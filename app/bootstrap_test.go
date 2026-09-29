@@ -1127,7 +1127,10 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 		})},
 		{name: "custom_cache_connector_is_wired", cfg: &config.Config{}, opts: &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}, wantCache: true},
 		{name: "multi_tenant_reads_true_for_every_kind", cfg: withCfg(func(c *config.Config) { c.Multitenant.Enabled = true }), wantDB: true, wantMessaging: true, wantCache: true},
-		{name: "dynamic_resource_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }), opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}}, wantDB: true, wantMessaging: true, wantCache: true},
+		{
+			name: "dynamic_resource_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }),
+			opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}}, wantDB: true, wantMessaging: true, wantCache: true,
+		},
 		{name: "caller_resource_source_reads_true", cfg: &config.Config{}, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: false}}, wantDB: true, wantMessaging: true, wantCache: true},
 		{name: "nil_config_reads_true", cfg: nil, wantDB: true, wantMessaging: true, wantCache: true},
 	}

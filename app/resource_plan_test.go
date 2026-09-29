@@ -28,36 +28,56 @@ type planMode struct {
 // planModes covers every mode of the fact base the build accepts; the comment names the ones a
 // case stands for when their plan inputs coincide.
 var planModes = []planMode{
-	{name: "st_root", spec: "db broker cache", // ST-root, ST-streams
+	{
+		name: "st_root", spec: "db broker cache", // ST-root, ST-streams
 		want: [3]string{"st/present configured preinit prewarm", "st/present configured preinit prewarm", "st/present configured preinit"},
-		rule: [3]string{"", "", "st/present configured preinit prewarm"}},
-	{name: "st_db_cache_only", spec: "db cache",
+		rule: [3]string{"", "", "st/present configured preinit prewarm"},
+	},
+	{
+		name: "st_db_cache_only", spec: "db cache",
 		want: [3]string{"st/present configured preinit prewarm", "st/absent unavailable prewarm", "st/present configured preinit"},
-		rule: [3]string{"", "st/absent unavailable", "st/present configured preinit prewarm"}},
-	{name: "st_noroot", spec: "", // ST-noroot
+		rule: [3]string{"", "st/absent unavailable", "st/present configured preinit prewarm"},
+	},
+	{
+		name: "st_noroot", spec: "", // ST-noroot
 		want: [3]string{"st/absent unavailable prewarm", "st/absent unavailable prewarm", "st/absent unavailable skip"},
-		rule: [3]string{"st/absent unavailable", "st/absent unavailable", ""}},
-	{name: "st_shared_noroot", spec: "shared", // ST-shared-noroot: the ADR-041 env-parity no-op
+		rule: [3]string{"st/absent unavailable", "st/absent unavailable", ""},
+	},
+	{
+		name: "st_shared_noroot", spec: "shared", // ST-shared-noroot: the ADR-041 env-parity no-op
 		want: [3]string{"st/absent unavailable prewarm", "st/absent unavailable prewarm", "st/absent unavailable skip"},
-		rule: [3]string{"st/absent unavailable", "st/absent unavailable", ""}},
-	{name: "st_dynamic_noroot", spec: "dynamic", // ST-dynsrc-dynRS-noroot
+		rule: [3]string{"st/absent unavailable", "st/absent unavailable", ""},
+	},
+	{
+		name: "st_dynamic_noroot", spec: "dynamic", // ST-dynsrc-dynRS-noroot
 		want: [3]string{"st/runtime configured prewarm", "st/runtime unavailable configured prewarm", "st/runtime configured"},
-		rule: [3]string{"", "st/runtime configured prewarm", "st/runtime configured prewarm"}},
-	{name: "st_dynamic_root", spec: "dynamic db broker cache",
+		rule: [3]string{"", "st/runtime configured prewarm", "st/runtime configured prewarm"},
+	},
+	{
+		name: "st_dynamic_root", spec: "dynamic db broker cache",
 		want: [3]string{"st/runtime configured prewarm", "st/runtime configured prewarm", "st/runtime configured"},
-		rule: [3]string{"", "", "st/runtime configured prewarm"}},
-	{name: "st_dynamic_cacheconn", spec: "dynamic cacheconn",
+		rule: [3]string{"", "", "st/runtime configured prewarm"},
+	},
+	{
+		name: "st_dynamic_cacheconn", spec: "dynamic cacheconn",
 		want: [3]string{"st/runtime configured prewarm", "st/runtime unavailable configured prewarm", "st/runtime configured"},
-		rule: [3]string{"", "st/runtime configured prewarm", "st/runtime configured prewarm"}},
-	{name: "st_caller_noroot", spec: "caller", // ST-staticRS-noroot, ST-customRS-noroot; rule: root-block reading
+		rule: [3]string{"", "st/runtime configured prewarm", "st/runtime configured prewarm"},
+	},
+	{
+		name: "st_caller_noroot", spec: "caller", // ST-staticRS-noroot, ST-customRS-noroot; rule: root-block reading
 		want: [3]string{"st/absent unavailable configured prewarm", "st/absent unavailable configured prewarm", "st/present configured preinit"},
-		rule: [3]string{"st/absent unavailable", "st/absent unavailable", "st/absent unavailable skip"}},
-	{name: "st_caller_root", spec: "caller db broker", // ST-staticRS-root; rule: root-block reading
+		rule: [3]string{"st/absent unavailable", "st/absent unavailable", "st/absent unavailable skip"},
+	},
+	{
+		name: "st_caller_root", spec: "caller db broker", // ST-staticRS-root; rule: root-block reading
 		want: [3]string{"st/present configured preinit prewarm", "st/present configured preinit prewarm", "st/present configured preinit"},
-		rule: [3]string{"", "", "st/absent unavailable skip"}},
-	{name: "st_cacheconn_noroot", spec: "cacheconn", // ST-cacheconn, ST-noroot-cacheconn
+		rule: [3]string{"", "", "st/absent unavailable skip"},
+	},
+	{
+		name: "st_cacheconn_noroot", spec: "cacheconn", // ST-cacheconn, ST-noroot-cacheconn
 		want: [3]string{"st/absent unavailable prewarm", "st/absent unavailable prewarm", "st/present configured preinit"},
-		rule: [3]string{"st/absent unavailable", "st/absent unavailable", "st/present configured preinit prewarm"}},
+		rule: [3]string{"st/absent unavailable", "st/absent unavailable", "st/present configured preinit prewarm"},
+	},
 	{name: "mt_noroot", spec: "mt", // MT-static-tenants, MT-static-notenants-noroot, MT-static-pt
 		want: [3]string{"pt/absent configured per_tenant", "pt/absent configured per_tenant", "pt/absent configured skip per_tenant"}},
 	{name: "mt_rootcache", spec: "mt cache", // MT-static-tenants-rootcache
@@ -68,23 +88,31 @@ var planModes = []planMode{
 		want: [3]string{"pt/runtime configured per_tenant", "pt/runtime configured per_tenant", "pt/runtime configured per_tenant"}},
 	{name: "mt_cacheconn", spec: "mt cacheconn", // MT-cacheconn
 		want: [3]string{"pt/absent configured per_tenant", "pt/absent configured per_tenant", "pt/present configured per_tenant"}},
-	{name: "mt_shared_root", spec: "mt shared broker", // MT-shared-root, MT-static-shared-root, MT-shared-streams
+	{
+		name: "mt_shared_root", spec: "mt shared broker", // MT-shared-root, MT-static-shared-root, MT-shared-streams
 		want: [3]string{"pt/absent configured per_tenant", "shared/present configured prewarm per_tenant", "pt/absent configured skip per_tenant"},
-		rule: [3]string{"", "shared/present configured preinit prewarm", ""}},
-	{name: "mt_shared_noroot", spec: "mt shared", // MT-shared-noroot, MT-static-shared-noroot
+		rule: [3]string{"", "shared/present configured preinit prewarm", ""},
+	},
+	{
+		name: "mt_shared_noroot", spec: "mt shared", // MT-shared-noroot, MT-static-shared-noroot
 		want: [3]string{"pt/absent configured per_tenant", "shared/absent configured prewarm per_tenant", "pt/absent configured skip per_tenant"},
-		rule: [3]string{"", "shared/absent unavailable", ""}},
-	{name: "mt_shared_dynamic", spec: "mt shared dynamic", // MT-dyn-shared-noroot
+		rule: [3]string{"", "shared/absent unavailable", ""},
+	},
+	{
+		name: "mt_shared_dynamic", spec: "mt shared dynamic", // MT-dyn-shared-noroot
 		want: [3]string{"pt/runtime configured per_tenant", "shared/runtime configured prewarm per_tenant", "pt/runtime configured per_tenant"},
-		rule: [3]string{"", "shared/runtime configured prewarm", ""}},
-	{name: "mt_shared_caller_noroot", spec: "mt shared caller", // MT-customRS-shared-noroot; rule: root-block reading
+		rule: [3]string{"", "shared/runtime configured prewarm", ""},
+	},
+	{
+		name: "mt_shared_caller_noroot", spec: "mt shared caller", // MT-customRS-shared-noroot; rule: root-block reading
 		want: [3]string{"pt/absent configured per_tenant", "shared/absent configured prewarm per_tenant", "pt/present configured per_tenant"},
-		rule: [3]string{"", "shared/absent unavailable", "pt/absent configured skip per_tenant"}},
+		rule: [3]string{"", "shared/absent unavailable", "pt/absent configured skip per_tenant"},
+	},
 }
 
 // inputs builds the mode's validated-shape config, Options (nil unless one is set) and the
 // store FactoryResolver serves, plus the caller's store so a test can count its lookups.
-func (m planMode) inputs() (planInputs, *dynamicResourceSource) {
+func (m *planMode) inputs() (planInputs, *dynamicResourceSource) {
 	on := map[string]bool{}
 	for _, word := range strings.Fields(m.spec) {
 		on[word] = true
@@ -137,8 +165,12 @@ func renderPlan(p resourcePlan) [3]string {
 			word string
 			yes  bool
 		}{
-			{"unavailable", k.unavailable()}, {"configured", k.configured()}, {"preinit", k.preInits()},
-			{"prewarm", k.preWarms()}, {"skip", probe.absent}, {"per_tenant", probe.perTenant},
+			{"unavailable", k.unavailable()},
+			{"configured", k.configured()},
+			{"preinit", k.preInits()},
+			{"prewarm", k.preWarms()},
+			{"skip", probe.absent},
+			{"per_tenant", probe.perTenant},
 		} {
 			if a.yes {
 				words = append(words, a.word)
@@ -265,7 +297,7 @@ func TestResourcePlanPresenceMatchesBuiltInStore(t *testing.T) {
 	}
 }
 
-// TestResourcePlanMatchesLegacyPredicates is ADR-126's behaviour-preservation proof: in every
+// TestResourcePlanMatchesLegacyPredicates is ADR-126's behavior-preservation proof: in every
 // mode each answer equals the predicate, or the transcribed inline condition, that answers it
 // today. It goes once those readers read the plan.
 func TestResourcePlanMatchesLegacyPredicates(t *testing.T) {
@@ -366,12 +398,18 @@ func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
 		configured    [3]bool
 	}{
 		{name: "built_in_store", presence: [3]keyPresence{keyAbsent, keyAbsent, keyAbsent}},
-		{name: "caller_static_store", opts: &Options{ResourceSource: &dynamicResourceSource{}},
-			presence: [3]keyPresence{keyAbsent, keyAbsent, keyPresent}, configured: [3]bool{true, true, true}},
-		{name: "dynamic_store", dynamicSource: true, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
-			configured: [3]bool{true, true, true}},
-		{name: "cache_connector", opts: &Options{CacheConnector: cacheConnector},
-			presence: [3]keyPresence{keyAbsent, keyAbsent, keyPresent}, configured: [3]bool{false, false, true}},
+		{
+			name: "caller_static_store", opts: &Options{ResourceSource: &dynamicResourceSource{}},
+			presence: [3]keyPresence{keyAbsent, keyAbsent, keyPresent}, configured: [3]bool{true, true, true},
+		},
+		{
+			name: "dynamic_store", dynamicSource: true, opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
+			configured: [3]bool{true, true, true},
+		},
+		{
+			name: "cache_connector", opts: &Options{CacheConnector: cacheConnector},
+			presence: [3]keyPresence{keyAbsent, keyAbsent, keyPresent}, configured: [3]bool{false, false, true},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -389,9 +427,11 @@ func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
 			app := newConfiguredApp(t, cfg, tt.opts)
 
 			assert.Equal(t, planResources(cfg, tt.opts, store), app.plan)
-			assert.Equal(t, tt.presence, [3]keyPresence{app.plan.database.presence, app.plan.messaging.presence, app.plan.cache.presence})
+			gotPresence := [3]keyPresence{app.plan.database.presence, app.plan.messaging.presence, app.plan.cache.presence}
+			assert.Equal(t, tt.presence, gotPresence)
 			deps := app.registry.deps
-			assert.Equal(t, tt.configured, [3]bool{deps.DBConfigured, deps.MessagingConfigured, deps.CacheConfigured})
+			gotConfigured := [3]bool{deps.DBConfigured, deps.MessagingConfigured, deps.CacheConfigured}
+			assert.Equal(t, tt.configured, gotConfigured)
 		})
 	}
 }

@@ -2052,7 +2052,7 @@ apart. An unexported Resource plan in `app/` now holds, per kind, its Tenancy an
 and derives the answers readers need: unavailable, configured, pre-init, pre-warm, the readiness
 probe's lease and label, and the messaging row's stamps, streams refusal and seal tenancy. A
 temporary drift ledger of eight named rows pins today's answer wherever it differs from the rule,
-so behaviour is unchanged; ADR-127 deletes it. `ModuleDeps.*Configured` is its first reader.
+so behavior is unchanged; ADR-127 deletes it. `ModuleDeps.*Configured` is its first reader.
 
 **Key Benefits:** one place decides each kind, and the rule's difference from today is a named,
 tested list.

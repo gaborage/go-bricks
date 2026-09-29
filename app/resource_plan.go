@@ -250,7 +250,7 @@ type driftRow struct {
 	when   func(in planInputs, k kindPlan) bool
 }
 
-// driftLedger is today's behaviour written as its difference from the rule. presence
+// driftLedger is today's behavior written as its difference from the rule. presence
 // overrides what "" holds for a kind before the root blocks are read.
 type driftLedger struct {
 	presence func(in planInputs, kind string) (keyPresence, bool)
@@ -260,7 +260,7 @@ type driftLedger struct {
 func callerSource(in planInputs) bool { return in.opts != nil && in.opts.ResourceSource != nil }
 
 // todaysLedger pins every answer where a reader differs from the rule today, each row naming
-// the reader it reproduces, so planning under it changes no behaviour (ADR-126).
+// the reader it reproduces, so planning under it changes no behavior (ADR-126).
 var todaysLedger = driftLedger{
 	// D1: rootCacheAbsent, installed as cacheSlot.absent (app_builder.go:228), exempts ANY
 	// caller-supplied ResourceSource, so the cache probe and pre-init lease "" through it

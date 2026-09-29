@@ -57,7 +57,7 @@ broker and cache blocks — each with its own exemption set, and the sets drifte
    `FactoryResolver.ResourceSource`, before the manager configuration and any manager, and the plan
    rides on the dependency bundle and the `App`. `markConfigured` is its first reader; the other
    readers move onto it in later changes.
-4. **No behaviour change yet.** A temporary drift ledger pins today's answer wherever today's
+4. **No behavior change yet.** A temporary drift ledger pins today's answer wherever today's
    reader differs from the rule, so every gate, abort, lease, flag, readiness status and label,
    gauge value and INFO/WARN line is unchanged. ADR-127 deletes it and switches to the rule.
 
