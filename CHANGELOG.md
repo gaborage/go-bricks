@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.69.0](https://github.com/gaborage/go-bricks/compare/v0.68.0...v0.69.0) (2026-09-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** reject non-struct request types at handler registration ([#1843](https://github.com/gaborage/go-bricks/issues/1843))
+* **messaging:** fail a Mandatory publish the broker returns ([#1835](https://github.com/gaborage/go-bricks/issues/1835))
+* **app:** answer /ready with status only ([#1832](https://github.com/gaborage/go-bricks/issues/1832))
+* **server:** key duplicate routes by echo node identity ([#1824](https://github.com/gaborage/go-bricks/issues/1824))
+* **server:** refuse duplicate routes without app ([#1823](https://github.com/gaborage/go-bricks/issues/1823))
+
+### Added
+
+* **app:** report readiness and manager counters as gauges ([#1820](https://github.com/gaborage/go-bricks/issues/1820)) ([36baecc](https://github.com/gaborage/go-bricks/commit/36baecc0f2ec7e326f2437c0fe79d8197359cd1b))
+* **httpclient:** attach a bearer read from a token file at Build ([#1837](https://github.com/gaborage/go-bricks/issues/1837)) ([74221b5](https://github.com/gaborage/go-bricks/commit/74221b568d149be171d0056d54a4ba993c6d33c2))
+* **httpclient:** re-read the bearer token file on an interval ([#1838](https://github.com/gaborage/go-bricks/issues/1838)) ([dec7bbb](https://github.com/gaborage/go-bricks/commit/dec7bbbf4210df3f01ecb12a9e030952c1047ed9))
+* **messaging:** report a stream the broker lost ([#1830](https://github.com/gaborage/go-bricks/issues/1830)) ([de72866](https://github.com/gaborage/go-bricks/commit/de7286688394c464887a2f9705406463abcef1fd))
+
+
+### Fixed
+
+* **app:** answer /ready with status only ([#1832](https://github.com/gaborage/go-bricks/issues/1832)) ([7710ceb](https://github.com/gaborage/go-bricks/commit/7710ceb2e18a443596c13d2475abe7a764470244))
+* **messaging:** fail a Mandatory publish the broker returns ([#1835](https://github.com/gaborage/go-bricks/issues/1835)) ([6880f15](https://github.com/gaborage/go-bricks/commit/6880f15098d4d0e8fb5537dc1a0ed17d8b6ed25d))
+* **server:** key duplicate routes by echo node identity ([#1824](https://github.com/gaborage/go-bricks/issues/1824)) ([97c75ec](https://github.com/gaborage/go-bricks/commit/97c75ecb9414a2cf19ccda3538613705844943e7))
+* **server:** log the path the router keyed on as url.path ([#1821](https://github.com/gaborage/go-bricks/issues/1821)) ([c6768da](https://github.com/gaborage/go-bricks/commit/c6768daaf1f905af0eaf797327e5ee6ccdc6ec96))
+* **server:** refuse duplicate routes without app ([#1823](https://github.com/gaborage/go-bricks/issues/1823)) ([692ccf0](https://github.com/gaborage/go-bricks/commit/692ccf056169688b801e020fdee53712c105ef8f))
+* **server:** reject non-struct request types at handler registration ([#1843](https://github.com/gaborage/go-bricks/issues/1843)) ([9d5584c](https://github.com/gaborage/go-bricks/commit/9d5584c0bd3d8532790fb17dfd93008ca2061e2a))
+* **server:** report http.route on jose failures only when a route matched ([#1822](https://github.com/gaborage/go-bricks/issues/1822)) ([ce70be0](https://github.com/gaborage/go-bricks/commit/ce70be0b01e6ec3d1ec042354a0685f9de721348))
+
+
+### Changed
+
+* **messaging:** correlate broker returns with their publish ([#1834](https://github.com/gaborage/go-bricks/issues/1834)) ([59ac1be](https://github.com/gaborage/go-bricks/commit/59ac1be6c9e7962e67497ae2340caa17877aa7c9))
+* **messaging:** listen for broker returns on every channel ([#1833](https://github.com/gaborage/go-bricks/issues/1833)) ([d1b66f6](https://github.com/gaborage/go-bricks/commit/d1b66f6b0c58d4299a3363c644824ca8625c4ff8))
+* **messaging:** prepare a stream consumer for reattachment ([#1829](https://github.com/gaborage/go-bricks/issues/1829)) ([a20cc33](https://github.com/gaborage/go-bricks/commit/a20cc339187010a7636f4ac519d6706a18cd42e7))
+* **server:** delete the legacy per-request binding chain ([#1844](https://github.com/gaborage/go-bricks/issues/1844)) ([8e0d847](https://github.com/gaborage/go-bricks/commit/8e0d8471497c37f728375361ef63fcc17733e412))
+
 ## [0.68.0](https://github.com/gaborage/go-bricks/compare/v0.67.0...v0.68.0) (2026-09-28)
 
 
