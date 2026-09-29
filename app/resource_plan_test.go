@@ -369,9 +369,10 @@ func TestResourcePlanLookupFailureFailsStartup(t *testing.T) {
 			plan, err := planResources(context.Background(), &config.Config{}, nil, store)
 
 			require.ErrorIs(t, err, cause)
-			assert.EqualError(t, err, "resource plan: "+tt.kind+` lookup of the control-plane key "": secrets backend unreachable`)
+			require.EqualError(t, err, "resource plan: "+tt.kind+` lookup of the control-plane key "": secrets backend unreachable`)
 			assert.Equal(t, resourcePlan{}, plan)
-			assert.Equal(t, tt.asked, [3]int{store.calls[componentDatabase], store.calls[componentMessaging], store.calls[componentCache]})
+			gotAsked := [3]int{store.calls[componentDatabase], store.calls[componentMessaging], store.calls[componentCache]}
+			assert.Equal(t, tt.asked, gotAsked)
 		})
 	}
 }
@@ -399,7 +400,7 @@ func TestResourcePlanLookupHonorsTheKindBudget(t *testing.T) {
 	blocking := &answeringStore{block: true}
 	_, err = planResources(context.Background(), cfg, nil, blocking)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.ErrorContains(t, err, `resource plan: database lookup of the control-plane key ""`)
+	require.ErrorContains(t, err, `resource plan: database lookup of the control-plane key ""`)
 }
 
 // TestNewWithConfigCarriesTheResourcePlan pins the wiring: the Builder plans from its Options
@@ -463,6 +464,6 @@ func TestNewWithConfigFailsOnAControlPlaneLookupError(t *testing.T) {
 	_, _, err := NewWithConfig(defaultTestConfig(), &Options{ResourceSource: store})
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, `resource plan: messaging lookup of the control-plane key "": vault sealed`)
+	require.ErrorContains(t, err, `resource plan: messaging lookup of the control-plane key "": vault sealed`)
 	assert.Zero(t, store.calls[componentCache], "planning stops at the first failed kind")
 }

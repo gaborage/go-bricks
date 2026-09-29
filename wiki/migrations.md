@@ -10901,7 +10901,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - apply: make the store's answer for `""` honest, per kind: a configuration where it serves the
   kind on `""`, `config.NewNotConfiguredError(...)` where it does not — never a tenant-not-found
   error, and never an empty configuration with a nil error, which reads present and is then
-  leased at build (`[C70.3]`). Honour `ctx`. A lookup that needs a network round trip must fit its
+  leased at build (`[C70.3]`). Honor `ctx`. A lookup that needs a network round trip must fit its
   `app.startup.<kind>` budget; raise the budget, or report `IsDynamic()` true with
   `source.type: dynamic` (`[C70.1]`) if `""` is genuinely knowable only at runtime.
 - verify: boot every environment. A failure names the kind and the key; a boot that passes needs

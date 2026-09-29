@@ -13,7 +13,7 @@ and under `messaging.tenancy: shared`), [ADR-126](adr_126_resource_plan.md) (the
 ADR-126 put every startup decision about the database, messaging and cache kinds behind one
 Resource plan: per kind, its Tenancy and what the control-plane key `""` holds for it (known
 present, known absent, knowable only at runtime), with the answers derived from those two facts.
-It kept today's behaviour by pinning eight answers where today's readers differ from that rule
+It kept today's behavior by pinning eight answers where today's readers differ from that rule
 (a drift ledger, D1–D8), and it judged `""` beside a caller-supplied static
 `Options.ResourceSource` from the root config blocks, a store that the application never asks
 for anything. The pins are where the old exemption sets disagree with each other, and each one
@@ -149,7 +149,7 @@ The amended ADRs:
   and the shared consumer replay reach `""` through a dynamic store. Under per-tenant messaging
   tenancy the app neither pre-initializes nor pre-warms the control-plane broker, so "no startup
   connection probe" and "the first relay cycle may be cold" still hold there.
-- **ADR-126.** The drift ledger and the root-block judgement of a caller store are gone; the plan
+- **ADR-126.** The drift ledger and the root-block judgment of a caller store are gone; the plan
   asks the store.
 
 ## References
