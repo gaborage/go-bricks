@@ -3,6 +3,13 @@
 **Status:** Accepted
 **Date:** 2026-09-29
 
+> **Amended (2026-09-29, [ADR-127](adr_127_resource_plan_rule.md)):** the drift ledger (decision
+> 4) is deleted and the rule's answers are the plan's, `configured` included, which is now
+> `!unavailable`. Decision 1's "the plan never asks a store for `""`" and the consequence
+> "planning dials nothing and makes no store lookup" no longer hold: a static store is asked for
+> `""` once per kind at build (still a config lookup, no dial), and a lookup error other than
+> not-configured fails startup.
+
 ## Context
 
 Startup asks two questions of each resource kind (database, messaging, cache): does it resolve on

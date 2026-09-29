@@ -1,6 +1,8 @@
 # ADR-041: Shared (Control-Plane) Ledger Tenancy for Outbox/Inbox
 
 > **Extended by [ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md) (2026-08-30):** §4's deferred consumer half now exists as `messaging.tenancy: shared`, with the tenant carried as an `x-tenant-id` stamp.
+>
+> **Corrected (2026-09-29, [ADR-127](adr_127_resource_plan_rule.md)):** the startup trade-offs below narrow. The app now asks a static `Options.ResourceSource` for `""` at build, once per kind, in every mode — a config lookup, not a connection probe. Under `messaging.tenancy: shared` a configured control-plane broker is pre-initialized at build and pre-warmed (the pre-warm predates ADR-127, since [ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md)), and the pre-warm and the shared consumer replay reach `""` through a dynamic store, so "no startup connection probe" and "the first relay cycle may be cold" no longer hold for the broker there. Under the default `messaging.tenancy: per-tenant` the app neither pre-initializes nor pre-warms the control-plane broker, and both still hold. Custom sources still own `""`.
 
 **Status:** Accepted
 **Date:** 2026-07-23

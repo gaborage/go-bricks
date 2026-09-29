@@ -345,11 +345,16 @@ func TestMessagingProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T
 }
 
 // TestMessagingProbeLabelFollowsItsRow takes the row as given: a not-configured "" reads
-// per_tenant only where the messaging row relabels it, which under shared tenancy is D8.
+// per_tenant only under per-tenant Tenancy; shared messaging resolves on "", so it reads
+// not_configured.
 func TestMessagingProbeLabelFollowsItsRow(t *testing.T) {
 	sharedMT := &config.Config{
 		Multitenant: config.MultitenantConfig{Enabled: true},
 		Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
+	}
+	perTenantMT := &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging:   config.MessagingConfig{Tenancy: config.TenancyPerTenant},
 	}
 	for _, tt := range []struct {
 		name string
@@ -357,7 +362,8 @@ func TestMessagingProbeLabelFollowsItsRow(t *testing.T) {
 		want string
 	}{
 		{name: "single_tenant_row", row: describedRow(componentMessaging, false, false), want: notConfiguredStatus},
-		{name: "shared_row", row: fixturePlan(sharedMT).messaging, want: perTenantStatus},
+		{name: "shared_row", row: fixturePlan(sharedMT).messaging, want: notConfiguredStatus},
+		{name: "per_tenant_row", row: fixturePlan(perTenantMT).messaging, want: perTenantStatus},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			a := describingApp()

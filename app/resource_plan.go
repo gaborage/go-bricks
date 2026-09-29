@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/messaging"
 )
@@ -79,35 +82,28 @@ type kindPlan struct {
 	kind     string // componentDatabase, componentMessaging or componentCache; "" in the zero row
 	tenancy  kindTenancy
 	presence keyPresence
-	forced   forcedAnswers // today's answers where they differ from the rule; ADR-127 deletes it
 }
 
 // resolvesOnControlPlane: modules resolve the kind on "".
 func (k kindPlan) resolvesOnControlPlane() bool { return k.tenancy != perTenantTenancy }
 
 // unavailable: the kind resolves on "" and "" is known absent. Definitive, and never true while
-// presence is keyAtRuntime. For the database-absence WARN, the DatabaseRequirer abort and the
-// messaging-declarations gate (#366).
+// presence is keyAtRuntime. For the database-absence WARN, the DatabaseRequirer abort, the
+// messaging-declarations gate (#366) and ModuleDeps.*Configured, which reads its negation.
 func (k kindPlan) unavailable() bool {
-	return k.forced.resolve(answerUnavailable, k.resolvesOnControlPlane() && k.presence == keyAbsent)
-}
-
-// configured feeds ModuleDeps.*Configured. Its rule is !unavailable(); it stays a separate
-// answer until ADR-127 because today's flags read true where the kind is also unavailable.
-func (k kindPlan) configured() bool {
-	return k.forced.resolve(answerConfigured, !k.resolvesOnControlPlane() || k.presence != keyAbsent)
+	return k.resolvesOnControlPlane() && k.presence == keyAbsent
 }
 
 // preInits: lease "" at build under app.startup.<kind>, because the kind resolves on "" and ""
 // is known present. Whether a failure is fatal stays the slot's preInitFatal.
 func (k kindPlan) preInits() bool {
-	return k.forced.resolve(answerPreInit, k.resolvesOnControlPlane() && k.presence == keyPresent)
+	return k.resolvesOnControlPlane() && k.presence == keyPresent
 }
 
 // preWarms: lease "" once in prepareRuntime, advisory, because the kind resolves on "" and ""
 // is not known absent.
 func (k kindPlan) preWarms() bool {
-	return k.forced.resolve(answerPreWarm, k.resolvesOnControlPlane() && k.presence != keyAbsent)
+	return k.resolvesOnControlPlane() && k.presence != keyAbsent
 }
 
 // probe sets the two plan-owned fields of the description a slot built. Only the cache skips
@@ -115,7 +111,7 @@ func (k kindPlan) preWarms() bool {
 // (ADR-047). perTenant relabels a not-configured "" and follows Tenancy.
 func (k kindPlan) probe(d probeDescription) probeDescription {
 	d.absent = k.kind == componentCache && k.presence == keyAbsent
-	d.perTenant = k.forced.resolve(answerPerTenantLabel, !k.resolvesOnControlPlane())
+	d.perTenant = !k.resolvesOnControlPlane()
 	return d
 }
 
@@ -145,12 +141,24 @@ func (p resourcePlan) sealTenancy() messaging.SealTenancy {
 }
 
 // planResources plans from a validated cfg, opts (may be nil) and store, the instance
-// FactoryResolver.ResourceSource returned. It never asks a store for "": a dynamic store reads
-// keyAtRuntime, a CacheConnector makes the cache present, and otherwise "" is judged as the
-// built-in config.TenantStore answers it, from the root blocks — a caller-supplied static
-// store included, as today's readers judge it.
-func planResources(cfg *config.Config, opts *Options, store TenantStore) resourcePlan {
-	return planUnder(todaysLedger, planInputs{cfg: cfg, opts: opts, store: store})
+// FactoryResolver.ResourceSource returned (ADR-127). A dynamic store is never asked and reads
+// keyAtRuntime; a CacheConnector makes the cache present; otherwise the store is asked for ""
+// once per kind, a config lookup that dials nothing, under the kind's app.startup budget.
+// not_configured reads absent; any other failure, a spent budget included, fails startup
+// before any manager exists.
+func planResources(ctx context.Context, cfg *config.Config, opts *Options, store TenantStore) (resourcePlan, error) {
+	var plan resourcePlan
+	for _, row := range []struct {
+		kind string
+		dst  *kindPlan
+	}{{componentDatabase, &plan.database}, {componentMessaging, &plan.messaging}, {componentCache, &plan.cache}} {
+		presence, err := presenceOf(ctx, cfg, opts, store, row.kind)
+		if err != nil {
+			return resourcePlan{}, err
+		}
+		*row.dst = kindPlan{kind: row.kind, tenancy: tenancyOf(cfg, row.kind), presence: presence}
+	}
+	return plan, nil
 }
 
 func tenancyOf(cfg *config.Config, kind string) kindTenancy {
@@ -163,161 +171,40 @@ func tenancyOf(cfg *config.Config, kind string) kindTenancy {
 	return perTenantTenancy
 }
 
-func presenceOf(ledger driftLedger, in planInputs, kind string) keyPresence {
-	if in.store.IsDynamic() {
-		return keyAtRuntime
+func presenceOf(ctx context.Context, cfg *config.Config, opts *Options, store TenantStore, kind string) (keyPresence, error) {
+	if store.IsDynamic() {
+		return keyAtRuntime, nil
 	}
-	if kind == componentCache && in.opts != nil && in.opts.CacheConnector != nil {
-		return keyPresent
+	if kind == componentCache && opts != nil && opts.CacheConnector != nil {
+		return keyPresent, nil
 	}
-	if ledger.presence != nil {
-		if p, ok := ledger.presence(in, kind); ok {
-			return p
-		}
+	err := lookupControlPlaneKey(ctx, cfg, store, kind)
+	if err == nil {
+		return keyPresent, nil
 	}
-	return rootBlockPresence(in.cfg, kind)
+	if config.IsNotConfigured(err) {
+		return keyAbsent, nil
+	}
+	return keyAtRuntime, fmt.Errorf(`resource plan: %s lookup of the control-plane key "": %w`, kind, err)
 }
 
-// rootBlockPresence is config.TenantStore's answer for "": the content tests it applies before
-// answering not_configured.
-func rootBlockPresence(cfg *config.Config, kind string) keyPresence {
+// lookupControlPlaneKey asks store for kind's "" under the budget that kind's pre-init gets.
+func lookupControlPlaneKey(ctx context.Context, cfg *config.Config, store TenantStore, kind string) error {
 	// ==, not a tagged switch: a switch yields zero gremlins mutants, hiding this decision from the mutation gate.
-	present := cfg.Cache.Enabled
 	if kind == componentDatabase {
-		present = config.IsDatabaseConfigured(&cfg.Database)
+		lookupCtx, cancel := startupContext(ctx, cfg.App.Startup.Database)
+		defer cancel()
+		_, err := store.DBConfig(lookupCtx, "")
+		return err
 	}
 	if kind == componentMessaging {
-		present = config.IsMessagingConfigured(&cfg.Messaging)
+		lookupCtx, cancel := startupContext(ctx, cfg.App.Startup.Messaging)
+		defer cancel()
+		_, err := store.BrokerURL(lookupCtx, "")
+		return err
 	}
-	if present {
-		return keyPresent
-	}
-	return keyAbsent
-}
-
-// ---- Transitional: ADR-127 deletes the drift ledger below and every answer's pin. ----
-
-type planInputs struct {
-	cfg   *config.Config
-	opts  *Options
-	store TenantStore
-}
-
-// planUnder is planResources with the drift ledger as a parameter; the rule is
-// planUnder(driftLedger{}, …).
-func planUnder(ledger driftLedger, in planInputs) resourcePlan {
-	return resourcePlan{
-		database:  planKind(ledger, in, componentDatabase),
-		messaging: planKind(ledger, in, componentMessaging),
-		cache:     planKind(ledger, in, componentCache),
-	}
-}
-
-func planKind(ledger driftLedger, in planInputs, kind string) kindPlan {
-	k := kindPlan{kind: kind, tenancy: tenancyOf(in.cfg, kind), presence: presenceOf(ledger, in, kind)}
-	for _, row := range ledger.rows {
-		if !row.when(in, k) {
-			continue
-		}
-		if row.to {
-			k.forced.toTrue |= row.answer
-		} else {
-			k.forced.toFalse |= row.answer
-		}
-	}
-	return k
-}
-
-// answer names one derived answer a drift row can pin.
-type answer uint8
-
-const (
-	answerUnavailable answer = 1 << iota
-	answerConfigured
-	answerPreInit
-	answerPreWarm
-	answerPerTenantLabel
-)
-
-// forcedAnswers holds the answers the ledger pinned on one row.
-type forcedAnswers struct{ toTrue, toFalse answer }
-
-// resolve returns the pinned value when a is pinned, and the rule otherwise.
-func (f forcedAnswers) resolve(a answer, rule bool) bool {
-	if f.toTrue&a != 0 {
-		return true
-	}
-	if f.toFalse&a != 0 {
-		return false
-	}
-	return rule
-}
-
-// driftRow is one named way a startup reader answers differently from the rule today: where
-// when holds, answer is pinned to `to`.
-type driftRow struct {
-	name   string
-	answer answer
-	to     bool
-	when   func(in planInputs, k kindPlan) bool
-}
-
-// driftLedger is today's behavior written as its difference from the rule. presence
-// overrides what "" holds for a kind before the root blocks are read.
-type driftLedger struct {
-	presence func(in planInputs, kind string) (keyPresence, bool)
-	rows     []driftRow
-}
-
-func callerSource(in planInputs) bool { return in.opts != nil && in.opts.ResourceSource != nil }
-
-// todaysLedger pins every answer where a reader differs from the rule today, each row naming
-// the reader it reproduces, so planning under it changes no behavior (ADR-126).
-var todaysLedger = driftLedger{
-	// D1: read through presenceOf (resource_plan.go:166) by cacheSlot.describe (slot.go:307)
-	// and cacheSlot.preInit (slot.go:335); reproduces the cache's absence verdict exempting
-	// ANY caller-supplied ResourceSource, so both lease "" whatever cache.enabled says.
-	presence: func(in planInputs, kind string) (keyPresence, bool) {
-		return keyPresent, kind == componentCache && callerSource(in)
-	},
-	rows: []driftRow{
-		// D2: the ModuleDeps flags read true in every per-key mode — multitenant, a dynamic
-		// store, any caller-supplied ResourceSource (module.go:324-326).
-		{name: "D2 per-key flags", answer: answerConfigured, to: true, when: func(in planInputs, k kindPlan) bool {
-			return k.tenancy != singleTenant || callerSource(in)
-		}},
-		// D3: read by preInitLease (slot.go:479) for all three slots; reproduces the former
-		// wholesale pre-init skip under multitenant, messaging under shared tenancy included.
-		{name: "D3 pre-init skips multitenant", answer: answerPreInit, to: false, when: func(_ planInputs, k kindPlan) bool {
-			return k.tenancy != singleTenant
-		}},
-		// D4: read by preWarmKind (slot.go:452) from databaseSlot.start and
-		// messagingSlot.start; reproduces their pre-warm on the tenancy alone, leasing a
-		// known-absent "" for a Debug skip.
-		{name: "D4 pre-warm ignores absence", answer: answerPreWarm, to: true, when: func(_ planInputs, k kindPlan) bool {
-			return k.kind != componentCache && k.tenancy != perTenantTenancy && k.presence == keyAbsent
-		}},
-		// D5: read by cacheSlot.start (slot.go:353) through preWarmKind; reproduces its
-		// former no-op.
-		{name: "D5 cache never pre-warms", answer: answerPreWarm, to: false, when: func(_ planInputs, k kindPlan) bool {
-			return k.kind == componentCache
-		}},
-		// D6: read by assertMessagingConfiguredIfDeclared (lifecycle.go:242) through
-		// unavailable(); reproduces the #366 gate's skip on multitenant.enabled, shared tenancy
-		// included.
-		{name: "D6 messaging gate skips multitenant", answer: answerUnavailable, to: false, when: func(_ planInputs, k kindPlan) bool {
-			return k.kind == componentMessaging && k.tenancy != singleTenant
-		}},
-		// D7: read by the same gate (lifecycle.go:242); reproduces its test of the root broker
-		// URL, never the store, so it refuses a dynamic store that serves "".
-		{name: "D7 messaging gate reads the root broker", answer: answerUnavailable, to: true, when: func(in planInputs, k kindPlan) bool {
-			return k.kind == componentMessaging && k.tenancy == singleTenant && k.presence == keyAtRuntime &&
-				!config.IsMessagingConfigured(&in.cfg.Messaging)
-		}},
-		// D8: read by messagingSlot.describe (slot.go:230) through probe(); reproduces its
-		// per_tenant label on multitenant.enabled, shared tenancy included.
-		{name: "D8 messaging label follows multitenant", answer: answerPerTenantLabel, to: true, when: func(_ planInputs, k kindPlan) bool {
-			return k.kind == componentMessaging && k.tenancy == sharedTenancy
-		}},
-	},
+	lookupCtx, cancel := startupContext(ctx, cfg.App.Startup.Cache)
+	defer cancel()
+	_, err := store.CacheConfig(lookupCtx, "")
+	return err
 }

@@ -2059,6 +2059,24 @@ tested list.
 
 ---
 
+### [ADR-127: Resource Availability Follows What the Control-Plane Key Holds](adr_127_resource_plan_rule.md)
+
+**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** a static `Options.ResourceSource` is asked for `""` at build and a lookup error fails startup; a caller store's `""` answer, not the root blocks, decides the absence WARN, the `DatabaseRequirer` abort, the #366 declarations gate and `ModuleDeps.*Configured`; shared messaging is pre-initialized, reads `not_configured` without a root broker, and refuses its declarations there; the cache pre-warms
+
+ADR-126's drift ledger is deleted and the Resource plan's rule decides every startup answer: a kind
+is unavailable when it resolves on the control-plane key `""` and `""` is known absent, pre-inits
+when `""` is known present, and pre-warms unless `""` is known absent. Presence is what the store
+serving `""` answers: a dynamic store is never asked, a `CacheConnector` makes the cache present,
+and any other store is asked once per kind at build under `app.startup.<kind>`, with an error other
+than not-configured failing startup. Amends ADR-047's exemption set, ADR-066 rule 1 (`per_tenant`
+follows Tenancy) and ADR-041's startup trade-offs beside a static caller store and under shared
+messaging. See [migrations.md](migrations.md) `[C70.2]`–`[C70.6]`.
+
+**Key Benefits:** every startup gate, flag, lease and label asks one rule, and a caller store's own
+answer for `""` is what counts.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2829,7 +2847,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-126) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-127) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

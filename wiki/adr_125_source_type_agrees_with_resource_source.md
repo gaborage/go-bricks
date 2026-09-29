@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-09-28
 
+> **Amended (2026-09-29, [ADR-127](adr_127_resource_plan_rule.md)):** "under multi-tenancy,
+> `IsDynamic()` changes nothing in the app builder" no longer holds. A store reporting `false` is
+> asked for `""` once per kind at build, in every mode, and must answer it with a configuration or
+> a not-configured error: any other error fails startup.
+
 ## Context
 
 Two inputs say whether the resource keys (the root key `""` included) resolve at runtime from an
