@@ -7,6 +7,16 @@ on:
   schedule:
     - cron: '17 6 * * 1'   # Mondays 06:17 UTC — weekly vuln re-scan of main
 
+# One live run per pull request: a newer run for the same PR cancels the older
+# one, whether it carries a new head or is a same-SHA twin (a stack push that
+# moves a PR's base and head together fires two pull_request runs). The
+# cancelled run's ci-ok still runs (always()) and fails at once; the live run's
+# ci-ok lands minutes later and supersedes it. Push and schedule runs key on
+# run_id, so each commit on main keeps its own full run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   # ============================================================================
   # Job 1: Detect which components changed
@@ -1027,9 +1037,10 @@ jobs:
       needs.changes.outputs.code == 'true' &&
       needs.framework-merge-coverage.result == 'success'
     runs-on: ubuntu-latest
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
-      cancel-in-progress: true
+    # No concurrency group here: a cancelled scan fails ci-ok, so nothing may
+    # cancel one. The workflow-level group already leaves one live run per PR,
+    # and scans of overlapping main pushes may run side by side (the scan only
+    # uploads; it does not wait for the quality gate).
 
     steps:
       - uses: actions/checkout@v7
@@ -1260,6 +1271,10 @@ jobs:
   # that job's failure would reach this gate only as a tolerated 'skipped'.
   # vuln-weekly is schedule-only and intentionally absent.
   # When you add a new PR job, add it to `needs:` here or it stays unenforced.
+  # A cancelled need must FAIL this gate — never gate it on !cancelled(): a
+  # skipped ci-ok counts as passing, and the red ci-ok of a run cancelled by the
+  # workflow-level group is what holds a twin's shared commit closed until the
+  # live run's ci-ok supersedes it.
   # ============================================================================
   ci-ok:
     permissions:
