@@ -99,12 +99,12 @@ func closeManagersOnDependencyError(dbManager *database.DbManager, messagingMana
 // Builder.closeBundleManagers cannot reach them (see closeManagersOnDependencyError).
 func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
 	resolver := newFactoryResolverForConfig(b.opts, b.cfg)
+	resourceSource := resolver.ResourceSource(b.cfg)
+	plan := planResources(b.cfg, b.opts, resourceSource)
 	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
 	factory.LogFactoryInfo()
-
-	resourceSource := resolver.ResourceSource(b.cfg)
 
 	// Gate DB-operation OpenTelemetry spans/metrics on observability.enabled before
 	// any connection is created. Honors the no-op provider's zero-overhead contract:
@@ -165,9 +165,10 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 		Messaging:     provider.Messaging,
 		Cache:         provider.Cache,
 	}
-	markConfigured(deps, b.cfg, b.opts)
+	markConfigured(deps, plan)
 
 	return &dependencyBundle{
+		plan:             plan,
 		deps:             deps,
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
@@ -177,18 +178,12 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	}, nil
 }
 
-// markConfigured sets the three flags with the content tests config.TenantStore applies
-// before answering a kind with not_configured; per-key modes read true, which is why the
-// two root-absence predicates below are prefixed rather than negated bare — their own
-// exemption sets are narrower on purpose. A custom DatabaseConnector or
-// MessagingClientFactory still reads its config through that resolver, so neither is an
-// exemption. See ModuleDeps.DBConfigured for the contract.
-func markConfigured(deps *ModuleDeps, cfg *config.Config, opts *Options) {
-	perKey := cfg == nil || cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic ||
-		(opts != nil && opts.ResourceSource != nil)
-	deps.DBConfigured = perKey || !rootDatabaseAbsent(cfg)
-	deps.MessagingConfigured = perKey || config.IsMessagingConfigured(&cfg.Messaging)
-	deps.CacheConfigured = perKey || !rootCacheAbsent(cfg, opts)
+// markConfigured sets the three flags from the Resource plan (ADR-126). See
+// ModuleDeps.DBConfigured for the contract.
+func markConfigured(deps *ModuleDeps, plan resourcePlan) {
+	deps.DBConfigured = plan.database.configured()
+	deps.MessagingConfigured = plan.messaging.configured()
+	deps.CacheConfigured = plan.cache.configured()
 }
 
 // rootDatabaseAbsent reports whether a deployment that expects a root database: block
@@ -199,8 +194,7 @@ func markConfigured(deps *ModuleDeps, cfg *config.Config, opts *Options) {
 // with ConfigureRuntimeHelpers' skipPreInit, which enumerates the same modes.
 //
 // This is the single home for the exemption set — see DatabaseRequirer in module.go
-// for why absence needs interpreting at all. markConfigured reuses it under a wider
-// per-key guard (any caller-supplied ResourceSource), so a change here reaches the flag.
+// for why absence needs interpreting at all.
 func rootDatabaseAbsent(cfg *config.Config) bool {
 	if cfg == nil || cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic {
 		return false

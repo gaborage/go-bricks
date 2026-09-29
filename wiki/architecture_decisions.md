@@ -2041,6 +2041,24 @@ one it reads.
 
 ---
 
+### [ADR-126: A Resource Plan Decides Each Kind's Tenancy and Presence Once](adr_126_resource_plan.md)
+
+**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** none
+
+Each startup reader re-derived where a resource kind resolves and whether the control-plane key
+`""` holds it, from raw config and `Options`, with its own exemption set, and the sets drifted
+apart. An unexported Resource plan in `app/` now holds, per kind, its Tenancy and the presence of
+`""` (known present, known absent, knowable only at runtime), computed once before any manager,
+and derives the answers readers need: unavailable, configured, pre-init, pre-warm, the readiness
+probe's lease and label, and the messaging row's stamps, streams refusal and seal tenancy. A
+temporary drift ledger of eight named rows pins today's answer wherever it differs from the rule,
+so behaviour is unchanged; ADR-127 deletes it. `ModuleDeps.*Configured` is its first reader.
+
+**Key Benefits:** one place decides each kind, and the rule's difference from today is a named,
+tested list.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2811,7 +2829,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-125) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-126) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
