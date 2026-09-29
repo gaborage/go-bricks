@@ -10416,7 +10416,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `CreateProbeSkipper`) ·
   [global_middleware.md](global_middleware.md#public-route-exemptions)
 
-## E69 · v0.68.0 → v0.69.0 — the server itself refuses a duplicate route, and the first registration keeps it + a Mandatory publish the broker returns fails instead of reporting success + the streams lane reports a stream the broker lost + `/ready` answers status only, on either listener + the exported `HealthStatus.PublicErr` seam is deleted + the server itself refuses a duplicate route, and the first registration keeps it + the streams lane reports a stream the broker lost + `/ready` answers status only, on either listener + the exported `HealthStatus.PublicErr` seam is deleted + the server itself refuses a duplicate route, and the first registration keeps it + a typed handler whose request type cannot bind is refused at registration + the streams lane reports a stream the broker lost + httpclient sends a bearer token read from a file that rotates on disk
+## E69 · v0.68.0 → v0.69.0 — `/ready` answers status only, on either listener + the exported `HealthStatus.PublicErr` seam is deleted + the server itself refuses a duplicate route, and the first registration keeps it + a typed handler whose request type cannot bind is refused at registration + a Mandatory publish the broker returns fails instead of reporting success + the streams lane reports a stream the broker lost + httpclient sends a bearer token read from a file that rotates on disk
 
 - gist: the duplicate method+path check lived only in `app`, so a service wiring `server.New` and
   `ModuleGroup()` itself got echo's silent overwrite — the later handler served under the kept route
