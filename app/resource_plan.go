@@ -188,6 +188,7 @@ func presenceOf(ctx context.Context, cfg *config.Config, opts *Options, store Te
 
 // lookupControlPlaneKey asks store for kind's "" under the budget that kind's pre-init gets.
 func lookupControlPlaneKey(ctx context.Context, cfg *config.Config, store TenantStore, kind string) error {
+	// ==, not a tagged switch: a switch yields zero gremlins mutants, hiding this decision from the mutation gate.
 	if kind == componentDatabase {
 		lookupCtx, cancel := startupContext(ctx, cfg.App.Startup.Database)
 		defer cancel()
