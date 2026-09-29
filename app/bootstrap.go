@@ -190,8 +190,8 @@ func markConfigured(deps *ModuleDeps, plan resourcePlan) {
 // It is the backstop for modules that declare no DatabaseRequirer: without a
 // declaration this line is the only production-visible signal that distinguishes a
 // deliberately database-free service from one whose config never arrived.
-func (b *appBootstrap) warnIfDatabaseAbsent(database kindPlan) {
-	if !database.unavailable() {
+func (b *appBootstrap) warnIfDatabaseAbsent(databasePlan kindPlan) {
+	if !databasePlan.unavailable() {
 		return
 	}
 

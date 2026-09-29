@@ -883,12 +883,18 @@ func TestWarnIfDatabaseAbsent(t *testing.T) {
 		database kindPlan
 		wantWarn bool
 	}{
-		{name: "unavailable_database_warns", wantWarn: true,
-			database: kindPlan{kind: componentDatabase, presence: keyAbsent}},
-		{name: "present_database_stays_silent",
-			database: kindPlan{kind: componentDatabase, presence: keyPresent}},
-		{name: "per_tenant_database_stays_silent",
-			database: kindPlan{kind: componentDatabase, tenancy: perTenantTenancy, presence: keyAbsent}},
+		{
+			name: "unavailable_database_warns", wantWarn: true,
+			database: kindPlan{kind: componentDatabase, presence: keyAbsent},
+		},
+		{
+			name:     "present_database_stays_silent",
+			database: kindPlan{kind: componentDatabase, presence: keyPresent},
+		},
+		{
+			name:     "per_tenant_database_stays_silent",
+			database: kindPlan{kind: componentDatabase, tenancy: perTenantTenancy, presence: keyAbsent},
+		},
 	}
 
 	for _, tt := range tests {

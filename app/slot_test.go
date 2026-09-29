@@ -394,7 +394,7 @@ func TestMessagingSlotPreInitFollowsItsRow(t *testing.T) {
 
 			err := slotOf(t, a, componentMessaging).preInit(context.Background())
 
-			assert.ErrorIs(t, err, tt.wantErr)
+			require.ErrorIs(t, err, tt.wantErr)
 			assert.Equal(t, tt.lookups, source.callCount())
 		})
 	}

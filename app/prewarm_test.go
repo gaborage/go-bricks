@@ -304,7 +304,7 @@ func TestPreWarmKindFollowsTheRow(t *testing.T) {
 			advisory, fatal := slotOf(t, a, componentCache).start(context.Background())
 
 			require.NoError(t, fatal, "pre-warming is never fatal")
-			assert.ErrorIs(t, advisory, tt.getErr)
+			require.ErrorIs(t, advisory, tt.getErr)
 			assert.Equal(t, tt.leases, leases.Load())
 			assert.Equal(t, tt.warmed, loggedCount(rec, "Pre-warmed control-plane cache connection"))
 		})
