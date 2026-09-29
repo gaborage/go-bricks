@@ -189,19 +189,19 @@ func presenceOf(ctx context.Context, cfg *config.Config, opts *Options, store Te
 // lookupControlPlaneKey asks store for kind's "" under the budget that kind's pre-init gets.
 func lookupControlPlaneKey(ctx context.Context, cfg *config.Config, store TenantStore, kind string) error {
 	if kind == componentDatabase {
-		ctx, cancel := startupContext(ctx, cfg.App.Startup.Database)
+		lookupCtx, cancel := startupContext(ctx, cfg.App.Startup.Database)
 		defer cancel()
-		_, err := store.DBConfig(ctx, "")
+		_, err := store.DBConfig(lookupCtx, "")
 		return err
 	}
 	if kind == componentMessaging {
-		ctx, cancel := startupContext(ctx, cfg.App.Startup.Messaging)
+		lookupCtx, cancel := startupContext(ctx, cfg.App.Startup.Messaging)
 		defer cancel()
-		_, err := store.BrokerURL(ctx, "")
+		_, err := store.BrokerURL(lookupCtx, "")
 		return err
 	}
-	ctx, cancel := startupContext(ctx, cfg.App.Startup.Cache)
+	lookupCtx, cancel := startupContext(ctx, cfg.App.Startup.Cache)
 	defer cancel()
-	_, err := store.CacheConfig(ctx, "")
+	_, err := store.CacheConfig(lookupCtx, "")
 	return err
 }
