@@ -271,7 +271,7 @@ func callerSource(in planInputs) bool { return in.opts != nil && in.opts.Resourc
 // todaysLedger pins every answer where a reader differs from the rule today, each row naming
 // the reader it reproduces, so planning under it changes no behavior (ADR-126).
 var todaysLedger = driftLedger{
-	// D1: read through presenceOf (resource_plan.go:159) by cacheSlot.describe (slot.go:308)
+	// D1: read through presenceOf (resource_plan.go:162) by cacheSlot.describe (slot.go:308)
 	// and cacheSlot.preInit (slot.go:336); reproduces the cache's absence verdict exempting
 	// ANY caller-supplied ResourceSource, so both lease "" whatever cache.enabled says.
 	presence: func(in planInputs, kind string) (keyPresence, bool) {
