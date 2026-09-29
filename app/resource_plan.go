@@ -38,13 +38,14 @@ const (
 // String spells the two multitenant arms as config does, so the messaging row can feed
 // MultiTenantResourceProvider.SetMessagingTenancy.
 func (t kindTenancy) String() string {
-	if t == sharedTenancy {
+	switch t {
+	case sharedTenancy:
 		return config.TenancyShared
-	}
-	if t == perTenantTenancy {
+	case perTenantTenancy:
 		return config.TenancyPerTenant
+	default:
+		return "single-tenant"
 	}
-	return "single-tenant"
 }
 
 // keyPresence is what "" holds for one kind. keyAtRuntime, the zero value, is never assumed
@@ -58,13 +59,14 @@ const (
 )
 
 func (p keyPresence) String() string {
-	if p == keyPresent {
+	switch p {
+	case keyPresent:
 		return "known present"
-	}
-	if p == keyAbsent {
+	case keyAbsent:
 		return "known absent"
+	default:
+		return "knowable only at runtime"
 	}
-	return "knowable only at runtime"
 }
 
 // kindPlan is one kind's row: two facts, and answers derived from them on every call and never
@@ -83,25 +85,25 @@ func (k kindPlan) resolvesOnControlPlane() bool { return k.tenancy != perTenantT
 // presence is keyAtRuntime. For the database-absence WARN, the DatabaseRequirer abort and the
 // messaging-declarations gate (#366).
 func (k kindPlan) unavailable() bool {
-	return k.forced.resolve(answerUnavailable, k.tenancy != perTenantTenancy && k.presence == keyAbsent)
+	return k.forced.resolve(answerUnavailable, k.resolvesOnControlPlane() && k.presence == keyAbsent)
 }
 
 // configured feeds ModuleDeps.*Configured. Its rule is !unavailable(); it stays a separate
 // answer until ADR-127 because today's flags read true where the kind is also unavailable.
 func (k kindPlan) configured() bool {
-	return k.forced.resolve(answerConfigured, k.tenancy == perTenantTenancy || k.presence != keyAbsent)
+	return k.forced.resolve(answerConfigured, !k.resolvesOnControlPlane() || k.presence != keyAbsent)
 }
 
 // preInits: lease "" at build under app.startup.<kind>, because the kind resolves on "" and ""
 // is known present. Whether a failure is fatal stays the slot's preInitFatal.
 func (k kindPlan) preInits() bool {
-	return k.forced.resolve(answerPreInit, k.tenancy != perTenantTenancy && k.presence == keyPresent)
+	return k.forced.resolve(answerPreInit, k.resolvesOnControlPlane() && k.presence == keyPresent)
 }
 
 // preWarms: lease "" once in prepareRuntime, advisory, because the kind resolves on "" and ""
 // is not known absent.
 func (k kindPlan) preWarms() bool {
-	return k.forced.resolve(answerPreWarm, k.tenancy != perTenantTenancy && k.presence != keyAbsent)
+	return k.forced.resolve(answerPreWarm, k.resolvesOnControlPlane() && k.presence != keyAbsent)
 }
 
 // probe sets the two plan-owned fields of the description a slot built. Only the cache skips
@@ -109,7 +111,7 @@ func (k kindPlan) preWarms() bool {
 // (ADR-047). perTenant relabels a not-configured "" and follows Tenancy.
 func (k kindPlan) probe(d probeDescription) probeDescription {
 	d.absent = k.kind == componentCache && k.presence == keyAbsent
-	d.perTenant = k.forced.resolve(answerPerTenantLabel, k.tenancy == perTenantTenancy)
+	d.perTenant = k.forced.resolve(answerPerTenantLabel, !k.resolvesOnControlPlane())
 	return d
 }
 
@@ -124,13 +126,14 @@ func (p resourcePlan) refusesStreams() bool { return p.messaging.tenancy == perT
 
 // sealTenancy maps the messaging row onto ADR-097's three seal tenancies.
 func (p resourcePlan) sealTenancy() messaging.SealTenancy {
-	if p.messaging.tenancy == perTenantTenancy {
+	switch p.messaging.tenancy {
+	case perTenantTenancy:
 		return messaging.SealTenancyPerTenant
-	}
-	if p.messaging.tenancy == sharedTenancy {
+	case sharedTenancy:
 		return messaging.SealTenancyShared
+	default:
+		return messaging.SealTenancyDisabled
 	}
-	return messaging.SealTenancyDisabled
 }
 
 // planResources plans from a validated cfg, opts (may be nil) and store, the instance
@@ -170,12 +173,14 @@ func presenceOf(ledger driftLedger, in planInputs, kind string) keyPresence {
 // rootBlockPresence is config.TenantStore's answer for "": the content tests it applies before
 // answering not_configured.
 func rootBlockPresence(cfg *config.Config, kind string) keyPresence {
-	present := cfg.Cache.Enabled
-	if kind == componentDatabase {
+	var present bool
+	switch kind {
+	case componentDatabase:
 		present = config.IsDatabaseConfigured(&cfg.Database)
-	}
-	if kind == componentMessaging {
-		present = cfg.Messaging.Broker.URL != ""
+	case componentMessaging:
+		present = config.IsMessagingConfigured(&cfg.Messaging)
+	default:
+		present = cfg.Cache.Enabled
 	}
 	if present {
 		return keyPresent
@@ -297,7 +302,7 @@ var todaysLedger = driftLedger{
 		// it refuses a dynamic store that serves "".
 		{name: "D7 messaging gate reads the root broker", answer: answerUnavailable, to: true, when: func(in planInputs, k kindPlan) bool {
 			return k.kind == componentMessaging && k.tenancy == singleTenant && k.presence == keyAtRuntime &&
-				in.cfg.Messaging.Broker.URL == ""
+				!config.IsMessagingConfigured(&in.cfg.Messaging)
 		}},
 		// D8: messagingSlot.describe labels per_tenant on multitenant.enabled (slot.go:237),
 		// shared tenancy included.
