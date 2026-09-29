@@ -4,9 +4,9 @@
 **Date:** 2026-09-29
 **Amends:** [ADR-047](adr_047_database_absence_vs_misconfiguration.md) (the absence exemption
 set), [ADR-066](adr_066_readiness_one_module.md) rule 1 (who reports `per_tenant`),
-[ADR-041](adr_041_shared_ledger_tenancy.md) (the "no synchronous external call during startup"
-trade-off), [ADR-126](adr_126_resource_plan.md) (the drift ledger, and "the plan never asks a
-store")
+[ADR-041](adr_041_shared_ledger_tenancy.md) (its startup trade-offs, beside a static caller store
+and under `messaging.tenancy: shared`), [ADR-126](adr_126_resource_plan.md) (the drift ledger, and
+"the plan never asks a store")
 
 ## Context
 
@@ -60,9 +60,15 @@ does something wrong in some deployment:
 3. **A lookup that fails otherwise fails startup.** Any other error, a spent budget included,
    aborts the build before any manager exists, with
    `dependency resolution failed: resource plan: <kind> lookup of the control-plane key "": <cause>`.
-   Under multi-tenancy the database and messaging answers that presence feeds are all per tenant,
-   but readiness leases `""` on every poll (ADR-047 §4), so a store that errors on `""` there was
-   already permanently unhealthy; failing at build says so once, with the kind named.
+   Under multi-tenancy with per-tenant Tenancy, presence feeds only the cache probe's lease. For
+   the database that is no new failure: its probe leases `""` on every poll and is always critical
+   (ADR-047 §4), so a store that errors on `""` already held `/ready` at 503; failing at build says
+   so once, with the kind named. For messaging and the cache it is a new startup failure: their
+   probes are non-critical unless `messaging.consumers.critical` / `cache.critical`, so an erroring
+   `""` read `unhealthy` while `/ready` stayed 200 and the service served. The cost is accepted so
+   that `""` has one contract in every mode — a configuration or not-configured — and a store that
+   answers it with a tenant-not-found error (the built-in store's shape for an unknown tenant) is
+   told so at build.
 4. **The ledger is deleted.** `todaysLedger`, the answer pins and `configured()` go;
    `markConfigured` reads `!unavailable()`. No reader changes: each already asked its answer.
    `resourcePlan` stays unexported, and `NewModuleRegistry`, `SetMessagingTenancy` and
@@ -79,19 +85,31 @@ Every flip, by deployment mode (ST single-tenant, MT multi-tenant; "built-in" is
   tests made, so nothing moves for it.
 - **A caller store's `""` lookup error is fatal**, in every mode: an error that does not
   satisfy `config.IsNotConfigured` — a `MultiTenantError` for the empty key, a transport failure,
-  a lookup outlasting `app.startup.<kind>` — fails construction.
+  a lookup outlasting `app.startup.<kind>` — fails construction. That includes MT per-tenant
+  deployments, where such an answer from `BrokerURL` or `CacheConfig` only read `unhealthy` on a
+  non-critical probe and the service served (decision 3).
 - **ST, caller store serving `""`, empty root blocks:** no database-absence WARN; a
   `DatabaseRequirer` module registers; messaging declarations no longer abort; database and
   messaging pre-init lease `""` at build and fail startup when it cannot be reached.
 - **ST, caller store not serving `""`:** `DBConfigured`, `MessagingConfigured` and
   `CacheConfigured` read false where they read true; the cache probe stops leasing `""` (it still
   reads `not_configured`) and its pre-init is skipped. With empty root blocks the WARN and both
-  aborts fire as before. With root blocks set, the database pre-init no longer leases `""` and
-  fails startup (`database connection failed during startup`): the service boots with the
-  absence WARN, a `DatabaseRequirer` module aborts, and messaging declarations abort.
+  aborts fire as before. With the root `database:` block set, the fatal database pre-init no
+  longer runs, so startup no longer fails with `database connection failed during startup`: the
+  service boots with the absence WARN, and a `DatabaseRequirer` module aborts. With
+  `messaging.broker.url` set, the fatal messaging pre-init no longer runs either, so startup no
+  longer fails with `messaging connection failed during startup`: messaging declarations abort
+  (#366), and a service with none boots with `MessagingConfigured` false and no WARN of its own —
+  messaging has no counterpart of the database-absence WARN, only the WARN `Failed to start
+  consumers on the control-plane key` that every service without a control-plane broker logs.
+  Both lose a fail-fast signal: a store that stops serving `""` beside set root blocks now boots.
+  The #366 error and the `DatabaseRequirer` error still name the root keys
+  (`messaging.broker.url`, `DATABASE_TYPE`) when the store's answer fired them.
 - **ST, the cache present** (root `cache.enabled`, a `CacheConnector`, a caller store serving it,
   or a dynamic store): the cache pre-warms, a second advisory lease of `""` in `prepareRuntime`
-  logged `Pre-warmed control-plane cache connection`, or a pre-warm WARN when it fails.
+  logged `Pre-warmed control-plane cache connection`, or a pre-warm WARN when it fails. With
+  Redis unreachable at boot, that lease redials after the failed pre-init, on `prepareRuntime`'s
+  unbounded context: up to one more Redis connect timeout (about 5s) before the listeners bind.
 - **ST, dynamic store, no root broker:** messaging declarations no longer abort startup (the
   #366 gate read the root broker, not the store). A declared consumer still replays on `""`
   through the store and fails startup if the store does not serve it.
@@ -106,9 +124,9 @@ Every flip, by deployment mode (ST single-tenant, MT multi-tenant; "built-in" is
   (`messaging declarations were registered … but messaging is not configured`) — a set with no
   consumer booted with the WARN `Failed to start consumers on the control-plane key`, and a
   consumer set aborted later with `failed to start consumers on the control-plane key`; the
-  messaging readiness status and the
-  `app.readiness.status` gauge read `not_configured` where they read `per_tenant`; the doomed
-  pre-warm is dropped.
+  messaging readiness status reads `not_configured` where it read `per_tenant`, visible only on
+  `/_sys/health-debug` (the `app.readiness.status` gauge has no series for either status, and
+  `/ready` passes both); the doomed pre-warm is dropped.
 - **MT + shared messaging, dynamic store:** a `""` the store answers not-configured at runtime
   reads `not_configured` on readiness, not `per_tenant`.
 - **MT, caller store not serving the cache's `""`:** the cache probe stops leasing `""` on every
@@ -125,9 +143,12 @@ The amended ADRs:
 - **ADR-066 rule 1.** `per_tenant` applies to a kind under per-tenant Tenancy, not to every kind
   in a multi-tenant deployment: shared messaging resolves on `""`, so a not-configured `""` reads
   `not_configured`.
-- **ADR-041.** Its trade-off "no synchronous external call during startup" no longer holds: a
-  static caller store is consulted at build, shared messaging is pre-initialized, and the
-  pre-warm and the shared consumer replay reach `""` through a dynamic store.
+- **ADR-041.** Its startup trade-offs narrow. A static caller store is asked for `""` at build in
+  every mode — a config lookup, not a connection probe. Under `messaging.tenancy: shared` the
+  control-plane broker is pre-initialized at build (it was already pre-warmed), and the pre-warm
+  and the shared consumer replay reach `""` through a dynamic store. Under per-tenant messaging
+  tenancy the app neither pre-initializes nor pre-warms the control-plane broker, so "no startup
+  connection probe" and "the first relay cycle may be cold" still hold there.
 - **ADR-126.** The drift ledger and the root-block judgement of a caller store are gone; the plan
   asks the store.
 

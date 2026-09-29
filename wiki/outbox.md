@@ -487,7 +487,8 @@ Three further consequences of running the check inside `Init`:
   same deployments; its `/ready` database probe does not, and leases `""` in every mode. A per-tenant
   fan-out deployment is exempt by the rule above and cannot take this route, because the outbox relay
   (and the inbox cleanup job) reject dynamic multi-tenant sources outright: its resource source must
-  report `IsDynamic()` false, which under multi-tenancy changes nothing in the app builder.
+  report `IsDynamic()` false, so the app build asks it for `""` once per kind and fails on any answer
+  other than a configuration or `config.NewNotConfiguredError` ([C70.2](migrations.md), ADR-127).
 - With `outbox.autocreatetable`/`inbox.autocreatetable` enabled, the `""` key's table DDL now runs at
   `Init` rather than on the first publish or poll — the probe initializes that store, which is what
   creates the table. The exempt modes above run no probe, so their DDL still waits for first use.
@@ -587,9 +588,11 @@ inbox:
   the stamp beside the trace keys because the relay cycle carries no tenant under shared tenancy. A
   caller must not set that header itself — it is a publish error. For anything else the event needs, carry it in the payload (the inbox's `Record` already persists `TenantID` from ctx,
   regardless of tenancy mode).
-- **First relay cycle after cold start may log one broker-outage cycle.** The connection pre-warmer
-  is single-tenant-only, so a shared-tenancy deployment (which requires `multitenant.enabled: true`)
-  isn't pre-warmed; this is a one-time, self-resolving startup artifact.
+- **First relay cycle after cold start may log one broker-outage cycle** under the default
+  `messaging.tenancy: per-tenant`, where the app neither pre-initializes nor pre-warms the
+  control-plane broker; this is a one-time, self-resolving startup artifact. Under
+  `messaging.tenancy: shared` a configured control-plane broker is pre-initialized at build and
+  pre-warmed (ADR-127), so an unreachable one fails startup instead.
 - **Shared + `multitenant.enabled: false` is a no-op by design** — both resolve via the same `""`
   key, so the same YAML works unchanged across single-tenant dev and multi-tenant prod.
 

@@ -2069,8 +2069,8 @@ when `""` is known present, and pre-warms unless `""` is known absent. Presence 
 serving `""` answers: a dynamic store is never asked, a `CacheConnector` makes the cache present,
 and any other store is asked once per kind at build under `app.startup.<kind>`, with an error other
 than not-configured failing startup. Amends ADR-047's exemption set, ADR-066 rule 1 (`per_tenant`
-follows Tenancy) and ADR-041's "no synchronous external call during startup". See
-[migrations.md](migrations.md) `[C70.2]`–`[C70.6]`.
+follows Tenancy) and ADR-041's startup trade-offs beside a static caller store and under shared
+messaging. See [migrations.md](migrations.md) `[C70.2]`–`[C70.6]`.
 
 **Key Benefits:** every startup gate, flag, lease and label asks one rule, and a caller store's own
 answer for `""` is what counts.

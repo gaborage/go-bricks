@@ -10887,9 +10887,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `app.startup.timeout` when set). A nil error reads the kind present; an error satisfying
   `config.IsNotConfigured` reads it absent; any other error, a spent budget included, fails
   construction with `dependency resolution failed: resource plan: <kind> lookup of the
-  control-plane key "": <cause>`, where the store was never called at build. Unchanged: no
-  resource source (the built-in store's answers are the root-block tests it always applied), and
-  a store reporting true, which is never asked.
+  control-plane key "": <cause>`, where the store was never called at build. That includes
+  multi-tenant per-tenant deployments, where the answer otherwise drives only the cache probe's
+  lease: a store answering `""` with a tenant-not-found error — the built-in store's
+  `config.NewMultiTenantError` shape for an unknown key, which a copied store inherits — booted
+  there, and now fails construction. The database probe already held `/ready` at 503 on such an
+  answer, but the messaging and cache probes read `unhealthy` without failing `/ready` unless
+  `messaging.consumers.critical` / `cache.critical` was set, so `BrokerURL` and `CacheConfig` are
+  the ones to check. Unchanged: no resource source (the built-in store's answers are the
+  root-block tests it always applied), and a store reporting true, which is never asked.
 - gate: match = your code passes an `Options.ResourceSource` whose `IsDynamic()` returns false.
   no-match = no resource source, or one whose `IsDynamic()` returns true.
 - apply: make the store's answer for `""` honest, per kind: a configuration where it serves the
@@ -10917,20 +10923,30 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   messaging pre-init lease `""` at build and fail startup (`<kind> connection failed during
   startup`) when it cannot be reached. A store not serving `""`: `DBConfigured`,
   `MessagingConfigured` and `CacheConfigured` read false where they read true, and the cache
-  probe and pre-init stop leasing `""` (both already read not-configured); where the root blocks
-  are set, the database pre-init no longer fails startup on the store's not-configured `""` —
-  the service boots with the absence WARN, a `DatabaseRequirer` module aborts registration, and
-  messaging declarations abort startup. Under `multitenant.enabled` the database and cache resolve
-  per tenant, so only the cache probe's lease changes.
+  probe and pre-init stop leasing `""` (both already read not-configured). Where a kind's root
+  block is set, its fatal pre-init no longer runs on the store's not-configured `""`, so startup no
+  longer fails with `database connection failed during startup` or `messaging connection failed
+  during startup`: the service boots with the absence WARN and a `DatabaseRequirer` module
+  aborting registration, and with messaging declarations aborting startup — a service with none
+  boots with `MessagingConfigured` false and no messaging WARN of its own, only the generic
+  `Failed to start consumers on the control-plane key`. Both lose a fail-fast signal. Under
+  `multitenant.enabled` the database and cache resolve per tenant, so only the cache probe's
+  lease changes.
 - gate: match = `[C70.2]` matches and the service runs single-tenant or with
-  `messaging.tenancy: shared`. no-match = otherwise.
+  `messaging.tenancy: shared`, or runs `multitenant.enabled` behind a store not serving the
+  cache's `""` (the cache probe's lease only). no-match = otherwise.
 - apply: decide, per environment, what the store answers for `""` — that answer is now the whole
   truth, and the root blocks beside it are ignored. A store meant to serve the control plane
   serves `""`; one that does not, leaves `DatabaseRequirer` modules and messaging declarations
   out of that deployment. Code that branched on a `*Configured` flag being true beside the store
   keeps working only where the store serves `""`.
 - verify: boot every environment and read the startup log: the absence WARN and the flags now
-  match the store's answer.
+  match the store's answer. Where a root block is set beside a store not serving `""`,
+  startup no longer fails, so detect it: log `ModuleDeps.DBConfigured` and `MessagingConfigured`
+  from a module's `Init`, or read the kinds' `not_configured` status on `/_sys/health-debug`. The
+  #366 error and the `DatabaseRequirer` error still say to set `messaging.broker.url` /
+  `DATABASE_TYPE` when the store's answer fired them; the fix is the store's answer for `""`, and
+  the root keys beside it are ignored.
 - ref: [ADR-127](adr_127_resource_plan_rule.md) · `app/resource_plan.go` (`kindPlan.unavailable`,
   `kindPlan.preInits`) · `app/bootstrap.go` (`markConfigured`, `warnIfDatabaseAbsent`) ·
   `app/module.go` (`ModuleDeps.DBConfigured`, `DatabaseRequirer`)
@@ -10947,16 +10963,16 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   messaging declarations abort startup with `messaging declarations were registered … but
   messaging is not configured`, where a set with no consumer booted with the WARN `Failed to start
   consumers on the control-plane key` and a consumer set aborted with `failed to start consumers
-  on the control-plane key`; and the messaging readiness status, on `/_sys/health-debug` and the
-  `app.readiness.status` gauge under `readiness.kind=messaging`, reads `not_configured` where it
-  read `per_tenant`. Behind a dynamic store, a `""` it answers not-configured at runtime reads
-  `not_configured` too.
+  on the control-plane key`; and the messaging readiness status on `/_sys/health-debug` reads
+  `not_configured` where it read `per_tenant` — the `app.readiness.status` gauge has no series
+  for either status and `/ready` passes both, so neither moves. Behind a dynamic store, a `""` it
+  answers not-configured at runtime reads `not_configured` too.
 - gate: match = `multitenant.enabled: true` and `messaging.tenancy: shared`. no-match = otherwise
   (single-tenant `shared` is the ADR-041 no-op and moves only as `[C70.3]` says).
 - apply: give the control plane its broker — `messaging.broker.url`, or the store's `""` — and
   make it reachable at startup, or raise `app.startup.messaging`. A deployment with no broker at
-  all removes its messaging declarations. Repoint an alert or dashboard that expected
-  `per_tenant` for messaging at `not_configured`.
+  all removes its messaging declarations. A scraper of `/_sys/health-debug` that expected
+  `per_tenant` for messaging reads `not_configured`.
 - verify: boot; with declarations and no broker the startup error names messaging; with a broker
   the startup log shows the pre-init.
 - ref: [ADR-127](adr_127_resource_plan_rule.md) (amends ADR-066 rule 1) · `app/slot.go`
@@ -10971,7 +10987,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   dynamic store could serve. It now reads the plan, where a dynamic store's `""` is knowable only
   at runtime, so startup passes it. Declared consumers still replay on `""` through the store at
   startup and abort (`failed to start consumers on the control-plane key`) when it does not serve
-  `""`; a set with no consumer boots and resolves `""` on first publish.
+  `""`. A set with no consumer boots; startup still resolves `""` through the store — the declare
+  pass and the pre-warm — and logs the WARN `Failed to start consumers on the control-plane key`
+  when the store does not serve it.
 - gate: match = single-tenant, a dynamic store, messaging declarations, and no root broker URL.
   no-match = otherwise.
 - apply: nothing, unless the abort served as your "broker configuration missing" check: then
@@ -10987,13 +11005,22 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - scope: in single-tenant mode, a cache whose `""` is not known absent — root `cache.enabled`, an
   `Options.CacheConnector`, a static store serving it, or a dynamic store — is leased once more in
   `prepareRuntime`, after pre-init: the INFO `Pre-warmed control-plane cache connection`, or a
-  failure folded into the advisory WARN `Pre-warming completed with warnings`, never fatal. The
-  database and messaging pre-warm stop leasing a `""` already known absent; only a Debug line
-  goes, and the pools' failed-create counts on `/_sys/health-debug` no longer grow by one at
-  startup.
-- gate: match = single-tenant with a cache. no-match = no cache, or multi-tenant.
-- apply: none. Expect the new INFO line and one more cache round trip at startup; an alert keyed
-  on the pre-warm WARN now also fires on a cache unreachable at startup.
+  failure folded into the advisory WARN `Pre-warming completed with warnings`, never fatal. With
+  Redis unreachable at boot, the pre-warm redials after the failed pre-init, on `prepareRuntime`'s
+  unbounded context and outside `app.startup.cache`, so the listeners bind up to one more Redis
+  connect timeout (about 5s) later. The database and messaging pre-warm stop leasing a `""`
+  already known absent — each kind single-tenant with no root block (or behind a static store
+  not serving its `""`), and messaging under multi-tenant `messaging.tenancy: shared` with no
+  control-plane broker; only a Debug line goes, and the pools' failed-create counts on
+  `/_sys/health-debug` no longer grow by one at startup.
+- gate: match = either half. The cache pre-warm: single-tenant with a cache. The dropped
+  pre-warm: single-tenant without a root database or without a root broker (or behind a static
+  store not serving that kind's `""`), or multi-tenant `messaging.tenancy: shared` with no
+  control-plane broker. no-match = otherwise.
+- apply: none. Expect the new INFO line and one more cache round trip at startup; with Redis
+  unreachable, size `startupProbe` for the extra connect timeout
+  ([startup_defaults.md](startup_defaults.md#messaging-pre-warm-readiness-wait)). An alert keyed on
+  the pre-warm WARN now also fires on a cache unreachable at startup.
 - verify: boot; the startup log carries the cache pre-warm line.
 - ref: [ADR-127](adr_127_resource_plan_rule.md) · `app/slot.go` (`cacheSlot.start`) ·
   `app/slot.go` (`preWarmKind`)
