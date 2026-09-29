@@ -696,6 +696,50 @@ runs inside the transport chain is deferred to the field-level-encryption work
 `RoundTripper` passed to `WithTransport`, which does sit beneath body transforms, at the
 cost of building the base transport yourself.
 
+### Bearer token from a file
+
+`WithBearerTokenFile` sends `Authorization: Bearer <token>` on every request and every retry,
+reading the token from a file once, at `Build()`. It is code-only: there is no configuration key.
+
+```go
+client, err := httpclient.NewBuilder(deps.Logger).
+    WithPeerName("partner-api").
+    WithRetries(3, 500*time.Millisecond).
+    WithBearerTokenFile("/var/run/secrets/tokens/partner-api").
+    Build()
+if err != nil {
+    return err
+}
+```
+
+- **Eager read.** `Build()` trims the path, reads the file, trims surrounding whitespace, and fails when the file
+  is missing, unreadable, not a regular file (checked on the opened file, after symlinks are
+  followed and before any read; the open does not wait for a FIFO writer, so a FIFO or a device is
+  refused unread), larger than 64 KiB, or empty after trimming, or when what is left holds a
+  byte other than visible ASCII (`!` through `~`). That refuses an interior newline or space, a
+  `Bearer` scheme copied into the file, and a UTF-8 byte order mark.
+  The error names the path and never the contents. A path that
+  looks like a token passed in its place — one starting `eyJ` as a JWT does, or a bare name with
+  no directory and no extension — fails `Build()` before any read and is not echoed; write
+  `./token` for a file in the working directory. That check is a heuristic: an opaque token that
+  contains `/` or `.` passes it, so it is read as a path, and the startup error can quote it as
+  that path.
+- **Precedence.** An `Authorization` header the request sets itself — `Request.Headers`, any
+  spelling of the key, even with an empty value, or `Request.Auth` — wins over the file. Request interceptors run after the
+  token is set, so they see it and can still replace it.
+- **Conflicts.** `Build()` fails when the option is combined with `WithBasicAuth` or a default
+  `Authorization` header (`WithDefaultHeader`, any spelling): both would claim the same header.
+- **Logging.** Under `WithLogPayloads(true)` the header is masked by the logger's
+  `SensitiveDataFilter` (its default `auth` and `authorization` needles), and spans never carry
+  request headers.
+- **Scope.** The token is bound to the client, not to a host: every request carries it, whatever
+  URL it names. Use one client per counterparty, and never pass it a URL you did not build (a
+  pagination link, a callback URL).
+- **Redirects.** net/http forwards the header to the same domain or a subdomain of it, whatever
+  the scheme. Unless the `*http.Client` passed to `WithHTTPClient` has a `CheckRedirect` of its
+  own, `Build()` installs one that refuses a redirect from `https` to `http` that would carry an
+  `Authorization` header, without retrying, and keeps net/http's cap of 10 redirects.
+
 ## Metrics
 
 ### Overview
