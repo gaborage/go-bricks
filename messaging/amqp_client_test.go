@@ -717,7 +717,7 @@ func TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher(t *testing.
 
 	// New publisher registers against channel 2; its expected tag is 1
 	// (channel 2's broker session starts fresh).
-	confirmCh2 := make(chan amqp.Confirmation, 1)
+	confirmCh2 := make(chan publishConfirm, 1)
 	c.publishSerial.acquireUncond()
 	c.m.RLock()
 	channel2 := c.channel
@@ -728,7 +728,7 @@ func TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher(t *testing.
 		t.Fatalf("expected channel 2 to start at tag 1, got %d", tag2)
 	}
 	key2 := confirmKey{generation: gen2, tag: tag2}
-	c.pendingPublishes.Store(key2, confirmCh2)
+	c.pendingPublishes.Store(key2, &pendingPublish{confirm: confirmCh2})
 	c.publishSerial.release()
 
 	// Inject a "late" confirm for tag 1 into the OLD generation's notify
@@ -751,6 +751,34 @@ func TestPublishStaleConfirmFromOldChannelDoesNotRouteToNewPublisher(t *testing.
 	// Sanity: the new entry is still registered.
 	if _, ok := c.pendingPublishes.Load(key2); !ok {
 		t.Fatal("new publisher's pendingPublishes entry was unexpectedly removed")
+	}
+}
+
+// TestDispatchConfirmsRecordsAReturnBeforeRoutingItsAck buffers a return and its
+// ack back to back before the dispatcher starts, so its first select finds both
+// ready and picks one at random. Only draining the returns before routing an ack
+// makes the returned outcome certain on every iteration.
+func TestDispatchConfirmsRecordsAReturnBeforeRoutingItsAck(t *testing.T) {
+	for i := range 50 {
+		c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, done: make(chan bool)}
+		confirm := make(chan publishConfirm, 1)
+		c.trackPending(confirmKey{generation: 1, tag: 1}, &pendingPublish{confirm: confirm, messageID: "m-1"})
+		returns := make(chan amqp.Return, 1)
+		src := make(chan amqp.Confirmation, 1)
+		returns <- amqp.Return{ReplyCode: amqp.NoRoute, ReplyText: "NO_ROUTE", Exchange: "ex", RoutingKey: "rk", MessageId: "m-1"}
+		src <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
+
+		go c.dispatchConfirms(src, returns, 1)
+		var got publishConfirm
+		select {
+		case got = <-confirm:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the ack was never routed")
+		}
+		close(c.done)
+
+		require.NotNil(t, got.returned, "iteration %d: the ack was routed before its return was recorded", i)
+		assert.Equal(t, publishReturn{replyCode: amqp.NoRoute, replyText: "NO_ROUTE", messageID: "m-1"}, *got.returned)
 	}
 }
 
@@ -3070,7 +3098,7 @@ type publishAttemptCase struct {
 func TestArmPublishFailureBuildsOnlyForAFailure(t *testing.T) {
 	c := &AMQPClientImpl{resendDelay: 250 * time.Millisecond}
 	key := confirmKey{generation: 7, tag: 42}
-	c.pendingPublishes.Store(key, make(chan amqp.Confirmation, 1))
+	c.pendingPublishes.Store(key, &pendingPublish{confirm: make(chan publishConfirm, 1)})
 
 	require.Nil(t, c.armPublishFailure(nil), "a publish that reached the broker has no retry arm")
 
@@ -3131,6 +3159,9 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := &fakeChannel{publishErr: tt.publishErr}
+			// Mandatory on every case, so every exit must also drop the index entry.
+			options := publishRetryTestOptions
+			options.Mandatory = true
 			c := newClientWithFakeChannel(t, ch)
 			c.resendDelay = 5 * time.Millisecond
 			c.nackBackoff = 7 * time.Millisecond
@@ -3141,12 +3172,13 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			publishing := (&AMQPClientImpl{}).preparePublishing(ctx, publishRetryTestOptions, []byte("msg"))
+			publishing := (&AMQPClientImpl{}).preparePublishing(ctx, options, []byte("msg"))
 			arm, termErr := c.publishAttempt(
-				ctx, publishRetryTestOptions, &publishing, time.Now(), trace.SpanFromContext(ctx), nil,
+				ctx, options, &publishing, time.Now(), trace.SpanFromContext(ctx), nil,
 			)
 			require.NoError(t, termErr)
 			tt.assertArm(t, arm)
+			assert.Empty(t, pendingKeys(c), "the attempt must leave nothing tracked")
 		})
 	}
 }

@@ -60,7 +60,7 @@ type AMQPClientImpl struct {
 
 	// pendingPublishes correlates broker confirmations to the in-flight publish
 	// that issued them. Keyed by (channel generation, DeliveryTag) →
-	// chan amqp.Confirmation (buffered, capacity 1). The generation rotates on
+	// *pendingPublish (confirm channel of capacity 1). The generation rotates on
 	// every changeChannel() so that late confirmations from a torn-down
 	// channel cannot hit a publish registered against the NEW channel — both
 	// channels start their DeliveryTag sequence at 1, so without generation
@@ -69,6 +69,10 @@ type AMQPClientImpl struct {
 	// drained with a synthetic NACK so their publishers retry instead of
 	// hanging on a tag the new generation will never emit.
 	pendingPublishes sync.Map
+	// pendingMandatory indexes the Mandatory entries of pendingPublishes by
+	// mandatoryKey, so a basic.return finds its publish in one lookup.
+	// trackPending and untrackPending keep the two maps in step.
+	pendingMandatory sync.Map
 
 	// generation rotates on every changeChannel() to scope pendingPublishes
 	// entries to a single channel incarnation. Written under publishSerial
@@ -531,10 +535,10 @@ func (c *AMQPClientImpl) publishSlotted(
 	publishStart time.Time,
 	span trace.Span,
 	lastCause error,
-) (confirmCh chan amqp.Confirmation, key confirmKey, publishErr, termErr error) {
+) (confirmCh chan publishConfirm, key confirmKey, publishErr, termErr error) {
 	// publishSerial guards the full critical section: readiness check,
 	// channel snapshot, generation snapshot, GetNextPublishSeqNo,
-	// pendingPublishes.Store, and PublishWithContext. Holding it across
+	// trackPending, and PublishWithContext. Holding it across
 	// all of these means:
 	//   1. The channel and generation are mutually consistent — a
 	//      changeChannel() rotation cannot interleave between our
@@ -568,8 +572,12 @@ func (c *AMQPClientImpl) publishSlotted(
 	}
 	expectedTag := channel.GetNextPublishSeqNo()
 	key = confirmKey{generation: gen, tag: expectedTag}
-	confirmCh = make(chan amqp.Confirmation, 1)
-	c.pendingPublishes.Store(key, confirmCh)
+	confirmCh = make(chan publishConfirm, 1)
+	pending := &pendingPublish{confirm: confirmCh}
+	if options.Mandatory {
+		pending.messageID = publishing.MessageId
+	}
+	c.trackPending(key, pending)
 	publishErr = channel.PublishWithContext(
 		ctx,
 		options.Exchange,
@@ -689,7 +697,7 @@ func (c *AMQPClientImpl) armPublishFailure(err error) *retryArm {
 
 // armConfirmation returns the retry arm for a NACK, or nil for a publish the
 // broker ACKed.
-func (c *AMQPClientImpl) armConfirmation(confirm *amqp.Confirmation) *retryArm {
+func (c *AMQPClientImpl) armConfirmation(confirm *publishConfirm) *retryArm {
 	if confirm.Ack {
 		return nil
 	}
@@ -725,7 +733,7 @@ func (c *AMQPClientImpl) publishAttempt(
 		// Publish never made it to the broker — drop our pending registration.
 		// (A stray broker confirmation for this tag, if it somehow arrives later,
 		// will be silently dropped by the dispatcher's unmatched-tag handling.)
-		c.pendingPublishes.Delete(key)
+		c.untrackPending(key)
 		return arm, nil
 	}
 
@@ -735,10 +743,10 @@ func (c *AMQPClientImpl) publishAttempt(
 	select {
 	case <-ctx.Done():
 		// Cleanup so the dispatcher doesn't hold a stale chan reference.
-		c.pendingPublishes.Delete(key)
+		c.untrackPending(key)
 		return nil, c.publishAbort(ctx, options, publishStart, span, ctx.Err(), lastCause)
 	case <-c.done:
-		c.pendingPublishes.Delete(key)
+		c.untrackPending(key)
 		return nil, c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
 	case confirm := <-confirmCh:
 		arm := c.armConfirmation(&confirm)
@@ -776,7 +784,7 @@ func (c *AMQPClientImpl) publishAttempt(
 		// is still registered. Without this delete every timeout leaks one
 		// pendingPublishes entry until the channel is torn down, and a
 		// silently-stuck broker can grow the map unboundedly.
-		c.pendingPublishes.Delete(key)
+		c.untrackPending(key)
 		return &retryArm{
 			cause:        ErrPublishConfirmTimeout,
 			logMsg:       "Publish confirmation timeout, retrying...",
@@ -1472,7 +1480,7 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	channel.NotifyReturn(returns)
 
 	// Start the dispatcher for this channel incarnation, pinned to newGen
-	// so late confirms from a previous channel (read by the previous
+	// so late confirms and returns from a previous channel (read by the previous
 	// dispatcher, which is still running until its source channel closes)
 	// route only to entries of THAT generation — never to ours.
 	go c.dispatchConfirms(c.notifyConfirm, returns, newGen)
@@ -1484,20 +1492,19 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 // loop kick in cleanly — it captures a fresh DeliveryTag from the new
 // channel/generation and tries again.
 func (c *AMQPClientImpl) drainPendingPublishesWithNack(gen uint64) {
-	c.pendingPublishes.Range(func(key, value any) bool {
+	c.pendingPublishes.Range(func(key, _ any) bool {
 		k, ok := key.(confirmKey)
 		if !ok || k.generation != gen {
 			return true
 		}
-		c.pendingPublishes.Delete(key)
-		ch, ok := value.(chan amqp.Confirmation)
-		if !ok {
+		p := c.untrackPending(k)
+		if p == nil {
 			return true
 		}
 		// Non-blocking send: if the publisher already gave up via ctx.Done,
 		// nobody reads, and we'd otherwise block forever.
 		select {
-		case ch <- amqp.Confirmation{DeliveryTag: k.tag, Ack: false}:
+		case p.confirm <- publishConfirm{Confirmation: amqp.Confirmation{DeliveryTag: k.tag, Ack: false}}:
 		default:
 		}
 		return true
@@ -1513,44 +1520,49 @@ func (c *AMQPClientImpl) drainPendingPublishesWithNack(gen uint64) {
 // from the new generation even though the tags collide.
 //
 // It takes each return off returns as it arrives, so amqp091's reader never
-// waits on the listener.
+// waits on the listener. It also drains the buffered returns before routing
+// each confirmation, so a returned publish's ACK carries its return.
 //
-// Exits when src is closed (channel teardown) OR when c.done is closed (full
-// client shutdown). Unmatched confirmations are silently dropped — they happen
-// when a publish errored out before registering or when the publisher already
-// drained via NACK after channel reinit.
+// Exits when src is closed (channel teardown, after recording the returns still
+// buffered) OR when c.done is closed (full client shutdown). Unmatched
+// confirmations are silently dropped — they happen when a publish errored out
+// before registering or when the publisher already drained via NACK after
+// channel reinit.
 func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation, returns <-chan amqp.Return, gen uint64) {
 	for {
 		select {
 		case <-c.done:
 			return
-		case _, ok := <-returns:
+		case ret, ok := <-returns:
 			if !ok {
 				returns = nil
+				continue
 			}
+			c.recordReturn(gen, &ret)
 		case confirm, ok := <-src:
 			if !ok {
-				return // channel closed by broker / channel teardown
+				// Channel teardown. amqp091 closes the return listener before the
+				// confirm listener, so every return it delivered is buffered now;
+				// record them before exiting, as select may pick this arm first.
+				c.drainReturns(gen, returns)
+				return
 			}
+			returns = c.drainReturns(gen, returns)
 			c.routeConfirm(gen, confirm)
 		}
 	}
 }
 
-// routeConfirm hands one confirmation to the publisher registered for its
-// (generation, DeliveryTag).
+// routeConfirm hands one confirmation, and the return recorded for its publish
+// if any, to the publisher registered for its (generation, DeliveryTag).
 func (c *AMQPClientImpl) routeConfirm(gen uint64, confirm amqp.Confirmation) {
-	v, ok := c.pendingPublishes.LoadAndDelete(confirmKey{generation: gen, tag: confirm.DeliveryTag})
-	if !ok {
-		return
-	}
-	ch, ok := v.(chan amqp.Confirmation)
-	if !ok {
+	p := c.untrackPending(confirmKey{generation: gen, tag: confirm.DeliveryTag})
+	if p == nil {
 		return
 	}
 	// Non-blocking send: publisher may have abandoned via ctx.Done.
 	select {
-	case ch <- confirm:
+	case p.confirm <- publishConfirm{Confirmation: confirm, returned: p.returned}:
 	default:
 	}
 }

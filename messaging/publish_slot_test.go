@@ -80,7 +80,7 @@ func awaitResult(t *testing.T, result <-chan error) error {
 	case err := <-result:
 		return err
 	case <-time.After(2 * time.Second):
-		t.Fatal("publish never returned; the slot wait is not bounded by the caller's deadline")
+		t.Fatal("publish never returned")
 		return nil
 	}
 }
