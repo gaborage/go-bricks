@@ -79,28 +79,39 @@ broker and cache blocks — each with its own exemption set, and the sets drifte
 ## Consequences
 
 - **The next breaking change is mechanical.** The table test states the rule's answer beside
-  today's in every mode the build accepts; the cells that differ are exactly what ADR-127 flips:
+  today's in every mode the build accepts. With the built-in store or a dynamic store, the cells
+  that differ are what ADR-127 flips:
   - single-tenant with `""` absent: no doomed database or messaging pre-warm (D4);
   - single-tenant with the cache present, at runtime or behind a `CacheConnector`: the cache
     pre-warms (D5);
   - single-tenant behind a dynamic store with no root broker: messaging declarations boot instead
     of aborting (D7);
-  - a single-tenant caller-supplied static store with an empty root database or broker block:
-    that kind's flag reads false (D2);
-  - any caller-supplied static store with an empty root cache block: the cache probe stops
-    leasing, and in single-tenant the cache skips pre-init and its flag reads false (D1, D2);
   - multi-tenant shared messaging with a root broker: messaging pre-init leases `""` at build (D3)
     and readiness stops relabelling (D8);
   - multi-tenant shared messaging without one: `MessagingConfigured` reads false (D2),
-    declarations refuse startup (D6), no pre-warm (D4), and readiness reads `not_configured` (D8).
+    declarations refuse startup (D6), no pre-warm (D4), and readiness reads `not_configured` (D8);
+  - multi-tenant shared messaging behind a dynamic store: readiness stops relabelling (D8).
 
-  The rule's presence asks a caller-supplied static store for `""` rather than reading the root
-  blocks; once ADR-127 does, those modes also follow what the store answers.
+  Beside a caller-supplied static store the rule cells are the root-block reading this plan can
+  compute without a lookup. ADR-127 asks the store for `""` instead, so there each flip depends on
+  what the store answers:
+  - single-tenant, a store that serves `""` beside an empty root block: the database absence WARN,
+    the `DatabaseRequirer` abort and the #366 declarations abort give way to a boot, and database
+    and messaging pre-init lease `""` fatally at build;
+  - single-tenant, a store that does not serve `""`: that kind's flag reads false (D2); where the
+    root block is set, today's fatal pre-init of `""` gives way to the absence WARN and the
+    `DatabaseRequirer` and #366 gates;
+  - multi-tenant shared messaging behind a store that serves `""`: messaging pre-init leases `""`
+    fatally at build (D3) and readiness stops relabelling (D8); behind one that does not, the
+    shared-messaging flips above;
+  - the cache follows the store's cache answer: absent stops the probe's lease, and in
+    single-tenant skips pre-init and reads the flag false (D1, D2); present pre-warms in
+    single-tenant (D5).
 - **`configured` and `unavailable` disagree until ADR-127** wherever D2 fires; a reader uses the
   answer its row names.
 - **The gate bites the plan.** Every decision is an `==`/`!=` comparison of the two facts or of
-  the kind, discriminated by a named mode, and a meta-test fails any ledger row that changes no
-  answer.
+  the kind, discriminated by a named mode. Meta-tests fail any ledger row that changes no answer,
+  and any two rows that pin one answer on one kind in the same mode.
 - **Planning dials nothing** and makes no store lookup; it reads config.
 
 ## References
