@@ -369,9 +369,9 @@ func TestResourcePlanLookupFailureFailsStartup(t *testing.T) {
 	}
 }
 
-// TestResourcePlanLookupHonoursTheKindBudget pins that each kind's lookup runs under its own
+// TestResourcePlanLookupHonorsTheKindBudget pins that each kind's lookup runs under its own
 // app.startup budget, and that a store outlasting it fails startup.
-func TestResourcePlanLookupHonoursTheKindBudget(t *testing.T) {
+func TestResourcePlanLookupHonorsTheKindBudget(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.App.Startup = config.StartupConfig{Database: time.Hour, Messaging: 2 * time.Hour, Cache: 3 * time.Hour}
 	store := &answeringStore{}

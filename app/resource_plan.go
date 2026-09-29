@@ -183,7 +183,7 @@ func presenceOf(ctx context.Context, cfg *config.Config, opts *Options, store Te
 	if config.IsNotConfigured(err) {
 		return keyAbsent, nil
 	}
-	return keyAtRuntime, fmt.Errorf("resource plan: %s lookup of the control-plane key %q: %w", kind, "", err)
+	return keyAtRuntime, fmt.Errorf(`resource plan: %s lookup of the control-plane key "": %w`, kind, err)
 }
 
 // lookupControlPlaneKey asks store for kind's "" under the budget that kind's pre-init gets.
