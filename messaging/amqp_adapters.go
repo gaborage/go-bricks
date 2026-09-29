@@ -29,6 +29,9 @@ type amqpChannel interface {
 	QueueBind(name, key, exchange string, noWait bool, args amqp.Table) error
 	NotifyClose(c chan *amqp.Error) chan *amqp.Error
 	NotifyPublish(confirm chan amqp.Confirmation) chan amqp.Confirmation
+	// NotifyReturn registers a basic.return listener; amqp091 drops a return
+	// that no listener takes.
+	NotifyReturn(c chan amqp.Return) chan amqp.Return
 	// GetNextPublishSeqNo returns the DeliveryTag that the broker will assign
 	// to the next call to PublishWithContext on this channel. Capturing this
 	// BEFORE publish lets us correlate the confirmation that comes back later
