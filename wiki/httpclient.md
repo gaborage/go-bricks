@@ -696,16 +696,21 @@ runs inside the transport chain is deferred to the field-level-encryption work
 `RoundTripper` passed to `WithTransport`, which does sit beneath body transforms, at the
 cost of building the base transport yourself.
 
-### Bearer token from a file
+### Bearer token from a rotating file
 
 `WithBearerTokenFile` sends `Authorization: Bearer <token>` on every request and every retry,
-reading the token from a file once, at `Build()`. It is code-only: there is no configuration key.
+reading the token from a file that something else rotates on disk — a Kubernetes projected
+service-account token is the common case. It is code-only: there is no configuration key.
+
+Unlike the OAuth 1.0a and x-pay-token recipes above, this one ships as a helper, because the
+framework's safe read error for operator-named secret files (the path quoted and bounded, never
+the contents) lives in `internal/secretfile`, out of reach of consumer code.
 
 ```go
 client, err := httpclient.NewBuilder(deps.Logger).
     WithPeerName("partner-api").
     WithRetries(3, 500*time.Millisecond).
-    WithBearerTokenFile("/var/run/secrets/tokens/partner-api").
+    WithBearerTokenFile("/var/run/secrets/tokens/partner-api", httpclient.BearerTokenFileOptions{}).
     Build()
 if err != nil {
     return err
@@ -724,6 +729,26 @@ if err != nil {
   `./token` for a file in the working directory. That check is a heuristic: an opaque token that
   contains `/` or `.` passes it, so it is read as a path, and the startup error can quote it as
   that path.
+- **Refresh.** The token is served for `RefreshInterval` (zero means
+  `DefaultBearerTokenRefreshInterval`, one minute — client-go's period for the same file; a negative
+  value fails `Build()`), then the next attempt re-reads the file. Each attempt checks, so a retry
+  that lands after the interval lapsed carries a token rotated since the attempt before it, unless
+  another request holds the refresh lock at that moment; within the interval it resends the cached
+  one. The read runs on the request path, in the one request that takes a lock, so concurrent
+  requests at the boundary cause one read, and there is no background goroutine to stop. A request
+  that finds another request holding the refresh lock, whether re-reading the file or only checking
+  that a re-read is not yet due, is served the last good token; a stalled read holds only the
+  request performing it, which waits whatever its deadline, with nothing logged until the read
+  returns. A read stalled past the token's own expiry keeps serving the expired token until it
+  returns. A symlink swap (the kubelet's atomic writer) is picked up; so is an in-place write, but a
+  writer that truncates and then writes can be caught mid-write. A re-read that finds the file
+  empty then fails as a refresh (below): the last good token is kept, and the new token is picked
+  up only one full interval later. A re-read that finds a truncated token that is still visible
+  ASCII serves it for an interval. So write a temporary file in the same directory and rename it
+  over the path: a rename is atomic, as the kubelet's symlink swap is.
+- **Failed refresh.** A re-read that fails any check the eager read applies keeps the last good
+  token and logs one WARN naming the path; the next re-read is one interval later. Deleting or
+  emptying the file therefore does not revoke the cached token.
 - **Precedence.** An `Authorization` header the request sets itself — `Request.Headers`, any
   spelling of the key, even with an empty value, or `Request.Auth` — wins over the file. Request interceptors run after the
   token is set, so they see it and can still replace it.
@@ -739,6 +764,33 @@ if err != nil {
   the scheme. Unless the `*http.Client` passed to `WithHTTPClient` has a `CheckRedirect` of its
   own, `Build()` installs one that refuses a redirect from `https` to `http` that would carry an
   `Authorization` header, without retrying, and keeps net/http's cap of 10 redirects.
+
+A projected service-account token for that path:
+
+```yaml
+spec:
+  serviceAccountName: payments
+  containers:
+    - name: app
+      volumeMounts:
+        - name: partner-token
+          mountPath: /var/run/secrets/tokens
+          readOnly: true
+  volumes:
+    - name: partner-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: partner-api
+              audience: partner-api
+              expirationSeconds: 3600
+```
+
+The kubelet rewrites the token once it is 80% through `expirationSeconds` (or older than 24
+hours) — about 12 minutes before expiry for the 3600 above — so the default one-minute interval
+picks the new token up long before the old one lapses. `expirationSeconds` cannot go below 600;
+keep `RefreshInterval` at most a tenth of whatever you set: a failed re-read waits a full interval
+for the next one, and the rotated token must still arrive before the old one lapses.
 
 ## Metrics
 

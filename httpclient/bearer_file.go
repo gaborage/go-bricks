@@ -7,10 +7,19 @@ import (
 	nethttp "net/http"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/gaborage/go-bricks/internal/secretfile"
+	"github.com/gaborage/go-bricks/logger"
 )
+
+// DefaultBearerTokenRefreshInterval is the RefreshInterval a zero
+// BearerTokenFileOptions gets — the period client-go re-reads a projected
+// service-account token on.
+const DefaultBearerTokenRefreshInterval = time.Minute
 
 const headerAuthorization = "Authorization"
 
@@ -22,13 +31,26 @@ var (
 	errTokenFileTooLarge = fmt.Errorf("larger than %d bytes", maxBearerTokenFileBytes)
 )
 
-// bearerFileSpec is what WithBearerTokenFile records; nil means the option is unset.
+// BearerTokenFileOptions configures Builder.WithBearerTokenFile.
+type BearerTokenFileOptions struct {
+	// RefreshInterval is how long a token read from the file is served before the
+	// next request re-reads it. Zero means DefaultBearerTokenRefreshInterval; a
+	// negative value fails Build.
+	RefreshInterval time.Duration
+}
+
+// bearerFileSpec is what WithBearerTokenFile records; nil means the option is
+// unset. The pointer also keeps Builder comparable despite the func test seams.
 type bearerFileSpec struct {
-	path string
+	path     string
+	opts     BearerTokenFileOptions
+	now      func() time.Time
+	readFile func(string) ([]byte, error)
 }
 
 // WithBearerTokenFile sends "Authorization: Bearer <token>" on every request and
-// every retry, reading the token from path once, at Build.
+// every retry, reading the token from path — a file that rotates on disk, such as
+// a Kubernetes projected service-account token.
 //
 // Build trims the path, reads the file eagerly, trims surrounding whitespace,
 // and fails when the file is missing, unreadable, not a regular file, larger
@@ -40,17 +62,32 @@ type bearerFileSpec struct {
 // Build also fails when this option is combined with WithBasicAuth or a default
 // Authorization header. Unless the client already has a CheckRedirect, Build
 // installs one that refuses a redirect from https to http that would carry the
-// token. An Authorization header the request sets itself, through
-// Request.Headers or Request.Auth, wins over the file. The last call wins.
-func (b *Builder) WithBearerTokenFile(path string) *Builder {
-	b.bearer = &bearerFileSpec{path: path}
+// token. After Build the file is re-read at most once per RefreshInterval, on
+// the request path; a failed re-read keeps the last good token and logs one
+// WARN per interval. A request that finds another request holding the refresh
+// lock, whether re-reading the file or only checking that a re-read is not yet
+// due, is served the last good token; a stalled read holds only the request
+// performing it, which waits whatever its deadline, with nothing logged until
+// the read returns. A read stalled past the token's own expiry keeps serving the
+// expired token until it returns. An Authorization header the request sets
+// itself, through Request.Headers or Request.Auth, wins over the file. The last
+// call wins.
+func (b *Builder) WithBearerTokenFile(path string, opts BearerTokenFileOptions) *Builder {
+	b.bearer = &bearerFileSpec{path: path, opts: opts, now: time.Now, readFile: readBearerTokenFile}
 	return b
 }
 
-// bearerTokenFile holds the token read from the file at Build.
+// bearerTokenFile serves the cached header value and re-reads the file once it is due.
 type bearerTokenFile struct {
-	path  string
-	token string
+	path     string
+	interval time.Duration
+	now      func() time.Time
+	readFile func(string) ([]byte, error)
+	logger   logger.Logger
+
+	mu     sync.Mutex             // guards next; a request only tries it
+	header atomic.Pointer[string] // "Bearer <token>"
+	next   time.Time
 }
 
 // newBearerTokenFile validates WithBearerTokenFile's input against the rest of
@@ -77,13 +114,24 @@ func (b *Builder) newBearerTokenFile() (*bearerTokenFile, error) {
 			return nil, errors.New("httpclient: WithBearerTokenFile cannot be combined with a default Authorization header")
 		}
 	}
+	interval := spec.opts.RefreshInterval
+	if interval < 0 {
+		return nil, fmt.Errorf("httpclient: WithBearerTokenFile: RefreshInterval %s is negative", interval)
+	}
+	if interval == 0 {
+		interval = DefaultBearerTokenRefreshInterval
+	}
 
-	s := &bearerTokenFile{path: path}
-	token, err := s.read()
-	if err != nil {
+	s := &bearerTokenFile{
+		path:     path,
+		interval: interval,
+		now:      spec.now,
+		readFile: spec.readFile,
+		logger:   b.logger,
+	}
+	if err := s.refresh(); err != nil {
 		return nil, err
 	}
-	s.token = token
 	return s, nil
 }
 
@@ -123,7 +171,7 @@ func readBearerTokenFile(path string) ([]byte, error) {
 }
 
 func (s *bearerTokenFile) read() (string, error) {
-	data, err := readBearerTokenFile(s.path)
+	data, err := s.readFile(s.path)
 	if err != nil {
 		return "", fmt.Errorf("httpclient: bearer token file: %w", secretfile.ReadError(s.path, err))
 	}
@@ -149,9 +197,47 @@ func isVisibleASCII(v string) bool {
 	return true
 }
 
+// current returns the header value to send, re-reading the file when it is due.
+// Only the request that takes the lock checks and reads; a request that finds it
+// held is served the cached header rather than waiting. A failed read is logged
+// after the lock is released.
+func (s *bearerTokenFile) current() string {
+	if !s.mu.TryLock() {
+		return *s.header.Load()
+	}
+	err := func() error {
+		defer s.mu.Unlock()
+		return s.refresh()
+	}()
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("httpclient: bearer token file refresh failed; keeping the last good token")
+	}
+	return *s.header.Load()
+}
+
+// refresh re-reads the file when it is due; the caller holds mu, or is Build,
+// before the file is shared. A failed read keeps the cached header and returns
+// the read error.
+func (s *bearerTokenFile) refresh() error {
+	now := s.now()
+	if now.Before(s.next) {
+		return nil
+	}
+	// Advanced before the read: a failure waits a full interval to retry, rather
+	// than re-reading and re-warning on every request until the file heals.
+	s.next = now.Add(s.interval)
+	token, err := s.read()
+	if err != nil {
+		return err
+	}
+	header := "Bearer " + token
+	s.header.Store(&header)
+	return nil
+}
+
 func (s *bearerTokenFile) apply(req *nethttp.Request) {
 	if _, set := req.Header[headerAuthorization]; set {
 		return
 	}
-	req.Header.Set(headerAuthorization, "Bearer "+s.token)
+	req.Header.Set(headerAuthorization, s.current())
 }
