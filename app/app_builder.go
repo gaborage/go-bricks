@@ -216,7 +216,6 @@ func (b *Builder) CreateApp() *Builder {
 		messagingManager: b.bundle.messagingManager,
 		cacheManager:     b.bundle.cacheManager,
 		resourceProvider: b.bundle.provider,
-		plan:             b.bundle.plan,
 	}
 	if b.opts != nil && b.opts.PostRegisterRoutes != nil {
 		b.app.postRegisterRoutes = b.opts.PostRegisterRoutes
@@ -224,8 +223,8 @@ func (b *Builder) CreateApp() *Builder {
 	}
 
 	// Slots are installed here, before ConfigureRuntimeHelpers runs pre-initialization over
-	// them. cacheAbsent is the one verdict App cannot re-derive: it reads Options.
-	b.app.installSlots(slotInputs{cacheAbsent: rootCacheAbsent(b.cfg, b.opts)})
+	// them, each with its own kind's row of the Resource plan.
+	b.app.installSlots(b.bundle.plan)
 
 	return b
 }
@@ -244,7 +243,7 @@ func (b *Builder) InitializeRegistry() *Builder {
 	registry := NewModuleRegistry(b.bundle.deps)
 	// Set post-construction: NewModuleRegistry is shipped API and must keep its
 	// signature byte-identical (apidiff gate).
-	registry.rootDBAbsent = rootDatabaseAbsent(b.cfg)
+	registry.rootDBAbsent = b.bundle.plan.database.unavailable()
 	b.app.registry = registry
 	return b
 }
@@ -273,21 +272,12 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 		}
 	}
 
-	// Determine if we should skip pre-initialization
-	// Skip for multi-tenant mode (resources loaded per-tenant)
-	skipPreInit := b.cfg.Multitenant.Enabled
-
-	// Skip for dynamic source configuration; WithConfig made source.type agree with
-	// Options.ResourceSource.IsDynamic() (ADR-125), so this also covers a dynamic store.
-	if b.cfg.Source.Type == config.SourceTypeDynamic {
-		skipPreInit = true
+	// Each slot's preInit asks its own row whether to lease "". Behind a dynamic store no
+	// row can, so every kind is skipped; source.type: dynamic always comes with one (ADR-125).
+	if b.app.plan.keyedAtRuntime() {
 		b.logger.Info().Msg("Dynamic source type detected - skipping pre-initialization")
 	}
-
-	// Only pre-initialize for single-tenant mode with static configuration
-	if !skipPreInit {
-		b.performPreInitialization()
-	}
+	b.performPreInitialization()
 
 	return b
 }
@@ -333,7 +323,7 @@ func (b *Builder) performPreInitialization() {
 	// is threaded as a parameter (never stored on the builder), matching the framework's
 	// startup-at-Background precedent.
 	parent := context.Background()
-	b.logger.Debug().Msg("Performing pre-initialization for static single-tenant mode")
+	b.logger.Debug().Msg("Performing pre-initialization")
 
 	for _, slot := range b.app.slots {
 		err := slot.preInit(parent)

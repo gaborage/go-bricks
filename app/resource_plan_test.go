@@ -16,7 +16,8 @@ import (
 
 // planMode is one deployment mode the build accepts. spec switches inputs on: mt, shared
 // (messaging.tenancy), dynamic (source.type dynamic beside a dynamic store), caller (a static
-// Options.ResourceSource), cacheconn, and the db, broker and cache root blocks. want is today's
+// Options.ResourceSource), cacheconn, the db, broker and cache root blocks, and dbconn (a root
+// database named by its connection string alone). want is today's
 // answer per kind (database, messaging, cache); rule is the rule's, where it differs. Beside a
 // caller store the rule cells are the root-block reading the plan can compute without a lookup;
 // ADR-127 decides those from what the store answers for "".
@@ -59,6 +60,7 @@ var planModes = []planMode{
 	// ST-root, ST-streams
 	{name: "st_root", spec: "db broker cache", want: kinds{stPresentPrewarm, stPresentPrewarm, stPresent}, rule: kinds{asToday, asToday, stPresentPrewarm}},
 	{name: "st_db_cache_only", spec: "db cache", want: kinds{stPresentPrewarm, stAbsentPrewarm, stPresent}, rule: kinds{asToday, stAbsent, stPresentPrewarm}},
+	{name: "st_dbconn_only", spec: "dbconn", want: kinds{stPresentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{asToday, stAbsent, asToday}},
 	// ST-noroot
 	{name: "st_noroot", spec: "", want: kinds{stAbsentPrewarm, stAbsentPrewarm, stAbsentSkip}, rule: kinds{stAbsent, stAbsent, asToday}},
 	// ST-shared-noroot: the ADR-041 env-parity no-op
@@ -109,6 +111,10 @@ func (m *planMode) inputs() (planInputs, *dynamicResourceSource) {
 	if on["db"] {
 		cfg.Database.Host = "db.internal"
 	}
+	if on["dbconn"] {
+		cfg.Database.Type = config.PostgreSQL
+		cfg.Database.ConnectionString = "postgres://db.internal/app"
+	}
 	if on["broker"] {
 		cfg.Messaging.Broker.URL = "amqp://broker/"
 	}
@@ -130,6 +136,16 @@ func (m *planMode) inputs() (planInputs, *dynamicResourceSource) {
 		opts.CacheConnector = func(context.Context, string) (cache.Cache, error) { return nil, nil }
 	}
 	return planInputs{cfg: cfg, opts: opts, store: newFactoryResolverForConfig(opts, cfg).ResourceSource(cfg)}, caller
+}
+
+// fixturePlan is the plan a fixture App built from cfg gets: cfg's built-in store beside a
+// CacheConnector, which is how the fixtures' cache managers dial. A nil cfg plans nothing.
+func fixturePlan(cfg *config.Config) resourcePlan {
+	if cfg == nil {
+		return resourcePlan{}
+	}
+	opts := &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}
+	return planResources(cfg, opts, config.NewTenantStore(cfg))
 }
 
 var (
@@ -278,94 +294,6 @@ func TestResourcePlanPresenceMatchesBuiltInStore(t *testing.T) {
 		assert.Equal(t, asPresence(msgErr), plan.messaging.presence, m.name)
 		assert.Equal(t, asPresence(cacheErr), plan.cache.presence, m.name)
 	}
-}
-
-// TestResourcePlanMatchesLegacyPredicates is ADR-126's behavior-preservation proof: in every
-// mode each answer equals the predicate, or the transcribed inline condition, that answers it
-// today. It goes once those readers read the plan.
-func TestResourcePlanMatchesLegacyPredicates(t *testing.T) {
-	for _, m := range planModes {
-		t.Run(m.name, func(t *testing.T) {
-			in, _ := m.inputs()
-			assert.Equal(t, legacyAnswers(in), planAnswers(planResources(in.cfg, in.opts, in.store)))
-		})
-	}
-}
-
-// legacyAnswers asks each reader the plan replaces, keyed by the answer that replaces it.
-func legacyAnswers(in planInputs) map[string]any {
-	cfg, opts := in.cfg, in.opts
-	a := &App{cfg: cfg}
-	b := &Builder{cfg: cfg, opts: opts, bundle: &dependencyBundle{deps: &ModuleDeps{}}, app: &App{}}
-	dbAbsent := b.InitializeRegistry().app.registry.rootDBAbsent // the WARN's predicate, as wired
-	decls := messaging.NewDeclarations()
-	decls.RegisterExchange(&messaging.ExchangeDeclaration{Name: "orders", Type: "topic"})
-	skipPreInit := cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic // ConfigureRuntimeHelpers
-	perKey := cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic ||
-		(opts != nil && opts.ResourceSource != nil) // markConfigured before ADR-126
-	seal := messaging.SealTenancyDisabled // configureSealing
-	switch {
-	case a.perTenantMessaging():
-		seal = messaging.SealTenancyPerTenant
-	case a.multiTenant():
-		seal = messaging.SealTenancyShared
-	}
-	// The slots' describe, preInit and start conditions, transcribed; the #366 gate, asked.
-	answers := map[string]any{
-		"database.unavailable":             dbAbsent,
-		"database.configured":              perKey || !dbAbsent,
-		"database.preInits":                !skipPreInit && config.IsDatabaseConfigured(&cfg.Database),
-		"database.preWarms":                !a.multiTenant(),
-		"database.probe":                   probeDescription{perTenant: a.multiTenant()},
-		"messaging.unavailable":            a.assertMessagingConfiguredIfDeclared(decls) != nil,
-		"messaging.configured":             perKey || config.IsMessagingConfigured(&cfg.Messaging),
-		"messaging.preInits":               !skipPreInit && config.IsMessagingConfigured(&cfg.Messaging),
-		"messaging.preWarms":               !a.perTenantMessaging(),
-		"messaging.resolvesOnControlPlane": !a.perTenantMessaging(),
-		"messaging.probe":                  probeDescription{perTenant: a.multiTenant()},
-		"cache.configured":                 perKey || !rootCacheAbsent(cfg, opts),
-		"cache.preInits":                   !skipPreInit && !rootCacheAbsent(cfg, opts),
-		"cache.preWarms":                   false,
-		"cache.probe":                      probeDescription{absent: rootCacheAbsent(cfg, opts), perTenant: a.multiTenant()},
-		"multitenant":                      a.multiTenant(),
-		"amqpStamps":                       newManagerConfigBuilderFromConfig(cfg).tenantStamps,
-		"streamStamps":                     a.multiTenant() && a.sharedMessaging(),
-		"refusesStreams":                   a.perTenantMessaging(),
-		"sealTenancy":                      seal,
-	}
-	if a.multiTenant() {
-		answers["SetMessagingTenancy"] = cfg.Messaging.Tenancy
-	}
-	return answers
-}
-
-func planAnswers(p resourcePlan) map[string]any {
-	answers := map[string]any{
-		"database.unavailable":             p.database.unavailable(),
-		"database.configured":              p.database.configured(),
-		"database.preInits":                p.database.preInits(),
-		"database.preWarms":                p.database.preWarms(),
-		"database.probe":                   p.database.probe(probeDescription{}),
-		"messaging.unavailable":            p.messaging.unavailable(),
-		"messaging.configured":             p.messaging.configured(),
-		"messaging.preInits":               p.messaging.preInits(),
-		"messaging.preWarms":               p.messaging.preWarms(),
-		"messaging.resolvesOnControlPlane": p.messaging.resolvesOnControlPlane(),
-		"messaging.probe":                  p.messaging.probe(probeDescription{}),
-		"cache.configured":                 p.cache.configured(),
-		"cache.preInits":                   p.cache.preInits(),
-		"cache.preWarms":                   p.cache.preWarms(),
-		"cache.probe":                      p.cache.probe(probeDescription{}),
-		"multitenant":                      p.multitenant(),
-		"amqpStamps":                       p.tenantStamps(),
-		"streamStamps":                     p.tenantStamps(),
-		"refusesStreams":                   p.refusesStreams(),
-		"sealTenancy":                      p.sealTenancy(),
-	}
-	if p.multitenant() {
-		answers["SetMessagingTenancy"] = p.messaging.tenancy.String()
-	}
-	return answers
 }
 
 // TestNewWithConfigCarriesTheResourcePlan pins the wiring: the Builder plans from its Options

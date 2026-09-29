@@ -493,7 +493,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		opt(fixture)
 	}
 
-	fixture.app.installSlots(slotInputs{})
+	fixture.app.installSlots(fixturePlan(fixture.app.cfg))
 	fixture.rebuildLifecycle()
 	fixture.server.RegisterReadyHandler(fixture.app.readyCheck)
 
@@ -507,6 +507,13 @@ func (f *testAppFixture) rebuildLifecycle() {
 	sealAndJudge(f.app)
 	f.app.closers = nil
 	f.app.registerSlotClosers()
+}
+
+// replan re-plans the fixture after a test edited its cfg: each slot holds the row planned at
+// install, so an edit the plan reads is invisible to the slots until this runs.
+func (f *testAppFixture) replan() {
+	f.app.installSlots(fixturePlan(f.app.cfg))
+	f.rebuildLifecycle()
 }
 
 func withSignalHandler(handler SignalHandler) fixtureOption {
@@ -811,7 +818,7 @@ func TestSlotCriticalityFromLoadedConfig(t *testing.T) {
 			app := &App{cfg: loadConfigFromYAML(t, minimumValidConfig+tc.yaml), logger: logger.New("error", false)}
 			tc.wire(t, app)
 
-			app.installSlots(slotInputs{})
+			app.installSlots(fixturePlan(app.cfg))
 
 			status := slotDescription(t, app, tc.component).Run(context.Background())
 			assert.Equal(t, tc.component, status.Name)
@@ -862,6 +869,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			name: "database not configured",
 			prepare: func(f *testAppFixture) {
 				f.app.cfg.Database = config.DatabaseConfig{}
+				f.replan()
 				f.messaging.SetReady(true)
 			},
 			expectedStatus: http.StatusOK,
@@ -1261,6 +1269,7 @@ func perTenantMessagingFixture(t *testing.T, client messaging.AMQPClient) *testA
 	f.db.On(methodHealth, mock.Anything).Return(nil)
 	f.app.cfg.Multitenant.Enabled = true
 	f.app.cfg.Messaging.Consumers.Critical = true
+	f.replan()
 	f.useMessagingManager(t, messagingManagerOn(t, &tenantOnlyBrokerSource{}, client), testTenantID)
 
 	return f

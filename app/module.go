@@ -72,7 +72,7 @@ type GlobalMiddlewareRegisterer interface {
 // whether the service is deliberately database-free or its configuration failed to
 // reach the process (a dropped secret mount). No amount of config inspection separates
 // those, so the module supplies the missing fact. Deployments that resolve database
-// config at runtime are exempt — see rootDatabaseAbsent for that set.
+// config at runtime are exempt — the Resource plan decides that set (ADR-126).
 //
 // Implementing the interface is not itself the declaration: RequiresDatabase may
 // return false, so a module can gate the requirement on its own construction-time

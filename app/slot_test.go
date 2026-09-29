@@ -68,7 +68,7 @@ func newSlotTestAppWithLogger(t *testing.T, log logger.Logger, withDB, withMessa
 		a.messagingManager = messagingManager
 	}
 
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 	return a
 }
 
@@ -161,6 +161,24 @@ func TestInstallSlotsCoversEveryKindInRegistrationOrder(t *testing.T) {
 	assert.Equal(t,
 		[]string{componentDatabase, componentMessaging, componentCache, componentStreams},
 		slotNames(a))
+}
+
+// TestInstallSlotsHandsEachSlotItsOwnRow pins that each slot reads its own kind's row, so a
+// transposed pair cannot hand the cache the database's answers.
+func TestInstallSlotsHandsEachSlotItsOwnRow(t *testing.T) {
+	plan := resourcePlan{
+		database:  kindPlan{kind: componentDatabase, tenancy: perTenantTenancy, presence: keyAbsent},
+		messaging: kindPlan{kind: componentMessaging, tenancy: sharedTenancy, presence: keyPresent},
+		cache:     kindPlan{kind: componentCache, tenancy: perTenantTenancy, presence: keyPresent},
+	}
+	a := &App{}
+
+	a.installSlots(plan)
+
+	assert.Equal(t, plan, a.plan)
+	assert.Equal(t, plan.database, a.slots[0].(*databaseSlot).plan)
+	assert.Equal(t, plan.messaging, a.slots[1].(*messagingSlot).plan)
+	assert.Equal(t, plan.cache, a.slots[2].(*cacheSlot).plan)
 }
 
 // TestSlotWalksCoverEveryKind is the table the spec asks for: for each kind, whether it
@@ -262,11 +280,10 @@ func TestStreamsSlotContributesItsCloserOnceItsManagerExists(t *testing.T) {
 	assertCloserIdentity(t, a)
 }
 
-// TestCacheSlotTakesAbsenceFromItsInputs pins that the cache description's absence arm is
-// driven by the Builder's verdict rather than by state stored on App: absence needs
-// Options, which only the Builder holds, so a second copy on App could drift from it. The
-// connector always fails, so the two arms are told apart by whether it was reached at all.
-func TestCacheSlotTakesAbsenceFromItsInputs(t *testing.T) {
+// TestCacheSlotTakesAbsenceFromItsRow pins that the cache description's absence arm is
+// driven by the cache's row of the plan rather than by state stored on App. The connector
+// always fails, so the two arms are told apart by whether it was reached at all.
+func TestCacheSlotTakesAbsenceFromItsRow(t *testing.T) {
 	newApp := func(absent bool) *App {
 		a := &App{
 			cfg:    defaultTestConfig(),
@@ -274,7 +291,7 @@ func TestCacheSlotTakesAbsenceFromItsInputs(t *testing.T) {
 			cacheManager: createTestCacheManagerWithGetError(t,
 				errNeverReachTheConnector),
 		}
-		a.installSlots(slotInputs{cacheAbsent: absent})
+		a.installSlots(resourcePlan{cache: describedRow(componentCache, false, absent)})
 		return a
 	}
 
@@ -328,15 +345,59 @@ func TestSlotPreInitFatality(t *testing.T) {
 	}
 }
 
-// TestDatabaseSlotPreInitSkipsUnconfiguredKind pins the pre-check: an unconfigured database
-// is skipped without ever leasing, so the pool's error counter starts at a true zero.
-func TestDatabaseSlotPreInitSkipsUnconfiguredKind(t *testing.T) {
-	a := newSlotTestApp(t, true, false)
-	a.cfg.Database = config.DatabaseConfig{} // nothing configured
+// TestDatabaseSlotPreInitFollowsItsRow pins the pre-check: a database whose row does not
+// pre-init is skipped without ever leasing, so the pool's error counter starts at a true zero;
+// one whose row does opens the connection.
+func TestDatabaseSlotPreInitFollowsItsRow(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		absent bool
+		opened int
+	}{
+		{name: "row_says_no", absent: true, opened: 0},
+		{name: "row_says_yes", absent: false, opened: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a := newSlotTestApp(t, true, false)
+			a.installSlots(resourcePlan{database: describedRow(componentDatabase, false, tt.absent)})
 
-	require.NoError(t, a.slots[0].preInit(context.Background()))
-	assert.Equal(t, 0, statsInt(t, a.dbManager.Stats(), "active_connections"),
-		"the unconfigured arm must never open a connection")
+			require.NoError(t, a.slots[0].preInit(context.Background()))
+			assert.Equal(t, tt.opened, statsInt(t, a.dbManager.Stats(), "active_connections"))
+		})
+	}
+}
+
+// TestMessagingSlotPreInitFollowsItsRow pins that the messaging slot asks its own row: the
+// database row always says the opposite, so a slot reading it leases a broker-less "" or skips
+// a present one. The provider refuses and counts every lookup.
+func TestMessagingSlotPreInitFollowsItsRow(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		absent  bool
+		lookups int
+		wantErr error
+	}{
+		{name: "row_says_no", absent: true},
+		{name: "row_says_yes", lookups: 1, wantErr: errBrokerLookupFailed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			log := logger.New("error", false)
+			source := &scriptedBrokerURLProvider{}
+			manager := newFailingConsumerManager(t, log, source)
+			t.Cleanup(func() { assert.NoError(t, manager.Close()) })
+
+			a := &App{cfg: defaultTestConfig(), logger: log, messagingManager: manager}
+			a.installSlots(resourcePlan{
+				database:  describedRow(componentDatabase, false, !tt.absent),
+				messaging: describedRow(componentMessaging, false, tt.absent),
+			})
+
+			err := slotOf(t, a, componentMessaging).preInit(context.Background())
+
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.lookups, source.callCount())
+		})
+	}
 }
 
 // TestDatabaseSlotPreInitReportsLeaseFailure pins that the raw failure reaches the caller,
@@ -352,7 +413,7 @@ func TestDatabaseSlotPreInitReportsLeaseFailure(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
 
 	a := &App{cfg: cfg, logger: log, dbManager: dbManager}
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 
 	err := a.slots[0].preInit(context.Background())
 
@@ -360,9 +421,8 @@ func TestDatabaseSlotPreInitReportsLeaseFailure(t *testing.T) {
 	assert.ErrorIs(t, err, errNeverReachTheConnector)
 }
 
-// TestCacheSlotPreInitSkipsAbsentCache pins that the cache is never leased when the fixed ""
-// key can never resolve (rootCacheAbsent), so the pool's errors counter starts at a true
-// zero. Moved here from app_builder_test.go, where it drove the Builder's own cache arm.
+// TestCacheSlotPreInitSkipsAbsentCache pins that the cache is never leased when its row knows
+// the fixed "" key absent, so the pool's errors counter starts at a true zero.
 func TestCacheSlotPreInitSkipsAbsentCache(t *testing.T) {
 	newApp := func(t *testing.T, absent bool, calls *atomic.Int32) *App {
 		t.Helper()
@@ -373,7 +433,7 @@ func TestCacheSlotPreInitSkipsAbsentCache(t *testing.T) {
 		t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
 
 		a := &App{cfg: defaultTestConfig(), logger: logger.New("error", false), cacheManager: mgr}
-		a.installSlots(slotInputs{cacheAbsent: absent})
+		a.installSlots(resourcePlan{cache: describedRow(componentCache, false, absent)})
 		return a
 	}
 
@@ -404,7 +464,7 @@ func TestCacheSlotPreInitSurfacesRealFailures(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
 
 	a := &App{cfg: defaultTestConfig(), logger: logger.New("error", false), cacheManager: mgr}
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 
 	assert.ErrorIs(t, a.slots[2].preInit(context.Background()), errNeverReachTheConnector)
 }
@@ -521,7 +581,7 @@ func newRefusingDBSlotApp(t *testing.T, multiTenant bool) *App {
 	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
 
 	a := &App{cfg: cfg, logger: log, dbManager: dbManager}
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 	return a
 }
 
@@ -556,7 +616,7 @@ func TestDatabaseSlotStartReportsPreWarmFailureAsAdvisory(t *testing.T) {
 func TestStreamsSlotStartRegistersItsCloser(t *testing.T) {
 	t.Run("no_declarations_registers_nothing", func(t *testing.T) {
 		a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
-		a.installSlots(slotInputs{})
+		a.installSlots(fixturePlan(a.cfg))
 
 		advisory, fatal := slotOf(t, a, componentStreams).start(context.Background())
 
@@ -569,7 +629,7 @@ func TestStreamsSlotStartRegistersItsCloser(t *testing.T) {
 	t.Run("failed_start_registers_nothing", func(t *testing.T) {
 		a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI},
 			&streamModule{name: "orders", declaration: declareOneConsumer})
-		a.installSlots(slotInputs{})
+		a.installSlots(fixturePlan(a.cfg))
 
 		_, fatal := slotOf(t, a, componentStreams).start(context.Background())
 

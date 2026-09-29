@@ -39,7 +39,7 @@ func newMinimalMessagingApp(log logger.Logger, manager *messaging.Manager, cfg *
 		messagingManager: manager,
 		cfg:              cfg,
 	}
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 	return a
 }
 

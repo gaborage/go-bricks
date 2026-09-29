@@ -875,117 +875,33 @@ type dynamicResourceSource struct {
 
 func (s *dynamicResourceSource) IsDynamic() bool { return s.dynamic }
 
-func TestRootDatabaseAbsent(t *testing.T) {
-	tests := []struct {
-		name   string
-		cfg    func() *config.Config
-		absent bool
-	}{
-		{name: "no_database_configured", absent: true, cfg: func() *config.Config {
-			return &config.Config{}
-		}},
-		{name: "type_configured", absent: false, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Database.Type = "postgresql"
-			return cfg
-		}},
-		{name: "host_configured", absent: false, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Database.Host = "db.internal"
-			return cfg
-		}},
-		// The two exempt modes below resolve database config at runtime, so an empty
-		// root block is correct there and must not read as absence.
-		{name: "multi_tenant_exempt", absent: false, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Multitenant.Enabled = true
-			return cfg
-		}},
-		{name: "dynamic_config_source_exempt", absent: false, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Source.Type = config.SourceTypeDynamic
-			return cfg
-		}},
-		{name: "nil_config_tolerated", absent: false, cfg: func() *config.Config { return nil }},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.absent, rootDatabaseAbsent(tt.cfg()))
-		})
-	}
-}
-
-func TestRootCacheAbsent(t *testing.T) {
-	stubConnector := func(context.Context, string) (cache.Cache, error) {
-		return nil, nil
-	}
-
-	tests := []struct {
-		name   string
-		cfg    func() *config.Config
-		opts   *Options
-		absent bool
-	}{
-		{name: "cache_disabled_is_absent", absent: true, cfg: func() *config.Config {
-			return &config.Config{}
-		}},
-		{name: "cache_enabled_is_present", absent: false, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Cache.Enabled = true
-			return cfg
-		}},
-		{name: "multi_tenant_is_not_an_exemption", absent: true, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Multitenant.Enabled = true
-			return cfg
-		}},
-		{name: "dynamic_config_source_exempt", absent: false, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Source.Type = config.SourceTypeDynamic
-			return cfg
-		}},
-		{
-			name:   "custom_cache_connector_exempt",
-			absent: false,
-			cfg:    func() *config.Config { return &config.Config{} },
-			opts:   &Options{CacheConnector: stubConnector},
-		},
-		{
-			name:   "static_resource_source_exempt",
-			absent: false,
-			cfg:    func() *config.Config { return &config.Config{} },
-			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: false}},
-		},
-		{name: "nil_config_tolerated", absent: false, cfg: func() *config.Config { return nil }},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.absent, rootCacheAbsent(tt.cfg(), tt.opts))
-		})
-	}
-}
-
+// TestWarnIfDatabaseAbsent takes the database row as given: it WARNs exactly when the row
+// is unavailable.
 func TestWarnIfDatabaseAbsent(t *testing.T) {
 	tests := []struct {
 		name     string
-		cfg      *config.Config
+		database kindPlan
 		wantWarn bool
 	}{
-		{name: "absent_database_warns", cfg: &config.Config{}, wantWarn: true},
-		{name: "configured_database_stays_silent", wantWarn: false, cfg: func() *config.Config {
-			cfg := &config.Config{}
-			cfg.Database.Type = "postgresql"
-			return cfg
-		}()},
+		{
+			name: "unavailable_database_warns", wantWarn: true,
+			database: kindPlan{kind: componentDatabase, presence: keyAbsent},
+		},
+		{
+			name:     "present_database_stays_silent",
+			database: kindPlan{kind: componentDatabase, presence: keyPresent},
+		},
+		{
+			name:     "per_tenant_database_stays_silent",
+			database: kindPlan{kind: componentDatabase, tenancy: perTenantTenancy, presence: keyAbsent},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := &recLogger{}
 
-			(&appBootstrap{cfg: tt.cfg, log: rec}).warnIfDatabaseAbsent()
+			(&appBootstrap{cfg: &config.Config{}, log: rec}).warnIfDatabaseAbsent(tt.database)
 
 			var got []recEvent
 			for _, e := range rec.events {
@@ -1003,6 +919,47 @@ func TestWarnIfDatabaseAbsent(t *testing.T) {
 			// message-only check green while destroying the only production-visible
 			// signal that a database config failed to reach the process.
 			assert.Equal(t, "warn", got[0].level)
+		})
+	}
+}
+
+// TestDependenciesWarnsFromTheDatabaseRow pins the row dependencies() hands
+// warnIfDatabaseAbsent: in both modes the database row disagrees with the other two, so a
+// call site reading either of them WARNs or stays silent the wrong way.
+func TestDependenciesWarnsFromTheDatabaseRow(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*config.Config)
+		wantWarn int
+	}{
+		{name: "database_without_broker_or_cache_stays_silent", mutate: func(c *config.Config) {
+			c.Messaging = config.MessagingConfig{}
+		}},
+		{name: "broker_and_cache_without_database_warns", wantWarn: 1, mutate: func(c *config.Config) {
+			c.Database = config.DatabaseConfig{}
+			c.Cache.Enabled = true
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultTestConfig()
+			tt.mutate(cfg)
+			rec := &recLogger{}
+			opts := &Options{
+				DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+					return &testmocks.MockDatabase{}, nil
+				},
+				MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+					return testmocks.NewMockAMQPClient()
+				},
+			}
+
+			bundle, err := newAppBootstrap(cfg, rec, opts).dependencies(context.Background())
+			require.NoError(t, err)
+			t.Cleanup(func() { (&Builder{bundle: bundle}).closeBundleManagers() })
+
+			assert.Equal(t, tt.wantWarn, loggedCount(rec, "No database configured"))
 		})
 	}
 }

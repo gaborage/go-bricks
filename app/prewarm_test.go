@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -48,7 +50,7 @@ func TestSlotStartSkipsAbsentManagers(t *testing.T) {
 	// The streams kind's "absent" is a registry that declares no stream, so it gets one:
 	// its start delegates to prepareStreamConsumers, which refuses a nil registry outright.
 	a := &App{logger: log, cfg: cfg, registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg})}
-	a.installSlots(slotInputs{})
+	a.installSlots(fixturePlan(a.cfg))
 
 	for _, slot := range a.slots {
 		advisory, fatal := slot.start(context.Background())
@@ -200,10 +202,7 @@ func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
-// TestPreWarmGateIsPerKind pins WHICH gate each slot hands preWarmKind. The two
-// arguments are both bools, so a swapped pair compiles and every pre-existing test
-// still passes; only these cases separate them.
-//
+// TestPreWarmGateIsPerKind pins that each slot hands preWarmKind its own kind's row.
 // Messaging under shared tenancy resolves the control-plane key, so it pre-warms
 // even though multitenant.enabled is true — while the database, resolved per
 // tenant in the same deployment, must not be warmed on the "" key.
@@ -250,20 +249,66 @@ func TestPreWarmGateIsPerKind(t *testing.T) {
 	})
 
 	t.Run("database_pre_warm_ignores_the_messaging_tenancy", func(t *testing.T) {
+		// The provider refuses "", so a lease would surface as an advisory; the messaging row
+		// beside it is shared and present, so it pre-warms.
+		a := newRefusingDBSlotApp(t, true)
+		a.cfg.Messaging.Tenancy = config.TenancyShared
+		a.installSlots(fixturePlan(a.cfg))
+
+		advisory, fatal := slotOf(t, a, componentDatabase).start(context.Background())
+
+		require.NoError(t, fatal)
+		assert.NoError(t, advisory, "the database is still resolved per tenant when only messaging is shared")
+	})
+}
+
+// TestPreWarmKindFollowsTheRow takes each row as given: a row that pre-warms leases "" once
+// and reports the outcome, one that does not never leases.
+func TestPreWarmKindFollowsTheRow(t *testing.T) {
+	t.Run("database_row_that_warms_leases", func(t *testing.T) {
 		rec := &recLogger{}
-		client := newPrewarmMockClient()
-		client.SetReady(true)
-		manager := newPrewarmTestManager(rec, client)
-		defer func() { _ = manager.Close() }()
-		a := newMinimalMessagingApp(rec, manager, sharedMT)
+		a := newSlotTestAppWithLogger(t, rec, true, false)
+		a.installSlots(resourcePlan{database: kindPlan{kind: componentDatabase, presence: keyPresent}})
 
 		advisory, fatal := slotOf(t, a, componentDatabase).start(context.Background())
 
 		require.NoError(t, fatal)
 		require.NoError(t, advisory)
-		assert.Zero(t, loggedCount(rec, "Pre-warmed control-plane database connection"),
-			"the database is still resolved per tenant when only messaging is shared")
+		assert.Equal(t, 1, loggedCount(rec, "Pre-warmed control-plane database connection"))
 	})
+
+	for _, tt := range []struct {
+		name    string
+		tenancy kindTenancy
+		getErr  error
+		leases  int32
+		warmed  int
+	}{
+		{name: "cache_row_that_warms_leases", leases: 1, warmed: 1},
+		{name: "cache_row_that_warms_reports_a_failed_lease", getErr: errNeverReachTheConnector, leases: 1},
+		{name: "cache_row_that_skips_never_leases", tenancy: perTenantTenancy},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var leases atomic.Int32
+			mgr := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
+				leases.Add(1)
+				if tt.getErr != nil {
+					return nil, tt.getErr
+				}
+				return &mockCacheInstance{}, nil
+			})
+			rec := &recLogger{}
+			a := &App{cfg: defaultTestConfig(), logger: rec, cacheManager: mgr}
+			a.installSlots(resourcePlan{cache: kindPlan{kind: componentCache, tenancy: tt.tenancy, presence: keyPresent}})
+
+			advisory, fatal := slotOf(t, a, componentCache).start(context.Background())
+
+			require.NoError(t, fatal, "pre-warming is never fatal")
+			require.ErrorIs(t, advisory, tt.getErr)
+			assert.Equal(t, tt.leases, leases.Load())
+			assert.Equal(t, tt.warmed, loggedCount(rec, "Pre-warmed control-plane cache connection"))
+		})
+	}
 }
 
 // declaredConsumerFixture returns declarationsWithConsumer() (see

@@ -198,7 +198,7 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadyOmitsIt(t *testing.T) {
 
 	log := &recLogger{}
 	app := &App{cfg: cfg, logger: log, cacheManager: cacheManager}
-	app.installSlots(slotInputs{})
+	app.installSlots(fixturePlan(app.cfg))
 	sealAndJudge(app)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
@@ -267,7 +267,7 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 
 	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
 	app := &App{cfg: cfg, logger: log, dbManager: dbManager}
-	app.installSlots(slotInputs{})
+	app.installSlots(fixturePlan(app.cfg))
 	sealAndJudge(app)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
