@@ -271,8 +271,9 @@ func callerSource(in planInputs) bool { return in.opts != nil && in.opts.Resourc
 // todaysLedger pins every answer where a reader differs from the rule today, each row naming
 // the reader it reproduces, so planning under it changes no behavior (ADR-126).
 var todaysLedger = driftLedger{
-	// D1: the cache's absence verdict exempted ANY caller-supplied ResourceSource, so the
-	// cache probe and pre-init lease "" through it whatever cache.enabled says.
+	// D1: read through presenceOf (resource_plan.go:159) by cacheSlot.describe (slot.go:308)
+	// and cacheSlot.preInit (slot.go:336); reproduces the cache's absence verdict exempting
+	// ANY caller-supplied ResourceSource, so both lease "" whatever cache.enabled says.
 	presence: func(in planInputs, kind string) (keyPresence, bool) {
 		return keyPresent, kind == componentCache && callerSource(in)
 	},
@@ -282,17 +283,19 @@ var todaysLedger = driftLedger{
 		{name: "D2 per-key flags", answer: answerConfigured, to: true, when: func(in planInputs, k kindPlan) bool {
 			return k.tenancy != singleTenant || callerSource(in)
 		}},
-		// D3: ConfigureRuntimeHelpers skipped every kind's pre-init under multitenant,
-		// messaging under shared tenancy included.
+		// D3: read by preInitLease (slot.go:480) for all three slots; reproduces the former
+		// wholesale pre-init skip under multitenant, messaging under shared tenancy included.
 		{name: "D3 pre-init skips multitenant", answer: answerPreInit, to: false, when: func(_ planInputs, k kindPlan) bool {
 			return k.tenancy != singleTenant
 		}},
-		// D4: databaseSlot.start and messagingSlot.start pre-warmed on the tenancy alone,
-		// leasing a known-absent "" for a Debug skip.
+		// D4: read by preWarmKind (slot.go:453) from databaseSlot.start and
+		// messagingSlot.start; reproduces their pre-warm on the tenancy alone, leasing a
+		// known-absent "" for a Debug skip.
 		{name: "D4 pre-warm ignores absence", answer: answerPreWarm, to: true, when: func(_ planInputs, k kindPlan) bool {
 			return k.kind != componentCache && k.tenancy != perTenantTenancy && k.presence == keyAbsent
 		}},
-		// D5: cacheSlot.start never pre-warmed.
+		// D5: read by cacheSlot.start (slot.go:354) through preWarmKind; reproduces its
+		// former no-op.
 		{name: "D5 cache never pre-warms", answer: answerPreWarm, to: false, when: func(_ planInputs, k kindPlan) bool {
 			return k.kind == componentCache
 		}},
