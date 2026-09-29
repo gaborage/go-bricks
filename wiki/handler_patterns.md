@@ -6,6 +6,8 @@ These are advanced HTTP handler patterns built on top of the basic Enhanced Hand
 
 The enhanced handler pattern supports both **value** and **pointer** types for requests and responses, allowing you to optimize for performance when handling large payloads.
 
+The request type must be a struct or a pointer to one (`struct{}` for a route that takes no input). Anything else panics at registration, naming the route and the type ([ADR-121](adr_121_typed_handler_request_type_must_be_struct.md)): another kind, a pointer to one (`*string`, `*[]Item`) or to a pointer (`**Req`), and `time.Time` or a type convertible to it, bare or behind a pointer. Wrap the value in a struct field.
+
 **When to Use Value Types (Default)**:
 
 - ✅ Small requests/responses (<1KB, ~10-15 simple fields)
