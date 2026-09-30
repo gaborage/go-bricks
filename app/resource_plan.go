@@ -13,14 +13,14 @@ import (
 // mutation gate. Display-only String methods may stay switches.
 
 // resourcePlan is the Resource plan (CONTEXT.md, ADR-126): for each resource kind, its Tenancy,
-// what the control-plane key "" holds for it and what the tenant keys hold, fixed once when the application is built.
-// Startup readers ask its answers instead of re-deriving them from config and Options. It is
-// computed once, in appBootstrap.dependencies, before any manager exists, and copied from
-// there.
+// what the control-plane key "" holds for it and what the tenant keys hold, fixed once when the
+// application is built. Startup readers ask its answers instead of re-deriving them from config
+// and Options. It is computed once, in appBootstrap.dependencies, before any manager exists, and
+// copied from there.
 //
 // The zero value is inert: every row reads single-tenant with "" and the tenant keys knowable
-// only at runtime, so
-// nothing is unavailable, nothing is leased at build, and every kind reads configured.
+// only at runtime, so nothing is unavailable, nothing is leased at build, and every kind reads
+// configured.
 type resourcePlan struct {
 	database  kindPlan
 	messaging kindPlan // streams and sealing read this row too
@@ -96,8 +96,12 @@ func (k kindPlan) resolvesOnControlPlane() bool { return k.tenancy != perTenantT
 // keyAtRuntime. For the database-absence WARN, the DatabaseRequirer abort, the
 // messaging-declarations gate (#366) and ModuleDeps.*Configured, which reads its negation.
 func (k kindPlan) unavailable() bool {
-	return (k.resolvesOnControlPlane() && k.presence == keyAbsent) ||
-		(k.tenancy == perTenantTenancy && k.tenantKeys == keyAbsent)
+	return (k.resolvesOnControlPlane() && k.presence == keyAbsent) || k.tenantKeysAbsent()
+}
+
+// tenantKeysAbsent: the kind resolves per tenant and every tenant key is known absent.
+func (k kindPlan) tenantKeysAbsent() bool {
+	return k.tenancy == perTenantTenancy && k.tenantKeys == keyAbsent
 }
 
 // controlPlaneAbsent: "" is known absent, whatever the Tenancy. For
@@ -167,17 +171,17 @@ func planResources(ctx context.Context, cfg *config.Config, opts *Options, store
 		if err != nil {
 			return resourcePlan{}, err
 		}
-		tenancy := tenancyOf(cfg, row.kind)
-		*row.dst = kindPlan{kind: row.kind, tenancy: tenancy, presence: presence, tenantKeys: tenantKeysOf(cfg, row.kind, tenancy, builtInStore)}
+		*row.dst = kindPlan{kind: row.kind, tenancy: tenancyOf(cfg, row.kind), presence: presence}
 	}
+	plan.messaging.tenantKeys = tenantKeysOf(cfg, plan.messaging.tenancy, builtInStore)
 	return plan, nil
 }
 
 // tenantKeysOf reads the static tenants' messaging.url the way the built-in store's BrokerURL
 // does, untrimmed: absent when none sets one. Only per-tenant messaging on the built-in store
-// is decided, and never from zero tenants.
-func tenantKeysOf(cfg *config.Config, kind string, tenancy kindTenancy, builtInStore bool) keyPresence {
-	if kind != componentMessaging || tenancy != perTenantTenancy || !builtInStore || len(cfg.Multitenant.Tenants) == 0 {
+// is decided, and never from zero tenants; every other row keeps keyAtRuntime.
+func tenantKeysOf(cfg *config.Config, tenancy kindTenancy, builtInStore bool) keyPresence {
+	if tenancy != perTenantTenancy || !builtInStore || len(cfg.Multitenant.Tenants) == 0 {
 		return keyAtRuntime
 	}
 	for id := range cfg.Multitenant.Tenants {

@@ -244,7 +244,7 @@ func (a *App) assertMessagingConfiguredIfDeclared(decls *messaging.Declarations)
 		return nil
 	}
 	action := "set messaging.broker.url (or env MESSAGING_BROKER_URL)"
-	if a.plan.messaging.tenancy == perTenantTenancy && a.plan.messaging.tenantKeys == keyAbsent {
+	if a.plan.messaging.tenantKeysAbsent() {
 		action = "no static tenant sets messaging.url under messaging.tenancy: per-tenant; " +
 			"set multitenant.tenants.<id>.messaging.url"
 	}
