@@ -12,8 +12,9 @@
 >
 > **Amended (2026-09-29, [ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md)):** a
 > row holds three facts, not two: what the tenant keys hold joins Tenancy and presence, decided
-> only for per-tenant messaging on the built-in store with static tenants. Unavailable also holds
-> when the kind resolves per tenant and the tenant keys are known absent.
+> only for per-tenant messaging on the built-in store with static tenants. Decision 1's "two facts"
+> and the "gate bites the plan" consequence read three facts, and the rule table's `unavailable`
+> row also holds when the kind resolves per tenant and the tenant keys are known absent.
 
 ## Context
 
@@ -45,7 +46,7 @@ broker and cache blocks — each with its own exemption set, and the sets drifte
 ## Decision
 
 1. **One plan, unexported, in `app/resource_plan.go`.** `resourcePlan` holds one row per kind with
-   two facts *(amended by ADR-128: three, the third being what the tenant keys hold)*:
+   two facts:
    - **Tenancy.** `single-tenant` without `multitenant.enabled`, which is also the deployment
      fact (`messaging.tenancy: shared` there is the ADR-041 no-op); `shared` for messaging under
      multi-tenancy and `messaging.tenancy: shared`; `per-tenant` for the database and cache under
@@ -58,7 +59,7 @@ broker and cache blocks — each with its own exemption set, and the sets drifte
 
    | Answer | Rule | Read by |
    | --- | --- | --- |
-   | unavailable | resolves on `""` and `""` known absent; *(ADR-128)* or resolves per tenant and the tenant keys known absent | absence WARN, `DatabaseRequirer`, #366 gate |
+   | unavailable | resolves on `""` and `""` known absent | absence WARN, `DatabaseRequirer`, #366 gate |
    | configured | `!unavailable` | `ModuleDeps.*Configured` |
    | pre-init | resolves on `""` and `""` known present | the fatal build-time lease |
    | pre-warm | resolves on `""` and `""` not known absent | the advisory `prepareRuntime` lease |
@@ -121,9 +122,9 @@ broker and cache blocks — each with its own exemption set, and the sets drifte
     single-tenant (D5).
 - **`configured` and `unavailable` disagree until ADR-127** wherever D2 fires; a reader uses the
   answer its row names.
-- **The gate bites the plan.** Every decision is an `==`/`!=` comparison of the two facts (three
-  since ADR-128) or of the kind, discriminated by a named mode. Meta-tests fail any ledger row that
-  changes no answer, and any two rows that pin one answer on one kind in the same mode.
+- **The gate bites the plan.** Every decision is an `==`/`!=` comparison of the two facts or of
+  the kind, discriminated by a named mode. Meta-tests fail any ledger row that changes no answer,
+  and any two rows that pin one answer on one kind in the same mode.
 - **Planning dials nothing** and makes no store lookup; it reads config.
 
 ## References
