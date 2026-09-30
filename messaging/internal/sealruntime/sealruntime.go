@@ -178,6 +178,19 @@ type OpenerProvider interface {
 	NewOpener(spec Spec, eventType string, rt *Runtime) (Opener, error)
 }
 
+// Verifier checks one stored sealed body against the producer's own declaration without
+// decrypting it; a refusal is an *OpenRefusedError, and the tid is surfaced, never judged.
+type Verifier interface {
+	Verify(ctx context.Context, body []byte) (Envelope, error)
+}
+
+// VerifierProvider is the OPTIONAL producer-side verification of a registered Codec: the
+// typed publish door type-asserts Registered() to it at declaration, and a codec without
+// it fails only PublishSealed, never startup.
+type VerifierProvider interface {
+	NewVerifier(spec Spec, eventType string, rt *Runtime) (Verifier, error)
+}
+
 // Codec is what messaging/sealed registers. ScanType returns (nil, nil) for a type that
 // carries no seal tags; NewSealer is the producer's startup fail-fast (Activation, roles)
 // and returns a Sealer bound to the declaration's EventType.
