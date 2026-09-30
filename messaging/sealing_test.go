@@ -282,8 +282,10 @@ func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {
 	require.NoError(t, decls.Validate())
 	assert.Zero(t, codec.scans)
 	assert.Nil(t, h.sealer)
-	_, _, err := h.Seal(context.Background(), plainEvent{ID: "x"})
+	data, jti, err := h.Seal(context.Background(), plainEvent{ID: "x"})
 	assert.ErrorIs(t, err, ErrNotSealTagged)
+	assert.Nil(t, data)
+	assert.Empty(t, jti)
 }
 
 func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
@@ -330,8 +332,9 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 			pubErr := h.Publish(context.Background(), client, sealedEvent{ID: "x", Card: "4111"})
 			require.Error(t, pubErr, "a handle whose sealer failed never publishes plaintext")
 			assert.Empty(t, client.data)
-			_, _, sealErr := h.Seal(context.Background(), sealedEvent{ID: "x"})
+			_, jti, sealErr := h.Seal(context.Background(), sealedEvent{ID: "x"})
 			assert.Equal(t, pubErr, sealErr)
+			assert.Empty(t, jti)
 			err := decls.Validate()
 			assert.Equal(t, err, pubErr, "Validate and the handle report the same failure")
 			require.Error(t, err)
@@ -387,7 +390,7 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)
 	sealErr := errors.New("seal boom")
-	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{err: sealErr}})
+	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{jti: "never-returned", err: sealErr}})
 	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
 	decls := newSealingDecls()
 	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
@@ -398,8 +401,10 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	assert.Contains(t, err.Error(), "seal payment.authorized event")
 	assert.Empty(t, client.data)
 	require.ErrorIs(t, err, sealErr)
-	_, _, err = h.Seal(context.Background(), sealedEvent{ID: "o1"})
+	data, jti, err := h.Seal(context.Background(), sealedEvent{ID: "o1"})
 	assert.ErrorIs(t, err, sealErr)
+	assert.Nil(t, data)
+	assert.Empty(t, jti, "a failed seal hands back no jti")
 }
 
 // tenantSealer records the tenant the context carried when Seal ran.
@@ -534,44 +539,4 @@ func TestSealedPublishClaimsJOSEContentType(t *testing.T) {
 	require.NotNil(t, client.opts[0].props)
 	assert.Equal(t, publishdoor.ContentTypeJOSE, client.opts[0].props.ContentType)
 	assert.Equal(t, "payment.authorized", client.opts[0].props.EventType)
-}
-
-func TestPublisherSealReturnsTheSealersJTI(t *testing.T) {
-	sealruntime.Reset()
-	t.Cleanup(sealruntime.Reset)
-	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes"), jti: "jti-1"}})
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
-	decls := newSealingDecls()
-	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
-	require.NoError(t, decls.Validate())
-
-	data, jti, err := h.Seal(context.Background(), sealedEvent{ID: "o1"})
-	require.NoError(t, err)
-	assert.Equal(t, "eyJ.sealed.bytes", string(data))
-	assert.Equal(t, "jti-1", jti)
-}
-
-func TestPublisherSealOnAPlainHandleReturnsNoJTI(t *testing.T) {
-	sealruntime.Reset()
-	t.Cleanup(sealruntime.Reset)
-	h := DeclareTypedPublisher[plainEvent](newSealingDecls(), sealedOpts())
-	data, jti, err := h.Seal(context.Background(), plainEvent{ID: "x"})
-	require.ErrorIs(t, err, ErrNotSealTagged)
-	assert.Nil(t, data)
-	assert.Empty(t, jti)
-}
-
-func TestPublisherSealFailureReturnsNoJTI(t *testing.T) {
-	sealruntime.Reset()
-	t.Cleanup(sealruntime.Reset)
-	sealErr := errors.New("seal boom")
-	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{jti: "never-returned", err: sealErr}})
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
-	decls := newSealingDecls()
-	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
-	require.NoError(t, decls.Validate())
-	data, jti, err := h.Seal(context.Background(), sealedEvent{ID: "o1"})
-	require.ErrorIs(t, err, sealErr)
-	assert.Nil(t, data)
-	assert.Empty(t, jti, "a failed seal hands back no jti")
 }

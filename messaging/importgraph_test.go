@@ -2,22 +2,42 @@ package messaging
 
 import (
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestMessagingStaysJoseFree pins the import gate ADR-097 relies on: only messaging/sealed links jose.
+const sealedPackage = "github.com/gaborage/go-bricks/messaging/sealed"
+
+var forbiddenJoseModules = []string{
+	"github.com/go-jose",
+	"github.com/gaborage/go-bricks/jose",
+}
+
+// TestMessagingStaysJoseFree pins the import gate ADR-097 relies on: the non-test import
+// graph of every messaging package except messaging/sealed holds neither go-jose nor go-bricks/jose.
 func TestMessagingStaysJoseFree(t *testing.T) {
-	out, err := exec.CommandContext(t.Context(), "go", "list", "-deps", "-f", "{{.ImportPath}}",
-		"github.com/gaborage/go-bricks/messaging", "github.com/gaborage/go-bricks/messaging/testing").CombinedOutput()
+	pkgs, err := exec.CommandContext(t.Context(), "go", "list", "github.com/gaborage/go-bricks/messaging/...").CombinedOutput()
+	require.NoError(t, err, "go list failed: %s", pkgs)
+	roots := slices.DeleteFunc(strings.Fields(string(pkgs)), func(pkg string) bool { return pkg == sealedPackage })
+
+	args := append([]string{"list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}"}, roots...)
+	out, err := exec.CommandContext(t.Context(), "go", args...).CombinedOutput()
 	require.NoError(t, err, "go list -deps failed: %s", out)
-	for line := range strings.Lines(string(out)) {
-		path := strings.TrimSpace(line)
-		assert.False(t, strings.HasPrefix(path, "github.com/go-jose/"), "messaging links %s", path)
-		assert.False(t, path == "github.com/gaborage/go-bricks/jose" || strings.HasPrefix(path, "github.com/gaborage/go-bricks/jose/"),
-			"messaging links %s", path)
+
+	var hits []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		for _, forbidden := range forbiddenJoseModules {
+			if line == forbidden || strings.HasPrefix(line, forbidden+"/") {
+				hits = append(hits, line)
+				break
+			}
+		}
 	}
+	require.Empty(t, hits, "messaging packages other than messaging/sealed link jose:\n%s", strings.Join(hits, "\n"))
 }

@@ -58,13 +58,14 @@ func producerOptions(t *testing.T) *sealed.OpenOptions {
 func TestVerifyAcceptsWhatSealProduced(t *testing.T) {
 	spec, opts := testSpec(t), testOptions(t)
 	opts.TenantID = "tenant-a"
-	wire, _, err := sealed.Seal(sampleEvent(), spec, opts)
+	wire, jti, err := sealed.Seal(sampleEvent(), spec, opts)
 	require.NoError(t, err)
 
 	env, err := sealed.Verify(wire, spec, producerOptions(t))
 	require.NoError(t, err)
 	hdr, _ := decodeSegment0(t, string(wire))
 	assert.Equal(t, hdr["jti"], env.JTI)
+	assert.Equal(t, jti, env.JTI)
 	assert.Equal(t, eventType, env.EventType)
 	assert.Equal(t, "tenant-a", env.TenantID)
 	assert.Equal(t, signKid, env.SignKid)
@@ -240,12 +241,15 @@ func TestVerifyJudgesTidOnlyByTheCallersRule(t *testing.T) {
 
 func TestVerifyAcceptsADocumentSpec(t *testing.T) {
 	spec := documentSpec(t)
-	wire, _, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
+	wire, jti, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
 	require.NoError(t, err)
 
 	env, err := sealed.Verify(wire, spec, producerOptions(t))
 	require.NoError(t, err)
 	assert.Equal(t, encKid, env.EncKid)
+	hdr, _ := decodeSegment0(t, string(wire))
+	assert.Equal(t, jti, hdr["jti"])
+	assert.Equal(t, jti, env.JTI)
 }
 
 func TestVerifyRejectsWiringMistakes(t *testing.T) {

@@ -501,14 +501,3 @@ func TestOpenDocumentAcceptsWhatOpenRefusesOnlyForItsType(t *testing.T) {
 	assert.NotContains(t, topLevelKeys(t, opened.Document), docSubjectPath)
 	assert.JSONEq(t, `"not-an-object"`, string(opened.Subject))
 }
-
-func TestSealDocumentReturnsTheJTIItSigned(t *testing.T) {
-	spec := documentSpec(t)
-	wire, jti, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
-	require.NoError(t, err)
-	hdr, _ := decodeSegment0(t, string(wire))
-	assert.Equal(t, jti, hdr["jti"])
-	env, err := sealed.Verify(wire, spec, producerOptions(t))
-	require.NoError(t, err)
-	assert.Equal(t, jti, env.JTI)
-}

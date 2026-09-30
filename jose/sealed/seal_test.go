@@ -134,7 +134,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 	opts.Now = func() time.Time { return now }
 	opts.TenantID = "tenant-a"
 
-	wire, _, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
+	wire, jti, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 	require.NoError(t, err)
 
 	// Outer JWS: exactly the decided protected header set and values.
@@ -148,7 +148,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 	assert.Equal(t, eventType, outer["etyp"])
 	assert.Equal(t, "tenant-a", outer["tid"])
 	assert.InDelta(t, float64(now.Unix()), outer["iat"], 0)
-	jti, _ := outer["jti"].(string)
+	assert.Equal(t, jti, outer["jti"])
 	_, err = uuid.Parse(jti)
 	require.NoError(t, err, "jti must be a UUID")
 	assert.Equal(t, uuid.Version(4), uuid.MustParse(jti).Version())
@@ -306,8 +306,9 @@ func TestSealRejectsInvalidInputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wire, _, err := sealed.Seal(tc.evt, tc.spec, tc.opts)
+			wire, jti, err := sealed.Seal(tc.evt, tc.spec, tc.opts)
 			assert.Nil(t, wire)
+			assert.Empty(t, jti)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
@@ -517,26 +518,4 @@ func TestSealSealsOnlyTheTopLevelSubjectMember(t *testing.T) {
 	plain, err := jwe.Decrypt(k.encPriv)
 	require.NoError(t, err)
 	assert.Contains(t, string(plain), testPAN)
-}
-
-func TestSealReturnsTheJTIItSigned(t *testing.T) {
-	spec := testSpec(t)
-	wire, jti, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
-	require.NoError(t, err)
-	_, parseErr := uuid.Parse(jti)
-	require.NoError(t, parseErr, "the jti is the minted UUID")
-	hdr, _ := decodeSegment0(t, string(wire))
-	assert.Equal(t, jti, hdr["jti"])
-	env, err := sealed.Verify(wire, spec, producerOptions(t))
-	require.NoError(t, err)
-	assert.Equal(t, jti, env.JTI)
-}
-
-func TestSealReturnsNoJTIOnFailure(t *testing.T) {
-	opts := testOptions(t)
-	opts.EventType = ""
-	wire, jti, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
-	require.Error(t, err)
-	assert.Nil(t, wire)
-	assert.Empty(t, jti)
 }

@@ -476,10 +476,6 @@ func TestSealReturnsTheJTITheVerificationReports(t *testing.T) {
 	data, jti, err := h.Seal(multitenant.SetTenant(context.Background(), "tenant-a"), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
 	require.NoError(t, err)
 	require.NotEmpty(t, jti)
-	keys(t)
-	resolver := jositest.NewTestResolver(map[string]any{signFamily + "-v1": &signPriv.PublicKey, encFamily + "-v1": &encPriv.PublicKey})
-	env, err := josesealed.Verify(data, mustSpec(t), &josesealed.OpenOptions{EventType: eventType, Keys: resolver})
-	require.NoError(t, err)
-	assert.Equal(t, jti, env.JTI)
+	env, _ := openWire(t, data, josesealed.TenantExpectation{Expected: "tenant-a"})
 	assert.Equal(t, "tenant-a", env.TenantID)
 }

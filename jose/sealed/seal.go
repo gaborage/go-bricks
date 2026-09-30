@@ -70,18 +70,18 @@ func Seal(evt any, spec *Spec, opts *Options) (data []byte, jti string, err erro
 	if spec == nil || spec.Type == nil {
 		return nil, "", sealError(CodeOptionsInvalid, "Seal requires a Spec from ScanType", nil)
 	}
-	if validateErr := opts.Validate(spec); validateErr != nil {
-		return nil, "", validateErr
+	if err = opts.Validate(spec); err != nil {
+		return nil, "", err
 	}
 	if t := unwrapPointer(reflect.TypeOf(evt)); t != spec.Type {
 		return nil, "", sealError(CodeTypeMismatch, fmt.Sprintf("event type %v does not match the scanned %v", t, spec.Type), nil)
 	}
-	plain, marshalErr := json.Marshal(evt)
-	if marshalErr != nil {
+	plain, err := json.Marshal(evt)
+	if err != nil {
 		// SECURITY: encoding/json embeds value bytes in some marshal errors (an invalid
 		// json.Number literal, a MarshalJSON syntax error); the Subject may be among them,
 		// so the cause is reported by type only (ADR-081 class).
-		return nil, "", sealError(CodeSealFailed, "failed to marshal event", marshalErrorType(marshalErr))
+		return nil, "", sealError(CodeSealFailed, "failed to marshal event", marshalErrorType(err))
 	}
 	return sealCore(plain, spec, opts)
 }
