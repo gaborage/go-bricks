@@ -331,15 +331,21 @@ type ModuleDeps struct {
 	// function whose every call returns an error satisfying config.IsNotConfigured
 	// (Scheduler, Outbox, Inbox and KeyStore differ: they are nil when absent).
 	//
-	// A flag is false exactly when the kind resolves on the control-plane key "" and ""
-	// is known absent: the store serving "" (Options.ResourceSource, or the built-in one
-	// over the root blocks) answered not_configured for it at build (ADR-127). False is
-	// definitive: every call would fail. True means "" was served at build, or a
-	// CacheConnector dials the cache, or the answer is per key at runtime — the kind
+	// A flag is false when the kind resolves on the control-plane key "" and "" is known
+	// absent: the store serving "" (Options.ResourceSource, or the built-in one over the
+	// root blocks) answered not_configured for it at build (ADR-127). MessagingConfigured
+	// is also false under messaging.tenancy: per-tenant on the built-in store when static
+	// tenants exist and none sets messaging.url (ADR-128). False is definitive: every call
+	// would fail — with IsNotConfigured on "", and per tenant with the store's config_missing
+	// or ErrNoTenantInContext, which fail IsNotConfigured. True means "" was served at build,
+	// or a CacheConnector dials the cache, or the answer is per key at runtime — the kind
 	// resolves per tenant (the database and cache under multi-tenancy, messaging under
-	// messaging.tenancy: per-tenant) or the store is dynamic. The accessor can still
-	// return IsNotConfigured for the tenant in hand, so a true flag never replaces the
-	// error path; it only spares a throwaway resolve when the answer is already no.
+	// messaging.tenancy: per-tenant) or the store is dynamic. A true flag can still hide a
+	// kind no tenant holds: a caller store's tenants, which the plan cannot enumerate; no
+	// static tenants under messaging.tenancy: per-tenant; tenant messaging.url values that
+	// are all whitespace; and the cache under multi-tenancy. So a true flag never replaces
+	// the accessor's error path; it only spares a throwaway resolve when the answer is
+	// already no.
 	// Framework readers: a per-tenant-ledger outbox refuses Init when MessagingConfigured
 	// is false (ADR-128), so a hand-built ModuleDeps handed to it must set the flag.
 	DBConfigured        bool

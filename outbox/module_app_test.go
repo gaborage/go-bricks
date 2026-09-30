@@ -95,13 +95,17 @@ func registerOutboxOnApp(t *testing.T, cfg *config.Config, store app.TenantStore
 // TestModuleInitBrokerCheckReadsTheResourcePlan drives the #366 broker check through a real
 // App (ADR-128): the per-tenant ledger refuses exactly when the Resource plan finds messaging
 // unavailable, and the shared ledger exactly when "" is known to hold no broker, whatever the
-// root messaging block says.
+// root messaging block says. Per-tenant messaging with no tenant broker is unavailable only on
+// the built-in store, the one store the plan can enumerate.
 func TestModuleInitBrokerCheckReadsTheResourcePlan(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(cfg *config.Config)
 		store app.TenantStore
-		want  []string // substrings of the refusal; empty means Init succeeds
+		// configStore passes config.NewTenantStore over the row's config as a caller store.
+		configStore bool
+		want        []string // substrings of the refusal; empty means Init succeeds
+		notWant     []string
 	}{
 		{
 			name: "mt_shared_messaging_static_tenants_no_root_broker_refuses",
@@ -188,13 +192,36 @@ func TestModuleInitBrokerCheckReadsTheResourcePlan(t *testing.T) {
 			store: &planStore{},
 			want:  []string{"root"},
 		},
+		{
+			name: "mt_per_tenant_messaging_no_tenant_url_built_in_store_refuses",
+			setup: func(cfg *config.Config) {
+				withMultitenant(cfg, config.TenancyPerTenant, map[string]config.TenantEntry{
+					"acme": tenantEntry(""), "globex": tenantEntry(""),
+				})
+			},
+			want:    []string{"messaging is not configured", "multitenant.tenants.", ".messaging.url"},
+			notWant: []string{"messaging.broker.url"},
+		},
+		{
+			name: "mt_per_tenant_messaging_no_tenant_url_caller_store_boots",
+			setup: func(cfg *config.Config) {
+				withMultitenant(cfg, config.TenancyPerTenant, map[string]config.TenantEntry{
+					"acme": tenantEntry(""), "globex": tenantEntry(""),
+				})
+			},
+			configStore: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := planAppConfig()
 			tt.setup(cfg)
+			store := tt.store
+			if tt.configStore {
+				store = config.NewTenantStore(cfg)
+			}
 
-			err := registerOutboxOnApp(t, cfg, tt.store)
+			err := registerOutboxOnApp(t, cfg, store)
 
 			if len(tt.want) == 0 {
 				require.NoError(t, err)
@@ -203,6 +230,9 @@ func TestModuleInitBrokerCheckReadsTheResourcePlan(t *testing.T) {
 			require.Error(t, err)
 			for _, want := range tt.want {
 				assert.Contains(t, err.Error(), want)
+			}
+			for _, notWant := range tt.notWant {
+				assert.NotContains(t, err.Error(), notWant)
 			}
 		})
 	}

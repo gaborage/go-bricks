@@ -246,12 +246,14 @@ _Avoid_: mode, scope, isolation, tenant model
 
 **Resource plan**:
 What the deployment says about each resource kind, fixed once when the
-application is built: the kind's Tenancy, and whether the control-plane key
-holds that kind — known present, known absent, or knowable only at runtime.
-Presence is whatever the source that serves the control-plane key answers; a
-source that can only answer at runtime makes it unknown, never assumed. A kind
-is unavailable when it resolves on the control-plane key and that key is known
-absent. Everything at startup that must know where a kind resolves or whether
+application is built: the kind's Tenancy, whether the control-plane key holds
+that kind — known present, known absent, or knowable only at runtime — and
+what the tenant keys hold, known only for per-tenant messaging on the built-in
+store with static tenants. Presence is whatever the source that serves the
+control-plane key answers; a source that can only answer at runtime makes it
+unknown, never assumed. A kind is unavailable when it resolves on the
+control-plane key and that key is known absent, or when it resolves per tenant
+and the tenant keys are known absent. Everything at startup that must know where a kind resolves or whether
 it is configured reads the plan; nothing re-derives it.
 _Avoid_: tenancy verdict (a Verdict is a database section's), posture, mode,
 tenancy table

@@ -11,14 +11,16 @@ and under `messaging.tenancy: shared`), [ADR-126](adr_126_resource_plan.md) (the
 > **Amended (2026-09-29, [ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md)):** the
 > outbox's #366 broker check for a per-tenant ledger reads `ModuleDeps.MessagingConfigured`, the
 > plan's answer, and for a shared ledger `ModuleDeps.ControlPlaneMessagingAbsent`, the plan's `""`
-> fact, instead of root config; the inbox has no broker check.
+> fact, instead of root config; the inbox has no broker check. The rule gains a third fact:
+> per-tenant messaging on the built-in store, with static tenants none of which sets
+> `messaging.url`, is unavailable, and the #366 error then names the tenants' key.
 
 ## Context
 
 ADR-126 put every startup decision about the database, messaging and cache kinds behind one
 Resource plan: per kind, its Tenancy and what the control-plane key `""` holds for it (known
-present, known absent, knowable only at runtime), with the answers derived from those two facts.
-It kept today's behavior by pinning eight answers where today's readers differ from that rule
+present, known absent, knowable only at runtime), with the answers derived from those two facts
+*(amended by ADR-128: three, the third being what the tenant keys hold)*. It kept today's behavior by pinning eight answers where today's readers differ from that rule
 (a drift ledger, D1–D8), and it judged `""` beside a caller-supplied static
 `Options.ResourceSource` from the root config blocks, a store that the application never asks
 for anything. The pins are where the old exemption sets disagree with each other, and each one
@@ -41,18 +43,22 @@ does something wrong in some deployment:
 
 ## Decision
 
-1. **The rule.** For each kind, from its Tenancy and the presence of `""`:
+1. **The rule.** For each kind, from its Tenancy and the presence of `""` *(amended by ADR-128:
+   and, for per-tenant messaging on the built-in store with static tenants, what the tenant keys
+   hold)*:
 
    | Answer | Rule | Read by |
    | --- | --- | --- |
-   | unavailable | resolves on `""` and `""` known absent | absence WARN, `DatabaseRequirer` abort, #366 declarations gate, `ModuleDeps.*Configured` (its negation) |
+   | unavailable | resolves on `""` and `""` known absent; *(ADR-128)* or resolves per tenant and the tenant keys known absent | absence WARN, `DatabaseRequirer` abort, #366 declarations gate, `ModuleDeps.*Configured` (its negation) |
    | pre-init | resolves on `""` and `""` known present | the fatal build-time lease of `""` under `app.startup.<kind>` |
    | pre-warm | resolves on `""` and `""` not known absent | the advisory lease in `prepareRuntime` |
    | readiness | the database and messaging always lease `""` (ADR-047 §4); the cache skips the lease only when `""` is known absent; a not-configured `""` reads `per_tenant` only under per-tenant Tenancy | the probe |
 
    A kind resolves on `""` in single-tenant mode, and messaging under multi-tenancy with
    `messaging.tenancy: shared`; the database and cache under multi-tenancy, and messaging under
-   `messaging.tenancy: per-tenant`, resolve per tenant. The deployment answers — multi-tenancy, the
+   `messaging.tenancy: per-tenant`, resolve per tenant *(amended by ADR-128: per-tenant messaging
+   is unavailable on the built-in store when static tenants exist and none sets `messaging.url`;
+   every other per-tenant row stays available)*. The deployment answers — multi-tenancy, the
    tenant stamp, the streams refusal and the seal tenancy — are unchanged from ADR-126.
 2. **Presence is what the store serving `""` answers.** The store is `Options.ResourceSource`, or
    the built-in `config.TenantStore` over the root blocks. A dynamic store (`IsDynamic()` true) is
@@ -111,7 +117,9 @@ Every flip, by deployment mode (ST single-tenant, MT multi-tenant; "built-in" is
   consumers on the control-plane key` that every service without a control-plane broker logs.
   Both lose a fail-fast signal: a store that stops serving `""` beside set root blocks now boots.
   The #366 error and the `DatabaseRequirer` error still name the root keys
-  (`messaging.broker.url`, `DATABASE_TYPE`) when the store's answer fired them.
+  (`messaging.broker.url`, `DATABASE_TYPE`) when the store's answer fired them *(amended by
+  ADR-128: the #366 error names `multitenant.tenants.<id>.messaging.url` instead when per-tenant
+  messaging's tenant keys fired it)*.
 - **ST, the cache present** (root `cache.enabled`, a `CacheConnector`, a caller store serving it,
   or a dynamic store): the cache pre-warms, a second advisory lease of `""` in `prepareRuntime`
   logged `Pre-warmed control-plane cache connection`, or a pre-warm WARN when it fails. With
@@ -139,7 +147,10 @@ Every flip, by deployment mode (ST single-tenant, MT multi-tenant; "built-in" is
 - **MT, caller store not serving the cache's `""`:** the cache probe stops leasing `""` on every
   poll; it still reads `per_tenant`.
 - **Unchanged:** every MT per-tenant answer for the database and messaging, every flag under MT
-  except shared messaging's, the INFO and WARN texts, the Builder's step names.
+  except shared messaging's, the INFO and WARN texts, the Builder's step names. *(Amended by
+  ADR-128: per-tenant messaging on the built-in store with static tenants none of which sets
+  `messaging.url` is unavailable, so its `MessagingConfigured` reads false and the #366 gate
+  refuses its declarations; its readiness label and consumer-start log are unchanged.)*
 - **Unchanged:** the outbox #366 broker check still read only root config, so with a static
   caller store serving the broker and an empty root messaging block, outbox Init still aborted
   where the app now boots (#1853). The inbox has no broker check: it discards the messaging

@@ -2067,6 +2067,8 @@ and derives the answers readers need: unavailable, configured, pre-init, pre-war
 probe's lease and label, and the messaging row's stamps, streams refusal and seal tenancy. A
 temporary drift ledger of eight named rows pins today's answer wherever it differs from the rule,
 so behavior is unchanged; ADR-127 deletes it. `ModuleDeps.*Configured` is its first reader.
+Amended by ADR-128: a row holds a third fact, what the tenant keys hold, and per-tenant messaging
+whose tenant keys are known absent is unavailable too.
 
 **Key Benefits:** one place decides each kind, and the rule's difference from today is a named,
 tested list.
@@ -2084,7 +2086,9 @@ serving `""` answers: a dynamic store is never asked, a `CacheConnector` makes t
 and any other store is asked once per kind at build under `app.startup.<kind>`, with an error other
 than not-configured failing startup. Amends ADR-047's exemption set, ADR-066 rule 1 (`per_tenant`
 follows Tenancy) and ADR-041's startup trade-offs beside a static caller store and under shared
-messaging. See [migrations.md](migrations.md) `[C70.2]`–`[C70.6]`.
+messaging. Amended by ADR-128: per-tenant messaging on the built-in store with static tenants none
+of which sets `messaging.url` is unavailable too. See [migrations.md](migrations.md)
+`[C70.2]`–`[C70.6]`.
 
 **Key Benefits:** every startup gate, flag, lease and label asks one rule, and a caller store's own
 answer for `""` is what counts.
@@ -2093,7 +2097,7 @@ answer for `""` is what counts.
 
 ### [ADR-128: The Outbox Broker Check Reads the Resource Plan](adr_128_outbox_broker_check_reads_the_resource_plan.md)
 
-**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false, so multi-tenant `messaging.tenancy: shared` without a control-plane broker (stream-only outboxes included) and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag; a shared-ledger outbox refuses exactly when the new `ModuleDeps.ControlPlaneMessagingAbsent` is true, so a caller static store not serving `""` beside a root broker now aborts it
+**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false, so multi-tenant `messaging.tenancy: shared` without a control-plane broker (stream-only outboxes included) and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag; a shared-ledger outbox refuses exactly when the new `ModuleDeps.ControlPlaneMessagingAbsent` is true, so a caller static store not serving `""` beside a root broker now aborts it; multi-tenant `messaging.tenancy: per-tenant` on the built-in store with static tenants none of which sets `messaging.url` reads `MessagingConfigured` false, so a per-tenant-ledger outbox aborts and messaging declarations refuse startup
 
 The outbox's #366 broker check rebuilt its answer from root config, so since ADR-127 it disagreed
 with the Resource plan both ways: multi-tenant shared messaging with no root broker booted while
@@ -2102,7 +2106,9 @@ single-tenant dynamic store, was refused. The per-tenant ledger now reads
 `ModuleDeps.MessagingConfigured`, runs its fan-out guard first, and names the tenants' broker or the
 control-plane one by where messaging resolves; the shared ledger reads the new
 `ModuleDeps.ControlPlaneMessagingAbsent`, the plan's `""` fact, instead of the root block and
-`source.type`. Amends ADR-127. See [migrations.md](migrations.md) `[C70.7]`–`[C70.10]`.
+`source.type`. The plan also marks per-tenant messaging unavailable on the built-in store when static
+tenants exist and none sets `messaging.url`, and the #366 error then names the tenants' key. Amends
+ADR-126 and ADR-127. See [migrations.md](migrations.md) `[C70.7]`–`[C70.11]`.
 
 **Key Benefits:** the outbox and the app answer "can this relay publish?" from the same store.
 

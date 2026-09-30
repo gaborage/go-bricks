@@ -269,8 +269,11 @@ observability:
 
 # Messaging registry initialization errors
 # → Fatal Init error: "messaging declarations were registered ... but
-#   messaging is not configured; set messaging.broker.url"
-# → Verify messaging.broker.url set for each tenant
+#   messaging is not configured; no static tenant sets messaging.url under
+#   messaging.tenancy: per-tenant; set multitenant.tenants.<id>.messaging.url"
+# → Set multitenant.tenants.<id>.messaging.url for each tenant (ADR-128)
+# → Under messaging.tenancy: shared the text ends "set messaging.broker.url
+#   (or env MESSAGING_BROKER_URL)": set the control-plane broker instead
 # → See ADR-014 for the MessagingDeclarer pattern details
 ```
 
