@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,4 +158,67 @@ func TestVerifyRejectsWiringMistakes(t *testing.T) {
 			requirePreflightRefusal(t, err, "Verify")
 		})
 	}
+}
+
+// verifyResiduals are the published vectors Verify accepts and Open refuses: nothing before the
+// decrypt can tell a wrong key under the right kid, or a document of the wrong shape.
+var verifyResiduals = map[string]bool{"wrong_key_same_name": true, "opened_document_wrong_shape": true}
+
+// producerView is the vector keys as a producer holds them: every generation as a PUBLIC key.
+func (k *vectorKeys) producerView(t *testing.T) bricksjose.KeyResolver {
+	t.Helper()
+	return publicOnlyResolver{t: t, keys: jositest.NewTestResolver(map[string]any{
+		vecSignKid:   &k.priv[vecSignKid].PublicKey,
+		vecSignKidV1: &k.priv[vecSignKidV1].PublicKey,
+		vecEncKid:    &k.priv[vecEncKid].PublicKey,
+	})}
+}
+
+func verifyOptions(t *testing.T, k *vectorKeys, tenant *tenantRule) *sealed.OpenOptions {
+	t.Helper()
+	opts := vectorOptions(k, tenant)
+	opts.Keys = k.producerView(t)
+	return opts
+}
+
+func TestVerifyPositiveVector(t *testing.T) {
+	k := loadVectorKeys(t)
+	vf := loadVectors(t, k)
+	env, err := sealed.Verify([]byte(vf.Positive), testSpec(t), verifyOptions(t, k, nil))
+	require.NoError(t, err)
+	assert.Equal(t, &sealed.Envelope{
+		JTI: vecJTI, IssuedAt: time.Unix(vecIAT, 0).UTC(), EventType: eventType, TenantID: vecTenant,
+		SignKid: vecSignKid, SignFamily: "svc-payments-sign", EncKid: vecEncKid,
+	}, env)
+}
+
+func TestVerifyNegativeVectors(t *testing.T) {
+	k := loadVectorKeys(t)
+	vf := loadVectors(t, k)
+	require.NotEmpty(t, vf.Vectors)
+	for _, tc := range vf.Vectors {
+		t.Run(tc.Name, func(t *testing.T) {
+			env, err := sealed.Verify([]byte(tc.Body), testSpec(t), verifyOptions(t, k, tc.Tenant))
+			if verifyResiduals[tc.Name] {
+				require.NoError(t, err, "a documented residual: the consumer refuses it")
+				assert.Equal(t, vecJTI, env.JTI)
+				return
+			}
+			assert.Nil(t, env)
+			requireVectorRefusal(t, err, &tc)
+		})
+	}
+}
+
+// TestVerifyResidualsAreTheDecryptAndDecodeVectors keeps a vector added later out of the residual set.
+func TestVerifyResidualsAreTheDecryptAndDecodeVectors(t *testing.T) {
+	k := loadVectorKeys(t)
+	vf := loadVectors(t, k)
+	got := map[string]bool{}
+	for _, v := range vf.Vectors {
+		if v.Code == sealed.CodeDecryptFailed || v.Rule == 11 {
+			got[v.Name] = true
+		}
+	}
+	assert.Equal(t, verifyResiduals, got)
 }

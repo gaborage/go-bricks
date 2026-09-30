@@ -386,6 +386,37 @@ func TestOpenPositiveVector(t *testing.T) {
 	assert.Equal(t, key, env2.DedupKey())
 }
 
+// requireVectorRefusal asserts what every door owes a refused negative vector: the vector's code,
+// rule and details as an *OpenError and a *bricksjose.Error, no slot value in the text (#1307), and
+// the code's sentinel. The leak check runs BEFORE the sentinel switch: the switch is require, and a
+// sentinel regression must not abort before the leak check, an independent property of the same error.
+func requireVectorRefusal(t *testing.T, err error, tc *vector) {
+	t.Helper()
+	var oe *sealed.OpenError
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, tc.Code, oe.Err.Code)
+	assert.Equal(t, tc.Rule, oe.Rule)
+	assert.Equal(t, tc.Layer, oe.Details[sealed.DetailLayer])
+	assert.Equal(t, tc.Slot, oe.Details[sealed.DetailSlot])
+
+	var je *bricksjose.Error
+	require.ErrorAs(t, err, &je, "*bricksjose.Error-compatible")
+	assert.Equal(t, tc.Code, je.Code)
+	for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon"} {
+		assert.NotContains(t, err.Error(), secret)
+	}
+	switch tc.Code {
+	case sealed.CodeNotSealed:
+		require.ErrorIs(t, err, sealed.ErrNotSealed)
+	case sealed.CodeKidUnknownGeneration:
+		require.ErrorIs(t, err, sealed.ErrKidUnknownGeneration)
+	case sealed.CodeKidFamilyMismatch:
+		require.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
+	default:
+		require.ErrorIs(t, err, sealed.ErrOpenFailed)
+	}
+}
+
 // TestOpenNegativeVectors asserts the exact code, rule, details and sentinel of every published negative vector.
 func TestOpenNegativeVectors(t *testing.T) {
 	k := loadVectorKeys(t)
@@ -399,34 +430,7 @@ func TestOpenNegativeVectors(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, env)
 			assert.Zero(t, evt, "nothing decodes on a refused message")
-
-			var oe *sealed.OpenError
-			require.ErrorAs(t, err, &oe)
-			assert.Equal(t, tc.Code, oe.Err.Code)
-			assert.Equal(t, tc.Rule, oe.Rule)
-			assert.Equal(t, tc.Layer, oe.Details[sealed.DetailLayer])
-			assert.Equal(t, tc.Slot, oe.Details[sealed.DetailSlot])
-
-			var je *bricksjose.Error
-			require.ErrorAs(t, err, &je, "*bricksjose.Error-compatible")
-			assert.Equal(t, tc.Code, je.Code)
-			// Never a slot value in the error text (#1307): presence and lengths only.
-			// This runs BEFORE the sentinel switch: the switch is require, and a
-			// sentinel regression must not abort before the leak check, which is an
-			// independent property of the same error.
-			for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon"} {
-				assert.NotContains(t, err.Error(), secret)
-			}
-			switch tc.Code {
-			case sealed.CodeNotSealed:
-				require.ErrorIs(t, err, sealed.ErrNotSealed)
-			case sealed.CodeKidUnknownGeneration:
-				require.ErrorIs(t, err, sealed.ErrKidUnknownGeneration)
-			case sealed.CodeKidFamilyMismatch:
-				require.ErrorIs(t, err, sealed.ErrKidFamilyMismatch)
-			default:
-				require.ErrorIs(t, err, sealed.ErrOpenFailed)
-			}
+			requireVectorRefusal(t, err, &tc)
 		})
 	}
 }
@@ -740,13 +744,14 @@ func TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin(t *testing.T) {
 		},
 	}
 	cases := []struct {
-		name string
-		want []string
+		name    string
+		want    []string
+		wantErr bool
 	}{
 		{name: "positive", want: []string{"public:" + vecSignKid, "private:" + vecEncKid}},
-		{name: "strip_and_resign_iss_differs", want: []string{"public:" + vecSignKidV1}},
-		{name: "inner_cross_family_kid", want: []string{"public:" + vecSignKid}},
-		{name: "inner_unprovisioned_generation", want: []string{"public:" + vecSignKid, "private:acme-core-enc-v9"}},
+		{name: "strip_and_resign_iss_differs", want: []string{"public:" + vecSignKidV1}, wantErr: true},
+		{name: "inner_cross_family_kid", want: []string{"public:" + vecSignKid}, wantErr: true},
+		{name: "inner_unprovisioned_generation", want: []string{"public:" + vecSignKid, "private:acme-core-enc-v9"}, wantErr: true},
 	}
 	for doorName, door := range doors {
 		for _, tc := range cases {
@@ -756,10 +761,10 @@ func TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin(t *testing.T) {
 				opts.Keys = rec
 				err := door([]byte(vectorBody(t, vf, tc.name)), opts)
 				assert.Equal(t, tc.want, rec.calls)
-				if tc.name == "positive" {
-					require.NoError(t, err)
-				} else {
+				if tc.wantErr {
 					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
 				}
 			})
 		}

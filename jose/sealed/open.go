@@ -411,7 +411,7 @@ func checkPins(slots *authenticatedSlots, spec *Spec, opts *OpenOptions) error {
 // checkOpenArgs is the key-free pre-flight: wiring mistakes, reported with the sealer's
 // SEAL_OPTIONS_INVALID / SEAL_TYPE_MISMATCH codes (same sentinel, same class of error) as
 // an *OpenError with Rule 0, so every Open failure is one error type. Open additionally
-// requires spec.Type, unlike OpenDocument's checkOpenOptionsArgs below: out must decode into
+// requires spec.Type, unlike the type-free doors (OpenDocument, Verify): out must decode into
 // a concrete Go type, and a document Spec (nil Type) has none.
 func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	if spec == nil || spec.Type == nil {
@@ -430,11 +430,11 @@ func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	return nil
 }
 
-// checkOpenOptionsArgs is the part of the pre-flight Open and OpenDocument share: a Spec and
-// OpenOptions with a resolver and a declared EventType. It says nothing about spec.Type,
-// which only the typed door (Open) requires — OpenDocument is type-free and accepts a
-// document Spec (NewDocumentSpec) as readily as a scanned one. door names the caller's door
-// in the message, so a wiring mistake is never attributed to the other one.
+// checkOpenOptionsArgs is the part of the pre-flight Open, OpenDocument and Verify share: a Spec
+// and OpenOptions with a resolver and a declared EventType. It says nothing about spec.Type,
+// which only the typed door (Open) requires — the type-free doors (OpenDocument, Verify) accept
+// a document Spec (NewDocumentSpec) as readily as a scanned one. door names the caller's door
+// in the message, so a wiring mistake is never attributed to another one.
 func checkOpenOptionsArgs(spec *Spec, opts *OpenOptions, door string) error {
 	switch {
 	case spec == nil:
