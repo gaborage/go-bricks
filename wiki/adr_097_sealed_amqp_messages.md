@@ -246,6 +246,8 @@ hand bytes to the broker. The outbox handoff above is the one sanctioned bytes p
 it accepts only what `Seal` produced. Tests publish through the typed capture double the framework
 ships, never a byte-capable mock (ADR-096).
 
+*(Amended 2026-09-30 by [ADR-131](adr_131_sealed_bytes_publish_door.md): `Publisher[T].PublishSealed` is the one verified exception — seal-tagged handles only, bytes verified before any broker I/O.)*
+
 **Default exchange.** An empty `Exchange` on a publisher declaration denotes AMQP's
 default exchange and is exempt from the declared-exchange rule ONLY when `RoutingKey` is
 non-empty (the target queue name). `Exchange: ""` + `RoutingKey: ""` names no destination

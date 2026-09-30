@@ -80,6 +80,8 @@ ADR-091 pattern) and the relay calls `publishdoor.Publish(ctx, client, opts, pay
 
 Within the `messaging` AMQP lane, no exported symbol lets a module hand `[]byte` to the broker:
 
+*(Amended 2026-09-30 by [ADR-131](adr_131_sealed_bytes_publish_door.md): `Publisher[T].PublishSealed` is the one verified exception — seal-tagged handles only, bytes verified before any broker I/O.)*
+
 - `bytePublisher` and its one method are unexported, so only types declared in
   package `messaging` implement it, and `reflect` cannot call an unexported method.
   A module that type-asserts its `AMQPClient` to `*messaging.AMQPClientImpl` finds no
@@ -94,6 +96,8 @@ Within the `messaging` AMQP lane, no exported symbol lets a module hand `[]byte`
   byte payload: `json.Marshal` validates the output of any `json.Marshaler`
   (`json.RawMessage` included), so what reaches the frame is always well-formed JSON
   of a type the module declared — the same thing the sealed door judges by tags.
+
+  *(Amended 2026-09-30 by [ADR-131](adr_131_sealed_bytes_publish_door.md): `Publisher[T].PublishSealed` is the one verified exception — seal-tagged handles only, bytes verified before any broker I/O.)*
   Publishing an untagged `T` in clear is the documented default, not a bypass.
 - A `go:linkname` pull of `(*AMQPClientImpl).publishBytes` needs `unsafe`, a
   layout-matching copy of the unexported `publishOptions`, and survives no
