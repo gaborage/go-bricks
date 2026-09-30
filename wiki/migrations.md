@@ -11154,7 +11154,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `MESSAGING_TENANCY`) is not `shared`, it lists at least one static tenant, and its code passes no
   `app.Options.ResourceSource` (`git grep -n 'ResourceSource' -- '*.go'`). Then read every
   environment's `multitenant.tenants.<id>.messaging.url` (env
-  `MULTITENANT_TENANTS_<ID>_MESSAGING_URL`): the atom applies when none is set.
+  `MULTITENANT_TENANTS_<ID>_MESSAGING_URL`). A candidate where none is set is a match only if it
+  also passes the gate below.
 - scope: config validation lets every static tenant omit `messaging.url` (all or none), and then
   every `deps.Messaging` call with a tenant in context fails with `config_missing`, yet the
   Resource plan read messaging available: `MessagingConfigured` was true, a per-tenant-ledger
