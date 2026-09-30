@@ -22,7 +22,7 @@ declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),
 `messaging.SealTagName`) is the one predicate every door asks; the lane guards use it to
 refuse a seal-tagged `T` on streams and on the outbox struct door. `Publisher[T].Publish`
 seals when `T` is seal-tagged; `Publisher[T].Seal(ctx, evt)` runs the same sealer once and
-returns the body `Publish` would have put on the wire, for the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
+returns the body `Publish` would have put on the wire and the bare `jti` signed into it, for the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
 (#1359). Metrics:
 `seal.operation.duration` with `seal.operation = seal|open`, and
 `seal.open.failures.total` with `seal.error.code`.
@@ -105,10 +105,13 @@ type PaymentAuthorized struct {
   the Dedup key is reachable; the meta-less door refuses it at startup (#1359). Streams typed
   declarations refuse a seal-tagged `T` in v1 (#1360). `outbox.Publish` refuses a seal-tagged struct
   payload with `outbox.ErrSealedPayloadNeedsBytes` (#1360). The outbox flow is
-  `bytes, err := h.Seal(ctx, evt)` inside the business transaction, then
+  `bytes, jti, err := h.Seal(ctx, evt)` inside the business transaction, then
   `deps.Outbox.Publish(ctx, tx, event)` with those bytes as the payload: the record keeps
   that one seal result and the relay republishes it byte-identical on every drive, so the
   `jti` is stable across redeliveries; a second `Seal` call is a new seal and a new `jti`.
+  The returned `jti` is the bare signed slot (`""` on error): a consumer keying its own
+  ledger on it uses it as is, while the go-bricks inbox stores `<SignFamily>:<jti>`
+  ([ADR-131](adr_131_sealed_bytes_publish_door.md)).
   `Seal` on a plain `T` is `messaging.ErrNotSealTagged` (#1358).
 
 ## Keys
