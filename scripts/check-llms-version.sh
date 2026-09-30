@@ -21,12 +21,12 @@ set -euo pipefail
 manifest="${1:-.release-please-manifest.json}"
 llms="${2:-llms.txt}"
 
-fail() { echo "::error file=$llms::$1"; status=1; }
+fail() { echo "::error file=$llms::$1" >&2; status=1; }
 status=0
 
 version="$(jq -er '."."' "$manifest")"
 if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "::error file=$manifest::manifest '.' version is not X.Y.Z"
+  echo "::error file=$manifest::manifest '.' version is not X.Y.Z" >&2
   exit 1
 fi
 tag="v$version"
@@ -36,13 +36,13 @@ bullet="$(awk '
   /^## / { in_section = ($0 == "## Version & Compatibility") ; next }
   in_section && /^- Reflects \*\*go-bricks v/ { print; exit }
 ' "$llms")"
-if [ -z "$bullet" ]; then
-  echo "::error file=$llms::no '- Reflects **go-bricks vX.Y.Z**' bullet under '## Version & Compatibility'"
+if [[ -z "$bullet" ]]; then
+  echo "::error file=$llms::no '- Reflects **go-bricks vX.Y.Z**' bullet under '## Version & Compatibility'" >&2
   exit 1
 fi
 
 declared="$(printf '%s\n' "$bullet" | sed -nE 's/^- Reflects \*\*go-bricks (v[0-9]+\.[0-9]+\.[0-9]+)\*\*.*/\1/p')"
-if [ "$declared" != "$tag" ]; then
+if [[ "$declared" != "$tag" ]]; then
   fail "llms.txt declares go-bricks ${declared:-<unparseable>}, the release-please manifest releases $tag: bump the Version & Compatibility bullet"
 fi
 
@@ -51,7 +51,7 @@ if ! printf '%s\n' "$rest" | grep -qE "(^|[^0-9A-Za-z.])${tag_re} [a-z]"; then
   fail "llms.txt has no ladder clause for $tag: add '$tag <verb> …' to the Version & Compatibility bullet, summarizing that hop in wiki/migrations.md"
 fi
 
-if [ "$status" -eq 0 ]; then
+if [[ "$status" -eq 0 ]]; then
   echo "llms.txt declares $tag and carries its ladder clause."
 fi
 exit "$status"
