@@ -16,12 +16,13 @@
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
 > **Amended (2026-09-30, [ADR-131](adr_131_sealed_bytes_publish_door.md)):** `Publisher[T].Seal`
-> returns the `jti` it signed (§2's outbox-flow example now reads `bytes, jti, err :=
-> h.Seal(ctx, evt)`), and a producer that persists sealed bytes republishes them through the
-> verified `PublishSealed` door, so its retry keeps the `jti`. The "caller-side retry is a new
-> seal and a new `jti`" residual (Consequences) is withdrawn for such producers.
+> returns the `jti` it signed (§2's outbox-flow example carries the three-value form), and a
+> producer that persists sealed bytes republishes them through the verified `PublishSealed`
+> door, so its retry keeps the `jti`. The Consequences residual "A caller-side retry after
+> exhausted in-loop retries is a new seal and a new `jti`" is withdrawn for such producers.
 > Producer-owned sealed-bytes stores join the rotation drain gate, and sign-family step 5 removes
-> `v<N>` from the producer's keystore as well as every consumer's.
+> `v<N>` from the producer's keystore as well as every consumer's (both in
+> [sealing.md's rotation runbooks](sealing.md#rotation-runbooks)).
 >
 > **Amended (2026-09-16, #1634):** a sealed `DedupKey` must EQUAL the key bound to the delivery
 > in hand — value equality, not a capability token and not a comparison of delivery

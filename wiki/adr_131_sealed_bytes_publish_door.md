@@ -2,7 +2,7 @@
 
 **Status:** Accepted — `Seal`'s `jti` return ships in this change; the `PublishSealed` door lands in the next link of the #1869 stack
 **Date:** 2026-09-30
-**Amends:** [ADR-096](adr_096_typed_publish_door.md) (a second, narrow exported path to the wire), [ADR-097](adr_097_sealed_amqp_messages.md) (the caller-side-retry residual, the rotation drain gate, sign-family step 5)
+**Amends:** [ADR-096](adr_096_typed_publish_door.md) (a second, narrow exported path to the wire), [ADR-097](adr_097_sealed_amqp_messages.md) (the caller-side-retry residual, and the rotation drain gate and sign-family step 5 in [sealing.md's rotation runbooks](sealing.md#rotation-runbooks))
 
 ## Context
 
@@ -20,8 +20,8 @@ relay cannot serve it. The relay publishes without `Mandatory` (#1819), and it i
 asynchronous, so the producer never sees `ErrPublishUnroutable`, a NACK or exhausted retries,
 and cannot stop the batch. `Publish` on a `Mandatory` handle fails loudly, but each retry mints
 a new `jti` that the consumer's ledger cannot dedup. `Seal` returned no `jti` at all, and the
-only read-backs, `jose/sealed.Open` and `OpenDocument`, decrypt: they need the encrypt private
-key, which the rotation runbook never gives a producer.
+only read-backs were `jose/sealed.Open` and `OpenDocument`, which both decrypted: they needed the
+encrypt private key, which the rotation runbook never gives a producer.
 
 ## Decision
 
@@ -49,8 +49,10 @@ unchanged. It runs rule 10 up to the encrypt-family pin, then resolves the inner
 does no decrypt and skips rule 11. `spec` may be a scanned or a document `Spec`, and `opts.Keys`
 is asked for PUBLIC keys only, so a producer can run it. Every refusal is code-identical to
 `Open`'s (a vector test pins all published vectors). What `Verify` accepts and `Open` refuses is
-exactly a Subject encrypted to the wrong key under the right `kid`, and a document that does not
-decode into the event type: nothing before the decrypt can tell either (see "Residual" below).
+any Subject that does not decrypt under the named key (the wrong key under the right `kid`, or a
+corrupt encrypted key, IV, ciphertext or tag) and a document that does not decode into the event
+type; among the published vectors, exactly `wrong_key_same_name` and
+`opened_document_wrong_shape`. Nothing before the decrypt can tell either (see "Residual" below).
 `Open` and `OpenDocument` keep their rule order and codes.
 
 ### 3. `Publisher[T].PublishSealed` — the door
@@ -97,9 +99,11 @@ never seals, verifies or reaches a broker.
 
 - ADR-096: a second, narrow exported path to the wire, valid only on a seal-tagged handle and
   only for bytes that verify against that handle's own declaration.
-- ADR-097: the "caller-side retry is a new `jti`" residual is withdrawn for producers that
-  persist sealed bytes. Producer-owned sealed-bytes stores join the rotation drain gate, and
-  sign-family step 5 removes `v<N>` from the producer's keystore as well as every consumer's.
+- ADR-097: its Consequences residual "A caller-side retry after exhausted in-loop retries is a
+  new seal and a new `jti`" is withdrawn for producers that persist sealed bytes.
+  Producer-owned sealed-bytes stores join the rotation drain gate, and sign-family step 5
+  removes `v<N>` from the producer's keystore as well as every consumer's (both in
+  [sealing.md's rotation runbooks](sealing.md#rotation-runbooks)).
 
 ## Threat model
 
@@ -110,8 +114,11 @@ never seals, verifies or reaches a broker.
 - **Retired generation.** The door admits exactly what the producer's keystore holds. Step 5
   removes the entry, and destroying only the private key is not enough: a public-only entry
   still resolves, and the door would admit bytes every consumer refuses. Once step 5 has run,
-  the door's refusal of a stored row is permanent, unlike the consumer's recoverable
-  `SEAL_KID_UNKNOWN_GENERATION`: recovery is a fresh `Seal` with a new `jti`.
+  the door refuses the stored row with `SEAL_KID_UNKNOWN_GENERATION`, and
+  `SealOpenRefusedError.Recoverable` is true as on the consumer, because it names the
+  key-provisioning class. The producer still treats a retired generation as final:
+  re-provisioning `v<N>` on the producer alone would admit bytes every consumer refuses, so
+  recovery is a fresh `Seal` with a new `jti`.
 - **Cross-tenant replay.** Strict `tid` equality means the signed tenant and the stamp cannot
   diverge.
 - **Ciphertext at rest.** A sealed-bytes store is storage. CVV/CVC, full track data and PIN
@@ -122,8 +129,9 @@ never seals, verifies or reaches a broker.
   verifier that admits anything. The door trusts the registered codec as every sealed door
   already does, and #1872 tracks unexporting the hook.
 - **Residual.** `Verify` does not examine the JWE encrypted key, IV, ciphertext or tag. A body
-  signed by the producer's own sign family but encrypted to the wrong key under the right `kid`,
-  or whose document does not decode into `T`, therefore passes the door. The consumer refuses it
+  signed by the producer's own sign family whose Subject does not decrypt under the named key
+  (the wrong key under the right `kid`, or a corrupt encrypted key, IV, ciphertext or tag), or
+  whose document does not decode into `T`, therefore passes the door. The consumer refuses it
   (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ. Only a holder of the
   producer's sign private key can mint one, and the residual is accepted.
 

@@ -14,8 +14,9 @@
 > **Amended (2026-09-30, [ADR-131](adr_131_sealed_bytes_publish_door.md)):** a second, narrow
 > exported path to the wire. `Publisher[T].PublishSealed` republishes bytes on a seal-tagged
 > handle only, after verifying them against that handle's own declaration, and goes through the
-> same `publishdoor` seam as `Publish`. No exported type gains a byte publish method, and a plain
-> handle still has no bytes door.
+> same `publishdoor` seam as `Publish`. The client-side bytes method stays unexported
+> (`bytePublisher`; `AMQPClient` gains nothing), and a plain handle still has no bytes door. The
+> "no exported bytes symbol" rule now has this one verified, seal-tagged-only exception.
 >
 > **Amended (2026-09-07, #1512):**
 > the outbox relay's AMQP adapter reaches the dispatcher through a func field that
