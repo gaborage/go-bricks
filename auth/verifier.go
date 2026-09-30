@@ -78,7 +78,8 @@ type Verifier struct {
 //
 // The key set is fetched before this returns and a failed fetch is an error, so
 // a module Init aborts startup rather than booting a verifier that can verify
-// nothing. cfg is validated in full first — the auth.jwt.* rules Config.Validate
+// nothing — unless WithDeferredKeySet is passed and the failure is an issuer
+// outage. cfg is validated in full first — the auth.jwt.* rules Config.Validate
 // owns plus the auth.jwt.jwks.* group, which only a fetching resolver makes
 // live.
 //
@@ -90,8 +91,10 @@ type Verifier struct {
 // Ownership: the returned verifier CONSTRUCTED its resolver, so its Close stops
 // the background refresh. Call it from the module's Shutdown.
 //
+// A nil option is ignored.
+//
 //nolint:gocritic // hugeParam: Config is the injected value type, matching NewVerifierWithResolver.
-func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client httpclient.Client) (*Verifier, error) {
+func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client httpclient.Client, opts ...JWKSOption) (*Verifier, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -101,9 +104,15 @@ func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client 
 	if isNilInterface(log) {
 		log = nil
 	}
+	var options jwksOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
 
 	m := newAuthMetrics(mp)
-	resolver, err := newJWKSResolver(&cfg, log, m, client)
+	resolver, err := newJWKSResolver(&cfg, log, m, client, options.deferredKeySet)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +124,36 @@ func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client 
 	}
 	verifier.owned = resolver
 	return verifier, nil
+}
+
+// JWKSOption configures a verifier built through NewVerifier. It is a type of
+// its own, distinct from VerifierOption, because every JWKSOption acts on the
+// key set fetch — which a verifier built through NewVerifierWithResolver does
+// not perform — so passing one there is a compile error rather than a no-op.
+type JWKSOption func(*jwksOptions)
+
+type jwksOptions struct {
+	deferredKeySet bool
+}
+
+// WithDeferredKeySet lets NewVerifier return a working verifier when its
+// construction-time key set fetch fails for an outage-class reason: a refused
+// connection, a timeout, a temporary DNS failure, a 5xx or a 429. Any other
+// failure — a TLS verification failure, a host that does not exist, any other
+// status, a refused redirect, an oversized, unparseable or empty document —
+// still fails construction, because it is what a wrong or untrusted endpoint
+// produces every time.
+//
+// A verifier that started this way holds a never-fetched key set: every lookup
+// answers ErrKeySetUnavailable (auth.Middleware answers 503 with Retry-After)
+// until a fetch fills it. The failed construction attempt does not start the
+// rate floor, so the first lookup may fetch at once; the background refresh
+// runs on its usual cadence. One WARN is logged when the failure is tolerated
+// and one INFO when the key set is first filled.
+func WithDeferredKeySet() JWKSOption {
+	return func(o *jwksOptions) {
+		o.deferredKeySet = true
+	}
 }
 
 // VerifierOption configures a verifier built through NewVerifierWithResolver.
