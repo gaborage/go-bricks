@@ -15,6 +15,14 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-09-30, [ADR-131](adr_131_sealed_bytes_publish_door.md)):** `Publisher[T].Seal`
+> returns the `jti` it signed (§2's outbox-flow example now reads `bytes, jti, err :=
+> h.Seal(ctx, evt)`), and a producer that persists sealed bytes republishes them through the
+> verified `PublishSealed` door, so its retry keeps the `jti`. The "caller-side retry is a new
+> seal and a new `jti`" residual (Consequences) is withdrawn for such producers.
+> Producer-owned sealed-bytes stores join the rotation drain gate, and sign-family step 5 removes
+> `v<N>` from the producer's keystore as well as every consumer's.
+>
 > **Amended (2026-09-16, #1634):** a sealed `DedupKey` must EQUAL the key bound to the delivery
 > in hand — value equality, not a capability token and not a comparison of delivery
 > identity. The sealed consume path stores that delivery's
@@ -215,7 +223,8 @@ one mapping: `messaging.SealedEnvelope` is a plain data struct in `messaging` (s
 a time, no jose import — the import gate holds); `jose/sealed.Open` returns its own
 `sealed.Envelope`; `messaging/sealed` maps one to the other. Streams typed declarations
 hard-reject seal-tagged `T` in v1. The outbox flow has one shape: `bytes, err :=
-h.Seal(ctx, evt)` then `deps.Outbox.Publish(ctx, tx, event)` with those bytes as the
+h.Seal(ctx, evt)` (`bytes, jti, err :=` since the 2026-09-30 amendment) then
+`deps.Outbox.Publish(ctx, tx, event)` with those bytes as the
 payload; the record persists that single seal result and the relay republishes it
 byte-identical on every drive, so the `jti` never changes across redeliveries — calling
 `Seal` again is a new seal and a new `jti`. `outbox.Publish` refuses a seal-tagged STRUCT
