@@ -144,6 +144,21 @@ key. A redelivery of an already-recorded key skips `fn` and returns nil. Take th
 `meta.DedupKey()` on a metadata-carrying typed consumer, or build one with
 `messaging.WireDedupKey(id)`.
 
+### Registration Order
+
+`deps.Inbox` is set by the module registry right after `inbox.NewModule()`'s own `Init`, and only
+from what that module returns: `nil` while `inbox.enabled` is false. So register the inbox,
+enabled, BEFORE any module that captures `deps.Inbox` in its `Init`; a module registered earlier,
+or one running with the inbox disabled, captures `nil`. Guard it in `Init` and fail startup
+instead of meeting a nil at the first delivery:
+
+```go
+if deps.Inbox == nil {
+    return errors.New("orders: register inbox.NewModule() before this module")
+}
+m.inbox = deps.Inbox
+```
+
 ### Deduplication Scope
 
 **Deduplication is per service, not per consumer.** The ledger's primary key is
