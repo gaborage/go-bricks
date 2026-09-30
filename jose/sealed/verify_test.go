@@ -87,7 +87,7 @@ func TestVerifyResolvesTheEncryptKidAsPublic(t *testing.T) {
 
 func TestVerifyRefusesANilEncryptKey(t *testing.T) {
 	spec := testSpec(t)
-	wire, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
+	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	require.NoError(t, err)
 	opts := &sealed.OpenOptions{EventType: eventType, Keys: nilKeyResolver{keys: publicOnlyResolver{t: t, keys: testKeys(t).resolver}, nilPublic: encKid}}
 
@@ -97,7 +97,7 @@ func TestVerifyRefusesANilEncryptKey(t *testing.T) {
 
 func TestOpenKeepsTheConsumerWordingForAnUnprovisionedEncryptKey(t *testing.T) {
 	spec := testSpec(t)
-	wire, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
+	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	require.NoError(t, err)
 	k := testKeys(t)
 	opts := &sealed.OpenOptions{EventType: eventType, Keys: jositest.NewTestResolver(map[string]any{
@@ -119,7 +119,7 @@ func TestOpenKeepsTheConsumerWordingForAnUnprovisionedEncryptKey(t *testing.T) {
 // TestEveryKeyLookupRefusesANilKeyLikeAMissingOne pins, per door reaching each lookup, one refusal for a failed and a (nil, nil) lookup.
 func TestEveryKeyLookupRefusesANilKeyLikeAMissingOne(t *testing.T) {
 	spec := testSpec(t)
-	wire, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
+	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	require.NoError(t, err)
 	k := testKeys(t)
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
