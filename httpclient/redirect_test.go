@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"fmt"
 	nethttp "net/http"
 	"net/http/httptest"
 	"net/url"
@@ -69,6 +70,25 @@ func TestClientRefusesCredentialedRedirectDowngrade(t *testing.T) {
 			configure: func(b *Builder) *Builder { return b.WithRequestInterceptor(interceptor) },
 		},
 		{
+			name: "authorization_behind_an_empty_first_value",
+			configure: func(b *Builder) *Builder {
+				return b.WithRequestInterceptor(func(_ context.Context, r *nethttp.Request) error {
+					r.Header.Set(headerAuthorization, "")
+					r.Header.Add(headerAuthorization, "Bearer "+redirectSecret)
+					return nil
+				})
+			},
+		},
+		{
+			name: "noncanonical_authorization_key",
+			configure: func(b *Builder) *Builder {
+				return b.WithRequestInterceptor(func(_ context.Context, r *nethttp.Request) error {
+					r.Header["authorization"] = []string{"Bearer " + redirectSecret}
+					return nil
+				})
+			},
+		},
+		{
 			name: "cookie_only",
 			req:  Request{Headers: map[string]string{"Cookie": "session=" + redirectSecret}},
 		},
@@ -96,6 +116,19 @@ func TestClientRefusesCredentialedRedirectDowngrade(t *testing.T) {
 			assert.Equal(t, int64(1), hits.Load())
 		})
 	}
+}
+
+func TestClientRefusesRedirectDowngradeToUserinfo(t *testing.T) {
+	plain, seen := authServer(t)
+	secure, hits := redirectTo(t, strings.Replace(plain.URL, "http://", "http://user:"+redirectSecret+"@", 1)+"/landing")
+	c, err := NewBuilder(quietLogger()).WithTransport(secure.Client().Transport).Build()
+	require.NoError(t, err)
+
+	_, err = c.Get(context.Background(), &Request{URL: secure.URL})
+	require.ErrorIs(t, err, ErrRedirectDowngrade)
+	assert.NotContains(t, err.Error(), redirectSecret)
+	assert.Empty(t, seen(), "the http hop must never be requested")
+	assert.Equal(t, int64(1), hits.Load())
 }
 
 func TestClientRefusesRedirectDowngradeWithoutRetry(t *testing.T) {
@@ -271,4 +304,23 @@ func TestBearerTokenFileKeepsCallerRedirectPolicy(t *testing.T) {
 	_, err = c.Get(context.Background(), &Request{URL: secure.URL})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Bearer " + redirectSecret}, seen(), "the caller's policy governs, downgrade included")
+}
+
+func TestStripURLUserinfo(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "userinfo_dropped", url: "http://user:" + redirectSecret + "@host/landing", want: "http://host/landing"},
+		{name: "no_userinfo_unchanged", url: "http://host/landing", want: "http://host/landing"},
+		{name: "unparseable_unchanged", url: "http://[::1%zz]/", want: "http://[::1%zz]/"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			urlErr := &url.Error{Op: "Get", URL: tc.url, Err: ErrRedirectDowngrade}
+			stripURLUserinfo(fmt.Errorf("wrapped: %w", urlErr))
+			assert.Equal(t, tc.want, urlErr.URL)
+		})
+	}
 }

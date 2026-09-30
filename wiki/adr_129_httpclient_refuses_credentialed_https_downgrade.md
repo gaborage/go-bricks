@@ -29,12 +29,16 @@ the downgrade when the client carried a file bearer (#1840).
    the request-credential subset of net/http's six: `Www-Authenticate` and `Proxy-Authenticate`
    are response headers, and `Cookie2` is an obsolete version marker, not a credential. A
    downgrade hop carrying none of the three (a cross-host hop net/http already stripped) is
-   followed.
+   followed. Any value under any casing of those keys counts, not only what `Header.Get`
+   returns, and so does userinfo in the hop's URL, which net/http turns into `Authorization`
+   only after `CheckRedirect` returns.
 3. **A caller's policy governs entirely.** A `CheckRedirect` on the client passed to
    `WithHTTPClient` is kept and not chained with this one, downgrade included; `auth`'s JWKS
    client is such a caller, and its policy refuses every non-https hop anyway.
 4. **The refusal is an exported sentinel and terminal.** The error wraps
-   `httpclient.ErrRedirectDowngrade` (match with `errors.Is`), never carries a header value, and
+   `httpclient.ErrRedirectDowngrade` (match with `errors.Is`), never carries a header value —
+   the client also drops userinfo from the `*url.Error` URL, which on a refused redirect is
+   the raw `Location` net/http does not strip — and
    the retry loop returns it at once whatever `WithRetries` says, since every retry meets the same
    redirect. Its `ErrorType` and OTel `error.type` classification is unchanged (#1629 owns it).
 5. **The cap is restated.** Setting `CheckRedirect` replaces net/http's default ten-hop limit, so

@@ -964,6 +964,7 @@ func executionError(err error) error {
 	if errors.As(err, &clientErr) {
 		return clientErr
 	}
+	stripURLUserinfo(err)
 	return NewNetworkError(errMsgRequestExecutionFailed, err)
 }
 
