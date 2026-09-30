@@ -470,7 +470,7 @@ func TestNewSealerTagsTheActiveKidsAsSeal(t *testing.T) {
 	assert.Len(t, store.Recorded(), before)
 }
 
-func TestSealReturnsTheJTITheVerificationReports(t *testing.T) {
+func TestSealSignsTheContextTenantWithAJTI(t *testing.T) {
 	configure(t, sealruntime.TenancyDisabled)
 	h := declare(t)
 	data, jti, err := h.Seal(multitenant.SetTenant(context.Background(), "tenant-a"), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
