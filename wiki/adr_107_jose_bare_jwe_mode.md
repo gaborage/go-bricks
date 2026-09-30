@@ -88,7 +88,10 @@ honored, the duplicate side effect the refusal's terminality exists to prevent. 
 now the status, not the cause: every error `JOSETransport.RoundTrip` returns for a 2xx it
 rejected carries an unexported marker the retry loop treats as terminal, whatever
 `WithRetries` says. The same rejection on a non-2xx status still retries, since that peer
-honored nothing, and connection and timeout errors retry as before.
+honored nothing, and connection and timeout errors retry as before. That includes a
+`http.Client.Timeout` expiring while the transport reads a 2xx body: net/http replaces the
+error with its own string-only timeout error, which drops the marker, so that read still
+retries as a timeout.
 
 The client's terminal path also stopped re-typing. It wrapped every transport error in
 `NewNetworkError`, so the over-cap `ValidationError` the transport documents as
