@@ -100,6 +100,13 @@ func (producerOnlyCodec) NewSealer(sealruntime.Spec, string, *sealruntime.Runtim
 	return nil, errors.New("not the side under test")
 }
 
+// nilOpenerCodec has a consume side that answers with neither an opener nor an error.
+type nilOpenerCodec struct{ producerOnlyCodec }
+
+func (nilOpenerCodec) NewOpener(sealruntime.Spec, string, *sealruntime.Runtime) (sealruntime.Opener, error) {
+	return nil, nil
+}
+
 func installConsumerCodec(t *testing.T, opener *fakeOpener, tenancy sealruntime.Tenancy) {
 	t.Helper()
 	sealruntime.Reset()
@@ -164,6 +171,10 @@ func TestDeclareTypedConsumerWithMetaSealedStartupMatrix(t *testing.T) {
 			sealruntime.Register(&consumerCodec{newErr: newOpenerErr})
 			sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
 		}, want: newOpenerErr, text: "sealed consumer for"},
+		{name: "codec_returns_no_opener", setup: func(*testing.T) {
+			sealruntime.Register(nilOpenerCodec{})
+			sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
+		}, text: "returned no opener"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,7 +187,10 @@ func TestDeclareTypedConsumerWithMetaSealedStartupMatrix(t *testing.T) {
 			DeclareTypedConsumerWithMeta(decls, opts, func(context.Context, sealedEvt, Metadata) error { return nil })
 
 			err := decls.Validate()
-			require.ErrorIs(t, err, tc.want)
+			require.Error(t, err)
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+			}
 			if tc.text != "" {
 				assert.Contains(t, err.Error(), tc.text)
 			}

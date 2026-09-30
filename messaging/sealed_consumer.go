@@ -106,6 +106,9 @@ func newOpener(t reflect.Type, eventType string) (sealruntime.Opener, sealruntim
 	if err != nil {
 		return nil, 0, fmt.Errorf("messaging: sealed consumer for %v (event type %q): %w", t, eventType, err)
 	}
+	if opener == nil {
+		return nil, 0, fmt.Errorf("messaging: sealed consumer for %v (event type %q): the codec returned no opener", t, eventType)
+	}
 	return opener, rt.Tenancy, nil
 }
 

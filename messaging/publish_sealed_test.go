@@ -32,10 +32,10 @@ type fakeVerifier struct {
 func (v *fakeVerifier) Verify(_ context.Context, body []byte) (SealEnvelope, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.seen = append(v.seen, bytes.Clone(body))
 	if v.overwrite != nil {
 		copy(v.overwrite, bytes.Repeat([]byte("X"), len(v.overwrite)))
 	}
+	v.seen = append(v.seen, bytes.Clone(body))
 	return v.env, v.err
 }
 
@@ -108,16 +108,26 @@ func TestPublishSealedNeedsACodecThatVerifies(t *testing.T) {
 		name  string
 		codec sealruntime.Codec
 		want  error
+		text  string
 	}{
 		{name: "codec_without_verification", codec: &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}}, want: ErrSealingNotLinked},
 		{name: "verifier_startup_error", codec: &verifyingCodec{fakeCodec: &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}}, verifierErr: boom}, want: boom},
+		{name: "codec_returns_no_verifier", codec: &verifyingCodec{fakeCodec: &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}}}, text: "returned no verifier"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := declareWithCodec(t, tc.codec, sealedOpts()) // Validate passes: only PublishSealed needs the verifier
 			client := &capturingClient{}
 			require.NoError(t, h.Publish(context.Background(), client, sealedEvent{ID: "o1"}))
-			require.ErrorIs(t, h.PublishSealed(context.Background(), client, []byte("eyJ.sealed.bytes")), tc.want)
+			err := h.PublishSealed(context.Background(), client, []byte("eyJ.sealed.bytes"))
+			require.Error(t, err)
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+			}
+			if tc.text != "" {
+				assert.Contains(t, err.Error(), tc.text)
+			}
+			assert.Contains(t, err.Error(), "payment.authorized")
 			assert.Len(t, client.data, 1, "PublishSealed published nothing")
 		})
 	}
@@ -175,6 +185,9 @@ func TestPublishSealedTenantRule(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, tc.want)
+			if tc.signedTid != "" {
+				assert.NotContains(t, err.Error(), tc.signedTid, "the signed tid never reaches the error text")
+			}
 			assert.Empty(t, rec.data, "refused before any broker I/O")
 			if errors.Is(tc.want, ErrTenantStampConflict) {
 				assert.Zero(t, v.calls(), "the tenant resolves before the bytes are verified")

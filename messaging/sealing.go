@@ -233,5 +233,8 @@ func newVerifier(spec SealSpec, eventType string) (SealVerifier, error) {
 	if err != nil {
 		return nil, fmt.Errorf("messaging: sealed-bytes verification for event type %q: %w", eventType, err)
 	}
+	if verifier == nil {
+		return nil, fmt.Errorf("messaging: sealed-bytes verification for event type %q: the codec returned no verifier", eventType)
+	}
 	return verifier, nil
 }
