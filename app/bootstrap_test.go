@@ -1088,6 +1088,7 @@ func TestDependenciesClosesManagersOnCacheConstructionFailure(t *testing.T) {
 // static single-tenant config a false flag coincides exactly with the framework's own root
 // resolver answering that kind with not_configured, and every mode that resolves per key at
 // runtime reads true, so a flag is never false while the accessor could still succeed.
+// ControlPlaneMessagingAbsent follows "" alone, whatever the Tenancy.
 func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 	withCfg := func(mutate func(*config.Config)) *config.Config {
 		cfg := &config.Config{}

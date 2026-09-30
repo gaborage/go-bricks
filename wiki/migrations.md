@@ -11060,7 +11060,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   multitenant.tenants` or the dynamic-source error. The refusal keeps `messaging is not
   configured`, says the flag is false, and names `messaging.broker.url` or the resource source's
   answer for `""`; under multi-tenant `messaging.tenancy: per-tenant` it names
-  `multitenant.tenants.<id>.messaging.url` instead. The shared ledger is unchanged.
+  `multitenant.tenants.<id>.messaging.url` instead. The shared ledger is `[C70.9]`'s.
 - gate: match = an enabled per-tenant-ledger outbox under multi-tenant `messaging.tenancy: shared`
   without a control-plane broker, beside a caller static store not serving `""`, or built from a
   hand-built `ModuleDeps`. no-match = otherwise, the shared ledger included.
