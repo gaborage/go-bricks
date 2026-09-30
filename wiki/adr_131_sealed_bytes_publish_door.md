@@ -119,9 +119,13 @@ never seals, verifies or reaches a broker.
 - **Residual.** `Verify` does not examine the JWE encrypted key, IV, ciphertext or tag. A body
   signed by the producer's own sign family whose Subject does not decrypt under the named key
   (the wrong key under the right `kid`, or a corrupt encrypted key, IV, ciphertext or tag), or
-  whose document does not decode into `T`, therefore passes the door. The consumer refuses it
-  (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ. Only a holder of the
-  producer's sign private key can mint one, and the residual is accepted.
+  whose document does not decode into `T`, therefore passes the door. The consumer refuses those decrypt and decode
+  failures (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ. A body signed by
+  the producer's own sign key that carries a cleartext case-fold twin of the sealed Subject
+  member (`"card"` sealed, `"Card"` cleartext) is refused by neither side today: `Open` and
+  `Verify` accept it, only the sealer refuses twins, and `Seal`/`SealDocument` never produce
+  one. A follow-up issue tracks it. Only a holder of the producer's sign private key can mint
+  any of these, and the residual is accepted.
 
 ## Alternatives considered
 

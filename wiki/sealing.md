@@ -323,7 +323,9 @@ sealed them ([ADR-131](adr_131_sealed_bytes_publish_door.md)). Declare that hand
 
 ```go
 data, jti, err := h.Seal(ctx, evt) // persist data, jti and the tenant with the record
-// later, in the batch — restore the stored tenant first:
+// later, in the batch — restore the stored tenant first. For a control-plane record
+// (empty tenant) start from a tenant-free ctx: SetTenant(ctx, "") keeps an inherited
+// tenant, and the publish then fails closed with ErrSealedTenantMismatch.
 ctx = multitenant.SetTenant(ctx, rec.Tenant)
 err = h.PublishSealed(ctx, client, data)
 ```
@@ -370,11 +372,15 @@ broker NACK, and the caller sees `ErrPublishNacked`.
 the go-bricks inbox stores `<SignFamily>:<jti>`. A retry is therefore deduplicated only within
 `inbox.retentionperiod` (7 days by default), and only while the bytes' sign and encrypt
 generations are still provisioned on the consumer. After [rotation step 5](#rotation-runbooks),
-recovery is a fresh `Seal`, which mints a new `jti`.
+recovery is a fresh `Seal`, which mints a new `jti`. On the producer, a `SealOpenRefusedError`
+with `Recoverable` true after step 5 is final: do not retry the stored bytes.
 
 **Residual.** A body signed by this producer's own sign family but encrypted to the wrong key
 under the right `kid`, or whose document does not decode into `T`, passes the door. The consumer
-refuses it (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ.
+refuses those decrypt and decode failures (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`)
+into the DLQ. A body the producer's own sign key signed with a cleartext case-fold twin of the
+Subject member is refused by neither side today (`Seal`/`SealDocument` never produce it); a
+follow-up issue tracks it.
 
 **At rest.** A sealed-bytes store is storage, whatever the encryption. Keep CVV/CVC, full track
 data and PIN blocks out of any sealed event whose bytes are persisted, the same rule as the
