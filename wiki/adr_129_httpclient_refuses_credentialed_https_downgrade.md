@@ -23,7 +23,7 @@ the downgrade when the client carried a file bearer (#1840).
    `*http.Client` has no `CheckRedirect`: the default client, and a copy of one passed to
    `WithHTTPClient` with a nil `CheckRedirect`. `Build` already shallow-copies that client, so
    the caller's is never mutated.
-2. **The header set is the request's credentials.** A hop is refused when the chain began at
+2. **The header set is the request's credentials.** A hop is refused when the previous hop was
    `https`, the hop's URL is not `https`, and the hop's request — the headers net/http actually
    forwarded — carries a non-empty `Authorization`, `Cookie` or `Proxy-Authorization`. These are
    the request-credential subset of net/http's six: `Www-Authenticate` and `Proxy-Authenticate`

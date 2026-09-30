@@ -306,6 +306,20 @@ func TestBearerTokenFileKeepsCallerRedirectPolicy(t *testing.T) {
 	assert.Equal(t, []string{"Bearer " + redirectSecret}, seen(), "the caller's policy governs, downgrade included")
 }
 
+func TestClientRefusesADowngradeAfterAnUpgradeHop(t *testing.T) {
+	plain, seen := authServer(t)
+	secure, hits := redirectTo(t, strings.Replace(plain.URL, "http://", "http://user:"+redirectSecret+"@", 1)+"/landing")
+	entry := httptest.NewServer(nethttp.RedirectHandler(secure.URL, nethttp.StatusFound))
+	t.Cleanup(entry.Close)
+	c, err := NewBuilder(quietLogger()).WithTransport(secure.Client().Transport).Build()
+	require.NoError(t, err)
+
+	_, err = c.Get(context.Background(), &Request{URL: entry.URL})
+	require.ErrorIs(t, err, ErrRedirectDowngrade)
+	assert.Empty(t, seen(), "the http hop after the https one must never be requested")
+	assert.Equal(t, int64(1), hits.Load())
+}
+
 func TestStripURLUserinfo(t *testing.T) {
 	tests := []struct {
 		name string

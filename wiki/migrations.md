@@ -11125,7 +11125,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   access logs or traces for a 3xx from an `https` peer whose `Location` is `http://`.
 - scope: every client `httpclient.NewBuilder(...).Build()` returns whose `*http.Client` has no
   `CheckRedirect` — the default one, or one passed to `WithHTTPClient` with a nil
-  `CheckRedirect`. A redirect from a request that began at `https` to an `http` URL whose hop
+  `CheckRedirect`. A redirect from an `https` hop to an `http` URL whose hop
   still carries `Authorization`, `Cookie` or `Proxy-Authorization` (net/http keeps them on the
   same hostname or a subdomain, any port) used to be followed, sending them in cleartext; it now
   fails with an error wrapping the exported `httpclient.ErrRedirectDowngrade`, is never retried

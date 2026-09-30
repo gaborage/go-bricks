@@ -35,7 +35,7 @@ func checkRedirect(req *nethttp.Request, via []*nethttp.Request) error {
 	if len(via) >= maxRedirects {
 		return fmt.Errorf("httpclient: stopped after %d redirects", maxRedirects)
 	}
-	if via[0].URL.Scheme == "https" && req.URL.Scheme != "https" && carriesCredential(req) {
+	if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" && carriesCredential(req) {
 		return ErrRedirectDowngrade
 	}
 	return nil

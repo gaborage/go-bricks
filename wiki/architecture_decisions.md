@@ -2104,7 +2104,7 @@ control-plane one by where messaging resolves; the shared ledger is unchanged. A
 
 net/http strips credential headers on a redirect by hostname only, never scheme or port. Every
 client whose `*http.Client` has no `CheckRedirect` now gets the policy bearer-token-file clients
-had: a hop from a chain that began at `https` to an `http` URL, carrying any of the three
+had: a hop from an `https` URL to an `http` one, carrying any of the three
 request-credential headers of net/http's six sensitive ones, is refused, terminally, with the
 exported `httpclient.ErrRedirectDowngrade`; ten redirects stay the cap. A caller's
 `CheckRedirect` governs entirely. See [migrations.md](migrations.md) `[C70.13]`.
