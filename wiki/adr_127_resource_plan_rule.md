@@ -10,7 +10,8 @@ and under `messaging.tenancy: shared`), [ADR-126](adr_126_resource_plan.md) (the
 
 > **Amended (2026-09-29, [ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md)):** the
 > outbox's #366 broker check for a per-tenant ledger reads `ModuleDeps.MessagingConfigured`, the
-> plan's answer, instead of root config; the inbox has no broker check.
+> plan's answer, and for a shared ledger `ModuleDeps.ControlPlaneMessagingAbsent`, the plan's `""`
+> fact, instead of root config; the inbox has no broker check.
 
 ## Context
 
@@ -64,7 +65,9 @@ does something wrong in some deployment:
 3. **A lookup that fails otherwise fails startup.** Any other error, a spent budget included,
    aborts the build before any manager exists, with
    `dependency resolution failed: resource plan: <kind> lookup of the control-plane key "": <cause>`.
-   Under multi-tenancy with per-tenant Tenancy, presence feeds only the cache probe's lease. For
+   Under multi-tenancy with per-tenant Tenancy, presence feeds only the cache probe's lease
+   *(amended by ADR-128: messaging presence also feeds `ModuleDeps.ControlPlaneMessagingAbsent`,
+   which a shared-ledger outbox reads)*. For
    the database that is no new failure: its probe leases `""` on every poll and is always critical
    (ADR-047 §4), so a store that errors on `""` already held `/ready` at 503; failing at build says
    so once, with the kind named. For messaging and the cache it is a new startup failure: their
@@ -141,7 +144,8 @@ Every flip, by deployment mode (ST single-tenant, MT multi-tenant; "built-in" is
   caller store serving the broker and an empty root messaging block, outbox Init still aborted
   where the app now boots (#1853). The inbox has no broker check: it discards the messaging
   resolver. *(Amended by ADR-128: a per-tenant-ledger outbox now reads
-  `ModuleDeps.MessagingConfigured`, the plan's answer; the shared ledger still reads root config.)*
+  `ModuleDeps.MessagingConfigured`, the plan's answer, and a shared ledger reads
+  `ModuleDeps.ControlPlaneMessagingAbsent`, the plan's `""` fact.)*
 
 The amended ADRs:
 

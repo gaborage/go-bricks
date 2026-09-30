@@ -2086,15 +2086,16 @@ answer for `""` is what counts.
 
 ### [ADR-128: The Outbox Broker Check Reads the Resource Plan](adr_128_outbox_broker_check_reads_the_resource_plan.md)
 
-**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false, so multi-tenant `messaging.tenancy: shared` without a control-plane broker (stream-only outboxes included) and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag
+**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false, so multi-tenant `messaging.tenancy: shared` without a control-plane broker (stream-only outboxes included) and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag; a shared-ledger outbox refuses exactly when the new `ModuleDeps.ControlPlaneMessagingAbsent` is true, so a caller static store not serving `""` beside a root broker now aborts it
 
 The outbox's #366 broker check rebuilt its answer from root config, so since ADR-127 it disagreed
 with the Resource plan both ways: multi-tenant shared messaging with no root broker booted while
 every relay resolve failed (#1853), and a caller store serving `""` beside an empty root block, or a
 single-tenant dynamic store, was refused. The per-tenant ledger now reads
 `ModuleDeps.MessagingConfigured`, runs its fan-out guard first, and names the tenants' broker or the
-control-plane one by where messaging resolves; the shared ledger is unchanged. Amends ADR-127. See
-[migrations.md](migrations.md) `[C70.7]`, `[C70.8]`.
+control-plane one by where messaging resolves; the shared ledger reads the new
+`ModuleDeps.ControlPlaneMessagingAbsent`, the plan's `""` fact, instead of the root block and
+`source.type`. Amends ADR-127. See [migrations.md](migrations.md) `[C70.7]`–`[C70.10]`.
 
 **Key Benefits:** the outbox and the app answer "can this relay publish?" from the same store.
 

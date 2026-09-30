@@ -466,9 +466,12 @@ the answer of the store serving the keys — `Options.ResourceSource`, or the bu
 root blocks — not the root `messaging.broker.url` (ADR-128). Where messaging resolves on `""`
 (single-tenant, or multi-tenant `messaging.tenancy: shared`) that is the control-plane broker; under
 `messaging.tenancy: per-tenant` the refusal names `multitenant.tenants.<id>.messaging.url`. The
-per-tenant fan-out guard (dynamic source, or no static tenants) runs first. The shared ledger still
-requires the root `messaging.broker.url` unless `source.type` is `dynamic`. The inbox has no broker
-check.
+per-tenant fan-out guard (dynamic source, or no static tenants) runs first. For the shared ledger
+(`outbox.tenancy: shared`) the store serving the control-plane key `""` decides: the shared relay
+publishes on `""` whatever `messaging.tenancy` says, so `Init` refuses exactly when
+`ModuleDeps.ControlPlaneMessagingAbsent` is true, that store having answered `not_configured` for its
+broker at build. Set the root `messaging.broker.url` or have the resource source answer `""`; a
+dynamic store is never known absent (ADR-128). The inbox has no broker check.
 
 **Exempt modes** (the `""` key is not statically resolvable at `Init` time, so the check is skipped —
 these deployments keep today's runtime-resolution behavior):
