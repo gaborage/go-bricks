@@ -299,6 +299,21 @@ re-seal, not a uniqueness guarantee: two attempts landing inside the same millis
 an `iat`, and `jose.Seal` mints no `jti` at all — a nested policy's `jti` comes from the
 signed payload the caller hands it.
 
+### Redirects
+
+net/http strips six headers on a redirect — `Authorization`, `Www-Authenticate`, `Cookie`,
+`Cookie2`, `Proxy-Authorization` and `Proxy-Authenticate` — but judges only the hostname, never
+the scheme or port: a hop to `http://` on the same hostname or a subdomain of it keeps them. Of
+those six, `Authorization`, `Cookie` and `Proxy-Authorization` are the request's credentials.
+Unless the `*http.Client` passed to `WithHTTPClient` has a `CheckRedirect` of its own, `Build()`
+installs one that refuses a hop from `https` to `http` whose request still carries any of those
+three, whatever set it (`WithDefaultHeader`, `WithBasicAuth`, `Request.Headers`, `Request.Auth`,
+a request interceptor, `WithBearerTokenFile`). The refusal wraps `httpclient.ErrRedirectDowngrade`,
+never carries the header's value, and is never retried. A downgrade hop without them, and every
+`https`→`https` or `http`→`http` hop, is followed; the policy keeps net/http's cap of 10
+redirects (`httpclient: stopped after 10 redirects`). A caller's `CheckRedirect` governs
+entirely and is not chained with this one; the caller's client is never mutated (ADR-129).
+
 ### Mutual TLS (client certificates)
 
 `NewClientTLSConfig` turns declarative certificate material into a hardened
@@ -552,9 +567,9 @@ discarded wholesale — also a `Build()` failure. The interceptor path sidesteps
 all of this — it leaves `WithTLSConfig` intact regardless, because interceptors
 never touch the base-transport slot.
 
-**Do not let a signed request follow redirects.** go-bricks sets no
-`CheckRedirect`, so the stdlib default follows redirects below `buildRequest`
-without re-running interceptors, which either forwards a signature computed
+**Do not let a signed request follow redirects.** go-bricks' default
+`CheckRedirect` refuses only a credential-carrying `https`→`http` hop ([Redirects](#redirects)),
+so every other redirect is followed below `buildRequest` without re-running interceptors, which either forwards a signature computed
 over the wrong URL (same-host redirect) or drops `Authorization` entirely
 (cross-host redirect) — install a `CheckRedirect` returning
 `http.ErrUseLastResponse` on your own client, or ensure the partner endpoint
@@ -672,8 +687,9 @@ Nil-check it: a request with no body has neither. Draining `req.Body` and re-wra
 instead leaves `ContentLength` and `GetBody` stale, and `buildRequest` does **not**
 re-normalize framing after interceptors run.
 
-**Do not let a signed request follow redirects.** go-bricks sets no `CheckRedirect`, so the
-stdlib default follows redirects below `buildRequest` without re-running any interceptor.
+**Do not let a signed request follow redirects.** go-bricks' default `CheckRedirect` refuses
+only a credential-carrying `https`→`http` hop ([Redirects](#redirects)), so every other redirect
+is followed below `buildRequest` without re-running any interceptor.
 On a same-host redirect the token covers the wrong path. On a **cross-host** redirect the
 consequence is worse than for OAuth 1.0a: net/http strips only `Authorization`,
 `Www-Authenticate`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `Proxy-Authenticate` when
@@ -770,9 +786,9 @@ if err != nil {
   URL it names. Use one client per counterparty, and never pass it a URL you did not build (a
   pagination link, a callback URL).
 - **Redirects.** net/http forwards the header to the same domain or a subdomain of it, whatever
-  the scheme. Unless the `*http.Client` passed to `WithHTTPClient` has a `CheckRedirect` of its
-  own, `Build()` installs one that refuses a redirect from `https` to `http` that would carry an
-  `Authorization` header, without retrying, and keeps net/http's cap of 10 redirects.
+  the scheme. Like every client's, the default redirect policy refuses a redirect from `https` to
+  `http` that would carry it, without retrying ([Redirects](#redirects)); a `CheckRedirect` on
+  the `*http.Client` passed to `WithHTTPClient` replaces that policy.
 
 A projected service-account token for that path:
 
