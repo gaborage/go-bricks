@@ -56,14 +56,14 @@ type vectorFile struct {
 var (
 	vectorKeysOnce sync.Once
 	vectorKeys     map[string]*rsa.PrivateKey
-	vectorKeysErr  error
+	errVectorKeys  error
 )
 
 // vectorKey is one fixed private key of the published vectors (testdata/keys.json).
 func vectorKey(t *testing.T, kid string) *rsa.PrivateKey {
 	t.Helper()
-	vectorKeysOnce.Do(func() { vectorKeys, vectorKeysErr = parseVectorKeys() })
-	require.NoError(t, vectorKeysErr)
+	vectorKeysOnce.Do(func() { vectorKeys, errVectorKeys = parseVectorKeys() })
+	require.NoError(t, errVectorKeys)
 	k, ok := vectorKeys[kid]
 	require.True(t, ok, "keys.json holds %s", kid)
 	return k
@@ -77,8 +77,8 @@ func parseVectorKeys() (map[string]*rsa.PrivateKey, error) {
 	var file struct {
 		Keys map[string]string `json:"keys"`
 	}
-	if err = json.Unmarshal(raw, &file); err != nil {
-		return nil, err
+	if unmarshalErr := json.Unmarshal(raw, &file); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 	parsed := make(map[string]*rsa.PrivateKey, len(file.Keys))
 	for kid, encoded := range file.Keys {
