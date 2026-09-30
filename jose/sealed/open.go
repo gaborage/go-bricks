@@ -241,7 +241,7 @@ func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
 	if err := checkOpenOptionsArgs(spec, opts, "Verify"); err != nil {
 		return nil, err
 	}
-	core, err := verifyCore(body, spec, opts)
+	core, err := verifyCore(body, spec, opts, provisionedInKeySet)
 	if err != nil {
 		return nil, err
 	}
@@ -301,10 +301,11 @@ type verifiedCore struct {
 }
 
 // verifyCore runs rules 1–9 and rule 10 up to the encrypt-family pin and builds the rule-12 Envelope; no encrypt key is resolved.
-func verifyCore(body []byte, spec *Spec, opts *OpenOptions) (*verifiedCore, error) {
+// where is the rule-4 refusal's wording for the calling door.
+func verifyCore(body []byte, spec *Spec, opts *OpenOptions, where string) (*verifiedCore, error) {
 	compact := string(body)
 
-	signKid, signFamily, signKey, err := peekOuter(compact, spec, opts.Keys)
+	signKid, signFamily, signKey, err := peekOuter(compact, spec, opts.Keys, where)
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +348,7 @@ func verifyCore(body []byte, spec *Spec, opts *OpenOptions) (*verifiedCore, erro
 
 // openCore composes verifyCore and decryptSubject, so Open and OpenDocument refuse identically and differ only at rule 11.
 func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
-	v, err := verifyCore(body, spec, opts)
+	v, err := verifyCore(body, spec, opts, provisionedOnConsumer)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +362,7 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 // peekOuter runs rules 1–4 on the peeked, still unauthenticated protected header: the
 // structural check and typ, G5 policy, the sign-family pin, and the PUBLIC key for the
 // Generation. It returns the wire kid, its family and the key rule 5 verifies with.
-func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver) (kid, family string, key *rsa.PublicKey, err error) {
+func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver, where string) (kid, family string, key *rsa.PublicKey, err error) {
 	// Rule 1 — structural: exactly three segments whose first is a JSON object, typ = v1.
 	if strings.Count(compact, ".") != 2 {
 		return "", "", nil, openError(1, ErrNotSealed, CodeNotSealed, "body is not a compact JWS", nil)
@@ -385,8 +386,8 @@ func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver) (kid, fa
 		return "", "", nil, familyError(3, peek.Kid, spec.SignLogical, tagKeySign, "")
 	}
 	key, keyErr := keys.PublicKey(peek.Kid)
-	if keyErr != nil {
-		return "", "", nil, unknownGenerationError(4, peek.Kid, tagKeySign, provisionedOnConsumer, keyErr, "")
+	if keyErr != nil || key == nil {
+		return "", "", nil, unknownGenerationError(4, peek.Kid, tagKeySign, where, keyErr, "")
 	}
 	return peek.Kid, family, key, nil
 }
@@ -565,7 +566,7 @@ func checkSubjectHeader(compact, outerKid string, spec *Spec) (cryptoadapter.Hea
 // decryptSubject is the rest of rule 10: the PRIVATE key for the pinned inner kid, then the decrypt.
 func decryptSubject(compact, kid string, keys bricksjose.KeyResolver) ([]byte, error) {
 	encKey, keyErr := keys.PrivateKey(kid)
-	if keyErr != nil {
+	if keyErr != nil || encKey == nil {
 		return nil, unknownGenerationError(10, kid, tagKeyEncrypt, provisionedOnConsumer, keyErr, layerJWE)
 	}
 	plaintext, _, err := cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
