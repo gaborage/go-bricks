@@ -60,10 +60,10 @@ type bearerFileSpec struct {
 // bare name with no directory and no extension — fails Build without being read
 // or echoed; write "./token" for a file in the working directory.
 // Build also fails when this option is combined with WithBasicAuth or a default
-// Authorization header. Like any credential header, the token is never
-// followed across a redirect from https to http (see ErrRedirectDowngrade)
-// unless the client already has a CheckRedirect. After Build the file is re-read at most once per RefreshInterval, on
-// the request path; a failed re-read keeps the last good token and logs one
+// Authorization header. Unless the client already has a CheckRedirect, the
+// token, like any credential header, is never sent across a redirect from https
+// to http (see ErrRedirectDowngrade). After Build the file is re-read at most
+// once per RefreshInterval, on the request path; a failed re-read keeps the last good token and logs one
 // WARN per interval. A request that finds another request holding the refresh
 // lock, whether re-reading the file or only checking that a re-read is not yet
 // due, is served the last good token; a stalled read holds only the request
