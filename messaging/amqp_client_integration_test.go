@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -717,4 +719,93 @@ func TestStreamQueueConsumeIntegration(t *testing.T) {
 		{offset: 3, body: "stream-message-3"},
 		{offset: 4, body: "stream-message-4"},
 	}, replay)
+}
+
+// closeCountingConn wraps a real broker connection and counts Close calls.
+type closeCountingConn struct {
+	realConnection
+	closeCalls atomic.Int32
+}
+
+func (c *closeCountingConn) Close() error {
+	c.closeCalls.Add(1)
+	return c.realConnection.Close()
+}
+
+// TestAMQPClientDialCompletingAfterCloseIsClosedNotInstalled pins, against a
+// real broker, that a connection whose dial completes after Close is closed
+// exactly once, never installed, and never logged as connected or ready.
+func TestAMQPClientDialCompletingAfterCloseIsClosedNotInstalled(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	var dialed *closeCountingConn
+	old := getAmqpDialFunc()
+	setAmqpDialFunc(func(url string) (amqpConnection, error) {
+		once.Do(func() { close(entered) })
+		<-release
+		conn, err := amqp.Dial(url)
+		if err != nil {
+			return nil, err
+		}
+		dialed = &closeCountingConn{realConnection: realConnection{c: conn}}
+		return dialed, nil
+	})
+	t.Cleanup(func() { setAmqpDialFunc(old) })
+	log := newRecordingLogger()
+
+	client := NewAMQPClient(brokerURL, log)
+	<-entered
+	require.NoError(t, client.Close())
+	close(release)
+	select {
+	case <-client.reconnectDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("reconnect goroutine did not exit after Close")
+	}
+
+	require.NotNil(t, dialed, "the gated dial must have completed")
+	assert.Equal(t, int32(1), dialed.closeCalls.Load(), "a post-Close connection must be closed exactly once")
+	assert.True(t, dialed.c.IsClosed(), "a post-Close connection must not leak")
+	client.m.RLock()
+	assert.Nil(t, client.connection, "a post-Close connection must not be installed")
+	client.m.RUnlock()
+	for _, ln := range linesAfterClose(t, log) {
+		assert.NotContains(t, []string{msgConnected, msgInitReady}, ln.Msg, "success line logged after Close")
+	}
+}
+
+// TestAMQPClientCloseAfterAbsentExternalExchangeDeclareIsQuiet reproduces the
+// startup-rollback path: a passive declare of an absent external exchange
+// closes the shared channel, the rollback closes the client, and the client's
+// channel re-init must not log an ERROR for that expected shutdown.
+func TestAMQPClientCloseAfterAbsentExternalExchangeDeclareIsQuiet(t *testing.T) {
+	const iterations = 30
+	brokerURL := setupTestBroker(t)
+	registryLog := logger.New("disabled", true)
+	ctx := t.Context()
+
+	var loud []string
+	for i := range iterations {
+		log := newRecordingLogger()
+		client := NewAMQPClient(brokerURL, log)
+		require.Eventually(t, client.IsReady, 10*time.Second, 10*time.Millisecond, clientReadyMsg)
+
+		registry := NewRegistry(client, registryLog)
+		registry.RegisterExchange(NewExternalExchange(uniqueName(t, "absent_external")))
+		require.Error(t, registry.DeclareInfrastructure(ctx))
+
+		require.NoError(t, client.Close())
+		select {
+		case <-client.reconnectDone:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("iteration %d: reconnect goroutine did not exit after Close", i)
+		}
+		for _, ln := range log.Lines() {
+			if ln.Level == logger.LevelError {
+				loud = append(loud, fmt.Sprintf("iteration %d: %s", i, ln.Msg))
+			}
+		}
+	}
+	assert.Empty(t, loud, "the client logged ERROR lines for an expected shutdown")
 }
