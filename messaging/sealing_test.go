@@ -36,6 +36,7 @@ type fakeCodec struct {
 	scanErr   error
 	scanNil   bool
 	sealerErr error
+	sealerNil bool
 	scans     int
 	sealer    *fakeSealer
 	gotEvent  string
@@ -57,6 +58,9 @@ func (c *fakeCodec) NewSealer(_ sealruntime.Spec, eventType string, rt *sealrunt
 	c.gotEvent, c.gotRT = eventType, rt
 	if c.sealerErr != nil {
 		return nil, c.sealerErr
+	}
+	if c.sealerNil {
+		return nil, nil
 	}
 	return c.sealer, nil
 }
@@ -318,6 +322,11 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 			sealruntime.Register(c)
 			sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
 		}, want: sealerErr, text: "sealing producer"},
+		{name: "codec_returns_no_sealer", setup: func(c *fakeCodec) {
+			c.sealerNil = true
+			sealruntime.Register(c)
+			sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
+		}, text: "returned no sealer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
