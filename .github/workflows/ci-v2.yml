@@ -1033,6 +1033,32 @@ jobs:
         run: make lint-md
 
   # ============================================================================
+  # Release PR gate (#1565): llms.txt declares the version being released
+  # ----------------------------------------------------------------------------
+  # Runs ONLY on the release-please PR (head branch `release-please--…`) and
+  # skips on every other PR, which ci-ok tolerates. It requires llms.txt's
+  # Version & Compatibility bullet to declare the manifest's version and carry a
+  # ladder clause for it (rules in the script header). A pull_request run checks
+  # out the PR merged with main, so the job reads main's llms.txt: the docs(llms)
+  # PR lands first, release-please rebuilds its branch, and the job goes green
+  # (RELEASING.md §1). head_ref appears only in the `if:` expression, never in a
+  # shell step.
+  # ============================================================================
+  llms-version:
+    permissions:
+      contents: read
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: llms.txt declares the release-please manifest's version
+        run: scripts/check-llms-version.sh
+
+  # ============================================================================
   # SonarCloud (framework + tool coverage)
   # ============================================================================
 
@@ -1272,7 +1298,8 @@ jobs:
   # lint-docs skips) both still pass — the same always()+skipped-tolerant idiom
   # used by framework-merge-coverage and sonarcloud above. That tolerance is safe
   # in BOTH directions because every job in this `needs:` list is gated either on
-  # `changes` outputs alone, or on another job that is ALSO in this list — so a
+  # `changes` outputs alone, on the event and head branch alone (llms-version,
+  # which needs no other job), or on another job that is ALSO in this list — so a
   # failure always surfaces under its own key even when it makes a downstream job
   # skip. (It is NOT true that a job only skips when its own filter said "not my
   # paths": framework-merge-coverage and sonarcloud both skip when an upstream
@@ -1306,6 +1333,7 @@ jobs:
       - vuln-framework
       - vuln-migrate-tool
       - lint-docs
+      - llms-version
       - apidiff
       - sonarcloud
     runs-on: ubuntu-latest
