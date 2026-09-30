@@ -21,7 +21,7 @@ Certificate rotation is restart-based; there is no `tls.Config.GetCertificate` w
 
 A staged-but-disabled material configuration (fields set while `server.tls.enabled` is false) is fail-open — legitimate ahead of a flip — but emits one WARN naming `server.tls.enabled`, so a mistyped flag is never silent.
 
-**The split:** client-certificate verification (`ClientAuth`, client CA pool, leaf-validation hook) is deferred to a gated follow-up. Edge termination (ALB mTLS with trust store and CRL) already covers every named ALB-fronted deployment. App-side verification activates only when a deployment terminates partner TLS at the app itself (NLB/static-IP ingress) — no such deployment exists yet.
+**The split:** client-certificate verification (`ClientAuth`, client CA pool, leaf-validation hook) is deferred to a gated follow-up. Edge termination (ALB mTLS with trust store and CRL) already covers every named ALB-fronted deployment. App-side verification activates only when a deployment terminates partner TLS at the app itself (NLB/static-IP ingress) — no such deployment exists yet. **Amended by [ADR-130](adr_130_server_mtls_client_verification.md):** the follow-up shipped — `server.tls.clientauth` (`verify` / `require-verify`) verifies client certificates against `server.tls.clientcafile`/`clientcavalue`, with an optional leaf-validation hook through `app.Options.ServerOptions` that also runs on resumed sessions; revocation (CRL/OCSP) is still not checked at the app.
 
 ## Consequences
 

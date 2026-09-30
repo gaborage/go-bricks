@@ -1,10 +1,10 @@
 # ADR-130: App-Terminated mTLS Verifies Client Certificates Against a Configured CA Bundle
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-29
 **Issue:** #767
 **Breaking:** none — additive `server.tls` keys; the zero value leaves verification off
-**Extends:** [ADR-042](adr_042_server_tls.md) (the deferred client-verification split)
+**Amends:** [ADR-042](adr_042_server_tls.md) (the deferred client-verification split)
 
 ## Context
 
@@ -72,8 +72,6 @@ way to demand or verify a client certificate: the framework owns the listener's 
    `clientauth` is `""` would guard nothing, so `Start` fails naming `verify` and `require-verify`.
    A hook with `server.tls.enabled` false is a staged flip: `Start` serves plaintext and WARNs
    naming `server.tls.enabled`.
-
-**To follow (not in this change):** the ADR-042 amendment and the wiki updates.
 
 ## Consequences
 

@@ -1216,6 +1216,40 @@ Behavior and limits (see [wiki/auth.md](wiki/auth.md) / ADR-109):
 - **No claim hook, no ECDSA, no cookie/query credentials, no OIDC discovery** — name the JWKS
   endpoint explicitly.
 
+### App-Terminated mTLS (`server.tls.clientauth`, ADR-130)
+
+Verify partner client certificates at the listener when TLS terminates at the app (NLB / no edge proxy). Behind an ALB doing partner mTLS, use `server.forwardedclientcert` instead; the two compose.
+
+```yaml
+server:
+  tls:
+    enabled: true
+    certfile: /etc/tls/server.crt
+    keyfile: /etc/tls/server.key
+    clientauth: require-verify        # "" off | verify (if given) | require-verify; request/require refused
+    clientcafile: /etc/tls/partner-ca.pem   # or clientcavalue (base64 PEM), exactly one
+```
+
+```go
+// Optional leaf-validation hook (SAN/OU/CN allowlist): runs after chain verification and
+// again on resumed sessions; certless clients never reach it; an error rejects the handshake.
+fw, _, err := app.NewWithOptions(&app.Options{
+    ServerOptions: &server.Options{
+        TLSVerifyPeerCertificate: func(_ [][]byte, chains [][]*x509.Certificate) error {
+            if chains[0][0].Subject.CommonName != "partner-gateway" {
+                return errors.New("client not on the allowlist")
+            }
+            return nil
+        },
+    },
+})
+
+// In a handler: read the verified chain, never PeerCertificates. Identification, not authorization.
+chains := ctx.Request().TLS.VerifiedChains
+```
+
+`require-verify` with `server.probes.port > 0` fails startup (the probe self-check presents no client certificate); `verify` is allowed. A hook with TLS enabled but `clientauth: ""` fails startup. No CRL/OCSP checking. See [wiki/server_tls.md](wiki/server_tls.md#client-certificate-verification).
+
 ### App-Wide Global Middleware (`GlobalMiddlewareRegisterer`, v0.48.0+)
 
 `r.Use` / `r.Group` above are **group-scoped** — they wrap only routes registered on that

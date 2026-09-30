@@ -660,7 +660,8 @@ deployment sits behind an ALB that already terminates partner mTLS at the edge, 
 verification activates only once a deployment terminates partner TLS at the app itself
 (NLB/static-IP ingress) — no such deployment exists yet. No raw `*tls.Config` escape hatch; the
 framework owns the listener's posture. Additive-only; the zero value leaves every deployment on
-plaintext, unchanged.
+plaintext, unchanged. Amended by ADR-130: client-certificate verification shipped as
+`server.tls.clientauth`.
 
 **Key Benefits:** Closes the config-surface gap ADR-034's engine seal created (a consumer could no
 longer add TLS from outside); covers the ALB→target encryption-in-transit hop and any deployment
@@ -2132,9 +2133,9 @@ exported `httpclient.ErrRedirectDowngrade`; ten redirects stay the cap. A caller
 
 ### [ADR-130: App-Terminated mTLS Verifies Client Certificates Against a Configured CA Bundle](adr_130_server_mtls_client_verification.md)
 
-**Date:** 2026-09-29 | **Status:** Proposed | **Breaking:** none
+**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** none
 
-Extends ADR-042's deferred client-verification split. `server.tls.clientauth` takes `""` (off),
+Amends ADR-042's deferred client-verification split. `server.tls.clientauth` takes `""` (off),
 `verify` (`VerifyClientCertIfGiven`) or `require-verify` (`RequireAndVerifyClientCert`); Go's
 unverifying `request`/`require` are refused naming the valid values. On an enabled listener a
 verifying policy needs exactly one of `server.tls.clientcafile`/`clientcavalue`, a client CA

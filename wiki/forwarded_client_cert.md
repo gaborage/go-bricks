@@ -7,7 +7,11 @@ it to handlers and other middleware via `server.ForwardedClientCertFromContext`.
 > **Scope note:** this is the identity half only — **identification, not authorization**
 > (same stance as ADR-039's tenant resolution). Deciding what an identity may do is
 > application policy. This middleware is independent of `server.tls.*` (ADR-042, ALB→target
-> listener TLS) — the `X-Amzn-Mtls-*` headers arrive whether or not that hop is TLS.
+> listener TLS) — the `X-Amzn-Mtls-*` headers arrive whether or not that hop is TLS. It is for
+> **LB-terminated** partner mTLS; for **app-terminated** partner mTLS, where the application
+> verifies the partner itself, use `server.tls.clientauth` ([server_tls.md](server_tls.md),
+> ADR-130). The two compose — see
+> [Composing with app-terminated mTLS](#composing-with-app-terminated-mtls).
 
 ## Config Reference
 
@@ -191,11 +195,29 @@ certificate/fingerprint rather than `Subject` alone — falling back to `Subject
 Leaf is unavailable would defeat the comparison exactly when it matters. Never assume any
 partner header value is unforgeable purely because "the ALB set it."
 
+## Composing with app-terminated mTLS
+
+`server.forwardedclientcert` and `server.tls.clientauth` are independent: neither changes the
+other's behavior, and enabling both is not an error. A proxy (Envoy, nginx) that authenticates
+to the application over mTLS while forwarding the end client's certificate in a header is a
+legitimate and stronger posture than either alone — the mTLS leaf proves the hop came from the
+trusted proxy, which is what makes the forwarded header trustworthy.
+
+- The **mTLS leaf** identifies the **hop** (the proxy).
+- The **forwarded certificate** identifies the **end client**.
+- Both are **identification, not authorization** — the deployment still authorizes.
+
+**The trap:** under that posture the leaf-validation hook (`server.Options.TLSVerifyPeerCertificate`)
+sees the **proxy's** certificate, not the end client's. An allowlist written for partner
+subjects would reject the proxy: allowlist the proxy in the hook, and judge the partner from
+`server.ForwardedClientCertFromContext`. This middleware parses the AWS ALB's
+`X-Amzn-Mtls-Clientcert-*` headers; a different proxy's header format needs its own parser.
+
 ## See Also
 
 - [ADR-043](adr_043_forwarded_client_cert.md) — full design rationale and consequences
-- [wiki/server_tls.md](server_tls.md) — the listener-TLS half (ADR-042); independent of this
-  feature, but often deployed together on the same ALB
+- [wiki/server_tls.md](server_tls.md) — the listener-TLS half (ADR-042) and app-terminated
+  client-certificate verification (ADR-130); independent of this feature, and composable with it
 - [wiki/migrations.md](migrations.md) (`[C56.1]`) — upgrade note
 - [wiki/multi_tenant_resolvers.md](multi_tenant_resolvers.md) — the identification-vs-
   authorization precedent this middleware follows (ADR-039)
