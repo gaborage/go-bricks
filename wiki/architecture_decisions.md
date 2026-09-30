@@ -2116,7 +2116,7 @@ exported `httpclient.ErrRedirectDowngrade`; ten redirects stay the cap. A caller
 
 ### [ADR-131: A Verified Door Republishes Stored Sealed Bytes, and `Seal` Returns Its `jti`](adr_131_sealed_bytes_publish_door.md)
 
-**Date:** 2026-09-30 | **Status:** Accepted (the `PublishSealed` door lands in the next link of the #1869 stack) | **Breaking:** `Publisher[T].Seal`, `jose/sealed.Seal`, `jose/sealed.SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`
+**Date:** 2026-09-30 | **Status:** Accepted | **Breaking:** `Publisher[T].Seal`, `jose/sealed.Seal`, `jose/sealed.SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`
 
 A producer that persists sealed bytes could not publish them itself. ADR-096 left no exported
 bytes door, the outbox relay publishes without `Mandatory` and reports nothing back, and every

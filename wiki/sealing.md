@@ -6,7 +6,7 @@ signed by the producer. Decision record: [ADR-097](adr_097_sealed_amqp_messages.
 Vocabulary is the `Payload sealing` section of `CONTEXT.md`; this page uses it without
 redefining it.
 
-Packages: `jose/sealed` (codec — `ScanType`, `Seal`, `Open`, the failure codes) and
+Packages: `jose/sealed` (codec — `ScanType`, `Seal`, `Open`, `Verify`, the failure codes) and
 `messaging/sealed` (the adapter that engages the codec from the typed publish and consume
 doors; import-gated like `messaging/streams`, ADR-091). The gate keeps the `messaging`
 package free of go-jose and turns a forgotten import into a loud startup error; it does not
@@ -22,8 +22,10 @@ declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),
 `messaging.SealTagName`) is the one predicate every door asks; the lane guards use it to
 refuse a seal-tagged `T` on streams and on the outbox struct door. `Publisher[T].Publish`
 seals when `T` is seal-tagged; `Publisher[T].Seal(ctx, evt)` runs the same sealer once and
-returns the body `Publish` would have put on the wire, for the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
-(#1359). Metrics:
+returns the body `Publish` would have put on the wire, for the outbox lane or a producer-owned
+store that republishes it through `Publisher[T].PublishSealed`, verified through the codec's
+optional `messaging.SealVerifierProvider` ([ADR-131](adr_131_sealed_bytes_publish_door.md));
+the consumer side opens through the codec's `messaging.SealOpenerProvider` (#1359). Metrics:
 `seal.operation.duration` with `seal.operation = seal|open`, and
 `seal.open.failures.total` with `seal.error.code`.
 
@@ -75,9 +77,12 @@ producer carried a tenant stamp — its presence rule is the tenancy rule under
 | `etyp` | the publisher declaration's `EventType` | must equal the consumer declaration's `EventType` |
 | `tid` | the ADR-087 tenant stamp when non-empty, omitted otherwise | by tenancy — see [tenancy](#tid-by-tenancy) |
 
-AMQP `ContentType` stays `application/octet-stream`. Wire floor is ≈1.4 KB per message
-(RSA-wrapped CEK + PS256, base64): the prototype measured 104 B → 1505 B, and a nil Subject
-65 B → 1435 B. Ciphertext length grows with the plaintext, so a broker reader learns the
+AMQP `ContentType` is `application/jose` on a typed-door publish (`Publish`,
+`PublishSealed`); a persisted-sealed outbox row relays as `application/octet-stream`, since a
+`[]byte` payload carries no content type
+([ADR-105](adr_105_framework_writes_every_publish_property.md), #1873). Wire floor is ≈1.4 KB
+per message (RSA-wrapped CEK + PS256, base64): the prototype measured 104 B → 1505 B, and a nil
+Subject 65 B → 1435 B. Ciphertext length grows with the plaintext, so a broker reader learns the
 Subject's size class.
 
 ## Tags
@@ -155,8 +160,10 @@ messaging:
 Every step requires ordering, never simultaneity; both sides keep verifying and decrypting
 throughout because each message names the generation that sealed it. The drain gate is the
 same for both families: **queue depth AND the outbox retention window AND DLQ replay policy
-AND inbox parks** — old-generation rows replay byte-identical for the full retention window,
-so gating on queue depth alone strands them unopenable. The consumers-before-flip gate is
+AND inbox parks AND every producer-owned sealed-bytes store** — old-generation rows replay
+byte-identical for the full retention window, and stored sealed bytes republish through
+`PublishSealed` until step 5 removes their generation from the producer, so gating on queue
+depth alone strands them unopenable. The consumers-before-flip gate is
 human-enforced until #769; getting it wrong shows up as a DLQ spike of
 `SEAL_KID_UNKNOWN_GENERATION`.
 
@@ -168,8 +175,10 @@ human-enforced until #769; getting it wrong shows up as a DLQ spike of
 3. Flip `messaging.seal.active.<logical>: v<N+1>` on the producer and redeploy. New traffic
    seals under `v<N+1>`; in-flight and outbox-replayed `v<N>` traffic still opens per message.
 4. Drain gate (above).
-5. Remove the `v<N>` entries from every consumer (accept set shrinks); destroy the retired
-   private.
+5. Remove the `v<N>` entries from every consumer AND from the producer's keystore (the accept
+   set and the producer's sealed-bytes door both shrink); destroy the retired private.
+   Destroying the private alone is not enough: a public-only `v<N>` entry on the producer still
+   resolves, so `PublishSealed` would keep admitting `v<N>` bytes every consumer now refuses.
 
 ### Encrypt family (`encrypt=<logical>`)
 
@@ -180,8 +189,9 @@ The roles invert, so the order does too (G3):
 2. Provision the `v<N+1>` **PUBLIC** to the producer.
 3. Flip `messaging.seal.active.<logical>: v<N+1>` on the producer and redeploy.
 4. Drain gate (above).
-5. Remove `v<N>` from producer and consumers; destroy the retired privates — until the last
-   one is gone, captured ciphertext stays readable (no forward secrecy, no revocation).
+5. Remove `v<N>` from producer and consumers — on the producer that also stops `PublishSealed`
+   admitting `v<N>` bytes; destroy the retired privates — until the last one is gone, captured
+   and persisted ciphertext stays readable (no forward secrecy, no revocation).
 
 ### Provisioning a consumer N+1
 
@@ -214,6 +224,10 @@ no clock is read.
 | 10 | payload is an object, the Subject member is a compact JWE, inner header passes rule 2 (detail `layer: jwe`), `iss` equals the outer `kid`, inner `kid` is a Generation of the encrypt family that resolves to a PRIVATE key, decrypt | `SEAL_PAYLOAD_UNDECODABLE` / the rule-2–4 codes with `layer: jwe` / `SEAL_AUTHORSHIP_MISMATCH` / `SEAL_DECRYPT_FAILED` |
 | 11 | splice the plaintext back and unmarshal into the event type | `SEAL_PAYLOAD_UNDECODABLE` |
 | 12 | build the `Envelope` | — |
+
+Producer side: `jose/sealed.Verify` runs rules 1–9 and rule 10 up to the encrypt-family pin,
+resolving the inner `kid` as a PUBLIC key, and stops before the decrypt; every refusal carries
+`Open`'s code. The sealed-bytes door below runs it.
 
 Wiring mistakes (no `Spec`, no `KeyResolver`, empty `EventType`, wrong `out` type) are
 `SEAL_OPTIONS_INVALID` / `SEAL_TYPE_MISMATCH` as rule 0 — the same error type, never a
@@ -295,8 +309,92 @@ rejection**; its one replay-related job is to make the message's identity un-for
   queue; a DLQ watcher declares the producer's `EventType` or uses a raw handler; an
   `EventType` rename is a coordinated release.
 - A caller-side retry after `Publish` exhausts its in-loop retries is a new seal and a new
-  `jti`; business-key idempotency stays the consumer's contract. A stateless sealed consumer
-  (no ledger) leaves every replay class open — the `WithMeta` requirement is the nudge.
+  `jti`; business-key idempotency stays the consumer's contract — unless the producer persisted
+  `Seal`'s bytes and republishes them through `PublishSealed`, which keeps the `jti` (ADR-131).
+  A stateless sealed consumer (no ledger) leaves every replay class open — the `WithMeta`
+  requirement is the nudge.
+
+## Republishing stored sealed bytes (`PublishSealed`)
+
+A producer that persists `(record id, jti, sealed bytes)` before publishing, and must fail
+loudly when a publish is unroutable, republishes those exact bytes through the handle that
+sealed them ([ADR-131](adr_131_sealed_bytes_publish_door.md)). Declare that handle
+`Mandatory: true`.
+
+```go
+data, jti, err := h.Seal(ctx, evt) // persist data, jti and the tenant with the record
+// later, in the batch — restore the stored tenant first:
+ctx = multitenant.SetTenant(ctx, rec.Tenant)
+err = h.PublishSealed(ctx, client, data)
+```
+
+`PublishSealed` exists only on a seal-tagged handle and refuses before any broker I/O:
+
+| Refusal | Error |
+| --- | --- |
+| plain `T` | `messaging.ErrNotSealTagged` |
+| the handle's seal setup failed at declaration | that startup error (for example `messaging.ErrSealingNotLinked`) |
+| the registered codec has no producer verification | `messaging.ErrSealingNotLinked`, wrapped; `Publish` and `Seal` still work |
+| the context's tenant disagrees with the client's pool key | `messaging.ErrTenantStampConflict`, as `Publish` |
+| the bytes fail verification | `messaging.ErrSealedBytesRejected`; the chain carries a `*messaging.SealOpenRefusedError` whose `Code` is the rule's `SEAL_*` code, and `errors.As` reaches the `*jose/sealed.OpenError` |
+| the signed `tid` is not the tenant this publish would stamp | `messaging.ErrSealedTenantMismatch` |
+
+**Checks.** Verification runs the opener's rules 1–9 unchanged:
+
+- a compact JWS with `typ` `vnd.gobricks.sealed.v1+json`;
+- the outer `alg`/`cty`/`crit` policy;
+- a sign `kid` that is a Generation of the declared sign family and resolves to a PUBLIC key;
+- the signature;
+- well-formed `jti`/`iat`/`etyp`/`sp` slots;
+- `etyp` equal to the handle's `EventType`;
+- `sp` equal to the declared sealed set.
+
+It then runs rule 10 up to the decrypt: the Subject is a compact JWE whose header passes the
+inner policy, whose `iss` equals the outer `kid`, and whose `kid` is a Generation of the declared
+encrypt family that resolves to a PUBLIC key. It resolves no private key, decrypts nothing and
+decodes nothing. Kids resolve by entry name, with no activation filter. Bytes sealed under
+`v<N>` keep publishing after `messaging.seal.active` flips to `v<N+1>`, until step 5 removes
+`v<N>` from this producer's keystore.
+
+**Tenant rule.** The signed `tid` must equal the tenant `Publish` would stamp for the same `ctx`
+and client: the context's tenant, else the client's pool key. An absent `tid` counts as no
+tenant. So bytes sealed without a tenant cannot go through a per-tenant client, and bytes sealed
+for tenant A are never stamped B. Store the tenant with the bytes and restore it into `ctx`
+before republishing.
+
+**Publishing.** The door publishes the one copy of `data` it verified, so a buffer the caller
+mutates mid-call cannot change the wire. It uses the same internal door as `Publish`: the
+handle's exchange, routing key and declared headers, `Mandatory`,
+`content_type: application/jose`, `type` = the `EventType`, the tenant stamp, trace headers,
+bounded retries, confirms and redeclare-on-reconnect. The AMQP `message_id` is minted per call
+and never derived from the `jti`, because ADR-122 matches a returned publish by it.
+
+**Errors after verification** are the client's own, exactly as `Publish` returns them. On a
+`Mandatory` handle whose routing key reaches no queue, that is `ErrPublishUnroutable` under
+`ErrPublishRetriesExhausted`. When a deadline, a cancel or a shutdown cuts the retries short, it
+is joined with `context.DeadlineExceeded`, `context.Canceled` or `ErrShutdown` instead, so match
+`ErrPublishUnroutable` with `errors.Is`. Neither the door nor `Mandatory` signals queue capacity.
+A queue length limit with `x-overflow: reject-publish` (or `reject-publish-dlx`) makes the
+broker NACK, and the caller sees `ErrPublishNacked`.
+
+**Dedup.** Every republish of the same bytes carries the same `jti`. `Seal` returns it bare, and
+the go-bricks inbox stores `<SignFamily>:<jti>`. A retry is therefore deduplicated only within
+`inbox.retentionperiod` (7 days by default), and only while the bytes' sign and encrypt
+generations are still provisioned on the consumer. After step 5 the producer refuses the stored
+bytes, and recovery is a fresh `Seal`, which mints a new `jti`.
+
+**Residual.** A body signed by this producer's own sign family but encrypted to the wrong key
+under the right `kid`, or whose document does not decode into `T`, passes the door. The consumer
+refuses it (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ.
+
+**At rest.** A sealed-bytes store is storage, whatever the encryption. Keep CVV/CVC, full track
+data and PIN blocks out of any sealed event whose bytes are persisted, the same rule as the
+outbox's SAD warning ([outbox.md](outbox.md)). Persisted ciphertext stays readable until every
+retired encrypt private key that sealed it is destroyed (no forward secrecy).
+
+**Tests.** Depend on `messaging.SealedEventPublisher[T]` (`Seal` + `PublishSealed`, which
+`*Publisher[T]` satisfies) and inject `messaging/testing.CaptureSealedPublisher[T]`. It mints
+placeholder bytes and records every body it is handed.
 
 ## Minting test events with rabbitmqadmin (seal-event CLI)
 
@@ -450,6 +548,12 @@ stay uncapped.
   publish door that sealing engages from removed raw byte publishing (`[C63.1]`, ADR-096).
 - A keystore YAML entry binding a name to material remains a trust act, scoped to that
   entry. Two ids per outbox-lane event (`record.ID` and `jti`), correlated by `traceparent`.
+- `PublishSealed` admits a body its own sign family signed but encrypted to the wrong key under
+  the right `kid`, or whose document does not decode into `T`; the consumer refuses it
+  (ADR-131).
+- A stored sealed body's `jti` dedups a republish only within `inbox.retentionperiod` and while
+  its generations are provisioned on the consumer; after step 5 recovery is a fresh `Seal` and a
+  new `jti`.
 
 ## Migration pointers
 

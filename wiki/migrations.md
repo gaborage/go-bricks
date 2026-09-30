@@ -11211,6 +11211,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (data []byte, jti string, err error)`. `jti` is the bare signed `jti` slot, `""` on every error.
   The go-bricks inbox keys a sealed delivery `<SignFamily>:<jti>`, so compose the family before
   comparing with a framework ledger row. `Publish` and the wire are unchanged.
+  `messaging.ErrNotSealTagged` keeps its identity (`errors.Is(err, messaging.ErrNotSealTagged)`
+  still matches) but its text changes to
+  `messaging: the handle's event type carries no seal tags` so it fits `Seal` and
+  `PublishSealed` alike; a test comparing the FULL message (`EqualError`, `err.Error() ==`)
+  moves to `errors.Is`. Every seal-tagged publisher declaration now role-tags every provisioned
+  RSA generation of both families as seal material, not only the two active ones, so an entry
+  that also serves an HTTP jose route may log a new dual-role WARN at startup.
 - gate: match = any classified hit above. no-match = otherwise.
 - apply: `data, jti, err := h.Seal(ctx, evt)`, or `data, _, err :=` where the `jti` is unused;
   the same for `sealed.Seal`/`SealDocument`. A custom codec's sealer returns the `jti` it signed.

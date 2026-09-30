@@ -374,10 +374,20 @@ _Avoid_: key pair (ambiguous), sender/receiver keys, role-split kids
 **Typed door**:
 The module-facing publish or consume surface that sees an event as its Go
 type — where declaration-driven behavior (sealing, decoding, validation)
-engages. Raw bytes below it are framework plumbing, not a module surface, so
-what the type declares cannot be bypassed at a call site.
+engages. Raw bytes below it are framework plumbing, not a module surface —
+the Sealed-bytes door is the one exception, and it verifies what it is
+handed — so what the type declares cannot be bypassed at a call site.
 _Avoid_: typed API, generic publisher/consumer (the mechanism, not the seam),
 high-level client
+
+**Sealed-bytes door**:
+The one module-facing path that takes bytes rather than a Go value: a
+seal-tagged typed handle republishing bytes its own seal produced, after
+verifying them against the handle's declaration without decrypting. It exists
+for producers that persist sealed bytes and must learn at once that a publish
+failed; it admits nothing a plain handle, a forged header or a removed
+generation could put on the wire.
+_Avoid_: raw publish, bytes publish, escape hatch (it verifies), replay door
 
 **Accept-unsealed**:
 A consumer's declared, temporary tolerance of unprotected messages during a

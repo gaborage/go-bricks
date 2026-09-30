@@ -1,6 +1,6 @@
 # ADR-131: A Verified Door Republishes Stored Sealed Bytes, and `Seal` Returns Its `jti`
 
-**Status:** Accepted — `Seal`'s `jti` return ships in this change; the `PublishSealed` door lands in the next link of the #1869 stack
+**Status:** Accepted
 **Date:** 2026-09-30
 **Amends:** [ADR-096](adr_096_typed_publish_door.md) (a second, narrow exported path to the wire), [ADR-097](adr_097_sealed_amqp_messages.md) (the caller-side-retry residual, and the rotation drain gate and sign-family step 5 in [sealing.md's rotation runbooks](sealing.md#rotation-runbooks))
 
