@@ -23,10 +23,11 @@ const (
 )
 
 // gatedHandler blocks every Handle until release is closed, counting the calls that
-// entered and the calls that finished.
+// entered and the calls that finished. after, when set, runs once released.
 type gatedHandler struct {
 	entered  chan struct{}
 	release  chan struct{}
+	after    func()
 	calls    atomic.Int64
 	finished atomic.Int64
 }
@@ -42,6 +43,9 @@ func (h *gatedHandler) Handle(_ context.Context, _ *amqp.Delivery) error {
 	default:
 	}
 	<-h.release
+	if h.after != nil {
+		h.after()
+	}
 	h.finished.Add(1)
 	return nil
 }

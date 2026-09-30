@@ -514,8 +514,8 @@ func capitalizeFirst(s string) string {
 
 // shutdownConsumers stops AMQP consumers from accepting NEW messages before modules are
 // torn down, so the framework stops handing fresh work to modules that are shutting down.
-// It cancels each consumer's context (which propagates to in-flight handlers) but does not
-// synchronously join them, and does NOT close the underlying connections — the
+// It cancels each consumer's context (which propagates to in-flight handlers) and joins them
+// within the messaging stop budget, and does NOT close the underlying connections — the
 // messaging-manager closer does that later. No-op when messaging is not configured.
 func (a *App) shutdownConsumers() {
 	if a.messagingManager == nil {
