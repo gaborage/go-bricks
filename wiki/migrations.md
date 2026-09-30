@@ -11204,13 +11204,23 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   evt)`: two arguments, a context first) and `jose/sealed.Seal(evt, spec, opts)` /
   `SealDocument(doc, spec, opts)` now return three values. HTTP `jose.Seal(payload, policy,
   resolver)` is UNAFFECTED. A `RegisterSealCodec` hit means you registered your own codec, and
-  its sealer's `Seal(ctx, evt any)` must now return the `jti` too.
+  its sealer's `Seal(ctx, evt any)` must now return the `jti` too. Such a codec whose
+  `NewSealer`, `NewOpener` or `NewVerifier` returns `(nil, nil)` now fails loudly where it used
+  to fall open or panic: `NewSealer`/`NewOpener` fail the declaration at `Validate`, and
+  `NewVerifier` fails only `PublishSealed`.
 - scope: `Publisher[T].Seal(ctx, evt T) (data []byte, jti string, err error)` (was `([]byte,
   error)`). `jose/sealed.Seal` and `jose/sealed.SealDocument` return `(data []byte, jti string,
   err error)`. The seal-runtime seam's `messaging.Sealer` is `Seal(ctx context.Context, evt any)
   (data []byte, jti string, err error)`. `jti` is the bare signed `jti` slot, `""` on every error.
   The go-bricks inbox keys a sealed delivery `<SignFamily>:<jti>`, so compose the family before
   comparing with a framework ledger row. `Publish` and the wire are unchanged.
+  `messaging.ErrNotSealTagged` keeps its identity (`errors.Is(err, messaging.ErrNotSealTagged)`
+  still matches) but its text changes to
+  `messaging: the handle's event type carries no seal tags` so it fits `Seal` and
+  `PublishSealed` alike; a test comparing the FULL message (`EqualError`, `err.Error() ==`)
+  moves to `errors.Is`. Every seal-tagged publisher declaration now role-tags every provisioned
+  RSA generation of both families as seal material, not only the two active ones, so an entry
+  that also serves an HTTP jose route may log a new dual-role WARN at startup.
 - gate: match = any classified hit above. no-match = otherwise.
 - apply: `data, jti, err := h.Seal(ctx, evt)`, or `data, _, err :=` where the `jti` is unused;
   the same for `sealed.Seal`/`SealDocument`. A custom codec's sealer returns the `jti` it signed.

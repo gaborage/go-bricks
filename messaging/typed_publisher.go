@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,6 +42,9 @@ type Publisher[T any] struct {
 	// startup; the handle keeps it too, so a caller that publishes before or despite that
 	// report gets the error rather than plaintext.
 	sealErr error
+	// verifyErr is kept off Validate: only PublishSealed needs the verifier.
+	verifier  SealVerifier
+	verifyErr error
 }
 
 // newTypedPublisher is the single construction point for the handle, so every
@@ -97,11 +101,14 @@ func DeclareTypedPublisher[T any](decls *Declarations, opts *PublisherOptions) *
 		return handle
 	}
 	if hasSealTag(t) {
-		sealer, err := newSealer(t, decl.EventType)
+		sealer, spec, err := newSealer(t, decl.EventType)
 		if err != nil {
 			decls.recordSealError(err)
+			handle.sealErr = err
+			return handle
 		}
-		handle.sealer, handle.sealErr = sealer, err
+		handle.sealer = sealer
+		handle.verifier, handle.verifyErr = newVerifier(spec, decl.EventType)
 	}
 	return handle
 }
@@ -116,6 +123,14 @@ type EventPublisher[T any] interface {
 
 var _ EventPublisher[struct{}] = (*Publisher[struct{}])(nil)
 
+// SealedEventPublisher is the injection seam for a module that persists sealed bytes; *Publisher[T] satisfies it.
+type SealedEventPublisher[T any] interface {
+	Seal(ctx context.Context, evt T) (data []byte, jti string, err error)
+	PublishSealed(ctx context.Context, client AMQPClient, data []byte) error
+}
+
+var _ SealedEventPublisher[struct{}] = (*Publisher[struct{}])(nil)
+
 // Publish encodes evt and publishes it to the DECLARED exchange and routing
 // key with the declared default headers, through client — the tenant-aware
 // client a handler already holds (the getMessaging(ctx) idiom), so the
@@ -124,7 +139,8 @@ var _ EventPublisher[struct{}] = (*Publisher[struct{}])(nil)
 // A plain T is JSON-marshaled. A seal-tagged T is sealed (ADR-097) — once, here,
 // before the client's retry loop, so every attempt and every redelivery carries
 // the same bytes and the same signed jti. A caller-side retry after this call
-// fails is a new seal and a new jti.
+// fails is a new seal and a new jti, unless the caller persisted Seal's bytes
+// and republishes them through PublishSealed.
 //
 // An encode or seal failure is returned wrapped and publishes nothing. Every
 // other error is the client's own (ErrInvalidPublishDestination,
@@ -148,16 +164,42 @@ func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) er
 // Seal returns evt's sealed wire bytes and the jti signed into them without publishing;
 // a plain (not seal-tagged) T returns ErrNotSealTagged.
 func (h *Publisher[T]) Seal(ctx context.Context, evt T) (data []byte, jti string, err error) {
-	if h.sealer == nil && h.sealErr == nil {
-		return nil, "", fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
+	if !h.sealTagged() {
+		return nil, "", h.notSealTaggedError()
 	}
 	return h.seal(ctx, nil, evt)
+}
+
+// PublishSealed verifies data against this handle's declaration, then publishes that copy as Publish would (ADR-131).
+func (h *Publisher[T]) PublishSealed(ctx context.Context, client AMQPClient, data []byte) error {
+	if !h.sealTagged() {
+		return h.notSealTaggedError()
+	}
+	if h.sealErr != nil {
+		return h.sealErr
+	}
+	if h.verifyErr != nil {
+		return h.verifyErr
+	}
+	tenant, err := publishTenant(ctx, client)
+	if err != nil {
+		return err
+	}
+	body := bytes.Clone(data)
+	env, err := h.verifier.Verify(ctx, body)
+	if err != nil {
+		return fmt.Errorf("%w (event type %q): %w", ErrSealedBytesRejected, h.eventType, err)
+	}
+	if env.TenantID != tenant {
+		return fmt.Errorf("%w (event type %q)", ErrSealedTenantMismatch, h.eventType)
+	}
+	return h.publishBytes(ctx, client, body)
 }
 
 // encode is the one place the handle turns an event into bytes: seal when T is
 // seal-tagged, marshal otherwise.
 func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, error) {
-	if h.sealer != nil || h.sealErr != nil {
+	if h.sealTagged() {
 		data, _, err := h.seal(ctx, client, evt)
 		return data, err
 	}
@@ -188,6 +230,13 @@ func (h *Publisher[T]) seal(ctx context.Context, client AMQPClient, evt T) (data
 	return data, jti, nil
 }
 
+// sealTagged reports whether T carries seal tags, whether or not its sealer could be built.
+func (h *Publisher[T]) sealTagged() bool { return h.sealer != nil || h.sealErr != nil }
+
+func (h *Publisher[T]) notSealTaggedError() error {
+	return fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
+}
+
 // contentType is what this handle actually encoded: a compact JWS when T is
 // seal-tagged (ADR-097), JSON otherwise. The handle is the only place that
 // knows, which is why the property is set here and not in the client.
@@ -201,11 +250,7 @@ func (h *Publisher[T]) contentType() string {
 // tenantForSeal returns ctx carrying the tenant the stamping wrapper will write for a
 // publish through client, or ctx unchanged when no tenant is in play.
 func tenantForSeal(ctx context.Context, client AMQPClient) (context.Context, error) {
-	key := ""
-	if src, ok := client.(replayKeyProvider); ok {
-		key = src.ReplayKey()
-	}
-	tenant, err := tenantstamp.Resolve(ctx, key)
+	tenant, err := publishTenant(ctx, client)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +258,15 @@ func tenantForSeal(ctx context.Context, client AMQPClient) (context.Context, err
 		return ctx, nil
 	}
 	return multitenant.SetTenant(ctx, tenant), nil
+}
+
+// publishTenant is the tenant the stamping wrapper will write for a publish through client.
+func publishTenant(ctx context.Context, client AMQPClient) (string, error) {
+	key := ""
+	if src, ok := client.(replayKeyProvider); ok {
+		key = src.ReplayKey()
+	}
+	return tenantstamp.Resolve(ctx, key)
 }
 
 // publishBytes is the handle's ONE bytes door. It goes through the

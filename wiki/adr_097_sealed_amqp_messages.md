@@ -22,9 +22,9 @@
 > exhausted in-loop retries is a new seal and a new `jti`" is withdrawn for such producers.
 > Producer-owned sealed-bytes stores join the rotation drain gate, and sign-family step 5 removes
 > `v<N>` from the producer's keystore as well as every consumer's (both in
-> [sealing.md's rotation runbooks](sealing.md#rotation-runbooks)). The `jti` return ships with
-> this amendment; the door, the withdrawn residual and the drain-gate and step-5 changes take
-> effect when the door lands, in the next link of the #1869 stack.
+> [sealing.md's rotation runbooks](sealing.md#rotation-runbooks)). §2's DIRECT-door paragraph
+> ("no exported symbol lets a module hand bytes to the broker", the outbox handoff as "the one
+> sanctioned bytes path") now has one exception, `Publisher[T].PublishSealed` (ADR-131).
 >
 > **Amended (2026-09-16, #1634):** a sealed `DedupKey` must EQUAL the key bound to the delivery
 > in hand — value equality, not a capability token and not a comparison of delivery
@@ -245,6 +245,8 @@ interface inside `messaging` that `Publish` asserts, and no exported symbol lets
 hand bytes to the broker. The outbox handoff above is the one sanctioned bytes path, and
 it accepts only what `Seal` produced. Tests publish through the typed capture double the framework
 ships, never a byte-capable mock (ADR-096).
+
+*(Amended 2026-09-30 by [ADR-131](adr_131_sealed_bytes_publish_door.md): `Publisher[T].PublishSealed` is the one verified exception — seal-tagged handles only, bytes verified before any broker I/O.)*
 
 **Default exchange.** An empty `Exchange` on a publisher declaration denotes AMQP's
 default exchange and is exempt from the declared-exchange rule ONLY when `RoutingKey` is

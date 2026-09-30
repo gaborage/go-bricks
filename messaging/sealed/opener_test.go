@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,27 +53,75 @@ type vectorFile struct {
 	} `json:"vectors"`
 }
 
+var (
+	vectorKeysOnce sync.Once
+	vectorKeys     map[string]*rsa.PrivateKey
+	errVectorKeys  error
+)
+
+// vectorKey is one fixed private key of the published vectors (testdata/keys.json).
+func vectorKey(t *testing.T, kid string) *rsa.PrivateKey {
+	t.Helper()
+	vectorKeysOnce.Do(func() { vectorKeys, errVectorKeys = parseVectorKeys() })
+	require.NoError(t, errVectorKeys)
+	k, ok := vectorKeys[kid]
+	require.True(t, ok, "keys.json holds %s", kid)
+	return k
+}
+
+func parseVectorKeys() (map[string]*rsa.PrivateKey, error) {
+	raw, err := os.ReadFile(filepath.Join(vectorsDir, "keys.json"))
+	if err != nil {
+		return nil, err
+	}
+	var file struct {
+		Keys map[string]string `json:"keys"`
+	}
+	if unmarshalErr := json.Unmarshal(raw, &file); unmarshalErr != nil {
+		return nil, unmarshalErr
+	}
+	parsed := make(map[string]*rsa.PrivateKey, len(file.Keys))
+	for kid, encoded := range file.Keys {
+		der, decodeErr := base64.StdEncoding.DecodeString(encoded)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("%s: %w", kid, decodeErr)
+		}
+		if parsed[kid], err = x509.ParsePKCS1PrivateKey(der); err != nil {
+			return nil, fmt.Errorf("%s: %w", kid, err)
+		}
+	}
+	return parsed, nil
+}
+
+// vectorSignStore holds both provisioned sign generations of the vectors as PUBLIC keys.
+func vectorSignStore(t *testing.T) *kstest.MockKeyStore {
+	t.Helper()
+	store := withPublic(kstest.NewMockKeyStore(), signFamily, "v1", &vectorKey(t, vecSignKidV1).PublicKey)
+	return withPublic(store, signFamily, "v2", &vectorKey(t, vecSignKid).PublicKey)
+}
+
 // vectorConsumerStore is the audience's view of the vector keys: sign PUBLIC (both
 // provisioned generations), encrypt PRIVATE.
 func vectorConsumerStore(t *testing.T) *kstest.MockKeyStore {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(vectorsDir, "keys.json"))
-	require.NoError(t, err)
-	var file struct {
-		Keys map[string]string `json:"keys"`
+	return withPrivate(vectorSignStore(t), encFamily, "v1", vectorKey(t, vecEncKid))
+}
+
+// requireSeamRefusal asserts a published vector's refusal as the seam carries it: its code, layer
+// and slot, the recoverable class, the codec's error in the chain, and no signed value in the text.
+func requireSeamRefusal(t *testing.T, err error, code, layer, slot string) {
+	t.Helper()
+	var refused *sealruntime.OpenRefusedError
+	require.ErrorAs(t, err, &refused)
+	assert.Equal(t, code, refused.Code)
+	assert.Equal(t, layer, refused.Details["layer"])
+	assert.Equal(t, slot, refused.Details["slot"])
+	assert.Equal(t, code == josesealed.CodeKidUnknownGeneration, refused.Recoverable)
+	var oe *josesealed.OpenError
+	require.ErrorAs(t, err, &oe, "the codec's error stays in the chain")
+	for _, secret := range []string{"0f4b7c1e", vecTenant, "tenant-b", "payment.voided", "has:colon"} {
+		assert.NotContains(t, err.Error(), secret)
 	}
-	require.NoError(t, json.Unmarshal(raw, &file))
-	priv := func(kid string) *rsa.PrivateKey {
-		der, err := base64.StdEncoding.DecodeString(file.Keys[kid])
-		require.NoError(t, err)
-		k, err := x509.ParsePKCS1PrivateKey(der)
-		require.NoError(t, err)
-		return k
-	}
-	store := kstest.NewMockKeyStore()
-	withPublic(store, signFamily, "v1", &priv(vecSignKidV1).PublicKey)
-	withPublic(store, signFamily, "v2", &priv(vecSignKid).PublicKey)
-	return withPrivate(store, encFamily, "v1", priv(vecEncKid))
 }
 
 func withPublic(s *kstest.MockKeyStore, logical, version string, k *rsa.PublicKey) *kstest.MockKeyStore {
@@ -302,19 +352,8 @@ func TestOpenerMapsEveryPublishedVector(t *testing.T) {
 			require.Error(t, err)
 			assert.Zero(t, env)
 			assert.Zero(t, out, "nothing decodes on a refused message")
-
-			var refused *sealruntime.OpenRefusedError
-			require.ErrorAs(t, err, &refused)
-			assert.Equal(t, tc.Code, refused.Code)
-			assert.Equal(t, tc.Layer, refused.Details["layer"])
-			assert.Equal(t, tc.Slot, refused.Details["slot"])
-			assert.Equal(t, tc.Code == josesealed.CodeKidUnknownGeneration, refused.Recoverable)
-			var oe *josesealed.OpenError
 			assert.Equal(t, before+1, failureCount(t, reader, tc.Code), "counted once under its code")
-			require.ErrorAs(t, err, &oe, "the codec's error stays in the chain")
-			for _, secret := range []string{"0f4b7c1e", vecTenant, "tenant-b", "payment.voided", "has:colon"} {
-				assert.NotContains(t, err.Error(), secret)
-			}
+			requireSeamRefusal(t, err, tc.Code, tc.Layer, tc.Slot)
 		})
 	}
 }

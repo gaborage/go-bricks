@@ -1,6 +1,6 @@
 # ADR-131: A Verified Door Republishes Stored Sealed Bytes, and `Seal` Returns Its `jti`
 
-**Status:** Accepted — `Seal`'s `jti` return ships in this change; the `PublishSealed` door lands in the next link of the #1869 stack
+**Status:** Accepted
 **Date:** 2026-09-30
 **Amends:** [ADR-096](adr_096_typed_publish_door.md) (a second, narrow exported path to the wire), [ADR-097](adr_097_sealed_amqp_messages.md) (the caller-side-retry residual, and the rotation drain gate and sign-family step 5 in [sealing.md's rotation runbooks](sealing.md#rotation-runbooks))
 
@@ -119,9 +119,13 @@ never seals, verifies or reaches a broker.
 - **Residual.** `Verify` does not examine the JWE encrypted key, IV, ciphertext or tag. A body
   signed by the producer's own sign family whose Subject does not decrypt under the named key
   (the wrong key under the right `kid`, or a corrupt encrypted key, IV, ciphertext or tag), or
-  whose document does not decode into `T`, therefore passes the door. The consumer refuses it
-  (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ. Only a holder of the
-  producer's sign private key can mint one, and the residual is accepted.
+  whose document does not decode into `T`, therefore passes the door. The consumer refuses those decrypt and decode
+  failures (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ. A body signed by
+  the producer's own sign key that carries a cleartext case-fold twin of the sealed Subject
+  member (`"card"` sealed, `"Card"` cleartext) is refused by neither side today: `Open` and
+  `Verify` accept it, only the sealer refuses twins, and `Seal`/`SealDocument` never produce
+  one. A follow-up issue tracks it. Only a holder of the producer's sign private key can mint
+  any of these, and the residual is accepted.
 
 ## Alternatives considered
 

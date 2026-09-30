@@ -210,11 +210,22 @@ func configure(t *testing.T, tenancy sealruntime.Tenancy) *sdkmetric.ManualReade
 
 func declare(t *testing.T) *messaging.Publisher[paymentAuthorized] {
 	t.Helper()
-	decls := messaging.NewDeclarations()
-	decls.DeclareTopicExchange("payments")
-	h := messaging.DeclareTypedPublisher[paymentAuthorized](decls, &messaging.PublisherOptions{Exchange: "payments", RoutingKey: "payment.authorized", EventType: eventType})
+	return declareAs[paymentAuthorized](t, eventType)
+}
+
+// declareAs is declareIn plus a Validate that must pass.
+func declareAs[T any](t *testing.T, etyp string) *messaging.Publisher[T] {
+	t.Helper()
+	decls, h := declareIn[T](etyp)
 	require.NoError(t, decls.Validate())
 	return h
+}
+
+// declareIn declares a publisher of T under etyp on the "payments" exchange, without validating.
+func declareIn[T any](etyp string) (*messaging.Declarations, *messaging.Publisher[T]) {
+	decls := messaging.NewDeclarations()
+	decls.DeclareTopicExchange("payments")
+	return decls, messaging.DeclareTypedPublisher[T](decls, &messaging.PublisherOptions{Exchange: "payments", RoutingKey: "payment.authorized", EventType: etyp})
 }
 
 func openWire(t *testing.T, body []byte, tenant josesealed.TenantExpectation) (*josesealed.Envelope, paymentAuthorized) {
