@@ -93,9 +93,9 @@ honored nothing, and connection and timeout errors retry as before.
 The client's terminal path also stopped re-typing. It wrapped every transport error in
 `NewNetworkError`, so the over-cap `ValidationError` the transport documents as
 distinguishable read as `NetworkError` through a built client. A transport error that already
-carries a `ClientError` anywhere in its chain is now returned as is — the over-cap error
-satisfies `IsErrorType(err, ValidationError)` and no longer `NetworkError`, with every cause
-still reachable through `errors.Is`/`errors.As`. `ErrJOSEPlaintextResponse` and JOSE failures
+carries a `ClientError` anywhere in its chain now returns that `ClientError` itself, like
+every other terminal error the client returns — the over-cap error is a `ValidationError` at
+top level and satisfies `IsErrorType(err, ValidationError)`, no longer `NetworkError`. `ErrJOSEPlaintextResponse` and JOSE failures
 carry no `ClientError`, so they keep the `NetworkError` wrap, and the OTel `error.type` each
 classifies as is unchanged. See [migrations.md](migrations.md) `[C70.12]`.
 

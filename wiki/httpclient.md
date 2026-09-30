@@ -207,8 +207,9 @@ only duplicate a non-idempotent side effect.
 
 Every other 2xx the transport rejects is terminal on the same ground, whatever `WithRetries`
 says: a body over `MaxResponseBytes`, and an `application/jose` body `jose.Open` refuses as
-malformed or tampered. The over-cap error reaches the caller as the transport raised it —
-`IsErrorType(err, httpclient.ValidationError)` is true and `NetworkError` false — while a JOSE
+malformed or tampered. The client returns the transport's over-cap error itself — a
+`ValidationError` at top level, so `IsErrorType(err, httpclient.ValidationError)` is true and
+`NetworkError` false — while a JOSE
 failure (`httpclient.IsJOSEError`) and the plaintext refusal keep their `NetworkError` wrap.
 The same rejection on a 4xx or 5xx is not terminal: that peer honored nothing, so it retries
 like any other transport error.

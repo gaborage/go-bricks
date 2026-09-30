@@ -1431,18 +1431,18 @@ func TestShouldRetryOnErrorPlaintextJOSEResponseIsTerminal(t *testing.T) {
 }
 
 // TestExecutionErrorPassesThroughAClientError pins the terminal typing: a transport error
-// already carrying a ClientError anywhere in its chain keeps it, whole, and anything else is
-// wrapped as a NetworkError. The pass-through leaves the OTel error.type the chain classified
-// as under the old NetworkError wrap untouched.
+// already carrying a ClientError anywhere in its chain returns that ClientError itself, and
+// anything else is wrapped as a NetworkError. The pass-through leaves the OTel error.type the
+// chain classified as under the old NetworkError wrap untouched.
 func TestExecutionErrorPassesThroughAClientError(t *testing.T) {
+	validation := NewValidationError("JOSE response body exceeds 256 bytes", "response_body")
 	overCap := &url.Error{Op: "Post", URL: "https://peer.example", Err: &rejectedSuccessError{
-		err: fmt.Errorf("httpclient: read response body: %w", NewValidationError("JOSE response body exceeds 256 bytes", "response_body")),
+		err: fmt.Errorf("httpclient: read response body: %w", validation),
 	}}
 
 	got := executionError(overCap)
-	assert.Same(t, overCap, got, "an error carrying a ClientError is returned as is")
+	assert.Same(t, validation, got, "the ClientError the chain carries is returned itself")
 	assert.True(t, IsErrorType(got, ValidationError))
-	assert.ErrorIs(t, got, errJOSERejectedSuccess)
 	assert.Equal(t, classifyError(NewNetworkError(errMsgRequestExecutionFailed, overCap)), classifyError(got))
 	assert.Equal(t, errorTypeOther, classifyError(got))
 

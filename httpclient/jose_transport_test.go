@@ -1316,6 +1316,9 @@ func TestBuilderWithJOSERejectedSuccessIsTerminal(t *testing.T) {
 			body:     bytes.Repeat([]byte("A"), 1024),
 			maxBytes: 256,
 			check: func(t *testing.T, err error) {
+				clientErr, ok := err.(httpclient.ClientError) //nolint:errorlint // pins the top-level type callers may assert
+				require.True(t, ok, "over-cap must be a ClientError at top level, got %T", err)
+				assert.Equal(t, httpclient.ValidationError, clientErr.Type())
 				assert.True(t, httpclient.IsErrorType(err, httpclient.ValidationError),
 					"over-cap must read as ValidationError, got %T: %v", err, err)
 				assert.False(t, httpclient.IsErrorType(err, httpclient.NetworkError), "over-cap must not read as NetworkError")

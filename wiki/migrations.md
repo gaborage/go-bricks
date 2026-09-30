@@ -11093,12 +11093,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `jose.Open` as malformed or tampered. Through a built client that used to be retried up to
   `WithRetries`, counted `retry.reason = network`, so the peer received the request again. It is
   now terminal, like the `ErrJOSEPlaintextResponse` refusal (`[C65.8]`): one request, one error.
-  The over-cap error also reached the caller wrapped as a `NetworkError`; it now returns as the
-  transport raised it, so `IsErrorType(err, httpclient.ValidationError)` is true and
-  `IsErrorType(err, httpclient.NetworkError)` false. **Unchanged**: the same rejection on a
-  non-2xx status, and connection and timeout errors, which still retry; the plaintext refusal
-  and a JOSE failure (`httpclient.IsJOSEError`), which keep their `NetworkError` wrap; every
-  `errors.Is`/`errors.As` match on the cause; and the OTel `error.type` each classifies as.
+  The over-cap error also reached the caller wrapped as a `NetworkError`; the client now returns
+  the transport's `ValidationError` itself, so it is a `ClientError` at top level,
+  `IsErrorType(err, httpclient.ValidationError)` is true and `IsErrorType(err,
+  httpclient.NetworkError)` false, and the `*url.Error` it arrived in is no longer in the chain.
+  **Unchanged**: the same rejection on a non-2xx status, and connection and timeout errors,
+  which still retry; the plaintext refusal and a JOSE failure (`httpclient.IsJOSEError`), which
+  keep their `NetworkError` wrap and every `errors.Is`/`errors.As` match on their cause; and the
+  OTel `error.type` each classifies as.
 - gate: match = an `Inbound` JOSE client with `WithRetries` above 0, or a branch reading
   `IsErrorType(err, NetworkError)` on a JOSE client's error. no-match = otherwise.
 - apply: a branch that caught the over-cap body as `NetworkError` reads `ValidationError` now

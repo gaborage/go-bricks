@@ -955,12 +955,12 @@ func (c *client) handleExecutionError(ctx context.Context, err error, attempt, m
 }
 
 // executionError types a terminal transport error. One that already carries a ClientError
-// — the JOSE transport's over-cap ValidationError, say — keeps that type, with the whole
-// chain intact; anything else is wrapped as a NetworkError.
+// — the JOSE transport's over-cap ValidationError, say — returns that ClientError itself;
+// anything else is wrapped as a NetworkError.
 func executionError(err error) error {
 	var clientErr ClientError
 	if errors.As(err, &clientErr) {
-		return err
+		return clientErr
 	}
 	return NewNetworkError(errMsgRequestExecutionFailed, err)
 }

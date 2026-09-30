@@ -1634,7 +1634,7 @@ See [migrations.md](migrations.md) `[C64.15]` and `[C65.8]`.
 **Amendment (2026-09-29, #1857):** every 2xx `JOSETransport` rejects — plaintext, over
 `MaxResponseBytes`, or refused by `jose.Open` as malformed or tampered — is terminal, never
 retried; the same rejection on a non-2xx status still retries. The client's terminal path
-returns a transport error that already carries a `ClientError` as is, so the over-cap
+returns the `ClientError` a transport error already carries, itself, so the over-cap
 `ValidationError` is no longer re-typed `NetworkError`; the plaintext refusal and JOSE
 failures keep the `NetworkError` wrap. See [migrations.md](migrations.md) `[C70.12]`.
 
