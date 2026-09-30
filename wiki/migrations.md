@@ -960,7 +960,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - detect: `git grep -nE 'DeclareQueue\(|DeclareQueueWithDLQ\(|RegisterQueue\(|DeclareConsumer\(' -- '*.go'` in your app, then read the hits for one queue **name** reached from two places. `DeclareConsumer(opts, queue)` is a declaration site too — its non-nil `queue` argument now always reaches `RegisterQueue` instead of being skipped when the name already existed. Two different modules is the usual shape, and it is exactly the case no single call site can see — so grep the names, do not trust a per-module reading. A name that appears once is not a match; a name that appears twice is a match only if the two shapes disagree (see gate). Nothing changes for a name declared once, which is the overwhelming majority.
 - gate: match = one queue name declared twice where the two declarations disagree on any of the four flags (`Durable`, `AutoDelete`, `Exclusive`, `NoWait`), or where both set the same `Args` key to different values. no-match = every queue name is declared once, or the repeat declarations agree — including the common case where one call adds `Args` the other never sets, which merges cleanly. Note that a repeat declaration is no longer a silent no-op you can ignore: before this bump the later call replaced the earlier one wholesale, so an app could be *relying* on the overwrite without knowing it.
 - apply: align the call sites so the two declarations agree — pick the intended flags and the intended value for the contested `Args` key, and make both call sites say it. The good news first: `DeclareQueueWithDLQ("orders.events.queue", nil)` and `DeclareQueue("orders.events.queue")` on one name now **compose** — their `Args` union reaches the broker — instead of whichever ran last silently dropping the other's dead-letter args. That silent drop is the bug this hop fixes: it reverted a queue to dropping failed deliveries with no error, no WARN, and an unchanged-looking topology. If your two declarations genuinely need different shapes, they are different queues — give them different names. Exchanges are unchanged and still last-write-wins. Bindings are unchanged too, but they were never last-write-wins: `RegisterBinding` appends, so two declarations of the same queue/exchange/routing-key have always both survived and both replayed to the broker.
-- verify: boot the app and confirm startup does not abort with `declaration validation failed: conflicting queue declarations` — the error names every conflicting queue, the field or `Args["<key>"]` at fault, and both values labeled by which one is in effect (`Durable kept "true" vs rejected "false"`, `Args["x-dead-letter-exchange"] kept "orders.dlx" vs rejected ""`), so one boot enumerates all of them rather than one per restart. Then confirm on the broker that the queue carries the `x-dead-letter-exchange` you expect (`rabbitmqctl list_queues name arguments`, or the management UI's queue detail): a queue that used to lose its dead-letter args to an overwrite now keeps them, and that argument reaching the broker is the direct proof the merge ran. A queue whose arguments are unchanged from before the bump was never affected.
+- verify: boot the app and confirm startup does not abort with `declaration validation failed: conflicting queue declarations` — the error names every conflicting queue, the field or `Args["<key>"]` at fault, and both values labeled by which one is in effect (`Durable kept "true" vs rejected "false"`, `Args["x-dead-letter-exchange"] kept "orders.dlx" vs rejected ""`), so one boot enumerates all of them rather than one per restart. Then read the broker's own record back (`rabbitmqctl list_queues name durable auto_delete exclusive arguments`, or the management UI's queue detail) and compare it against what the code NOW declares, not against what the broker held before the bump: the proof is a complete `arguments` map, values included, that equals the UNION of both call sites' `Args` — a queue that used to lose its dead-letter args to an overwrite now carries the `x-dead-letter-exchange` you expect. Arguments that still read as they did before the bump prove nothing, because a redeclare the broker refused leaves exactly that record. The three flags are a sanity check, not merge detection: a successful boot already proves the call sites agree on them, since a flag mismatch aborts startup; `NoWait` is a flag on the `queue.declare` frame the broker never stores, so compare it in code. Finally confirm the application log carries no `PRECONDITION_FAILED` line for these queues — the broker's reply text reads `PRECONDITION_FAILED - inequivalent arg '<key>' …` — or what you read back is the OLD topology and the merge never reached the broker. It takes one of two shapes. At boot the refusal surfaces through the initial declare as `failed to declare queue <name>: Exception (406) Reason: "PRECONDITION_FAILED - …"`; it aborts startup only on the control-plane key (single-tenant, or `messaging.tenancy: shared`) when the app declares consumers. With no consumers declared it is the WARN `Failed to start consumers on the control-plane key` and the app keeps running, and under per-tenant messaging nothing runs at startup; in both, every `deps.Messaging(ctx)` that retries the declare RETURNS the error to its caller rather than logging it, so it shows only where your code logs that error. On a later reconnect it is the [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md) WARN `Messaging declaration rejected with PRECONDITION_FAILED, skipped until restart` with `declaration=queue:<name>`.
 - ref: `messaging/declarations.go` (`RegisterQueue`, `Validate`) · [wiki/messaging.md](messaging.md#helper-functions-for-simplified-declarations)
 
 ### [C56.8] A JOSE-configured httpclient no longer seals requests that carry no body · silent-behavior · when: match
@@ -10241,21 +10241,34 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`Type kept "fanout" vs rejected "topic"`, `Durable kept "true" vs rejected "false"`), with
   the TYPE printed on both sides when the two values would otherwise render alike
   (`Args["<key>"] kept "int(1)" vs rejected "int64(1)"`), so one boot enumerates all of them
-  rather than one per restart. Then read the broker's own record of each exchange back — an
-  unchanged `Type` proves nothing on its own, because `Durable`, `AutoDelete`, `Internal` and
-  the `Args` map can each have moved while `Type` did not.
+  rather than one per restart. Then read the broker's own record of each exchange back and
+  compare it against what the code NOW declares. A successful boot already proves the call
+  sites agree on `Type` and the four flags — any disagreement there aborts startup — so the
+  only field a compatible merge can move is the `Args` map, which becomes the UNION of both
+  call sites' `Args`; reading `Type` and the stored flags back confirms the broker holds what
+  the code declares, not that nothing moved.
   `rabbitmqctl list_exchanges name type durable auto_delete internal arguments` (or the
-  management UI's exchange detail) prints every field a merge can change except `NoWait`, which
+  management UI's exchange detail) prints every declared field except `NoWait`, which
   is a flag on the `exchange.declare` frame — whether the client waits for `declare-ok` — and is
   never stored, so compare that one at the two call sites in code. Check all of it: the type,
-  all three stored flags, and the COMPLETE `Args` map INCLUDING VALUES, since a compatible
-  repeat now declares the UNION of both call sites' `Args`. An exchange is proved unaffected
-  only when every one of those still reads what it read before the bump. Where the broker
-  already holds the exchange with different arguments it answers that redeclare with
-  `PRECONDITION_FAILED`, which [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md) skips
-  until the process restarts — so confirm the application log carries no such skip warning for
-  these exchanges, or what you just read back is the OLD topology and the merge never reached
-  the broker.
+  all three stored flags, and the COMPLETE `Args` map INCLUDING VALUES. The proof is that record
+  equaling the merged declaration; one that still reads as it did before the bump proves
+  nothing, because a redeclare the broker refused leaves exactly that record. Where the broker
+  already holds the exchange with different arguments it refuses the declare with
+  `PRECONDITION_FAILED` (the broker's reply text reads `PRECONDITION_FAILED - inequivalent arg
+  '<key>' …`), so confirm the application log carries no `PRECONDITION_FAILED` line for these
+  exchanges, or what you just read back is the OLD topology and the merge never reached the
+  broker. At boot it surfaces through the initial declare as `failed to declare exchange
+  <name>: Exception (406) Reason: "PRECONDITION_FAILED - …"`, which aborts startup only on the
+  control-plane key (single-tenant, or `messaging.tenancy: shared`) when the app declares
+  consumers; with none declared it is the WARN `Failed to start consumers on the control-plane
+  key`, and under per-tenant messaging nothing runs at startup — in both, every
+  `deps.Messaging(ctx)` that retries the declare RETURNS the error to its caller rather than
+  logging it. On a later reconnect it is the
+  [ADR-113](adr_113_amqp_topology_redeclare_on_reconnect.md) WARN `Messaging declaration
+  rejected with PRECONDITION_FAILED, skipped until restart` with `declaration=exchange:<name>`.
+  Exchanges are declared before queues and the first refusal ends the pass, so one boot
+  reports one refusal — fix it, reboot, and look again.
 - ref: gaborage/go-bricks#1714 · [ADR-118](adr_118_exchange_redeclaration_conflicts.md) ·
   `messaging/declarations.go` (`RegisterExchange`, `exchangeMergeConflict`,
   `validateExchangeConflicts`, `Clone`) ·
