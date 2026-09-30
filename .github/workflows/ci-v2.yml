@@ -321,7 +321,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-          cache-dependency-path: go.sum
+          # No other job hashes this file pair, so this job's heavy build cache
+          # has a key of its own: once ubuntu-latest reaches this job's 26.04
+          # image, the light jobs' go.sum-only saves can no longer replace it.
+          cache-dependency-path: |
+            go.sum
+            go.mod
 
       - name: Download dependencies
         run: go mod download
@@ -403,6 +408,11 @@ jobs:
           name: coverage-integration
           path: coverage-integration.out
           retention-days: 1
+
+      # setup-go saves the cache after this, so a later run restoring it never
+      # replays this run's test results.
+      - name: Expire test results before the cache save
+        run: go clean -testcache
 
   framework-merge-coverage:
     permissions:
