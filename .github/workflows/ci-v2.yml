@@ -1316,6 +1316,11 @@ jobs:
           if [ -n "$failed" ]; then
             echo "::error::Required job(s) did not pass:"
             printf '  - %s\n' $failed
+            # PR runs only: push runs key the group on run_id, so nothing supersedes them.
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && printf '%s' "$NEEDS_JSON" \
+                | jq -e 'all(.[]; .result != "failure")' >/dev/null; then
+              echo "::notice::ci-ok failed only on cancelled jobs (a newer run of this PR, a manual cancel, or a timeout). If the newest ci-ok on this commit is green, leave this run alone: re-running it cancels the live run. If it is red or missing, re-run the newest run."
+            fi
             exit 1
           fi
           echo "✅ All required jobs passed (or were skipped on a doc-only PR)."
