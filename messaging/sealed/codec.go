@@ -112,7 +112,7 @@ type sealer struct {
 // carries, absent when none resolves — and runs jose/sealed.Seal once. The typed door
 // has already resolved the tenant the way the stamping wrapper will (context, then the
 // client's pool key) and put it on the context, so the signed tid and the carrier agree.
-func (s *sealer) Seal(ctx context.Context, evt any) ([]byte, string, error) {
+func (s *sealer) Seal(ctx context.Context, evt any) (data []byte, jti string, err error) {
 	start := time.Now()
 	opts := s.template
 	tenant, err := tenantstamp.Resolve(ctx, "")

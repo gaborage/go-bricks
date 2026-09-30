@@ -68,7 +68,7 @@ type fakeSealer struct {
 	err   error
 }
 
-func (s *fakeSealer) Seal(context.Context, any) ([]byte, string, error) {
+func (s *fakeSealer) Seal(context.Context, any) (data []byte, jti string, err error) {
 	s.calls++
 	return s.out, s.jti, s.err
 }
@@ -405,7 +405,7 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 // tenantSealer records the tenant the context carried when Seal ran.
 type tenantSealer struct{ seen []string }
 
-func (s *tenantSealer) Seal(ctx context.Context, _ any) ([]byte, string, error) {
+func (s *tenantSealer) Seal(ctx context.Context, _ any) (data []byte, jti string, err error) {
 	id, _ := multitenant.GetTenant(ctx)
 	s.seen = append(s.seen, id)
 	return []byte("sealed"), "jti-tenant", nil

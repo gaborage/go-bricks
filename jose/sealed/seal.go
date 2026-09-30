@@ -89,7 +89,7 @@ func Seal(evt any, spec *Spec, opts *Options) (data []byte, jti string, err erro
 // sealCore is the body both doors share: it takes the serialized document, pins the Subject
 // member, encrypts it, splices the compact JWE in its place and signs the result. Only the
 // origin of the bytes differs above it — Seal marshals an event, SealDocument is handed one.
-func sealCore(plain []byte, spec *Spec, opts *Options) ([]byte, string, error) {
+func sealCore(plain []byte, spec *Spec, opts *Options) (data []byte, jti string, err error) {
 	signKey, err := opts.Keys.PrivateKey(opts.SignKid)
 	if err != nil {
 		return nil, "", err
@@ -118,7 +118,7 @@ func sealCore(plain []byte, spec *Spec, opts *Options) ([]byte, string, error) {
 		return nil, "", sealError(CodeSealFailed, "failed to splice subject", err)
 	}
 
-	jti := uuid.NewString()
+	jti = uuid.NewString()
 	compact, err := cryptoadapter.Sign(doc, signKey, &cryptoadapter.SignOptions{
 		Kid:    opts.SignKid,
 		SigAlg: sigAlg,

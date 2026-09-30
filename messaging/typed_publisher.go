@@ -159,26 +159,26 @@ func (h *Publisher[T]) Seal(ctx context.Context, evt T) (data []byte, jti string
 // a disagreement refused — and carries the answer on the context, so the signed tid
 // and the x-tenant-id header always name the same tenant. Seal (no client) sees only
 // the context; the outbox lane stamps from the same context later.
-func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, string, error) {
+func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) (data []byte, jti string, err error) {
 	if h.sealErr != nil {
 		return nil, "", h.sealErr
 	}
 	if h.sealer != nil {
-		sealCtx, err := tenantForSeal(ctx, client)
-		if err != nil {
-			return nil, "", err
+		sealCtx, tenantErr := tenantForSeal(ctx, client)
+		if tenantErr != nil {
+			return nil, "", tenantErr
 		}
-		data, jti, err := h.sealer.Seal(sealCtx, evt)
-		if err != nil {
-			return nil, "", fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
+		sealed, sealedJTI, sealErr := h.sealer.Seal(sealCtx, evt)
+		if sealErr != nil {
+			return nil, "", fmt.Errorf("messaging: seal %s event: %w", h.eventType, sealErr)
 		}
-		return data, jti, nil
+		return sealed, sealedJTI, nil
 	}
-	data, err := json.Marshal(evt)
-	if err != nil {
-		return nil, "", fmt.Errorf("messaging: marshal %s event: %w", h.eventType, err)
+	plain, marshalErr := json.Marshal(evt)
+	if marshalErr != nil {
+		return nil, "", fmt.Errorf("messaging: marshal %s event: %w", h.eventType, marshalErr)
 	}
-	return data, "", nil
+	return plain, "", nil
 }
 
 // contentType is what this handle actually encoded: a compact JWS when T is
