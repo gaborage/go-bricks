@@ -280,6 +280,9 @@ func TestPublishSealedAcceptsBytesSealedBeforeAnActivationFlip(t *testing.T) {
 	store := rotatingSignStore(t)
 	configureStore(t, store, map[string]string{signFamily: "v1"})
 	data := sealFor(t, declare(t), "", doorEvent())
+	before, err := josesealed.Verify(data, mustSpec(t), &josesealed.OpenOptions{EventType: eventType, Keys: jose.NewKeyStoreResolver(store)})
+	require.NoError(t, err)
+	require.Equal(t, signFamily+"-v1", before.SignKid, "the stored bytes were sealed under v1")
 
 	configureStore(t, store, map[string]string{signFamily: "v2"})
 	after := declare(t)

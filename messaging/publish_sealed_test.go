@@ -148,6 +148,22 @@ func TestPublishSealedWrapsAVerificationRefusal(t *testing.T) {
 	assert.Empty(t, client.data)
 }
 
+// tenantCase returns the recorder, the client to publish through (pooled under poolKey when set)
+// and a context carrying ctxTenant when set.
+func tenantCase(t *testing.T, poolKey, ctxTenant string) (*keyedClient, AMQPClient, context.Context) {
+	t.Helper()
+	rec := &keyedClient{key: poolKey}
+	var client AMQPClient = rec
+	if poolKey == "" {
+		client = &rec.capturingClient
+	}
+	ctx := context.Background()
+	if ctxTenant != "" {
+		ctx = multitenant.SetTenant(ctx, ctxTenant)
+	}
+	return rec, client, ctx
+}
+
 func TestPublishSealedTenantRule(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -169,15 +185,7 @@ func TestPublishSealedTenantRule(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			v := &fakeVerifier{env: SealEnvelope{TenantID: tc.signedTid}}
 			h := declareVerifying(t, sealedOpts(), v)
-			rec := &keyedClient{key: tc.poolKey}
-			var client AMQPClient = rec
-			if tc.poolKey == "" {
-				client = &rec.capturingClient
-			}
-			ctx := context.Background()
-			if tc.ctxTenant != "" {
-				ctx = multitenant.SetTenant(ctx, tc.ctxTenant)
-			}
+			rec, client, ctx := tenantCase(t, tc.poolKey, tc.ctxTenant)
 			err := h.PublishSealed(ctx, client, []byte("eyJ.stored.bytes"))
 			if tc.want == nil {
 				require.NoError(t, err)

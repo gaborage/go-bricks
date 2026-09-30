@@ -27,7 +27,7 @@ func NewCaptureSealedPublisher[T any]() *CaptureSealedPublisher[T] {
 }
 
 // Seal records evt and returns "sealed-<n>" and "jti-<n>", or the error FailSeal configured.
-func (c *CaptureSealedPublisher[T]) Seal(_ context.Context, evt T) ([]byte, string, error) {
+func (c *CaptureSealedPublisher[T]) Seal(_ context.Context, evt T) (data []byte, jti string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sealed = append(c.sealed, evt)
