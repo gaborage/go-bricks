@@ -139,8 +139,9 @@ func (m *Module) Shutdown() error {
 **Pinned keys instead of JWKS.** `auth.NewVerifierWithResolver(cfg, log, resolver)` takes any
 `auth.PublicKeyResolver` — `auth.NewStaticKeyResolver(map[string]*rsa.PublicKey{...})` ships
 for out-of-band keys. That verifier fetches nothing, leaves the whole `auth.jwt.jwks.*` group
-inert, records no metrics, and **does not own the resolver**: its `Close` is a no-op, so a
-resolver with resources of its own is shut down by whoever built it.
+inert, records no metrics unless given `auth.WithMeterProvider(mp)`, and **does not own the
+resolver**: its `Close` is a no-op, so a resolver with resources of its own is shut down by
+whoever built it.
 
 **`Verify` without HTTP.** `v.Verify(ctx, credential)` is transport-neutral and returns the
 `Principal` rather than attaching it; `auth.ContextWithPrincipal` publishes it. That is the
@@ -278,7 +279,10 @@ bare quote would close the parameter.
 ## Metrics
 
 Meter `go-bricks/auth`, off the `MeterProvider` passed to `NewVerifier` (nil falls back to the
-global one). A verifier built through `NewVerifierWithResolver` records nothing. Instrument
+global one). A verifier built through `NewVerifierWithResolver` records nothing unless given
+`auth.WithMeterProvider(mp)` (same nil fallback); it then records `auth.verification.total` with
+the same labels, and never the `auth.keyset.*` instruments, which describe a fetch cycle a
+caller-supplied resolver does not have. Instrument
 creation failures degrade to a no-op and a stderr WARNING, and so do the gauge-callback
 registration and unregistration — which report as an `auth metrics operation … failed`
 WARNING rather than as a failure to initialize a metric, since no instrument is missing.

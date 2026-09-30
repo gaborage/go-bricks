@@ -72,23 +72,41 @@ const (
 //
 // Unlike httpclient's tracking package, which memoizes one meter off the global
 // otel.Meter, the instruments here hang off the MeterProvider the caller passed
-// to NewVerifier and are per-verifier. A nil provider falls back to
-// otel.GetMeterProvider(), which is exactly what otel.Meter resolves to, so the
+// to NewVerifier or WithMeterProvider and are per-verifier. A nil provider falls
+// back to otel.GetMeterProvider(), which is exactly what otel.Meter resolves to, so the
 // precedent's behavior is the default and an explicit provider simply wins over
 // it. Nothing is package-global, so a test needs no reset hook.
 //
 // Every method tolerates a nil receiver: a verifier built through
-// NewVerifierWithResolver records nothing.
+// NewVerifierWithResolver without WithMeterProvider records nothing.
 type authMetrics struct {
 	meter         metric.Meter
 	verifications metric.Int64Counter
 	refreshes     metric.Int64Counter
 }
 
-// newAuthMetrics builds the counters. Instrument creation failures are logged
-// to stderr and leave the instrument nil: telemetry must never fail a
-// verification, and a nil instrument is simply not recorded.
+// newAuthMetrics builds the instruments a JWKS-backed verifier records: the
+// verification counter plus the key-set refresh counter. Instrument creation
+// failures are logged to stderr and leave the instrument nil: telemetry must
+// never fail a verification, and a nil instrument is simply not recorded.
 func newAuthMetrics(mp metric.MeterProvider) *authMetrics {
+	m := newVerificationMetrics(mp)
+
+	var err error
+	m.refreshes, err = m.meter.Int64Counter(
+		metricKeySetRefreshTotal,
+		metric.WithDescription("Total issuer key set refresh attempts by outcome"),
+		metric.WithUnit("{refresh}"),
+	)
+	logMetricError(metricKeySetRefreshTotal, err)
+
+	return m
+}
+
+// newVerificationMetrics builds the verification counter alone. A verifier over
+// a caller-supplied resolver uses it: the key-set instruments describe a fetch
+// cycle only the JWKS resolver has, so it registers none of them.
+func newVerificationMetrics(mp metric.MeterProvider) *authMetrics {
 	// isNilInterface, not mp == nil: a typed-nil provider — a (*sdkmetric.
 	// MeterProvider)(nil) a caller left unassigned — is a non-nil interface whose
 	// Meter dereferences the receiver and panics construction.
@@ -105,13 +123,6 @@ func newAuthMetrics(mp metric.MeterProvider) *authMetrics {
 		metric.WithUnit("{verification}"),
 	)
 	logMetricError(metricVerificationTotal, err)
-
-	m.refreshes, err = meter.Int64Counter(
-		metricKeySetRefreshTotal,
-		metric.WithDescription("Total issuer key set refresh attempts by outcome"),
-		metric.WithUnit("{refresh}"),
-	)
-	logMetricError(metricKeySetRefreshTotal, err)
 
 	return m
 }

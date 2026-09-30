@@ -550,3 +550,147 @@ func TestTwoVerifiersObserveDistinctKeySetSeries(t *testing.T) {
 	assert.ElementsMatch(t, []string{issuerA, issuerB}, gaugeIssuers[int64](t, rm, metricKeySetKeyCount))
 	assert.ElementsMatch(t, []string{issuerA, issuerB}, gaugeIssuers[float64](t, rm, metricKeySetAge))
 }
+
+// instrumentRecordingProvider captures every instrument name at creation time.
+// A ManualReader collects only instruments that carry a data point, so an
+// un-recorded key-set instrument is absent from a collection whether or not it
+// was registered; this provider sees the registration itself.
+type instrumentRecordingProvider struct {
+	embedded.MeterProvider
+	real  metric.MeterProvider
+	names *[]string
+}
+
+func newInstrumentRecordingProvider() (provider instrumentRecordingProvider, names *[]string) {
+	names = &[]string{}
+	return instrumentRecordingProvider{real: obstesting.NewTestMeterProvider().MeterProvider, names: names}, names
+}
+
+func (p instrumentRecordingProvider) Meter(name string, opts ...metric.MeterOption) metric.Meter {
+	return instrumentRecordingMeter{Meter: p.real.Meter(name, opts...), names: p.names}
+}
+
+type instrumentRecordingMeter struct {
+	metric.Meter
+	names *[]string
+}
+
+func (m instrumentRecordingMeter) Int64Counter(name string, opts ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	*m.names = append(*m.names, name)
+	return m.Meter.Int64Counter(name, opts...)
+}
+
+func (m instrumentRecordingMeter) Int64ObservableGauge(
+	name string,
+	opts ...metric.Int64ObservableGaugeOption,
+) (metric.Int64ObservableGauge, error) {
+	*m.names = append(*m.names, name)
+	return m.Meter.Int64ObservableGauge(name, opts...)
+}
+
+func (m instrumentRecordingMeter) Float64ObservableGauge(
+	name string,
+	opts ...metric.Float64ObservableGaugeOption,
+) (metric.Float64ObservableGauge, error) {
+	*m.names = append(*m.names, name)
+	return m.Meter.Float64ObservableGauge(name, opts...)
+}
+
+func TestVerifierWithResolverRecordsVerificationWithAMeterProvider(t *testing.T) {
+	iss := newTestIssuer()
+	mp := obstesting.NewTestMeterProvider()
+	v, err := NewVerifierWithResolver(verifierConfig(iss), nil, NewStaticKeyResolver(iss.PublicKeys()), WithMeterProvider(mp.MeterProvider))
+	require.NoError(t, err)
+	v.now = fixedClock
+	unavailable, err := NewVerifierWithResolver(verifierConfig(iss), nil, NewStaticKeyResolver(nil), WithMeterProvider(mp.MeterProvider))
+	require.NoError(t, err)
+	unavailable.now = fixedClock
+	ctx := context.Background()
+
+	_, err = v.Verify(ctx, iss.Mint(authtesting.Claims{}))
+	require.NoError(t, err)
+	_, err = v.Verify(ctx, iss.MintExpired())
+	require.Error(t, err)
+	_, err = v.Verify(ctx, "")
+	require.ErrorIs(t, err, ErrMissingCredential)
+	_, err = unavailable.Verify(ctx, iss.Mint(authtesting.Claims{}))
+	require.ErrorIs(t, err, ErrKeySetUnavailable)
+
+	rm := mp.Collect(t)
+
+	for _, result := range []string{resultSuccess, string(ClassExpired), resultMissingCredential, string(ClassKeySetUnavailable)} {
+		assert.Equal(t, int64(1), counterValue(t, rm, metricVerificationTotal, attribute.String(attrAuthResult, result)), result)
+	}
+}
+
+func TestVerifierWithResolverRecordsNothingWithoutAMeterProvider(t *testing.T) {
+	v := newTestVerifier(t, newTestIssuer(), nil)
+
+	assert.Nil(t, v.metrics)
+}
+
+func TestVerifierWithResolverIgnoresANilOption(t *testing.T) {
+	iss := newTestIssuer()
+
+	var v *Verifier
+	require.NotPanics(t, func() {
+		var err error
+		v, err = NewVerifierWithResolver(verifierConfig(iss), nil, NewStaticKeyResolver(iss.PublicKeys()), nil)
+		require.NoError(t, err)
+	})
+	assert.Nil(t, v.metrics)
+}
+
+func TestVerifierWithResolverRegistersNoKeySetInstruments(t *testing.T) {
+	iss := newTestIssuer()
+	mp, names := newInstrumentRecordingProvider()
+
+	_, err := NewVerifierWithResolver(verifierConfig(iss), nil, NewStaticKeyResolver(iss.PublicKeys()), WithMeterProvider(mp))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{metricVerificationTotal}, *names)
+}
+
+// TestNewVerifierSharesOneMetricsValueWithItsResolver is the recording
+// provider's positive control as well: the JWKS path must register the key-set
+// instruments it sees, and create the verification counter exactly once.
+func TestNewVerifierSharesOneMetricsValueWithItsResolver(t *testing.T) {
+	srv := newJWKSFixture(t)
+	mp, names := newInstrumentRecordingProvider()
+
+	v, err := NewVerifier(jwksConfig(srv), nil, mp, jwksClient(t, srv))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, v.Close()) })
+
+	require.NotNil(t, v.metrics)
+	assert.Same(t, v.metrics, v.owned.metrics)
+	assert.ElementsMatch(t, []string{
+		metricVerificationTotal, metricKeySetRefreshTotal, metricKeySetKeyCount, metricKeySetAge,
+	}, *names)
+}
+
+func TestWithMeterProviderFallsBackForANilMeterProvider(t *testing.T) {
+	tests := []struct {
+		name string
+		mp   metric.MeterProvider
+	}{
+		{name: "nil_interface", mp: nil},
+		{name: "typed_nil_sdk_provider", mp: (*sdkmetric.MeterProvider)(nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iss := newTestIssuer()
+
+			var v *Verifier
+			require.NotPanics(t, func() {
+				var err error
+				v, err = NewVerifierWithResolver(verifierConfig(iss), nil, NewStaticKeyResolver(iss.PublicKeys()), WithMeterProvider(tt.mp))
+				require.NoError(t, err)
+				_, _ = v.Verify(context.Background(), "")
+			})
+			require.NotNil(t, v.metrics)
+			assert.NotNil(t, v.metrics.verifications)
+			assert.Nil(t, v.metrics.refreshes)
+		})
+	}
+}
