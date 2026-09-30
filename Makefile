@@ -4,9 +4,10 @@
 # check's prerequisites to run serially regardless of -j.
 .NOTPARALLEL: check
 
-# Package selection for testing (excludes tools directories)
-PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
-INTEGRATION_PKGS := $(shell go list -tags=integration ./... | grep -vE '/(tools)(/|$$)')
+# Package selection for testing (excludes tools directories). Recursive `=`, so
+# go list runs only in recipes that use them, not while parsing for every target.
+PKGS = $(shell go list ./... | grep -vE '/(tools)(/|$$)')
+INTEGRATION_PKGS = $(shell go list -tags=integration ./... | grep -vE '/(tools)(/|$$)')
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=golang.org/x/vuln
 GOVULNCHECK_VERSION := v1.8.0
@@ -214,7 +215,7 @@ vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
 # see wiki/linting.md. The race scan skips an empty package list for the same
 # reason the lint pass does.
 sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
-	# gosec only accepts relative patterns — the previous $(PKGS) import paths
+	# gosec only accepts relative patterns — the previous PKGS import paths
 	# silently scanned 0 files (a no-op gate). This now scans ./... as a backstop to
 	# golangci-lint's gosec (make lint), which is the fine-grained gate that honors the
 	# codebase's //#nosec annotations. G103 (unsafe audit) and G104 (unchecked cleanup

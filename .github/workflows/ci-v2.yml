@@ -48,7 +48,10 @@ jobs:
       # yamllint: valid GitHub Actions context expression
       docs: ${{ steps.filter.outputs.docs }}
     steps:
+      # paths-filter reads a PR's changed files from the GitHub API; only push
+      # runs diff with git and need the checkout.
       - uses: actions/checkout@v7
+        if: github.event_name != 'pull_request'
 
       - name: Detect changed paths
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
