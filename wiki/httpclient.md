@@ -205,6 +205,15 @@ exactly what must not be trusted. The refusal is **terminal**: it is exempt from
 loop, because the peer answered 2xx and has already honored the request, so retrying would
 only duplicate a non-idempotent side effect.
 
+Every other 2xx the transport rejects is terminal on the same ground, whatever `WithRetries`
+says: a body over `MaxResponseBytes`, and an `application/jose` body `jose.Open` refuses as
+malformed or tampered. The client returns the transport's over-cap error itself — a
+`ValidationError` at top level, so `IsErrorType(err, httpclient.ValidationError)` is true and
+`NetworkError` false — while a JOSE
+failure (`httpclient.IsJOSEError`) and the plaintext refusal keep their `NetworkError` wrap.
+The same rejection on a 4xx or 5xx is not terminal: that peer honored nothing, so it retries
+like any other transport error.
+
 The reason is what a 2xx asserts. The peer is saying the request was honored; if the reply
 carrying that verdict was not decrypted, nothing authenticated it, and a ciphertext stripped
 in transit looks exactly like a legitimate plaintext reply. A tampered ciphertext already

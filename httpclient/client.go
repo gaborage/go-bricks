@@ -42,8 +42,8 @@ const (
 
 	mimeApplicationJSON = "application/json"
 
-	// errMsgRequestExecutionFailed is the NewNetworkError message every terminal
-	// execution path shares, named once so the three sites cannot drift apart.
+	// errMsgRequestExecutionFailed is the NewNetworkError message executionError gives
+	// every terminal transport error that does not already carry a ClientError.
 	errMsgRequestExecutionFailed = "request execution failed"
 )
 
@@ -951,7 +951,18 @@ func (c *client) handleExecutionError(ctx context.Context, err error, attempt, m
 		}
 		return attemptResult{retry: true, retryReason: reason}
 	}
-	return attemptResult{err: NewNetworkError(errMsgRequestExecutionFailed, err)}
+	return attemptResult{err: executionError(err)}
+}
+
+// executionError types a terminal transport error. One that already carries a ClientError
+// — the JOSE transport's over-cap ValidationError, say — returns that ClientError itself;
+// anything else is wrapped as a NetworkError.
+func executionError(err error) error {
+	var clientErr ClientError
+	if errors.As(err, &clientErr) {
+		return clientErr
+	}
+	return NewNetworkError(errMsgRequestExecutionFailed, err)
 }
 
 func (c *client) processHTTPResponse(
@@ -1065,10 +1076,11 @@ func (c *client) handleBuildRespError(ctx context.Context, err error, attempt, m
 func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, maxRetries int) (bool, error) {
 	// Terminal: the peer answered 2xx, so it already honored the request. A retry would
 	// re-send it — duplicating any non-idempotent side effect — and the verdict cannot
-	// change, since the response was refused for what it lacked, not for a transport fault.
+	// change, since the JOSE transport refused the response itself, not a transport fault.
 	// A refused redirect downgrade is terminal too: every retry meets the same redirect.
-	if errors.Is(err, ErrJOSEPlaintextResponse) || errors.Is(err, errBearerRedirectDowngrade) {
-		return false, NewNetworkError(errMsgRequestExecutionFailed, err)
+	if errors.Is(err, ErrJOSEPlaintextResponse) || errors.Is(err, errJOSERejectedSuccess) ||
+		errors.Is(err, errBearerRedirectDowngrade) {
+		return false, executionError(err)
 	}
 	if c.isTimeout(err) {
 		if attempt < maxRetries {
@@ -1085,7 +1097,7 @@ func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, max
 		}
 		return true, nil
 	}
-	return false, NewNetworkError(errMsgRequestExecutionFailed, err)
+	return false, executionError(err)
 }
 
 // shouldRetryOnBuildRespError handles errors that occur while building the response

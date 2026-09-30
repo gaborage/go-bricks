@@ -1593,7 +1593,7 @@ member with no config key and no tag key.
 
 ### [ADR-107: Bare-JWE Mode Is a Field on the Policy, Not a Second Door](adr_107_jose_bare_jwe_mode.md)
 
-**Date:** 2026-09-09 (amended 2026-09-13, #1579) | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile; and, per the amendment, a 2xx response `JOSETransport` did not unwrap is now a transport error
+**Date:** 2026-09-09 (amended 2026-09-13, #1579; 2026-09-29, #1857) | **Status:** Accepted | **Breaking:** `jose.Policy` gains a `map[string]any` field and stops being comparable — `==` and map-key use on it no longer compile; per the first amendment, a 2xx response `JOSETransport` did not unwrap is now a transport error; and per the second, every 2xx it rejects is terminal and an over-cap body reads as `ValidationError` through the client
 
 `jose` shipped one wire shape, nested JWE-of-JWS, and Visa Message Level Encryption does not
 have it: a single compact JWE with no inner JWS, `A128GCM` content encryption, `typ: "JOSE"`,
@@ -1630,6 +1630,13 @@ same status and peer, plus the request id when a valid one is readable, never bo
 Non-2xx pass-through is unchanged; 204/304/HEAD stay skipped; every crypto failure keeps
 failing closed as before. `AllowPlaintextSuccess` on `JOSETransport`/`JOSEConfig` is the Strangler-migration opt-out.
 See [migrations.md](migrations.md) `[C64.15]` and `[C65.8]`.
+
+**Amendment (2026-09-29, #1857):** every 2xx `JOSETransport` rejects — plaintext, over
+`MaxResponseBytes`, or refused by `jose.Open` as malformed or tampered — is terminal, never
+retried; the same rejection on a non-2xx status still retries. The client's terminal path
+returns the `ClientError` a transport error already carries, itself, so the over-cap
+`ValidationError` is no longer re-typed `NetworkError`; the plaintext refusal and JOSE
+failures keep the `NetworkError` wrap. See [migrations.md](migrations.md) `[C70.12]`.
 
 ---
 

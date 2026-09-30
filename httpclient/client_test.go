@@ -9,6 +9,7 @@ import (
 	"net"
 	nethttp "net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1427,6 +1428,28 @@ func TestShouldRetryOnErrorPlaintextJOSEResponseIsTerminal(t *testing.T) {
 	retry, err = c.shouldRetryOnError(context.Background(), errors.New("connection reset"), 0, 3)
 	assert.True(t, retry, "an ordinary transport error under budget still retries")
 	require.NoError(t, err)
+}
+
+// TestExecutionErrorPassesThroughAClientError pins the terminal typing: a transport error
+// already carrying a ClientError anywhere in its chain returns that ClientError itself, and
+// anything else is wrapped as a NetworkError. The pass-through leaves the OTel error.type the
+// chain classified as under the old NetworkError wrap untouched.
+func TestExecutionErrorPassesThroughAClientError(t *testing.T) {
+	validation := NewValidationError("JOSE response body exceeds 256 bytes", "response_body")
+	overCap := &url.Error{Op: "Post", URL: "https://peer.example", Err: &rejectedSuccessError{
+		err: fmt.Errorf("httpclient: read response body: %w", validation),
+	}}
+
+	got := executionError(overCap)
+	assert.Same(t, validation, got, "the ClientError the chain carries is returned itself")
+	assert.True(t, IsErrorType(got, ValidationError))
+	assert.Equal(t, classifyError(NewNetworkError(errMsgRequestExecutionFailed, overCap)), classifyError(got))
+	assert.Equal(t, errorTypeOther, classifyError(got))
+
+	plain := errors.New("connection reset")
+	got = executionError(plain)
+	assert.True(t, IsErrorType(got, NetworkError), "an error without a ClientError is wrapped as a NetworkError")
+	assert.ErrorIs(t, got, plain)
 }
 
 // TestBackoffDelayFallbacks covers the three defensive fallback branches in

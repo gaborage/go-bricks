@@ -78,6 +78,30 @@ deliberately out of scope: the field stays a `bool` because `JOSETransport` is e
 comparable, and a func-typed field would be an apidiff INCOMPATIBLE — an interface-typed
 field is the door if one is ever wanted. See [migrations.md](migrations.md) `[C65.8]`.
 
+## Amendment (2026-09-29, #1857): every rejected 2xx is terminal, and a transport's ClientError passes through
+
+The #1579 amendment made the plaintext refusal terminal, but it was not the only 2xx the
+transport rejects after the peer answered. A body over `MaxResponseBytes` and an
+`application/jose` body `jose.Open` refuses as malformed or tampered failed the same way at
+the same point, and the client retried both — re-sending a request the peer had already
+honored, the duplicate side effect the refusal's terminality exists to prevent. The rule is
+now the status, not the cause: every error `JOSETransport.RoundTrip` returns for a 2xx it
+rejected carries an unexported marker the retry loop treats as terminal, whatever
+`WithRetries` says. The same rejection on a non-2xx status still retries, since that peer
+honored nothing, and connection and timeout errors retry as before. That includes a
+`http.Client.Timeout` expiring while the transport reads a 2xx body: net/http replaces the
+error with its own string-only timeout error, which drops the marker, so that read still
+retries as a timeout.
+
+The client's terminal path also stopped re-typing. It wrapped every transport error in
+`NewNetworkError`, so the over-cap `ValidationError` the transport documents as
+distinguishable read as `NetworkError` through a built client. A transport error that already
+carries a `ClientError` anywhere in its chain now returns that `ClientError` itself, like
+every other terminal error the client returns — the over-cap error is a `ValidationError` at
+top level and satisfies `IsErrorType(err, ValidationError)`, no longer `NetworkError`. `ErrJOSEPlaintextResponse` and JOSE failures
+carry no `ClientError`, so they keep the `NetworkError` wrap, and the OTel `error.type` each
+classifies as is unchanged. See [migrations.md](migrations.md) `[C70.12]`.
+
 ## Context
 
 `jose` ships exactly one wire shape. `Seal` signs the payload as a compact JWS and
