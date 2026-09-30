@@ -14,7 +14,10 @@
 //
 // There are two doors onto a Verifier. NewVerifier fetches the issuer's key set
 // from its JWKS endpoint, refreshes it in the background and on an unknown kid,
-// and owns what it built — its Close stops that refresh. NewVerifierWithResolver
+// and owns what it built — its Close stops that refresh. A failed first fetch
+// fails NewVerifier, unless WithDeferredKeySet is passed and the failure is an
+// issuer outage: the verifier then starts with a never-fetched key set and
+// reports ErrKeySetUnavailable until a fetch fills it. NewVerifierWithResolver
 // takes a PublicKeyResolver the caller pins out of band and closes nothing. A
 // key set that cannot be refreshed is served until it passes its configured
 // stale ceiling and then reports ErrKeySetUnavailable: there is no path on which

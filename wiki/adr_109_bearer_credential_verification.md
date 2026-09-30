@@ -4,6 +4,31 @@
 **Date:** 2026-09-12
 **Issue:** #1596
 
+> **Amended (2026-09-30, #1752 — a deferred issuer key set):** decision 7's fail-fast first
+> fetch gains an opt-in, `auth.NewVerifier(..., auth.WithDeferredKeySet())`. The case it
+> answers is the partially guarded service: when only some routes carry `auth.Middleware`, an
+> issuer outage during a deploy aborted startup and took down every route, the unguarded ones
+> included, and the only workaround was `NewVerifierWithResolver` over a hand-written lazy
+> cache — which gives up the stale ceiling, refresh, rate floor, coalescing and gauges, and
+> uses the pinned-key door outside its purpose. Fail-fast stays the default: a verifier that
+> can verify nothing turns every guarded route into a 503, and `auth` has no readiness probe to
+> drain the replica, so that trade is the caller's to make. The option is a `JWKSOption`, a
+> type of its own, so it does not compile at `NewVerifierWithResolver`, and there is no config
+> key. Only an **outage-class** failure is tolerated — a refused connection, any timeout
+> (httpclient's timeout type or `context.DeadlineExceeded`), a temporary DNS failure, a 5xx or
+> a 429. A **configuration-class** failure stays fatal: a TLS verification failure, NXDOMAIN, a
+> refused redirect, any other non-200, an oversized, unparseable or empty document.
+> Classification is positive, so an error nothing recognizes is configuration-class. This is
+> [ADR-054](adr_054_cache_construction_fails_startup.md)'s split: construction-grade failures
+> abort startup, while an unreachable backend is "a runtime condition". ADR-054 hands that
+> condition to the readiness probe; `auth` has none, so its instruments are the per-request
+> 503 with `Retry-After` (Consequences, second bullet), one construction WARN, and the
+> `auth.keyset.refresh.total` / `auth.verification.total` counters. A never-fetched key set
+> answers `ErrKeySetUnavailable` on every lookup, never a pass, so this is not the
+> accept-unverified mode ruled out below. The failed construction attempt does not start the
+> rate floor, and once a fetch fills the set the verifier is indistinguishable from one whose
+> first fetch succeeded. See [wiki/auth.md](auth.md#key-set-lifecycle).
+
 ## Context
 
 GoBricks shipped no inbound request authentication. `app.GlobalMiddlewareRegisterer` and

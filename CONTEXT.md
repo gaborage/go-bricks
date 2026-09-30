@@ -314,6 +314,31 @@ on an unknown `kid`. Serving it past its stale ceiling is refused, not
 degraded.
 _Avoid_: remote keys, JWKS cache
 
+**Deferred key set**:
+A verifier built with the opt-in that lets it start without its issuer key set
+when the first fetch fails for an outage-class reason. It answers "key set
+unavailable" until a later fetch fills it. The default verifier requires the
+key set at construction.
+_Avoid_: lazy verifier, keyless mode
+
+**Never-fetched**:
+The state of an issuer key set no fetch has filled yet. Every lookup in it is
+refused as unavailable (503), never as an unknown `kid` (401).
+_Avoid_: empty key set (that is a fetched document with no usable keys)
+
+**Outage-class failure**:
+A fetch failure an issuer outage produces: a refused connection, a timeout, a
+temporary DNS failure, a 5xx or a 429. Tolerated at construction only under a
+deferred key set.
+_Avoid_: transient error (on its own)
+
+**Configuration-class failure**:
+A fetch failure a wrong or untrusted endpoint produces every time: a TLS
+verification failure, a host that does not exist, any other non-success status,
+a refused redirect, or an oversized, unparseable or empty document. It always
+aborts construction.
+_Avoid_: permanent error
+
 ### Payload sealing
 
 **Seal**:
