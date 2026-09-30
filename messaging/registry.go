@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -30,6 +31,12 @@ const defaultConsumerResubscribeDelay = 5 * time.Second
 // which ConsumerState.GivenUp reports the outage, so moving it moves a readiness
 // verdict as well as a log level.
 const consumerResubscribeWarnFromAttempt = 5
+
+// consumerStopBudget bounds how long StopConsumers waits for the consumer
+// supervisors it canceled to exit. It mirrors the streams manager's shutdown flush
+// budget (ADR-123): a handler that ignores its canceled context must not hold
+// shutdown hostage, so past the budget the stop warns and returns instead of hanging.
+const consumerStopBudget = 5 * time.Second
 
 // RegistryInterface defines the contract for messaging infrastructure management.
 // This interface allows for easy mocking and testing of messaging infrastructure.
@@ -68,7 +75,7 @@ type Registry struct {
 	queues     map[string]*QueueDeclaration
 	bindings   []*BindingDeclaration
 	publishers []*PublisherDeclaration
-	// Mutex protects: exchanges, queues, bindings, publishers, consumerIndex, consumerOrder, consumerStates, consumersActive, declared, redeclareObserverDone
+	// Mutex protects: exchanges, queues, bindings, publishers, consumerIndex, consumerOrder, consumerStates, consumersActive, supervisors, declared, redeclareObserverDone
 	// NOTE: GoBricks startup is single-threaded, but multi-tenant scenarios
 	// may have concurrent registry access during tenant initialization.
 	mu              sync.RWMutex
@@ -78,6 +85,16 @@ type Registry struct {
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
+	// supervisors joins the supervisor goroutines of the latest StartConsumers. Each
+	// start allocates a fresh group, so a stop that gave up waiting never races a later
+	// start's Add; a stop leaves it in place, so a second stop still sees what the
+	// first one abandoned.
+	supervisors *supervisorGroup
+	// runningSupervisors counts supervisors not yet exited, across every start, so a
+	// stop that runs out of budget can name how many it left behind.
+	runningSupervisors atomic.Int64
+	// stopBudget is consumerStopBudget, held as a field so tests can shrink it.
+	stopBudget time.Duration
 	// tenantStamps makes every delivery's tenant stamp seed the handler context:
 	// true only under multitenant.enabled together with messaging.tenancy: shared.
 	// Written once by setTenantStamps before the registry leaves the manager and
@@ -250,6 +267,7 @@ func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 		consumerOrder:      make([]consumerKey, 0),
 		consumerStates:     make(map[consumerKey]*consumerState),
 		resubscribeDelay:   defaultConsumerResubscribeDelay,
+		stopBudget:         consumerStopBudget,
 		redeclareSkip:      make(map[string]struct{}),
 		handledGenerations: make(map[*redeclareToken]uint64),
 	}
@@ -511,6 +529,9 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 
 	consumerCtx, cancel := context.WithCancel(ctx)
 	r.cancelConsumers = cancel
+	// Installed before the loop so a start that fails midway still leaves the
+	// supervisors it did spawn for the next stop to join.
+	r.supervisors = newSupervisorGroup()
 
 	// Start each consumer with a handler
 	for _, key := range r.consumerOrder {
@@ -615,8 +636,20 @@ func (r *Registry) rearmRedeclaring(ctx context.Context) {
 }
 
 // StopConsumers gracefully stops all running consumers and halts topology repair
-// until a later StartConsumers re-arms it.
+// until a later StartConsumers re-arms it. It returns once every consumer
+// supervisor has exited — no handler runs and no consumer state is written after
+// that — or once consumerStopBudget has passed, whichever comes first.
 func (r *Registry) StopConsumers() {
+	ctx, cancel := context.WithTimeout(context.Background(), r.stopBudget)
+	defer cancel()
+	r.waitSupervisors(ctx, r.cancelConsumersAndRepair(), r.stopBudget)
+}
+
+// cancelConsumersAndRepair cancels every consumer and halts topology repair, and
+// returns the supervisors to join. It does not wait: a re-subscribe in flight takes
+// r.mu's read lock on its redeclare pass, so waiting while holding mu would deadlock
+// against the very supervisor being joined.
+func (r *Registry) cancelConsumersAndRepair() *supervisorGroup {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -629,7 +662,6 @@ func (r *Registry) StopConsumers() {
 		}
 
 		r.consumersActive = false
-		r.logger.Info().Msg("All consumers stopped")
 	}
 
 	// Topology repair is not a consumer: a publisher-only registry runs it with
@@ -637,6 +669,93 @@ func (r *Registry) StopConsumers() {
 	// guard above — and AFTER the consumers, or a re-subscribe could still attach
 	// on repair that is already dead.
 	r.stopRedeclaring()
+	return r.supervisors
+}
+
+// supervisorGroup is one StartConsumers' supervisors and what stopping them has
+// learned: whether they have all exited, and whether a stop already gave up on them.
+type supervisorGroup struct {
+	wg        sync.WaitGroup
+	drainOnce sync.Once
+	done      chan struct{}
+	// abandoned is set once a join ran out of budget, so a later join of the same
+	// group (Close after the shutdown stop) does not wait the whole budget again.
+	abandoned atomic.Bool
+	// reported keeps "All consumers stopped" to one line per group.
+	reported atomic.Bool
+}
+
+func newSupervisorGroup() *supervisorGroup {
+	return &supervisorGroup{done: make(chan struct{})}
+}
+
+// drained returns a channel closed once every supervisor in the group has exited.
+// Every Add happens under r.mu inside the StartConsumers that created the group, and
+// a stop reaches the group only through r.mu afterwards, so Wait never races an Add.
+func (g *supervisorGroup) drained() <-chan struct{} {
+	g.drainOnce.Do(func() {
+		go func() {
+			g.wg.Wait()
+			close(g.done)
+		}()
+	})
+	return g.done
+}
+
+// waitSupervisors waits until every supervisor in group has exited or ctx, which
+// carries budget, is done. On ctx it warns with the number still running and marks the
+// group abandoned; a later wait on an abandoned group does not block at all, it warns
+// again and returns. Neither path is taken under r.mu.
+func (r *Registry) waitSupervisors(ctx context.Context, group *supervisorGroup, budget time.Duration) {
+	if group == nil {
+		return
+	}
+	if group.abandoned.Load() {
+		if r.supervisorsExited(group) {
+			r.reportStopped(group)
+			return
+		}
+		r.logger.Warn().
+			Int64("running_supervisors", r.runningSupervisors.Load()).
+			Msg("Consumer supervisors still running from an abandoned stop; not waiting again")
+		return
+	}
+	select {
+	case <-group.drained():
+		r.reportStopped(group)
+	case <-ctx.Done():
+		// A ctx already done on entry ties with a drained group in the select above;
+		// re-check so an exited group is never reported as abandoned.
+		if r.supervisorsExited(group) {
+			r.reportStopped(group)
+			return
+		}
+		group.abandoned.Store(true)
+		r.logger.Warn().
+			Int64("running_supervisors", r.runningSupervisors.Load()).
+			Dur("stop_budget", budget).
+			Msg("Consumer supervisors still running after the stop budget; abandoning them")
+	}
+}
+
+// supervisorsExited reports, without blocking, whether group's supervisors have all
+// exited. drained() closes its channel from a waiter goroutine that may not have run
+// yet, so a zero runningSupervisors — which counts every group, this one included —
+// also answers yes: each supervisor decrements it only after superviseConsumer returns.
+func (r *Registry) supervisorsExited(group *supervisorGroup) bool {
+	select {
+	case <-group.drained():
+		return true
+	default:
+	}
+	return r.runningSupervisors.Load() == 0
+}
+
+// reportStopped logs the completed join, once per group.
+func (r *Registry) reportStopped(group *supervisorGroup) {
+	if group.reported.CompareAndSwap(false, true) {
+		r.logger.Info().Msg("All consumers stopped")
+	}
 }
 
 // consumerState is one consumer session's runtime subscription state. The
@@ -906,8 +1025,8 @@ func (s *streamResume) observe(headers amqp.Table) {
 }
 
 // consumerStateFor installs the state a starting consumer session writes to. A restart
-// always gets a FRESH struct: StopConsumers cancels its supervisors without waiting for
-// them, so one still unwinding would otherwise share the new session's state and could
+// always gets a FRESH struct: StopConsumers abandons a supervisor that outlives its stop
+// budget, so one still unwinding would otherwise share the new session's state and could
 // revive its subscribed flag or leave its failure streak behind. It keeps the consumer's
 // history, though — the same record, not a copy — because a success that lands late is
 // still a success this consumer had, and a copy would drop it. History is per consumer,
@@ -955,7 +1074,16 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 	// closes the delivery channel (connection/channel flap), superviseConsumer
 	// re-subscribes on the client's new channel instead of leaving the queue
 	// with zero consumers until a process restart.
-	go r.superviseConsumer(ctx, consumer, deliveries, resume, state)
+	// The supervisor goroutine runs the worker pool and every re-subscribe inline,
+	// so joining it joins everything that can call a handler or write state.
+	supervisors := r.supervisors
+	supervisors.wg.Add(1)
+	r.runningSupervisors.Add(1)
+	go func() {
+		defer supervisors.wg.Done()
+		defer r.runningSupervisors.Add(-1)
+		r.superviseConsumer(ctx, consumer, deliveries, resume, state)
+	}()
 
 	return nil
 }

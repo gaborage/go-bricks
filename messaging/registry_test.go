@@ -2717,10 +2717,9 @@ func TestRegistryConsumerStatesStartEachRunWithAFreshSession(t *testing.T) {
 	assert.True(t, restarted.Subscribed)
 	assert.Zero(t, restarted.FailStreak, "a restarted consumer does not inherit the previous session's streak")
 	assert.False(t, restarted.GivenUp())
-	// A lower bound, not an equality: the previous run's supervisor is not joined, so
-	// it may land one more success before the carry-over reads its counters. A
-	// non-carrying implementation reports 0 and still fails here.
-	assert.GreaterOrEqual(t, restarted.Resubscribes, uint64(1), "the cumulative counters carry across a restart")
+	// StopConsumers joined the previous run's supervisor, so it cannot land a success
+	// after the carry-over. A non-carrying implementation reports 0.
+	assert.Equal(t, uint64(1), restarted.Resubscribes, "the cumulative counters carry across a restart")
 }
 
 // pausingConsumeClient serves one subscription, fails every re-subscribe after it,
@@ -2848,8 +2847,8 @@ func TestRegistryConsumerStatesEndTheSessionWhenTheContextIsCanceled(t *testing.
 }
 
 // TestRegistryConsumerHistoryOutlivesItsSession pins the split between what belongs to a
-// consumer and what belongs to one run of it. StopConsumers does not wait for its
-// supervisors and AMQPClientImpl.ConsumeFromQueue ignores the context, so a replaced
+// consumer and what belongs to one run of it. StopConsumers abandons a supervisor that
+// outlives its stop budget and AMQPClientImpl.ConsumeFromQueue ignores the context, so a replaced
 // session can still land a success: it must reach the cumulative record, and it must not
 // touch the live flags of the session that replaced it.
 func TestRegistryConsumerHistoryOutlivesItsSession(t *testing.T) {
