@@ -57,6 +57,10 @@ The guard is renamed away from "bearer" (`httpclient/redirect.go`: `guardRedirec
 - **Not covered:** a custom credential header outside the three (an `x-pay-token`, an API key
   header) is not judged; net/http forwards those to any host, so such clients still need their
   own `CheckRedirect` (see [httpclient.md](httpclient.md)).
+- **Not covered: a cookie `Jar`'s own cookies.** net/http adds them after `CheckRedirect` runs, so
+  the policy never sees them. `net/http/cookiejar` returns a cookie for an `http` URL only when the server that set
+  it omitted `Secure`, which declared it fit for cleartext. The policy guards the credentials the
+  request carried out of the `https` origin, not a cookie's own scope.
 
 ## References
 
