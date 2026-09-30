@@ -28,6 +28,18 @@ func (r publicOnlyResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 	return nil, errors.New("private key requested")
 }
 
+// nilEncryptKeyResolver answers the encrypt kid's public lookup with (nil, nil).
+type nilEncryptKeyResolver struct {
+	publicOnlyResolver
+}
+
+func (r nilEncryptKeyResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
+	if kid == encKid {
+		return nil, nil
+	}
+	return r.publicOnlyResolver.PublicKey(kid)
+}
+
 // producerOptions is the producer's view: both generations as public keys, no tid rule.
 func producerOptions(t *testing.T) *sealed.OpenOptions {
 	t.Helper()
@@ -61,6 +73,43 @@ func TestVerifyResolvesTheEncryptKidAsPublic(t *testing.T) {
 	})}}
 
 	env, err := sealed.Verify(wire, spec, opts)
+	requireUnprovisionedEncryptRefusal(t, env, err)
+}
+
+func TestVerifyRefusesANilEncryptKey(t *testing.T) {
+	spec := testSpec(t)
+	wire, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
+	require.NoError(t, err)
+	opts := &sealed.OpenOptions{EventType: eventType, Keys: nilEncryptKeyResolver{publicOnlyResolver{t: t, keys: testKeys(t).resolver}}}
+
+	env, err := sealed.Verify(wire, spec, opts)
+	requireUnprovisionedEncryptRefusal(t, env, err)
+}
+
+func TestOpenKeepsTheConsumerWordingForAnUnprovisionedEncryptKey(t *testing.T) {
+	spec := testSpec(t)
+	wire, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
+	require.NoError(t, err)
+	k := testKeys(t)
+	opts := &sealed.OpenOptions{EventType: eventType, Keys: jositest.NewTestResolver(map[string]any{
+		signKid: &k.signPriv.PublicKey,
+	})}
+	const want = "encrypt kid generation is not provisioned on this consumer"
+
+	var out paymentAuthorized
+	_, err = sealed.Open(wire, spec, opts, &out)
+	var oe *sealed.OpenError
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, want, oe.Err.Message)
+
+	_, err = sealed.OpenDocument(wire, spec, opts)
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, want, oe.Err.Message)
+}
+
+// requireUnprovisionedEncryptRefusal pins Verify's rule-10 refusal for an encrypt kid its key set cannot serve.
+func requireUnprovisionedEncryptRefusal(t *testing.T, env *sealed.Envelope, err error) {
+	t.Helper()
 	assert.Nil(t, env)
 	var oe *sealed.OpenError
 	require.ErrorAs(t, err, &oe)
@@ -68,6 +117,7 @@ func TestVerifyResolvesTheEncryptKidAsPublic(t *testing.T) {
 	assert.Equal(t, 10, oe.Rule)
 	assert.Equal(t, "jwe", oe.Details[sealed.DetailLayer])
 	assert.Equal(t, encKid, oe.Err.Kid)
+	assert.Equal(t, "encrypt kid generation is not provisioned in this key set", oe.Err.Message)
 	assert.ErrorIs(t, err, sealed.ErrKidUnknownGeneration)
 }
 

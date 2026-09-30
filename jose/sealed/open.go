@@ -235,6 +235,8 @@ func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, 
 }
 
 // Verify checks body as Open does, resolving both wire kids as PUBLIC keys, and stops before the decrypt.
+// It never examines the Subject's ciphertext, IV, tag or encrypted key, so it proves neither that the Subject decrypts nor that it decodes.
+// It judges no freshness, replay or authorization, and judges the tid only by the caller's TenantExpectation.
 func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
 	if err := checkOpenOptionsArgs(spec, opts, "Verify"); err != nil {
 		return nil, err
@@ -243,8 +245,8 @@ func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, keyErr := opts.Keys.PublicKey(core.env.EncKid); keyErr != nil {
-		return nil, unknownGenerationError(10, core.env.EncKid, tagKeyEncrypt, keyErr, layerJWE)
+	if key, keyErr := opts.Keys.PublicKey(core.env.EncKid); keyErr != nil || key == nil {
+		return nil, unknownGenerationError(10, core.env.EncKid, tagKeyEncrypt, provisionedInKeySet, keyErr, layerJWE)
 	}
 	return core.env, nil
 }
@@ -384,7 +386,7 @@ func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver) (kid, fa
 	}
 	key, keyErr := keys.PublicKey(peek.Kid)
 	if keyErr != nil {
-		return "", "", nil, unknownGenerationError(4, peek.Kid, tagKeySign, keyErr, "")
+		return "", "", nil, unknownGenerationError(4, peek.Kid, tagKeySign, provisionedOnConsumer, keyErr, "")
 	}
 	return peek.Kid, family, key, nil
 }
@@ -564,7 +566,7 @@ func checkSubjectHeader(compact, outerKid string, spec *Spec) (cryptoadapter.Hea
 func decryptSubject(compact, kid string, keys bricksjose.KeyResolver) ([]byte, error) {
 	encKey, keyErr := keys.PrivateKey(kid)
 	if keyErr != nil {
-		return nil, unknownGenerationError(10, kid, tagKeyEncrypt, keyErr, layerJWE)
+		return nil, unknownGenerationError(10, kid, tagKeyEncrypt, provisionedOnConsumer, keyErr, layerJWE)
 	}
 	plaintext, _, err := cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid: kid, AllowedKeyAlgs: openKeyAlgs, AllowedContentEnc: openContents,
@@ -583,10 +585,16 @@ func familyError(rule int, kid, logical, role, layer string) error {
 	return &OpenError{Err: je, Rule: rule, Details: layerDetails(layer)}
 }
 
-// unknownGenerationError is the recoverable class: a well-formed Generation this consumer has not provisioned.
-func unknownGenerationError(rule int, kid, role string, cause error, layer string) error {
+// Verify also runs on producers, so its wording names no role; Open and OpenDocument keep the consumer wording.
+const (
+	provisionedOnConsumer = "on this consumer"
+	provisionedInKeySet   = "in this key set"
+)
+
+// unknownGenerationError is the recoverable class: a well-formed Generation the resolver has not provisioned.
+func unknownGenerationError(rule int, kid, role, where string, cause error, layer string) error {
 	err := openError(rule, ErrKidUnknownGeneration, CodeKidUnknownGeneration,
-		fmt.Sprintf("%s kid generation is not provisioned on this consumer", role), layerDetails(layer))
+		fmt.Sprintf("%s kid generation is not provisioned %s", role, where), layerDetails(layer))
 	err.Err.Kid, err.Err.Cause = kid, cause
 	return err
 }
