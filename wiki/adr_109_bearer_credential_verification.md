@@ -148,8 +148,8 @@ restated here.
   credential was presented and judged — is reported by `Class`, a closed, low-cardinality
   vocabulary, to one DEBUG breadcrumb (emitted where the rule fires, in the verifier) and, on a
   verifier built by `NewVerifier`, to the `auth.result` metric attribute —
-  `NewVerifierWithResolver` constructs no metrics, so a resolver-backed verifier records
-  nothing. A request carrying no credential is not classified: it
+  `NewVerifierWithResolver` records it too when given `WithMeterProvider`, and records
+  nothing without it. A request carrying no credential is not classified: it
   returns before any rule runs, so it has no `Class` and emits no breadcrumb, and the counter
   alone records it as `missing_credential`. It is never rendered
   into a response, and `VerificationError` never renders its `Cause` under any `fmt` verb,

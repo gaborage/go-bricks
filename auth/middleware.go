@@ -131,7 +131,7 @@ func Middleware(v *Verifier) server.MiddlewareFunc {
 		// Verify rather than short-circuiting keeps auth.verification.total's
 		// missing_credential observation on the HTTP path too, and still records
 		// exactly one observation per request — on a verifier that has metrics at
-		// all, which NewVerifierWithResolver does not construct.
+		// all, which NewVerifierWithResolver constructs only with WithMeterProvider.
 		principal, err := v.Verify(ctx, bearerCredential(c.RequestHeader(headerAuthorization)))
 		if err != nil {
 			return ch.deny(c, err)

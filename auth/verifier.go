@@ -61,9 +61,9 @@ type Verifier struct {
 	// package replace it directly; there is deliberately no exported option.
 	now func() time.Time
 
-	// metrics is nil for a verifier built through NewVerifierWithResolver: the
-	// OTel instruments arrive with the MeterProvider NewVerifier takes, and
-	// every recording method no-ops on a nil receiver.
+	// metrics is nil for a verifier built through NewVerifierWithResolver
+	// without WithMeterProvider, and every recording method no-ops on a nil
+	// receiver.
 	metrics *authMetrics
 
 	// owned is the JWKS resolver this verifier CONSTRUCTED, and the only thing
@@ -108,19 +108,48 @@ func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client 
 		return nil, err
 	}
 
-	verifier, err := NewVerifierWithResolver(cfg, log, resolver)
+	verifier, err := NewVerifierWithResolver(cfg, log, resolver, withAuthMetrics(m))
 	if err != nil {
 		resolver.close()
 		return nil, err
 	}
-	verifier.metrics = m
 	verifier.owned = resolver
 	return verifier, nil
+}
+
+// VerifierOption configures a verifier built through NewVerifierWithResolver.
+type VerifierOption func(*verifierOptions)
+
+type verifierOptions struct {
+	metrics *authMetrics
+}
+
+// WithMeterProvider makes a resolver-backed verifier record
+// auth.verification.total, one observation per Verify labeled with the same
+// outcomes a JWKS-backed verifier records. mp may be nil (or a typed nil), in
+// which case the global MeterProvider is used. The key-set gauges and the
+// refresh counter stay exclusive to NewVerifier: they describe a fetch cycle a
+// caller-supplied resolver does not have.
+func WithMeterProvider(mp metric.MeterProvider) VerifierOption {
+	return func(o *verifierOptions) {
+		o.metrics = newVerificationMetrics(mp)
+	}
+}
+
+// withAuthMetrics hands the verifier the metrics value NewVerifier already
+// built for its JWKS resolver, so both record through one set of instruments.
+func withAuthMetrics(m *authMetrics) VerifierOption {
+	return func(o *verifierOptions) {
+		o.metrics = m
+	}
 }
 
 // NewVerifierWithResolver builds a verifier over an explicitly supplied
 // PublicKeyResolver, for consumers that pin issuer keys out of band rather than
 // fetching JWKS.
+//
+// Without WithMeterProvider the verifier records no metrics. A nil option is
+// ignored.
 //
 // cfg is validated up front and its *ConfigError is returned unchanged, so a
 // misconfigured service fails startup instead of booting with a widened
@@ -144,7 +173,7 @@ func NewVerifier(cfg Config, log logger.Logger, mp metric.MeterProvider, client 
 // contract.
 //
 //nolint:gocritic // hugeParam: Config is the injected value type; a pointer here would invite post-construction mutation.
-func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyResolver) (*Verifier, error) {
+func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyResolver, opts ...VerifierOption) (*Verifier, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -157,6 +186,12 @@ func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyRe
 	if isNilInterface(log) {
 		log = nil
 	}
+	var options verifierOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
 	cfg.Audience = slices.Clone(cfg.Audience)
 	cfg.Algorithms = slices.Clone(cfg.Algorithms)
 	cfg.Typ = slices.Clone(cfg.Typ)
@@ -166,6 +201,7 @@ func NewVerifierWithResolver(cfg Config, log logger.Logger, resolver PublicKeyRe
 		resolver: resolver,
 		allowed:  allowedAlgorithms(cfg.Algorithms),
 		now:      time.Now,
+		metrics:  options.metrics,
 	}, nil
 }
 

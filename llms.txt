@@ -1206,7 +1206,8 @@ Behavior and limits (see [wiki/auth.md](wiki/auth.md) / ADR-109):
   under `%v`/`%s`/`%q`/`%#v` and `json.Marshal` — but NOT under `logger.Interface`/`WithFields`,
   whose reflective filter reads exported fields directly (#1602). Don't hand it one.
 - **Pinned keys**: `auth.NewVerifierWithResolver(cfg, log, auth.NewStaticKeyResolver(keys))`
-  fetches nothing and owns nothing — its `Close` is a no-op.
+  fetches nothing and owns nothing — its `Close` is a no-op. It records no metrics unless given
+  `auth.WithMeterProvider(deps.MeterProvider)`, which adds `auth.verification.total` (no `auth.keyset.*`).
 - **No claim hook, no ECDSA, no cookie/query credentials, no OIDC discovery** — name the JWKS
   endpoint explicitly.
 
