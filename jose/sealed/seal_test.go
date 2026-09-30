@@ -134,7 +134,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 	opts.Now = func() time.Time { return now }
 	opts.TenantID = "tenant-a"
 
-	wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
+	wire, jti, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 	require.NoError(t, err)
 
 	// Outer JWS: exactly the decided protected header set and values.
@@ -148,7 +148,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 	assert.Equal(t, eventType, outer["etyp"])
 	assert.Equal(t, "tenant-a", outer["tid"])
 	assert.InDelta(t, float64(now.Unix()), outer["iat"], 0)
-	jti, _ := outer["jti"].(string)
+	assert.Equal(t, jti, outer["jti"])
 	_, err = uuid.Parse(jti)
 	require.NoError(t, err, "jti must be a UUID")
 	assert.Equal(t, uuid.Version(4), uuid.MustParse(jti).Version())
@@ -185,7 +185,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 
 func TestSealOmitsTidWithoutTenantAndDefaultsIatToNow(t *testing.T) {
 	before := time.Now().Unix()
-	wire, err := sealed.Seal(&paymentAuthorized{OrderID: "o", Card: &cardData{PAN: testPAN}}, testSpec(t), testOptions(t))
+	wire, _, err := sealed.Seal(&paymentAuthorized{OrderID: "o", Card: &cardData{PAN: testPAN}}, testSpec(t), testOptions(t))
 	require.NoError(t, err)
 	outer, _ := decodeSegment0(t, string(wire))
 	assert.Equal(t, []string{"alg", "cty", "etyp", "iat", "jti", "kid", "sp", "typ"}, sortedKeys(outer), "tid absent when no tenant resolves")
@@ -196,7 +196,7 @@ func TestSealOmitsTidWithoutTenantAndDefaultsIatToNow(t *testing.T) {
 
 func TestSealNilSubjectIsJWEOfNull(t *testing.T) {
 	k := testKeys(t)
-	wire, err := sealed.Seal(paymentAuthorized{OrderID: "o", Card: nil, Amount: 1}, testSpec(t), testOptions(t))
+	wire, _, err := sealed.Seal(paymentAuthorized{OrderID: "o", Card: nil, Amount: 1}, testSpec(t), testOptions(t))
 	require.NoError(t, err)
 	outer, _ := decodeSegment0(t, string(wire))
 	assert.Equal(t, []any{"card"}, outer["sp"], "sp is constant per type, nil subject included")
@@ -211,15 +211,16 @@ func TestSealNilSubjectIsJWEOfNull(t *testing.T) {
 
 func TestSealMintsAFreshJTIPerCallWithAnIdenticalHeaderSet(t *testing.T) {
 	spec, opts := testSpec(t), testOptions(t)
-	first, err := sealed.Seal(sampleEvent(), spec, opts)
+	first, jti1, err := sealed.Seal(sampleEvent(), spec, opts)
 	require.NoError(t, err)
-	second, err := sealed.Seal(sampleEvent(), spec, opts)
+	second, jti2, err := sealed.Seal(sampleEvent(), spec, opts)
 	require.NoError(t, err)
 	h1, _ := decodeSegment0(t, string(first))
 	h2, _ := decodeSegment0(t, string(second))
 	assert.Equal(t, sortedKeys(h1), sortedKeys(h2))
 	assert.NotEqual(t, h1["jti"], h2["jti"], "seal runs once per call: a caller-side retry is a new jti")
 	assert.NotEqual(t, first, second)
+	assert.NotEqual(t, jti1, jti2)
 }
 
 func TestSealFamilyPinRefusesForeignOrLogicalKids(t *testing.T) {
@@ -240,7 +241,7 @@ func TestSealFamilyPinRefusesForeignOrLogicalKids(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := testOptions(t)
 			opts.SignKid, opts.EncryptKid = tc.sign, tc.encrypt
-			wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
+			wire, _, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
@@ -270,7 +271,7 @@ func TestSealPropagatesResolverErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := testOptions(t)
 			opts.Keys = tc.resolver
-			_, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
+			_, _, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.wantKid, jerr.Kid)
@@ -305,8 +306,9 @@ func TestSealRejectsInvalidInputs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wire, err := sealed.Seal(tc.evt, tc.spec, tc.opts)
+			wire, jti, err := sealed.Seal(tc.evt, tc.spec, tc.opts)
 			assert.Nil(t, wire)
+			assert.Empty(t, jti)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
@@ -343,7 +345,7 @@ func (selfMarshaling) MarshalJSON() ([]byte, error) { return []byte(`{"other":1}
 func TestSealRefusesADocumentWithoutTheSubjectMember(t *testing.T) {
 	spec, err := sealed.ScanType(reflect.TypeOf(selfMarshaling{}))
 	require.NoError(t, err)
-	_, err = sealed.Seal(selfMarshaling{}, spec, testOptions(t))
+	_, _, err = sealed.Seal(selfMarshaling{}, spec, testOptions(t))
 	var jerr *bricksjose.Error
 	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeDocumentInvalid, jerr.Code)
@@ -369,7 +371,7 @@ func TestSealRefusesACaseFoldTwinTheScanCannotSee(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "card", spec.SubjectPath, "the scan sees one member and accepts the type")
 
-	wire, err := sealed.Seal(twinMarshaling{Card: &cardData{PAN: testPAN, Exp: "12/29"}}, spec, testOptions(t))
+	wire, _, err := sealed.Seal(twinMarshaling{Card: &cardData{PAN: testPAN, Exp: "12/29"}}, spec, testOptions(t))
 	assert.Nil(t, wire, "a document with a clear twin of the subject is never signed")
 	var jerr *bricksjose.Error
 	require.ErrorAs(t, err, &jerr)
@@ -396,7 +398,7 @@ type leakyEvent struct {
 func TestSealMarshalFailureNeverCarriesSubjectBytes(t *testing.T) {
 	spec, err := sealed.ScanType(reflect.TypeOf(leakyEvent{}))
 	require.NoError(t, err)
-	_, err = sealed.Seal(leakyEvent{Card: leakyCard{PAN: testPAN}}, spec, testOptions(t))
+	_, _, err = sealed.Seal(leakyEvent{Card: leakyCard{PAN: testPAN}}, spec, testOptions(t))
 	var jerr *bricksjose.Error
 	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
@@ -437,7 +439,7 @@ type unmarshalable struct {
 func TestSealReportsMarshalFailure(t *testing.T) {
 	spec, err := sealed.ScanType(reflect.TypeOf(unmarshalable{}))
 	require.NoError(t, err)
-	_, err = sealed.Seal(unmarshalable{Bad: map[bool]int{true: 1}}, spec, testOptions(t))
+	_, _, err = sealed.Seal(unmarshalable{Bad: map[bool]int{true: 1}}, spec, testOptions(t))
 	var jerr *bricksjose.Error
 	require.ErrorAs(t, err, &jerr)
 	assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
@@ -474,8 +476,9 @@ func TestSealReportsCryptoFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := testOptions(t)
 			opts.Keys = brokenKeys(t, tc.breakSign, tc.breakEncrypt)
-			wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
+			wire, jti, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
+			assert.Empty(t, jti)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, sealed.CodeSealFailed, jerr.Code)
@@ -503,7 +506,7 @@ func TestSealSealsOnlyTheTopLevelSubjectMember(t *testing.T) {
 		Card: &cardData{PAN: testPAN},
 		Note: `{"card":"another decoy"}`,
 	}
-	wire, err := sealed.Seal(evt, spec, testOptions(t))
+	wire, _, err := sealed.Seal(evt, spec, testOptions(t))
 	require.NoError(t, err)
 	payload, doc, innerJWE := openWire(t, wire, &k.signPriv.PublicKey)
 	assert.Equal(t, []string{"meta", "card", "note"}, topLevelKeys(t, payload))

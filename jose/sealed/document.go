@@ -43,10 +43,10 @@ func NewDocumentSpec(signLogical, encryptLogical, subjectPath string) (*Spec, er
 // the sealed member). Nothing of the document's bytes reaches the error.
 //
 // SealDocument exists for tooling and JSON-fixture tests. Producers seal events with Seal,
-// whose scanned Spec pins the Go type the wire must match.
-func SealDocument(doc []byte, spec *Spec, opts *Options) ([]byte, error) {
-	if err := opts.Validate(spec); err != nil {
-		return nil, err
+// whose scanned Spec pins the Go type the wire must match. It returns what Seal returns.
+func SealDocument(doc []byte, spec *Spec, opts *Options) (data []byte, jti string, err error) {
+	if validateErr := opts.Validate(spec); validateErr != nil {
+		return nil, "", validateErr
 	}
 	return sealCore(doc, spec, opts)
 }

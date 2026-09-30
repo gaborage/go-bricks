@@ -306,13 +306,14 @@ func TestSealAndPublishProduceTheSameShapeWithFreshJTI(t *testing.T) {
 	client := &capturingClient{}
 	before := sealCount(t, reader)
 	require.NoError(t, h.Publish(context.Background(), client, evt))
-	sealedBytes, err := h.Seal(context.Background(), evt)
+	sealedBytes, jti, err := h.Seal(context.Background(), evt)
 	require.NoError(t, err)
 	assert.Equal(t, before+2, sealCount(t, reader), "Seal is the same one-shot operation Publish runs")
 	assert.Empty(t, client.data[1:], "Seal publishes nothing")
 
 	envA, _ := openWire(t, client.data[0], josesealed.TenantExpectation{})
 	envB, _ := openWire(t, sealedBytes, josesealed.TenantExpectation{})
+	assert.Equal(t, envB.JTI, jti)
 	assert.NotEqual(t, envA.JTI, envB.JTI, "seal runs once per call: each call mints its own jti")
 	assert.Equal(t, envA.SignKid, envB.SignKid)
 	assert.Equal(t, envA.EncKid, envB.EncKid)
@@ -380,7 +381,7 @@ func TestPlainTypeIsUntouchedByTheCodec(t *testing.T) {
 	client := &capturingClient{}
 	require.NoError(t, h.Publish(context.Background(), client, plainEvent{ID: "p"}))
 	assert.JSONEq(t, `{"id":"p"}`, string(client.data[0]))
-	_, err := h.Seal(context.Background(), plainEvent{ID: "p"})
+	_, _, err := h.Seal(context.Background(), plainEvent{ID: "p"})
 	assert.ErrorIs(t, err, messaging.ErrNotSealTagged)
 }
 
@@ -467,4 +468,14 @@ func TestNewSealerTagsTheActiveKidsAsSeal(t *testing.T) {
 	_, err = sealruntime.Registered().NewSealer(spec(t), "", &sealruntime.Runtime{KeyStore: store})
 	require.Error(t, err)
 	assert.Len(t, store.Recorded(), before)
+}
+
+func TestSealSignsTheContextTenantWithAJTI(t *testing.T) {
+	configure(t, sealruntime.TenancyDisabled)
+	h := declare(t)
+	data, jti, err := h.Seal(multitenant.SetTenant(context.Background(), "tenant-a"), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
+	require.NoError(t, err)
+	require.NotEmpty(t, jti)
+	env, _ := openWire(t, data, josesealed.TenantExpectation{Expected: "tenant-a"})
+	assert.Equal(t, "tenant-a", env.TenantID)
 }

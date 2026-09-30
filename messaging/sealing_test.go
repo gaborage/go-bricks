@@ -36,6 +36,7 @@ type fakeCodec struct {
 	scanErr   error
 	scanNil   bool
 	sealerErr error
+	sealerNil bool
 	scans     int
 	sealer    *fakeSealer
 	gotEvent  string
@@ -58,18 +59,22 @@ func (c *fakeCodec) NewSealer(_ sealruntime.Spec, eventType string, rt *sealrunt
 	if c.sealerErr != nil {
 		return nil, c.sealerErr
 	}
+	if c.sealerNil {
+		return nil, nil
+	}
 	return c.sealer, nil
 }
 
 type fakeSealer struct {
 	calls int
 	out   []byte
+	jti   string
 	err   error
 }
 
-func (s *fakeSealer) Seal(context.Context, any) ([]byte, error) {
+func (s *fakeSealer) Seal(context.Context, any) (data []byte, jti string, err error) {
 	s.calls++
-	return s.out, s.err
+	return s.out, s.jti, s.err
 }
 
 type stubKeyStore struct{}
@@ -281,8 +286,10 @@ func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {
 	require.NoError(t, decls.Validate())
 	assert.Zero(t, codec.scans)
 	assert.Nil(t, h.sealer)
-	_, err := h.Seal(context.Background(), plainEvent{ID: "x"})
-	assert.ErrorIs(t, err, ErrNotSealTagged)
+	data, jti, err := h.Seal(context.Background(), plainEvent{ID: "x"})
+	require.ErrorIs(t, err, ErrNotSealTagged)
+	assert.Nil(t, data)
+	assert.Empty(t, jti)
 }
 
 func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
@@ -315,6 +322,11 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 			sealruntime.Register(c)
 			sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
 		}, want: sealerErr, text: "sealing producer"},
+		{name: "codec_returns_no_sealer", setup: func(c *fakeCodec) {
+			c.sealerNil = true
+			sealruntime.Register(c)
+			sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
+		}, text: "returned no sealer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -329,8 +341,9 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 			pubErr := h.Publish(context.Background(), client, sealedEvent{ID: "x", Card: "4111"})
 			require.Error(t, pubErr, "a handle whose sealer failed never publishes plaintext")
 			assert.Empty(t, client.data)
-			_, sealErr := h.Seal(context.Background(), sealedEvent{ID: "x"})
+			_, jti, sealErr := h.Seal(context.Background(), sealedEvent{ID: "x"})
 			assert.Equal(t, pubErr, sealErr)
+			assert.Empty(t, jti)
 			err := decls.Validate()
 			assert.Equal(t, err, pubErr, "Validate and the handle report the same failure")
 			require.Error(t, err)
@@ -348,7 +361,7 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 func TestDeclareTypedPublisherSealedHappyPath(t *testing.T) {
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)
-	sealer := &fakeSealer{out: []byte("eyJ.sealed.bytes")}
+	sealer := &fakeSealer{out: []byte("eyJ.sealed.bytes"), jti: "jti-1"}
 	codec := &fakeCodec{sealer: sealer}
 	sealruntime.Register(codec)
 	rt := &sealruntime.Runtime{KeyStore: stubKeyStore{}, Active: map[string]string{"svc-sign": "v2"}, Tenancy: sealruntime.TenancyShared}
@@ -374,9 +387,10 @@ func TestDeclareTypedPublisherSealedHappyPath(t *testing.T) {
 	_, hasSealedHeader := client.opts[0].Headers["x-sealed"]
 	assert.False(t, hasSealedHeader, "no unsigned sealing marker on the frame")
 
-	bytes, err := h.Seal(context.Background(), sealedEvent{ID: "o1", Card: "4111"})
+	bytes, jti, err := h.Seal(context.Background(), sealedEvent{ID: "o1", Card: "4111"})
 	require.NoError(t, err)
 	assert.Equal(t, "eyJ.sealed.bytes", string(bytes))
+	assert.Equal(t, "jti-1", jti)
 	assert.Equal(t, 2, sealer.calls)
 	assert.Len(t, client.data, 1, "Seal publishes nothing")
 }
@@ -385,7 +399,7 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)
 	sealErr := errors.New("seal boom")
-	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{err: sealErr}})
+	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{jti: "never-returned", err: sealErr}})
 	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
 	decls := newSealingDecls()
 	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
@@ -396,17 +410,19 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	assert.Contains(t, err.Error(), "seal payment.authorized event")
 	assert.Empty(t, client.data)
 	require.ErrorIs(t, err, sealErr)
-	_, err = h.Seal(context.Background(), sealedEvent{ID: "o1"})
-	assert.ErrorIs(t, err, sealErr)
+	data, jti, err := h.Seal(context.Background(), sealedEvent{ID: "o1"})
+	require.ErrorIs(t, err, sealErr)
+	assert.Nil(t, data)
+	assert.Empty(t, jti, "a failed seal hands back no jti")
 }
 
 // tenantSealer records the tenant the context carried when Seal ran.
 type tenantSealer struct{ seen []string }
 
-func (s *tenantSealer) Seal(ctx context.Context, _ any) ([]byte, error) {
+func (s *tenantSealer) Seal(ctx context.Context, _ any) (data []byte, jti string, err error) {
 	id, _ := multitenant.GetTenant(ctx)
 	s.seen = append(s.seen, id)
-	return []byte("sealed"), nil
+	return []byte("sealed"), "jti-tenant", nil
 }
 
 type keyedClient struct {
@@ -467,9 +483,9 @@ func TestSealWithoutAClientUsesTheContextOnly(t *testing.T) {
 	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
 	require.NoError(t, decls.Validate())
 	h.sealer = sealer
-	_, err := h.Seal(multitenant.SetTenant(context.Background(), "t-out"), sealedEvent{ID: "x"})
+	_, _, err := h.Seal(multitenant.SetTenant(context.Background(), "t-out"), sealedEvent{ID: "x"})
 	require.NoError(t, err)
-	_, err = h.Seal(context.Background(), sealedEvent{ID: "x"})
+	_, _, err = h.Seal(context.Background(), sealedEvent{ID: "x"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"t-out", ""}, sealer.seen)
 }

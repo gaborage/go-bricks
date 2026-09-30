@@ -685,7 +685,7 @@ func TestOpenOpensWhatSealProduced(t *testing.T) {
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &keys.signPriv.PublicKey, encKid: keys.encPriv})
 	opts := testOptions(t)
 	opts.TenantID = "tenant-a"
-	wire, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
+	wire, _, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 	require.NoError(t, err)
 
 	var evt paymentAuthorized

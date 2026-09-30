@@ -105,10 +105,14 @@ type PaymentAuthorized struct {
   the Dedup key is reachable; the meta-less door refuses it at startup (#1359). Streams typed
   declarations refuse a seal-tagged `T` in v1 (#1360). `outbox.Publish` refuses a seal-tagged struct
   payload with `outbox.ErrSealedPayloadNeedsBytes` (#1360). The outbox flow is
-  `bytes, err := h.Seal(ctx, evt)` inside the business transaction, then
+  `bytes, jti, err := h.Seal(ctx, evt)` inside the business transaction, then
   `deps.Outbox.Publish(ctx, tx, event)` with those bytes as the payload: the record keeps
   that one seal result and the relay republishes it byte-identical on every drive, so the
   `jti` is stable across redeliveries; a second `Seal` call is a new seal and a new `jti`.
+  The returned `jti` is the bare signed slot (`""` on error), held by the caller of `Seal`
+  (the producer): a producer keying its own ledger on it uses it as is, while a consuming
+  app gets the namespaced `Meta.DedupKey()`, `<SignFamily>:<jti>`, which the go-bricks
+  inbox stores ([ADR-131](adr_131_sealed_bytes_publish_door.md)).
   `Seal` on a plain `T` is `messaging.ErrNotSealTagged` (#1358).
 
 ## Keys

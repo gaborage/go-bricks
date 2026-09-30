@@ -145,43 +145,47 @@ func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) er
 	return h.publishBytes(ctx, client, data)
 }
 
-// Seal returns the sealed wire bytes for evt without publishing them — the outbox
-// lane persists them as-is (persisted-sealed, ADR-097) and the relay moves them
-// byte-identical. A plain T has nothing to seal: it returns ErrNotSealTagged, and the
-// event goes to the outbox as a struct payload the outbox already marshals.
-func (h *Publisher[T]) Seal(ctx context.Context, evt T) ([]byte, error) {
+// Seal returns evt's sealed wire bytes and the jti signed into them without publishing;
+// a plain (not seal-tagged) T returns ErrNotSealTagged.
+func (h *Publisher[T]) Seal(ctx context.Context, evt T) (data []byte, jti string, err error) {
 	if h.sealer == nil && h.sealErr == nil {
-		return nil, fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
+		return nil, "", fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
 	}
-	return h.encode(ctx, nil, evt)
+	return h.seal(ctx, nil, evt)
 }
 
 // encode is the one place the handle turns an event into bytes: seal when T is
-// seal-tagged, marshal otherwise. Before sealing it resolves the tenant exactly as the
-// stamping wrapper will for client — context first, the client's pool key otherwise,
-// a disagreement refused — and carries the answer on the context, so the signed tid
-// and the x-tenant-id header always name the same tenant. Seal (no client) sees only
-// the context; the outbox lane stamps from the same context later.
+// seal-tagged, marshal otherwise.
 func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, error) {
-	if h.sealErr != nil {
-		return nil, h.sealErr
-	}
-	if h.sealer != nil {
-		sealCtx, err := tenantForSeal(ctx, client)
-		if err != nil {
-			return nil, err
-		}
-		data, err := h.sealer.Seal(sealCtx, evt)
-		if err != nil {
-			return nil, fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
-		}
-		return data, nil
+	if h.sealer != nil || h.sealErr != nil {
+		data, _, err := h.seal(ctx, client, evt)
+		return data, err
 	}
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: marshal %s event: %w", h.eventType, err)
 	}
 	return data, nil
+}
+
+// seal seals evt for a seal-tagged handle. Before sealing it resolves the tenant exactly
+// as the stamping wrapper will for client — context first, the client's pool key
+// otherwise, a disagreement refused — and carries the answer on the context, so the
+// signed tid and the x-tenant-id header always name the same tenant. Seal (no client)
+// sees only the context; the outbox lane stamps from the same context later.
+func (h *Publisher[T]) seal(ctx context.Context, client AMQPClient, evt T) (data []byte, jti string, err error) {
+	if h.sealErr != nil {
+		return nil, "", h.sealErr
+	}
+	sealCtx, err := tenantForSeal(ctx, client)
+	if err != nil {
+		return nil, "", err
+	}
+	data, jti, err = h.sealer.Seal(sealCtx, evt)
+	if err != nil {
+		return nil, "", fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
+	}
+	return data, jti, nil
 }
 
 // contentType is what this handle actually encoded: a compact JWS when T is

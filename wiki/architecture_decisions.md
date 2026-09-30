@@ -2114,6 +2114,23 @@ exported `httpclient.ErrRedirectDowngrade`; ten redirects stay the cap. A caller
 
 ---
 
+### [ADR-131: A Verified Door Republishes Stored Sealed Bytes, and `Seal` Returns Its `jti`](adr_131_sealed_bytes_publish_door.md)
+
+**Date:** 2026-09-30 | **Status:** Accepted (the `PublishSealed` door lands in the next link of the #1869 stack) | **Breaking:** `Publisher[T].Seal`, `jose/sealed.Seal`, `jose/sealed.SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`
+
+A producer that persists sealed bytes could not publish them itself. ADR-096 left no exported
+bytes door, the outbox relay publishes without `Mandatory` and reports nothing back, and every
+caller-side `Publish` retry minted a new `jti`. `Seal` now returns the `jti` it signed.
+`Publisher[T].PublishSealed` republishes bytes the handle's own `Seal` produced, through the same
+internal door as `Publish`, after two checks: `jose/sealed.Verify` (the opener's rules 1–9 and
+rule 10 up to the decrypt, keys resolved as PUBLIC by entry name), and a strict equality check
+on the signed `tid`. Amends ADR-096 and ADR-097. See [migrations.md](migrations.md) `[C70.15]`.
+
+**Key Benefits:** a batch producer learns synchronously that a publish failed, and a retry of
+stored bytes keeps its `jti`, so the consumer's ledger dedups it.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2884,7 +2901,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-129) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-131) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

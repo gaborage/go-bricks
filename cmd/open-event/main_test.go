@@ -164,7 +164,7 @@ func (fx *cliFixture) seal(t *testing.T, o *sealOptions) []byte {
 	spec, err := sealed.NewDocumentSpec(signLogical, encLogical, o.subjectKey)
 	require.NoError(t, err)
 
-	body, err := sealed.SealDocument([]byte(o.doc), spec, &sealed.Options{
+	body, _, err := sealed.SealDocument([]byte(o.doc), spec, &sealed.Options{
 		SignKid:    o.signKid,
 		EncryptKid: o.encKid,
 		EventType:  o.eventType,

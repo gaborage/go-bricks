@@ -32,7 +32,7 @@ type (
 	SealTenancy = sealruntime.Tenancy
 	// SealKeyStore is the app.KeyStore subset sealing needs.
 	SealKeyStore = sealruntime.KeyStore
-	// Sealer turns one event into its sealed wire bytes.
+	// Sealer turns one event into its sealed wire bytes and the jti it signed.
 	Sealer = sealruntime.Sealer
 )
 
@@ -176,9 +176,9 @@ func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[se
 }
 
 // newSealer builds the sealer for a seal-tagged declaration, or reports why it cannot:
-// codec not linked, runtime not configured, no key store, a refused declaration, or a
-// producer that cannot resolve its Activation. Every error is recorded on the
-// Declarations and surfaces from Validate as a startup failure.
+// codec not linked, runtime not configured, no key store, a refused declaration, a
+// producer that cannot resolve its Activation, or a codec that returns no sealer. Every
+// error is recorded on the Declarations and surfaces from Validate as a startup failure.
 func newSealer(t reflect.Type, eventType string) (Sealer, error) {
 	codec := sealruntime.Registered()
 	if codec == nil {
@@ -201,6 +201,9 @@ func newSealer(t reflect.Type, eventType string) (Sealer, error) {
 	sealer, err := codec.NewSealer(spec, eventType, rt)
 	if err != nil {
 		return nil, fmt.Errorf("messaging: sealing producer for %v (event type %q): %w", t, eventType, err)
+	}
+	if sealer == nil {
+		return nil, fmt.Errorf("messaging: sealing producer for %v (event type %q): the codec returned no sealer", t, eventType)
 	}
 	return sealer, nil
 }
