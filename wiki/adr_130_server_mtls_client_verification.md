@@ -46,9 +46,10 @@ way to demand or verify a client certificate: the framework owns the listener's 
    certificate at all: an empty `VerifiedChains` means the caller is unidentified, not verified.
 6. **Independent of `server.forwardedclientcert`.** The two compose and neither changes the other.
    A proxy (Envoy, nginx) that authenticates to the application over mTLS while forwarding the end
-   client's certificate in a header is a legitimate and stronger posture: the mTLS leaf proves the
-   hop came from the trusted proxy, which is what makes the forwarded header trustworthy. The mTLS
-   leaf identifies the hop; the forwarded certificate identifies the end client; both are
+   client's certificate in a header is a legitimate and stronger posture, provided the proxy sets
+   the forwarded identity from the end-client certificate it verified and overwrites or strips any
+   caller-supplied copy: the mTLS leaf proves which proxy made the hop, not the header's content.
+   The mTLS leaf identifies the hop; the forwarded certificate identifies the end client; both are
    identification. Under that posture the leaf-validation hook sees the proxy's certificate, not the
    end client's, and a SAN or OU allowlist written for partners would reject the proxy.
 7. **The probe listener refuses only `require-verify`.** The internal probe listener's
