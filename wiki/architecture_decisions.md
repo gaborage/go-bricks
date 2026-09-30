@@ -1340,8 +1340,8 @@ integration round trip is what fails loudly if it stops holding). Publisher clos
 outstanding waiter with `ErrPublisherClosed`, because the client's `entityClosed` confirmations cannot
 reach a send that never enqueued. An outstanding-send limit, deduplication, key routing, sub-entry
 batching and compression stay deferred. The outbox relay to super streams has since shipped under
-[ADR-088](adr_088_outbox_ordered_leader_relay.md) (`outbox.superstreams`), with its stream-lane
-readiness pre-flight added by #1512. See [streams.md](streams.md).
+[ADR-088](adr_088_outbox_ordered_leader_relay.md) (`outbox.superstreams`); its readiness is checked
+per target producer inside `Ship`, not by a lane-wide pre-flight. See [streams.md](streams.md).
 
 ### [ADR-064: The App Validates Every Config It Is Handed](adr_064_app_validates_every_config.md)
 
