@@ -76,6 +76,7 @@ func tenantEntry(brokerURL string) config.TenantEntry {
 func registerOutboxOnApp(t *testing.T, cfg *config.Config, store app.TenantStore) error {
 	t.Helper()
 	opts := &app.Options{
+		ResourceSource: store,
 		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 			return probeReadyDB("postgresql"), nil
 		},
@@ -84,9 +85,6 @@ func registerOutboxOnApp(t *testing.T, cfg *config.Config, store app.TenantStore
 			client.ExpectClose(nil).Maybe()
 			return client
 		},
-	}
-	if store != nil {
-		opts.ResourceSource = store
 	}
 	a, _, err := app.NewWithConfig(cfg, opts)
 	require.NoError(t, err)
