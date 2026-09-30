@@ -82,7 +82,7 @@ func TestKeystoreModuleInitWithSecret(t *testing.T) {
 
 	got, err := m.store.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, secret, got)
+	assertSameSecretBytes(t, secret, got, "secret bytes differ")
 }
 
 func TestKeystoreModuleInitSecretBelowMinLengthFails(t *testing.T) {

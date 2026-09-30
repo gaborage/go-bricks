@@ -39,7 +39,12 @@ never the key itself.
 **Key material in a test assertion is reported by TYPE, never by value.** The rule
 generalizes past this helper: any assertion whose failure message can carry a key, a
 secret or a private-key struct renders it with `%T`, because testify prints the operand
-of a failed assertion and a test log is archived wherever CI keeps its output. Nothing
+of a failed assertion and a test log is archived wherever CI keeps its output.
+Equality assertions (`Equal`, `EqualValues`) on key material fall under the rule too,
+because a failed comparison renders both operands: a private key is compared with its
+own `Equal` (a private exponent with `big.Int.Cmp`), and secret bytes, DER or a
+password with `bytes.Equal` or string equality, each inside a boolean assertion whose
+message carries only types or lengths. Nothing
 enforces this — no check in `.golangci.yml` covers it — so violations are found by
 reading, not by tooling:
 `git grep -nE '(assert|require)\.(Nil|Empty|NotEmpty|Equal|Len)' -- '*_test.go' '*/testing/*.go'`

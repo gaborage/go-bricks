@@ -65,6 +65,13 @@ func assertNoKeyBytes(t *testing.T, data []byte) {
 	}
 }
 
+// assertSameSecretBytes compares key or secret bytes by value, reporting LENGTHS
+// only on a mismatch — never the bytes themselves (ADR-102).
+func assertSameSecretBytes(t *testing.T, want, got []byte, msg string) {
+	t.Helper()
+	assert.True(t, bytes.Equal(want, got), "%s: want %d bytes, got %d", msg, len(want), len(got))
+}
+
 func TestNewStoreWithFileSource(t *testing.T) {
 	privKey, pubKey := generateTestKeys(t)
 	dir := t.TempDir()
@@ -287,7 +294,7 @@ func TestLoadKeyBytesFromFile(t *testing.T) {
 
 	data, err := loadKeyBytes(config.KeySourceConfig{File: path}, "test", "public")
 	require.NoError(t, err)
-	assert.Equal(t, expected, data)
+	assertSameSecretBytes(t, expected, data, "loaded key bytes differ")
 }
 
 func TestLoadKeyBytesFromBase64(t *testing.T) {
@@ -296,7 +303,7 @@ func TestLoadKeyBytesFromBase64(t *testing.T) {
 
 	data, err := loadKeyBytes(config.KeySourceConfig{Value: b64}, "test", "public")
 	require.NoError(t, err)
-	assert.Equal(t, expected, data)
+	assertSameSecretBytes(t, expected, data, "loaded key bytes differ")
 }
 
 func TestLoadKeyBytesNeitherSet(t *testing.T) {
@@ -342,7 +349,7 @@ func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
 
 		data, err := loadKeyBytes(config.KeySourceConfig{File: path}, "test", "public")
 		require.NoError(t, err)
-		assert.Equal(t, expected, data)
+		assertSameSecretBytes(t, expected, data, "loaded key bytes differ")
 	})
 
 	t.Run("missing_plausible_path", func(t *testing.T) {
@@ -391,7 +398,7 @@ func TestNewStoreWithSecretFileSource(t *testing.T) {
 
 	got, err := s.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	assertSameSecretBytes(t, want, got, "secret bytes differ")
 }
 
 func TestNewStoreWithSecretBase64Source(t *testing.T) {
@@ -403,7 +410,7 @@ func TestNewStoreWithSecretBase64Source(t *testing.T) {
 
 	got, err := s.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	assertSameSecretBytes(t, want, got, "secret bytes differ")
 }
 
 func TestSecretReturnsDefensiveCopy(t *testing.T) {
@@ -419,7 +426,7 @@ func TestSecretReturnsDefensiveCopy(t *testing.T) {
 
 	second, err := s.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, want, second, "store must not be affected by caller mutation")
+	assertSameSecretBytes(t, want, second, "store must not be affected by caller mutation")
 }
 
 func TestNewStoreSecretBelowMinLength(t *testing.T) {
@@ -442,7 +449,7 @@ func TestNewStoreSecretAtFloorAdmitted(t *testing.T) {
 
 	got, err := s.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	assertSameSecretBytes(t, want, got, "secret bytes differ")
 }
 
 // TestNewStoreRaisedFloorRejectsDefaultLengthSecret: a set floor can only be
