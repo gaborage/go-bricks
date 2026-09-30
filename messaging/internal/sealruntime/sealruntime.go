@@ -90,9 +90,9 @@ type Spec interface {
 	EncryptLogical() string
 }
 
-// Sealer turns one event of a declared type into its sealed wire bytes.
+// Sealer turns one event of a declared type into its sealed wire bytes and the jti it signed.
 type Sealer interface {
-	Seal(ctx context.Context, evt any) ([]byte, error)
+	Seal(ctx context.Context, evt any) (data []byte, jti string, err error)
 }
 
 // TenantRule is the tid expectation for one delivery, derived by the consumer door from

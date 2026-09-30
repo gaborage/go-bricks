@@ -32,7 +32,7 @@ type (
 	SealTenancy = sealruntime.Tenancy
 	// SealKeyStore is the app.KeyStore subset sealing needs.
 	SealKeyStore = sealruntime.KeyStore
-	// Sealer turns one event into its sealed wire bytes.
+	// Sealer turns one event into its sealed wire bytes and the jti it signed.
 	Sealer = sealruntime.Sealer
 )
 

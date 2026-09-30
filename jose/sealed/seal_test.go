@@ -475,8 +475,9 @@ func TestSealReportsCryptoFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := testOptions(t)
 			opts.Keys = brokenKeys(t, tc.breakSign, tc.breakEncrypt)
-			wire, _, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
+			wire, jti, err := sealed.Seal(sampleEvent(), testSpec(t), opts)
 			assert.Nil(t, wire)
+			assert.Empty(t, jti)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, sealed.CodeSealFailed, jerr.Code)

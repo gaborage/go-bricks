@@ -137,7 +137,7 @@ var _ EventPublisher[struct{}] = (*Publisher[struct{}])(nil)
 // Safe for concurrent use: the handle is never written after construction and
 // the client receives a fresh copy of the declared headers on every call.
 func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) error {
-	data, err := h.encode(ctx, client, evt)
+	data, _, err := h.encode(ctx, client, evt)
 	if err != nil {
 		return err
 	}
@@ -145,13 +145,10 @@ func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) er
 	return h.publishBytes(ctx, client, data)
 }
 
-// Seal returns the sealed wire bytes for evt without publishing them — the outbox
-// lane persists them as-is (persisted-sealed, ADR-097) and the relay moves them
-// byte-identical. A plain T has nothing to seal: it returns ErrNotSealTagged, and the
-// event goes to the outbox as a struct payload the outbox already marshals.
-func (h *Publisher[T]) Seal(ctx context.Context, evt T) ([]byte, error) {
+// Seal returns evt's sealed wire bytes and the jti signed into them, without publishing.
+func (h *Publisher[T]) Seal(ctx context.Context, evt T) (data []byte, jti string, err error) {
 	if h.sealer == nil && h.sealErr == nil {
-		return nil, fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
+		return nil, "", fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
 	}
 	return h.encode(ctx, nil, evt)
 }
@@ -162,26 +159,26 @@ func (h *Publisher[T]) Seal(ctx context.Context, evt T) ([]byte, error) {
 // a disagreement refused — and carries the answer on the context, so the signed tid
 // and the x-tenant-id header always name the same tenant. Seal (no client) sees only
 // the context; the outbox lane stamps from the same context later.
-func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, error) {
+func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, string, error) {
 	if h.sealErr != nil {
-		return nil, h.sealErr
+		return nil, "", h.sealErr
 	}
 	if h.sealer != nil {
 		sealCtx, err := tenantForSeal(ctx, client)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		data, err := h.sealer.Seal(sealCtx, evt)
+		data, jti, err := h.sealer.Seal(sealCtx, evt)
 		if err != nil {
-			return nil, fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
+			return nil, "", fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
 		}
-		return data, nil
+		return data, jti, nil
 	}
 	data, err := json.Marshal(evt)
 	if err != nil {
-		return nil, fmt.Errorf("messaging: marshal %s event: %w", h.eventType, err)
+		return nil, "", fmt.Errorf("messaging: marshal %s event: %w", h.eventType, err)
 	}
-	return data, nil
+	return data, "", nil
 }
 
 // contentType is what this handle actually encoded: a compact JWS when T is

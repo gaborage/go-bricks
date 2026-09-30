@@ -192,8 +192,9 @@ func TestSealDocumentRejectsInvalidOptions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wire, _, err := sealed.SealDocument(sampleDocument(), tc.spec, tc.opts)
+			wire, jti, err := sealed.SealDocument(sampleDocument(), tc.spec, tc.opts)
 			assert.Nil(t, wire)
+			assert.Empty(t, jti)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
 			assert.Equal(t, tc.code, jerr.Code)
