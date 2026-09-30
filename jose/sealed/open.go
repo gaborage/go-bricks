@@ -277,12 +277,19 @@ type openedCore struct {
 	env       *Envelope
 }
 
-// openCore runs rules 1–10 and rule 12. It is shared so Open and OpenDocument refuse
-// identically and differ only in what they do with the plaintext at rule 11.
-func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
+// verifiedCore is what rules 1–9 and rule 10 up to the encrypt-family pin proved.
+type verifiedCore struct {
+	payload      []byte
+	span         subjectSpan
+	innerCompact string
+	inner        cryptoadapter.Header
+	env          *Envelope // EncKid is the pinned inner kid
+}
+
+// verifyCore runs rules 1–9 and rule 10 up to the encrypt-family pin; no encrypt key is resolved.
+func verifyCore(body []byte, spec *Spec, opts *OpenOptions) (*verifiedCore, error) {
 	compact := string(body)
 
-	// Rules 1–4 on the unauthenticated peek; rule 5 authenticates the header.
 	signKid, signFamily, signKey, err := peekOuter(compact, spec, opts.Keys)
 	if err != nil {
 		return nil, err
@@ -292,7 +299,6 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 		return nil, openError(5, ErrOpenFailed, CodeSignatureInvalid, "signature does not verify under the wire kid", nil)
 	}
 
-	// Rule 6 — authenticated slots (G7); rules 7–9 — the pins against the declaration.
 	slots, err := checkSlots(&hdr)
 	if err != nil {
 		return nil, err
@@ -301,7 +307,6 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 		return nil, pinErr
 	}
 
-	// Rule 10 — the payload document, the inner JWE's header, authorship, encrypt family, decrypt.
 	span, err := locateSubject(payload, spec.SubjectPath)
 	if err != nil {
 		return nil, openCause(10, CodePayloadUndecodable, fmt.Sprintf("cannot pin subject member %q", spec.SubjectPath), err)
@@ -310,21 +315,34 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 	if unquoteErr := json.Unmarshal(span.value, &innerCompact); unquoteErr != nil || !isCompactJOSE(innerCompact) {
 		return nil, openError(10, ErrOpenFailed, CodePayloadUndecodable, "subject member is not a compact JWE string", nil)
 	}
-	plaintext, encKid, err := openSubject(innerCompact, hdr.Kid, spec, opts.Keys)
+	inner, err := checkSubjectHeader(innerCompact, hdr.Kid, spec)
 	if err != nil {
 		return nil, err
 	}
 
-	// Rule 12 — the envelope. Every slot was validated by rule 6.
-	return &openedCore{payload: payload, span: span, plaintext: plaintext, env: &Envelope{
+	return &verifiedCore{payload: payload, span: span, innerCompact: innerCompact, inner: inner, env: &Envelope{
 		JTI:        slots.jti,
 		IssuedAt:   time.Unix(slots.issuedAt, 0).UTC(),
 		EventType:  slots.eventType,
 		TenantID:   slots.tenantID,
 		SignKid:    hdr.Kid,
 		SignFamily: signFamily,
-		EncKid:     encKid,
+		EncKid:     inner.Kid,
 	}}, nil
+}
+
+// openCore runs rules 1–10 and rule 12. It is shared so Open and OpenDocument refuse
+// identically and differ only in what they do with the plaintext at rule 11.
+func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
+	v, err := verifyCore(body, spec, opts)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := decryptSubject(v.innerCompact, &v.inner, opts.Keys)
+	if err != nil {
+		return nil, err
+	}
+	return &openedCore{payload: v.payload, span: v.span, plaintext: plaintext, env: v.env}, nil
 }
 
 // peekOuter runs rules 1–4 on the peeked, still unauthenticated protected header: the
@@ -513,36 +531,41 @@ func checkTenant(slots *authenticatedSlots, want TenantExpectation) error {
 	return nil
 }
 
-// openSubject is the inner half of rule 10: the JWE's protected header under G5 with the
-// outer codes and a layer=jwe detail, iss == the outer kid, the encrypt family pin, a
-// PRIVATE key for the Generation, then the decrypt itself.
-func openSubject(compact, outerKid string, spec *Spec, keys bricksjose.KeyResolver) (plaintext []byte, encKid string, err error) {
+// checkSubjectHeader is rule 10's key-free inner half: a compact JWE whose header passes G5
+// (outer codes, layer=jwe), whose iss equals the outer kid, and whose kid is a Generation
+// of the declared encrypt family.
+func checkSubjectHeader(compact, outerKid string, spec *Spec) (cryptoadapter.Header, error) {
 	inner, peekErr := cryptoadapter.PeekProtectedHeader(compact)
 	if peekErr != nil || strings.Count(compact, ".") != 4 {
-		return nil, "", openError(10, ErrOpenFailed, CodePayloadUndecodable, "subject member is not a compact JWE", nil)
+		return cryptoadapter.Header{}, openError(10, ErrOpenFailed, CodePayloadUndecodable, "subject member is not a compact JWE", nil)
 	}
 	algAllowed := inner.Alg == string(keyAlg) && inner.Enc == string(enc)
 	if policyErr := checkHeaderPolicy(10, &inner, algAllowed, layerJWE); policyErr != nil {
-		return nil, "", policyErr
+		return cryptoadapter.Header{}, policyErr
 	}
 	if iss, _ := inner.ExtraString(HeaderIssuer); iss != outerKid {
-		return nil, "", openError(10, ErrOpenFailed, CodeAuthorshipMismatch, "inner iss does not equal the outer kid", layerDetails(layerJWE))
+		return cryptoadapter.Header{}, openError(10, ErrOpenFailed, CodeAuthorshipMismatch, "inner iss does not equal the outer kid", layerDetails(layerJWE))
 	}
 	encFamily, _, ok := SplitGenerationKid(inner.Kid)
 	if !ok || encFamily != spec.EncryptLogical {
-		return nil, "", familyError(10, inner.Kid, spec.EncryptLogical, tagKeyEncrypt, layerJWE)
+		return cryptoadapter.Header{}, familyError(10, inner.Kid, spec.EncryptLogical, tagKeyEncrypt, layerJWE)
 	}
+	return inner, nil
+}
+
+// decryptSubject is the rest of rule 10: the PRIVATE key for the pinned inner kid, then the decrypt.
+func decryptSubject(compact string, inner *cryptoadapter.Header, keys bricksjose.KeyResolver) ([]byte, error) {
 	encKey, keyErr := keys.PrivateKey(inner.Kid)
 	if keyErr != nil {
-		return nil, "", unknownGenerationError(10, inner.Kid, tagKeyEncrypt, keyErr, layerJWE)
+		return nil, unknownGenerationError(10, inner.Kid, tagKeyEncrypt, keyErr, layerJWE)
 	}
-	plaintext, _, err = cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
+	plaintext, _, err := cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid: inner.Kid, AllowedKeyAlgs: openKeyAlgs, AllowedContentEnc: openContents,
 	})
 	if err != nil {
-		return nil, "", openError(10, ErrOpenFailed, CodeDecryptFailed, "subject does not decrypt under the wire encrypt kid", layerDetails(layerJWE))
+		return nil, openError(10, ErrOpenFailed, CodeDecryptFailed, "subject does not decrypt under the wire encrypt kid", layerDetails(layerJWE))
 	}
-	return plaintext, inner.Kid, nil
+	return plaintext, nil
 }
 
 // familyError is the sealer's checkFamily verdict (same sentinel, code and wording) at

@@ -691,3 +691,69 @@ func TestOpenRefusesReflectMismatchBeforeAnyKey(t *testing.T) {
 	require.Error(t, err)
 	assert.Zero(t, r.calls)
 }
+
+// recordingResolver records every key request in order, so a test pins where a door resolves each key.
+type recordingResolver struct {
+	keys  bricksjose.KeyResolver
+	calls []string
+}
+
+func (r *recordingResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
+	r.calls = append(r.calls, "public:"+kid)
+	return r.keys.PublicKey(kid)
+}
+
+func (r *recordingResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
+	r.calls = append(r.calls, "private:"+kid)
+	return r.keys.PrivateKey(kid)
+}
+
+// vectorBody returns the published body of the named vector, or the positive one for "positive".
+func vectorBody(t *testing.T, vf *vectorFile, name string) string {
+	t.Helper()
+	if name == "positive" {
+		return vf.Positive
+	}
+	for _, v := range vf.Vectors {
+		if v.Name == name {
+			return v.Body
+		}
+	}
+	require.Failf(t, "vector not found", "%s", name)
+	return ""
+}
+
+func TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin(t *testing.T) {
+	k := loadVectorKeys(t)
+	vf := loadVectors(t, k)
+	spec := testSpec(t)
+	doors := map[string]func(body []byte, opts *sealed.OpenOptions){
+		"open": func(body []byte, opts *sealed.OpenOptions) {
+			var evt paymentAuthorized
+			_, _ = sealed.Open(body, spec, opts, &evt)
+		},
+		"open_document": func(body []byte, opts *sealed.OpenOptions) {
+			_, _ = sealed.OpenDocument(body, spec, opts)
+		},
+	}
+	cases := []struct {
+		name string
+		want []string
+	}{
+		{name: "positive", want: []string{"public:" + vecSignKid, "private:" + vecEncKid}},
+		{name: "strip_and_resign_iss_differs", want: []string{"public:" + vecSignKidV1}},
+		{name: "inner_cross_family_kid", want: []string{"public:" + vecSignKid}},
+		{name: "inner_unprovisioned_generation", want: []string{"public:" + vecSignKid, "private:acme-core-enc-v9"}},
+	}
+	for doorName, door := range doors {
+		for _, tc := range cases {
+			t.Run(doorName+"/"+tc.name, func(t *testing.T) {
+				rec := &recordingResolver{keys: k.consumer}
+				opts := vectorOptions(k, nil)
+				opts.Keys = rec
+				door([]byte(vectorBody(t, vf, tc.name)), opts)
+				assert.Equal(t, tc.want, rec.calls)
+			})
+		}
+	}
+}
