@@ -40,6 +40,18 @@ type Inbox struct {
 // sealed door mints a Sealed key, so no string a publisher or consumer writes
 // can occupy a sealed message's ledger row, and a key retained from another
 // sealed delivery cannot occupy this one's.
+//
+// Deduplication is per service, not per consumer: the ledger is keyed on
+// (tenant, key) across the whole service. Two consumers in one service that
+// receive the same event id (one event fanned out to two queues) collide: only
+// the first runs fn; the other's call is a dedup hit that skips fn and returns
+// nil, so its delivery is acknowledged and never redelivered (#1362). For a
+// wire key, give each consumer its own key with
+// messaging.WireDedupKey("<consumer>_" + id); the composed id must still fit
+// the grammar [A-Za-z0-9_-], at most 128 bytes. A sealed key has no safe
+// workaround: rebuilding it as a wire key (for example from its jti) moves it
+// into the wire key space and reopens the shared-ledger suppression that
+// ADR-097 section 4 closes.
 func (i *Inbox) ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
 	if err := messaging.ValidateDedupKey(ctx, key); err != nil {
 		return fmt.Errorf("inbox: %w", err)

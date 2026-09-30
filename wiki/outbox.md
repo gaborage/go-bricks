@@ -136,6 +136,32 @@ PIN blocks may transit a sealed event, but PCI DSS forbids storing them after au
 regardless of encryption, and an outbox row *is* storage. Keep SAD out of any event that is
 outboxed; the framework's examples use PAN-class subjects only.
 
+## Inbox (Consumer Side)
+
+`inbox.NewModule()` is the outbox's consumer-side complement: `deps.Inbox.ProcessOnce(ctx, key, fn)`
+records a `messaging.DedupKey` in a ledger and runs `fn` in the same transaction, exactly once per
+key. A redelivery of an already-recorded key skips `fn` and returns nil. Take the key from
+`meta.DedupKey()` on a metadata-carrying typed consumer, or build one with
+`messaging.WireDedupKey(id)`.
+
+### Deduplication Scope
+
+**Deduplication is per service, not per consumer.** The ledger's primary key is
+`(tenant_id, event_id)` across the whole service; it has no consumer column. When the broker
+fans one event out to two queues that one service consumes, both deliveries carry the same key:
+only the first consumer runs its handler, and the second's `ProcessOnce` is a dedup hit that
+skips its handler and returns nil, so that delivery is acknowledged and nothing redelivers it
+(#1362).
+
+- **Wire keys — workaround:** give each consumer its own key with
+  `messaging.WireDedupKey("<consumer>_" + id)`. The composed id must still satisfy the ledger
+  grammar `^[A-Za-z0-9_-]{1,128}$`, so the prefix counts against the 128-byte bound;
+  `WireDedupKey` returns an error wrapping `messaging.ErrInvalidEventID` otherwise.
+- **Sealed keys — no safe workaround.** Do not rebuild a sealed event's key as a wire key (for
+  example from its `jti`). That moves it into the wire key space, which a publisher-written
+  header can spell, and reopens the shared-ledger suppression that
+  [ADR-097 §4](adr_097_sealed_amqp_messages.md#4-replay-and-redelivery-1307-g6-g7) closes.
+
 ## Trace Propagation
 
 Outbox publishes are **trace-equivalent to direct AMQP publishes**: the W3C trace
