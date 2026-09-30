@@ -11204,7 +11204,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   evt)`: two arguments, a context first) and `jose/sealed.Seal(evt, spec, opts)` /
   `SealDocument(doc, spec, opts)` now return three values. HTTP `jose.Seal(payload, policy,
   resolver)` is UNAFFECTED. A `RegisterSealCodec` hit means you registered your own codec, and
-  its sealer's `Seal(ctx, evt any)` must now return the `jti` too.
+  its sealer's `Seal(ctx, evt any)` must now return the `jti` too. Such a codec whose
+  `NewSealer`, `NewOpener` or `NewVerifier` returns `(nil, nil)` now fails loudly where it used
+  to fall open or panic: `NewSealer`/`NewOpener` fail the declaration at `Validate`, and
+  `NewVerifier` fails only `PublishSealed`.
 - scope: `Publisher[T].Seal(ctx, evt T) (data []byte, jti string, err error)` (was `([]byte,
   error)`). `jose/sealed.Seal` and `jose/sealed.SealDocument` return `(data []byte, jti string,
   err error)`. The seal-runtime seam's `messaging.Sealer` is `Seal(ctx context.Context, evt any)

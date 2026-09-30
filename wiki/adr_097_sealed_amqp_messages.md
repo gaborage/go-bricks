@@ -22,7 +22,10 @@
 > exhausted in-loop retries is a new seal and a new `jti`" is withdrawn for such producers.
 > Producer-owned sealed-bytes stores join the rotation drain gate, and sign-family step 5 removes
 > `v<N>` from the producer's keystore as well as every consumer's (both in
-> [sealing.md's rotation runbooks](sealing.md#rotation-runbooks)).
+> [sealing.md's rotation runbooks](sealing.md#rotation-runbooks)). §2's DIRECT-door paragraph
+> ("no exported symbol lets a module hand bytes to the broker", the outbox handoff as "the one
+> sanctioned bytes path") now has ADR-131's single exception: `Publisher[T].PublishSealed`,
+> valid only on a seal-tagged handle, which verifies the bytes before any broker I/O.
 >
 > **Amended (2026-09-16, #1634):** a sealed `DedupKey` must EQUAL the key bound to the delivery
 > in hand — value equality, not a capability token and not a comparison of delivery
