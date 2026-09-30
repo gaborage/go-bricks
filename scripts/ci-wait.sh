@@ -32,7 +32,13 @@ for _ in $(seq 20); do
   if gh run watch "$id" --interval 30 --exit-status; then
     exit 0
   fi
-  if [ "$(gh run view "$id" --json conclusion -q .conclusion)" != "cancelled" ]; then
+  conclusion=$(gh run view "$id" --json conclusion -q .conclusion) || conclusion=""
+  if [ -z "$conclusion" ]; then
+    echo "ci-wait: run $id has no conclusion yet (watch interrupted); retrying" >&2
+    sleep 30
+    continue
+  fi
+  if [ "$conclusion" != "cancelled" ]; then
     exit 1
   fi
   cancelled="$id"
