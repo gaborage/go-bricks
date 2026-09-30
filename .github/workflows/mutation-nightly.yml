@@ -15,7 +15,8 @@ concurrency:
 jobs:
   mutation-baseline:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    # A bridge under the 360-minute hosted-job cap; past it the run must get shorter.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v7
         with:
@@ -24,9 +25,16 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # GOCACHE grows to 9-12 GB here; saving it evicts CI's entries from the 10 GB cache.
+          cache: false
 
       - name: Run full-repo mutation baseline
         run: make mutate-baseline || echo "::warning::gremlins exited non-zero (advisory job)"
+
+      - name: Disk headroom after the baseline
+        if: always()
+        run: |
+          { echo '```'; df -h /; du -sh "$(go env GOCACHE)" 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish score summary
         if: always()
