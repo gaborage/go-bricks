@@ -183,6 +183,24 @@ type planModeInputs struct {
 	caller *answeringStore
 }
 
+// staticTenants spells the tenants, tenanturl and blankurl words: two static tenants, acme alone
+// with a messaging.url, or both with an all-whitespace one; nil when no word is on.
+func staticTenants(on map[string]bool) map[string]config.TenantEntry {
+	if !on["tenants"] && !on["tenanturl"] && !on["blankurl"] {
+		return nil
+	}
+	tenants := map[string]config.TenantEntry{"acme": {}, "globex": {}}
+	if on["tenanturl"] {
+		tenants["acme"] = config.TenantEntry{Messaging: config.TenantMessagingConfig{URL: "amqp://acme/"}}
+	}
+	if on["blankurl"] {
+		for id := range tenants {
+			tenants[id] = config.TenantEntry{Messaging: config.TenantMessagingConfig{URL: "  "}}
+		}
+	}
+	return tenants
+}
+
 func (m *planMode) inputs() planModeInputs {
 	on := map[string]bool{}
 	for _, word := range strings.Fields(m.spec) {
@@ -205,17 +223,7 @@ func (m *planMode) inputs() planModeInputs {
 		cfg.Messaging.Broker.URL = "amqp://broker/"
 	}
 	cfg.Cache.Enabled = on["cache"]
-	if on["tenants"] || on["tenanturl"] || on["blankurl"] {
-		cfg.Multitenant.Tenants = map[string]config.TenantEntry{"acme": {}, "globex": {}}
-	}
-	if on["tenanturl"] {
-		cfg.Multitenant.Tenants["acme"] = config.TenantEntry{Messaging: config.TenantMessagingConfig{URL: "amqp://acme/"}}
-	}
-	if on["blankurl"] {
-		for id := range cfg.Multitenant.Tenants {
-			cfg.Multitenant.Tenants[id] = config.TenantEntry{Messaging: config.TenantMessagingConfig{URL: "  "}}
-		}
-	}
+	cfg.Multitenant.Tenants = staticTenants(on)
 
 	var opts *Options
 	var caller *answeringStore
