@@ -101,9 +101,9 @@ func installDeferredResolverClock(t *testing.T, v *Verifier, clock *fakeClock) *
 
 // newDeferredVerifier builds a verifier with a deferred key set over srv, which
 // the caller has already put into a failing mode, and registers its Close.
-func newDeferredVerifier(t *testing.T, srv *authtesting.JWKSServer, log logger.Logger, mp metric.MeterProvider) *Verifier {
+func newDeferredVerifier(t *testing.T, srv *authtesting.JWKSServer, log logger.Logger) *Verifier {
 	t.Helper()
-	v, err := NewVerifier(jwksConfig(srv), log, mp, jwksClient(t, srv), WithDeferredKeySet())
+	v, err := NewVerifier(jwksConfig(srv), log, nil, jwksClient(t, srv), WithDeferredKeySet())
 	require.NoError(t, err)
 	require.NotNil(t, v)
 	t.Cleanup(func() { require.NoError(t, v.Close()) })
@@ -410,7 +410,7 @@ func TestNewVerifierIgnoresANilJWKSOption(t *testing.T) {
 func TestDeferredKeySetAnswersUnavailableNeverUnknownKid(t *testing.T) {
 	srv := newJWKSFixture(t)
 	srv.SetMode(authtesting.JWKSServerError)
-	v := newDeferredVerifier(t, srv, nil, nil)
+	v := newDeferredVerifier(t, srv, nil)
 	clock := newFakeClock()
 	r := installDeferredResolverClock(t, v, clock)
 
@@ -421,7 +421,7 @@ func TestDeferredKeySetAnswersUnavailableNeverUnknownKid(t *testing.T) {
 		_, err := r.PublicKey(context.Background(), kid)
 
 		require.ErrorIs(t, err, ErrKeySetUnavailable)
-		assert.NotErrorIs(t, err, ErrKidUnknown)
+		require.NotErrorIs(t, err, ErrKidUnknown)
 		assert.Equal(t, before+1, srv.RequestCount(), "the lookup must have attempted a refresh that failed")
 	}
 	_, err := v.Verify(context.Background(), srv.Issuer().Mint(authtesting.Claims{}))
@@ -431,7 +431,7 @@ func TestDeferredKeySetAnswersUnavailableNeverUnknownKid(t *testing.T) {
 func TestMiddlewareAnswers503WithTheRefreshFloorWhileTheKeySetIsDeferred(t *testing.T) {
 	srv := newJWKSFixture(t)
 	srv.SetMode(authtesting.JWKSServerError)
-	v := newDeferredVerifier(t, srv, nil, nil)
+	v := newDeferredVerifier(t, srv, nil)
 
 	run := runWithCredential(t, v, srv.Issuer().Mint(authtesting.Claims{}))
 
@@ -446,7 +446,7 @@ func TestMiddlewareAnswers503WithTheRefreshFloorWhileTheKeySetIsDeferred(t *test
 func TestDeferredKeySetFetchesOnTheFirstLookupThenRateFloors(t *testing.T) {
 	srv := newJWKSFixture(t)
 	srv.SetMode(authtesting.JWKSServerError)
-	v := newDeferredVerifier(t, srv, nil, nil)
+	v := newDeferredVerifier(t, srv, nil)
 	r := installDeferredResolverClock(t, v, newFakeClock())
 	require.Equal(t, 1, srv.RequestCount(), "construction attempts exactly one fetch")
 	srv.SetMode(authtesting.JWKSHealthy)
@@ -468,7 +468,7 @@ func TestDeferredKeySetLogsOneWarnAndOneInfo(t *testing.T) {
 	srv := newJWKSFixture(t)
 	srv.SetMode(authtesting.JWKSServerError)
 	log, sink := newBufferLogger()
-	v := newDeferredVerifier(t, srv, log, nil)
+	v := newDeferredVerifier(t, srv, log)
 	clock := newFakeClock()
 	r := installDeferredResolverClock(t, v, clock)
 	credential := srv.Issuer().Mint(authtesting.Claims{})
@@ -525,7 +525,7 @@ func TestDeferredKeySetAnnouncesAFillFromTheTicker(t *testing.T) {
 func TestNewVerifierWithDeferredKeySetSurvivesANilLogger(t *testing.T) {
 	srv := newJWKSFixture(t)
 	srv.SetMode(authtesting.JWKSServerError)
-	v := newDeferredVerifier(t, srv, nil, nil)
+	v := newDeferredVerifier(t, srv, nil)
 	srv.SetMode(authtesting.JWKSHealthy)
 
 	_, err := v.Verify(context.Background(), srv.Issuer().Mint(authtesting.Claims{}))
@@ -539,7 +539,7 @@ func TestNewVerifierWithDeferredKeySetSurvivesANilLogger(t *testing.T) {
 func TestNewVerifierWithDeferredKeySetBehavesAsDefaultOnSuccess(t *testing.T) {
 	srv := newJWKSFixture(t)
 	log, sink := newBufferLogger()
-	v := newDeferredVerifier(t, srv, log, nil)
+	v := newDeferredVerifier(t, srv, log)
 	r := v.owned
 
 	_, err := v.Verify(context.Background(), srv.Issuer().Mint(authtesting.Claims{}))
