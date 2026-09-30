@@ -11081,6 +11081,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - verify: boot; the outbox registers and its relay publishes through the store's broker.
 - ref: [ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md) · `outbox/module.go`
   (`checkPerTenantLedgerBroker`)
+
 ### [C70.12] a 2xx the JOSE transport rejects is not retried, and an over-cap body reads as `ValidationError` · silent-behavior · when: match
 
 - detect: `git grep -nE 'WithJOSE[(]|JOSETransport[{]' -- '*.go'` shortlists every JOSE transport;
