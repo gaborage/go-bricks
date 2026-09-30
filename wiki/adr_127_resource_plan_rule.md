@@ -8,6 +8,10 @@ set), [ADR-066](adr_066_readiness_one_module.md) rule 1 (who reports `per_tenant
 and under `messaging.tenancy: shared`), [ADR-126](adr_126_resource_plan.md) (the drift ledger, and
 "the plan never asks a store")
 
+> **Amended (2026-09-29, [ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md)):** the
+> outbox's #366 broker check for a per-tenant ledger reads `ModuleDeps.MessagingConfigured`, the
+> plan's answer, instead of root config; the inbox has no broker check.
+
 ## Context
 
 ADR-126 put every startup decision about the database, messaging and cache kinds behind one
@@ -133,9 +137,11 @@ Every flip, by deployment mode (ST single-tenant, MT multi-tenant; "built-in" is
   poll; it still reads `per_tenant`.
 - **Unchanged:** every MT per-tenant answer for the database and messaging, every flag under MT
   except shared messaging's, the INFO and WARN texts, the Builder's step names.
-- **Unchanged:** the outbox and inbox #366 broker checks still read only root config, so with a
-  static caller store serving the broker and an empty root messaging block, outbox Init still
-  aborts where the app now boots (#1853).
+- **Unchanged:** the outbox #366 broker check still read only root config, so with a static
+  caller store serving the broker and an empty root messaging block, outbox Init still aborted
+  where the app now boots (#1853). The inbox has no broker check: it discards the messaging
+  resolver. *(Amended by ADR-128: a per-tenant-ledger outbox now reads
+  `ModuleDeps.MessagingConfigured`, the plan's answer; the shared ledger still reads root config.)*
 
 The amended ADRs:
 

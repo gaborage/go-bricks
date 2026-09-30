@@ -2077,6 +2077,22 @@ answer for `""` is what counts.
 
 ---
 
+### [ADR-128: The Outbox Broker Check Reads the Resource Plan](adr_128_outbox_broker_check_reads_the_resource_plan.md)
+
+**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false, so multi-tenant `messaging.tenancy: shared` without a control-plane broker (stream-only outboxes included) and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag
+
+The outbox's #366 broker check rebuilt its answer from root config, so since ADR-127 it disagreed
+with the Resource plan both ways: multi-tenant shared messaging with no root broker booted while
+every relay resolve failed (#1853), and a caller store serving `""` beside an empty root block, or a
+single-tenant dynamic store, was refused. The per-tenant ledger now reads
+`ModuleDeps.MessagingConfigured`, runs its fan-out guard first, and names the tenants' broker or the
+control-plane one by where messaging resolves; the shared ledger is unchanged. Amends ADR-127. See
+[migrations.md](migrations.md) `[C70.7]`, `[C70.8]`.
+
+**Key Benefits:** the outbox and the app answer "can this relay publish?" from the same store.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2847,7 +2863,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-127) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-128) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
