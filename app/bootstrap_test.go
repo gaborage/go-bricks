@@ -1087,7 +1087,9 @@ func TestDependenciesClosesManagersOnCacheConstructionFailure(t *testing.T) {
 // TestMarkConfiguredMirrorsRootResolver pins the contract behind the three flags: for a
 // static single-tenant config a false flag coincides exactly with the framework's own root
 // resolver answering that kind with not_configured, and every mode that resolves per key at
-// runtime reads true, so a flag is never false while the accessor could still succeed.
+// runtime reads true, so a flag is never false while the accessor could still succeed. The one
+// multi-tenant false is per-tenant messaging on the built-in store where no static tenant sets
+// messaging.url: every tenant's accessor fails there (#1853).
 // ControlPlaneMessagingAbsent follows "" alone, whatever the Tenancy.
 func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 	withCfg := func(mutate func(*config.Config)) *config.Config {
@@ -1122,6 +1124,11 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 			name: "multi_tenant_reads_true_for_every_kind", cfg: withCfg(func(c *config.Config) { c.Multitenant.Enabled = true }),
 			wantDB: true, wantMessaging: true, wantCache: true, wantMsgAbsent: true,
 		},
+		{name: "static_tenants_without_a_messaging_url_read_false", cfg: withCfg(func(c *config.Config) {
+			c.Multitenant.Enabled = true
+			c.Messaging.Tenancy = config.TenancyPerTenant
+			c.Multitenant.Tenants = map[string]config.TenantEntry{"acme": {}}
+		}), wantDB: true, wantCache: true, wantMsgAbsent: true},
 		{
 			name: "dynamic_resource_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }),
 			opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}}, wantDB: true, wantMessaging: true, wantCache: true,

@@ -100,7 +100,8 @@ func closeManagersOnDependencyError(dbManager *database.DbManager, messagingMana
 func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
 	resolver := newFactoryResolverForConfig(b.opts, b.cfg)
 	resourceSource := resolver.ResourceSource(b.cfg)
-	plan, err := planResources(startupCtx, b.cfg, b.opts, resourceSource)
+	builtInStore := b.opts == nil || b.opts.ResourceSource == nil
+	plan, err := planResources(startupCtx, b.cfg, b.opts, resourceSource, builtInStore)
 	if err != nil {
 		return nil, err
 	}
