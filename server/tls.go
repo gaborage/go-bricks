@@ -11,10 +11,9 @@ import (
 // buildServerTLSConfig loads the configured PEM material into a *tls.Config
 // with a TLS 1.2 floor and, when server.tls.clientauth is set, client
 // certificates verified against the client-CA bundle (ADR-130). It is only
-// called when cfg.Enabled is true. Reading the
-// filesystem happens here, at Start() time — not in config validation — so a
-// bad or unreadable path still fails fast, just one hop later than a purely
-// structural check could.
+// called when cfg.Enabled is true. Reading the filesystem happens here, at
+// Start() time — not in config validation — so a bad or unreadable path still
+// fails fast, just one hop later than a purely structural check could.
 func buildServerTLSConfig(cfg *config.ServerTLSConfig) (*tls.Config, error) {
 	certPEM, err := loadPEM(cfg.CertFile, cfg.CertValue, "cert")
 	if err != nil {
@@ -88,9 +87,10 @@ func parseClientAuth(v string) (tls.ClientAuthType, error) {
 
 // loadPEM reads one piece of PEM material from a file path or a
 // base64-encoded value, delegating to secretfile.LoadPEM (shared with
-// httpclient's loader, httpclient/tls.go). The server always requires both
-// cert and key, so — unlike the client's optional-CA case — neither source
-// set is an error here rather than a valid nil state.
+// httpclient's loader, httpclient/tls.go). Every piece it loads is required
+// (the cert, the key, and the client CA under a verifying policy), so —
+// unlike the client's optional-CA case — neither source set is an error here
+// rather than a valid nil state.
 func loadPEM(file, value, what string) ([]byte, error) {
 	data, err := secretfile.LoadPEM("server: tls:", file, value, what)
 	if err != nil {

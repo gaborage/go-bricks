@@ -457,9 +457,7 @@ func TestServerStartRefusesATLSLeafThePinCannotVerify(t *testing.T) {
 		name string
 		edit func(*x509.Certificate)
 	}{
-		{name: "client_auth_only", edit: func(leaf *x509.Certificate) {
-			leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-		}},
+		{name: "client_auth_only", edit: clientAuthLeaf},
 		{name: "not_yet_valid", edit: func(leaf *x509.Certificate) {
 			leaf.NotBefore = time.Now().Add(time.Hour)
 			leaf.NotAfter = time.Now().Add(2 * time.Hour)

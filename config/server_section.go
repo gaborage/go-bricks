@@ -258,11 +258,6 @@ func validateServerTLS(cfg *ServerTLSConfig) error {
 	return validateServerTLSClientAuth(cfg)
 }
 
-const (
-	serverTLSEnabledCondition    = "server.tls.enabled is true"
-	serverTLSClientAuthCondition = "server.tls.clientauth is set"
-)
-
 // validateServerTLSClientAuth checks the client-verification keys of an
 // enabled listener: the policy is off or one of the two verifying values
 // (the stdlib's unverified request/require modes are refused), a verifying

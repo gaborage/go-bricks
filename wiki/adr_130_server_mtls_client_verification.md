@@ -50,10 +50,11 @@ way to demand or verify a client certificate: the framework owns the listener's 
    leaf identifies the hop; the forwarded certificate identifies the end client; both are
    identification. Under that posture the leaf-validation hook sees the proxy's certificate, not the
    end client's, and a SAN or OU allowlist written for partners would reject the proxy.
-7. **The probe listener refuses only `require-verify`.** The internal probe listener's
-   application-listener check (ADR-120) dials with no client certificate. Under `require-verify`
-   every such handshake fails and `/ready` would stay 503 forever, so `require-verify` beside
-   `server.probes.port > 0` is a startup error naming both keys. `verify` beside the probe listener
+7. **The probe listener will refuse only `require-verify`** (decided; ships in a later change).
+   The internal probe listener's application-listener check (ADR-120) dials with no client
+   certificate. Under `require-verify` every such handshake fails and `/ready` would stay 503
+   forever, so `require-verify` beside `server.probes.port > 0` becomes a startup error naming both
+   keys. `verify` beside the probe listener
    is allowed: a handshake with no client certificate completes under `VerifyClientCertIfGiven`.
 
 **To follow (not in this change):** a leaf-validation hook (SAN/OU allowlists) passed through

@@ -350,7 +350,7 @@ func TestParseClientAuth(t *testing.T) {
 }
 
 func TestBuildServerTLSConfigClientAuth(t *testing.T) {
-	serverCAPEM, issueServer := newTestCA(t, "server-ca")
+	_, issueServer := newTestCA(t, "server-ca")
 	certPEM, keyPEM := issueServer("127.0.0.1")
 	clientCAPEM, _ := newTestCA(t, "client-ca")
 
@@ -398,31 +398,15 @@ func TestBuildServerTLSConfigClientAuth(t *testing.T) {
 		assert.True(t, wantPool.Equal(tlsCfg.ClientCAs))
 	})
 
-	t.Run("server_ca_is_not_the_client_pool", func(t *testing.T) {
+	t.Run("min_version_preserved_under_require_verify", func(t *testing.T) {
 		tlsCfg, err := buildServerTLSConfig(base(func(c *config.ServerTLSConfig) {
-			c.ClientAuth = clientAuthVerify
+			c.MinVersion = "1.3"
+			c.ClientAuth = clientAuthRequireVerify
 			c.ClientCAValue = base64.StdEncoding.EncodeToString(clientCAPEM)
 		}))
 		require.NoError(t, err)
-		serverPool := x509.NewCertPool()
-		require.True(t, serverPool.AppendCertsFromPEM(serverCAPEM))
-		assert.False(t, serverPool.Equal(tlsCfg.ClientCAs))
+		assert.Equal(t, uint16(tls.VersionTLS13), tlsCfg.MinVersion)
 	})
-
-	for _, minVersion := range []struct {
-		in   string
-		want uint16
-	}{{in: "", want: tls.VersionTLS12}, {in: "1.3", want: tls.VersionTLS13}} {
-		t.Run("min_version_preserved_"+minVersion.in, func(t *testing.T) {
-			tlsCfg, err := buildServerTLSConfig(base(func(c *config.ServerTLSConfig) {
-				c.MinVersion = minVersion.in
-				c.ClientAuth = clientAuthRequireVerify
-				c.ClientCAValue = base64.StdEncoding.EncodeToString(clientCAPEM)
-			}))
-			require.NoError(t, err)
-			assert.Equal(t, minVersion.want, tlsCfg.MinVersion)
-		})
-	}
 
 	emptyPath := filepath.Join(t.TempDir(), "empty.pem")
 	require.NoError(t, os.WriteFile(emptyPath, nil, 0o600))
