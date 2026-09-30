@@ -42,6 +42,10 @@ type Module struct {
 	// deps.Messaging: false means every call would fail. Read only by the per-tenant ledger.
 	messagingConfigured bool
 
+	// controlPlaneMessagingAbsent is ModuleDeps.ControlPlaneMessagingAbsent: "" is known to hold
+	// no broker. Read only by the shared ledger, whose relay publishes on "".
+	controlPlaneMessagingAbsent bool
+
 	// sharedDB/sharedMsg are the control-plane ("" key) resolvers injected by
 	// app.RegisterModule. Used only when outbox.tenancy=shared.
 	sharedDB  func(context.Context) (dbtypes.Interface, error)
@@ -91,6 +95,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.getDB = deps.DB
 	m.getMsg = deps.Messaging
 	m.messagingConfigured = deps.MessagingConfigured
+	m.controlPlaneMessagingAbsent = deps.ControlPlaneMessagingAbsent
 
 	if m.config != nil {
 		m.cfg = m.config.Outbox
@@ -237,15 +242,16 @@ func (m *Module) checkPerTenantLedgerBroker() error {
 		"(or env MESSAGING_BROKER_URL), have the custom resource source answer \"\" with a broker, or set outbox.enabled=false")
 }
 
-// checkSharedLedgerBroker refuses a shared ledger with a static source when the root
-// messaging.broker.url is empty: the shared relay publishes on the control-plane broker.
-// A dynamic source resolves "" at runtime, so it is exempt (relay outage errors stay
-// visible). Never reads MessagingConfigured, which speaks for deps.Messaging, not the shared resolver.
+// checkSharedLedgerBroker refuses a shared ledger when the Resource plan found the
+// control-plane key "" holding no broker (ModuleDeps.ControlPlaneMessagingAbsent): the shared
+// relay publishes on "" whatever messaging.tenancy says, so every publish would fail. The
+// store serving "" decides, not root config or source.type (ADR-128). Never reads
+// MessagingConfigured, which speaks for deps.Messaging, not the shared resolver.
 func (m *Module) checkSharedLedgerBroker() error {
-	if m.config != nil && !config.IsMessagingConfigured(&m.config.Messaging) && m.config.Source.Type != config.SourceTypeDynamic {
-		return errors.New("outbox: tenancy=shared with a static source requires the root " +
-			"messaging.broker.url (the shared relay publishes on the control-plane broker); " +
-			"set messaging.broker.url or use a dynamic source that resolves the \"\" key")
+	if m.controlPlaneMessagingAbsent {
+		return errors.New("outbox: tenancy=shared publishes on the control-plane key \"\", which holds no broker " +
+			"(ModuleDeps.ControlPlaneMessagingAbsent is true); set the root messaging.broker.url (or env MESSAGING_BROKER_URL), " +
+			"have the custom resource source answer \"\" with a broker, or set outbox.enabled=false")
 	}
 	return nil
 }

@@ -94,6 +94,10 @@ func (k kindPlan) unavailable() bool {
 	return k.resolvesOnControlPlane() && k.presence == keyAbsent
 }
 
+// controlPlaneAbsent: "" is known absent, whatever the Tenancy. For
+// ModuleDeps.ControlPlaneMessagingAbsent, which a shared-ledger outbox reads (ADR-128).
+func (k kindPlan) controlPlaneAbsent() bool { return k.presence == keyAbsent }
+
 // preInits: lease "" at build under app.startup.<kind>, because the kind resolves on "" and ""
 // is known present. Whether a failure is fatal stays the slot's preInitFatal.
 func (k kindPlan) preInits() bool {

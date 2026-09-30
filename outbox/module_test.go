@@ -784,19 +784,39 @@ func TestModuleInitSharedTenancyRejectsStaticTenants(t *testing.T) {
 		"shared tenancy resolves the root \"\" key, which static tenant mode forbids")
 }
 
+// TestModuleInitSharedTenancyStaticSourceRequiresRootMessaging pins the shared-ledger broker
+// arm (ADR-128): the plan found "" holding no broker, so Init refuses. The shared database is
+// probe-ready, so removing the arm makes Init succeed rather than fail on the probe.
 func TestModuleInitSharedTenancyStaticSourceRequiresRootMessaging(t *testing.T) {
 	m := NewModule()
-	m.SetSharedResolvers(stubSharedDB, stubSharedMsg)
+	m.SetSharedResolvers(probeReadySharedDB, stubSharedMsg)
 	deps := sharedTenancyDeps(&config.Config{
 		Outbox: config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
-		// Multitenant intentionally disabled — a static source is the default in
-		// single-tenant mode, and the root messaging.broker.url is still empty.
 	})
+	deps.ControlPlaneMessagingAbsent = true
 
 	err := m.Init(deps)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "root",
-		"shared tenancy with a static source must require the root messaging.broker.url")
+	assert.Contains(t, err.Error(), "publishes on the control-plane key")
+	assert.Contains(t, err.Error(), "root messaging.broker.url")
+	assert.NotContains(t, err.Error(), "dynamic source")
+}
+
+// TestModuleInitSharedTenancyControlPlaneMessagingNotKnownAbsentBoots pins the lenient zero
+// value: a static-source shared ledger with an empty root block boots unless the plan says ""
+// holds no broker — root config no longer decides.
+func TestModuleInitSharedTenancyControlPlaneMessagingNotKnownAbsentBoots(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(probeReadySharedDB, stubSharedMsg)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox: config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+	})
+
+	require.NoError(t, m.Init(deps))
+}
+
+func probeReadySharedDB(context.Context) (dbtypes.Interface, error) {
+	return probeReadyDB("postgresql"), nil
 }
 
 func TestRegisterJobsSharedTenancySinglePass(t *testing.T) {

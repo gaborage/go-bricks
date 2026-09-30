@@ -1102,20 +1102,25 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 		wantDB        bool
 		wantMessaging bool
 		wantCache     bool
+		wantMsgAbsent bool // ControlPlaneMessagingAbsent: "" known to hold no broker, whatever the Tenancy
 		crossCheck    bool // static single-tenant: the flags must agree with config.TenantStore
 	}{
-		{name: "nothing_configured", cfg: &config.Config{}, crossCheck: true},
-		{name: "database_only", cfg: withCfg(func(c *config.Config) { c.Database.Host = "localhost" }), wantDB: true, crossCheck: true},
+		{name: "nothing_configured", cfg: &config.Config{}, wantMsgAbsent: true, crossCheck: true},
+		{name: "database_only", cfg: withCfg(func(c *config.Config) { c.Database.Host = "localhost" }), wantDB: true, wantMsgAbsent: true, crossCheck: true},
 		{name: "messaging_only", cfg: withCfg(func(c *config.Config) { c.Messaging.Broker.URL = "amqp://localhost" }), wantMessaging: true, crossCheck: true},
-		{name: "cache_enabled", cfg: withCfg(func(c *config.Config) { c.Cache.Enabled = true }), wantCache: true, crossCheck: true},
-		{name: "cache_host_without_enabled_stays_false", cfg: withCfg(func(c *config.Config) { c.Cache.Redis.Host = "localhost" }), crossCheck: true},
+		{name: "cache_enabled", cfg: withCfg(func(c *config.Config) { c.Cache.Enabled = true }), wantCache: true, wantMsgAbsent: true, crossCheck: true},
+		{name: "cache_host_without_enabled_stays_false", cfg: withCfg(func(c *config.Config) { c.Cache.Redis.Host = "localhost" }), wantMsgAbsent: true, crossCheck: true},
 		// DBConfigured speaks for DB only: a named database resolves through databases.<name>,
 		// not the root block, so this deliberately reads false while DBByName would succeed.
-		{name: "named_database_without_root_reads_false", crossCheck: true, cfg: withCfg(func(c *config.Config) {
+		{name: "named_database_without_root_reads_false", wantMsgAbsent: true, crossCheck: true, cfg: withCfg(func(c *config.Config) {
 			c.Databases = map[string]config.DatabaseConfig{"legacy": {Host: "localhost"}}
 		})},
-		{name: "custom_cache_connector_is_wired", cfg: &config.Config{}, opts: &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}, wantCache: true},
-		{name: "multi_tenant_reads_true_for_every_kind", cfg: withCfg(func(c *config.Config) { c.Multitenant.Enabled = true }), wantDB: true, wantMessaging: true, wantCache: true},
+		{name: "custom_cache_connector_is_wired", cfg: &config.Config{}, opts: &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}, wantCache: true, wantMsgAbsent: true},
+		// messaging.tenancy: per-tenant with no root broker: MessagingConfigured reads true while "" holds no broker.
+		{
+			name: "multi_tenant_reads_true_for_every_kind", cfg: withCfg(func(c *config.Config) { c.Multitenant.Enabled = true }),
+			wantDB: true, wantMessaging: true, wantCache: true, wantMsgAbsent: true,
+		},
 		{
 			name: "dynamic_resource_source_reads_true", cfg: withCfg(func(c *config.Config) { c.Source.Type = config.SourceTypeDynamic }),
 			opts: &Options{ResourceSource: &dynamicResourceSource{dynamic: true}}, wantDB: true, wantMessaging: true, wantCache: true,
@@ -1137,6 +1142,7 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 			assert.Equal(t, tt.wantDB, deps.DBConfigured, "DBConfigured")
 			assert.Equal(t, tt.wantMessaging, deps.MessagingConfigured, "MessagingConfigured")
 			assert.Equal(t, tt.wantCache, deps.CacheConfigured, "CacheConfigured")
+			assert.Equal(t, tt.wantMsgAbsent, deps.ControlPlaneMessagingAbsent, "ControlPlaneMessagingAbsent")
 
 			if !tt.crossCheck {
 				return
@@ -1147,6 +1153,7 @@ func TestMarkConfiguredMirrorsRootResolver(t *testing.T) {
 			assert.Equal(t, !tt.wantDB, config.IsNotConfigured(dbErr), "DB flag must mirror the root resolver")
 			_, msgErr := store.BrokerURL(ctx, "")
 			assert.Equal(t, !tt.wantMessaging, config.IsNotConfigured(msgErr), "Messaging flag must mirror the root resolver")
+			assert.Equal(t, tt.wantMsgAbsent, config.IsNotConfigured(msgErr), "ControlPlaneMessagingAbsent must mirror the root resolver")
 			_, cacheErr := store.CacheConfig(ctx, "")
 			assert.Equal(t, !tt.wantCache, config.IsNotConfigured(cacheErr), "Cache flag must mirror the root resolver")
 		})

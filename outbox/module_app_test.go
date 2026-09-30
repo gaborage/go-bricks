@@ -94,8 +94,8 @@ func registerOutboxOnApp(t *testing.T, cfg *config.Config, store app.TenantStore
 
 // TestModuleInitBrokerCheckReadsTheResourcePlan drives the #366 broker check through a real
 // App (ADR-128): the per-tenant ledger refuses exactly when the Resource plan finds messaging
-// unavailable, whatever the root messaging block says; the shared ledger still reads root
-// config.
+// unavailable, and the shared ledger exactly when "" is known to hold no broker, whatever the
+// root messaging block says.
 func TestModuleInitBrokerCheckReadsTheResourcePlan(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -155,6 +155,38 @@ func TestModuleInitBrokerCheckReadsTheResourcePlan(t *testing.T) {
 				cfg.Outbox.Tenancy = config.TenancyShared
 			},
 			want: []string{"root"},
+		},
+		{
+			name:  "shared_ledger_st_caller_store_serving_root_empty_root_boots",
+			setup: func(cfg *config.Config) { cfg.Outbox.Tenancy = config.TenancyShared },
+			store: &planStore{servesRoot: true},
+		},
+		{
+			name: "shared_ledger_st_caller_store_not_serving_root_root_broker_refuses",
+			setup: func(cfg *config.Config) {
+				cfg.Outbox.Tenancy = config.TenancyShared
+				cfg.Messaging.Broker.URL = "amqp://root/"
+			},
+			store: &planStore{},
+			want:  []string{"root"},
+		},
+		{
+			name: "shared_ledger_mt_shared_messaging_zero_tenants_caller_store_serving_root_boots",
+			setup: func(cfg *config.Config) {
+				withMultitenant(cfg, config.TenancyShared, nil)
+				cfg.Outbox.Tenancy = config.TenancyShared
+			},
+			store: &planStore{servesRoot: true},
+		},
+		{
+			name: "shared_ledger_mt_per_tenant_messaging_zero_tenants_caller_store_not_serving_root_root_broker_refuses",
+			setup: func(cfg *config.Config) {
+				withMultitenant(cfg, config.TenancyPerTenant, nil)
+				cfg.Outbox.Tenancy = config.TenancyShared
+				cfg.Messaging.Broker.URL = "amqp://root/"
+			},
+			store: &planStore{},
+			want:  []string{"root"},
 		},
 	}
 	for _, tt := range tests {
