@@ -11147,11 +11147,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C70.11] per-tenant messaging with no tenant broker is unavailable on the built-in store · breaking · when: match
 
-- detect: `git grep -nE 'MESSAGING_TENANCY|tenancy: *per-tenant' -- '*.yaml' '*.yml' '*.env'` beside
-  `multitenant.enabled: true` (`messaging.tenancy` defaults to `per-tenant`), with no
-  `app.Options.ResourceSource` in code (`git grep -n 'ResourceSource' -- '*.go'`); then read every
+- detect: candidates are every multi-tenant deployment,
+  `git grep -nE 'multitenant:|MULTITENANT_ENABLED' -- '*.yaml' '*.yml' '*.env'`, because
+  `messaging.tenancy` defaults to `per-tenant` and is usually omitted. Keep a candidate when its
+  effective `multitenant.enabled` is true, its effective `messaging.tenancy` (env
+  `MESSAGING_TENANCY`) is not `shared`, it lists at least one static tenant, and its code passes no
+  `app.Options.ResourceSource` (`git grep -n 'ResourceSource' -- '*.go'`). Then read every
   environment's `multitenant.tenants.<id>.messaging.url` (env
-  `MULTITENANT_TENANTS_<ID>_MESSAGING_URL`).
+  `MULTITENANT_TENANTS_<ID>_MESSAGING_URL`): the atom applies when none is set.
 - scope: config validation lets every static tenant omit `messaging.url` (all or none), and then
   every `deps.Messaging` call with a tenant in context fails with `config_missing`, yet the
   Resource plan read messaging available: `MessagingConfigured` was true, a per-tenant-ledger
