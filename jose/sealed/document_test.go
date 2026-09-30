@@ -485,13 +485,7 @@ func TestOpenDocumentAcceptsWhatOpenRefusesOnlyForItsType(t *testing.T) {
 	k := loadVectorKeys(t)
 	vf := loadVectors(t, k)
 
-	var tc vector
-	for _, v := range vf.Vectors {
-		if v.Name == "opened_document_wrong_shape" {
-			tc = v
-		}
-	}
-	require.Equal(t, "opened_document_wrong_shape", tc.Name, "fixture vector must exist")
+	tc := vectorNamed(t, vf, "opened_document_wrong_shape")
 	opts := vectorOptions(k, tc.Tenant)
 
 	var evt paymentAuthorized

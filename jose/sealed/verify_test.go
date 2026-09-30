@@ -3,9 +3,7 @@ package sealed_test
 import (
 	"crypto/rsa"
 	"errors"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,11 +31,7 @@ func (r publicOnlyResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 // producerOptions is the producer's view: both generations as public keys, no tid rule.
 func producerOptions(t *testing.T) *sealed.OpenOptions {
 	t.Helper()
-	k := testKeys(t)
-	return &sealed.OpenOptions{EventType: eventType, Keys: publicOnlyResolver{t: t, keys: jositest.NewTestResolver(map[string]any{
-		signKid: &k.signPriv.PublicKey,
-		encKid:  &k.encPriv.PublicKey,
-	})}}
+	return &sealed.OpenOptions{EventType: eventType, Keys: publicOnlyResolver{t: t, keys: testKeys(t).resolver}}
 }
 
 func TestVerifyAcceptsWhatSealProduced(t *testing.T) {
@@ -119,37 +113,6 @@ func TestVerifyAcceptsADocumentSpec(t *testing.T) {
 	assert.Equal(t, encKid, env.EncKid)
 }
 
-// wiringCase is one pre-flight mistake a type-free door (OpenDocument, Verify) must refuse.
-type wiringCase struct {
-	name string
-	spec *sealed.Spec
-	opts *sealed.OpenOptions
-}
-
-// wiringMistakes is the pre-flight table the type-free doors share: each row leaves out one argument.
-func wiringMistakes(spec *sealed.Spec, keys bricksjose.KeyResolver) []wiringCase {
-	return []wiringCase{
-		{name: "nil_spec", opts: &sealed.OpenOptions{EventType: eventType, Keys: keys}},
-		{name: "nil_opts", spec: spec},
-		{name: "nil_keys", spec: spec, opts: &sealed.OpenOptions{EventType: eventType}},
-		{name: "empty_event_type", spec: spec, opts: &sealed.OpenOptions{Keys: keys}},
-	}
-}
-
-// requirePreflightRefusal asserts a wiring mistake: an *OpenError with no rule, CodeOptionsInvalid,
-// a message naming the door the caller called, and ErrSealFailed.
-func requirePreflightRefusal(t *testing.T, err error, door string) {
-	t.Helper()
-	var oe *sealed.OpenError
-	require.ErrorAs(t, err, &oe, "every failure of a type-free door is an *OpenError")
-	assert.Zero(t, oe.Rule, "pre-flight, no rule fired")
-	var je *bricksjose.Error
-	require.ErrorAs(t, err, &je)
-	assert.Equal(t, sealed.CodeOptionsInvalid, je.Code)
-	assert.True(t, strings.HasPrefix(je.Message, door+" requires "), "the message names the door the caller called: %q", je.Message)
-	assert.ErrorIs(t, err, sealed.ErrSealFailed)
-}
-
 func TestVerifyRejectsWiringMistakes(t *testing.T) {
 	for _, tc := range wiringMistakes(testSpec(t), testKeys(t).resolver) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,20 +127,10 @@ func TestVerifyRejectsWiringMistakes(t *testing.T) {
 // decrypt can tell a wrong key under the right kid, or a document of the wrong shape.
 var verifyResiduals = map[string]bool{"wrong_key_same_name": true, "opened_document_wrong_shape": true}
 
-// producerView is the vector keys as a producer holds them: every generation as a PUBLIC key.
-func (k *vectorKeys) producerView(t *testing.T) bricksjose.KeyResolver {
-	t.Helper()
-	return publicOnlyResolver{t: t, keys: jositest.NewTestResolver(map[string]any{
-		vecSignKid:   &k.priv[vecSignKid].PublicKey,
-		vecSignKidV1: &k.priv[vecSignKidV1].PublicKey,
-		vecEncKid:    &k.priv[vecEncKid].PublicKey,
-	})}
-}
-
 func verifyOptions(t *testing.T, k *vectorKeys, tenant *tenantRule) *sealed.OpenOptions {
 	t.Helper()
 	opts := vectorOptions(k, tenant)
-	opts.Keys = k.producerView(t)
+	opts.Keys = publicOnlyResolver{t: t, keys: k.consumer}
 	return opts
 }
 
@@ -186,10 +139,7 @@ func TestVerifyPositiveVector(t *testing.T) {
 	vf := loadVectors(t, k)
 	env, err := sealed.Verify([]byte(vf.Positive), testSpec(t), verifyOptions(t, k, nil))
 	require.NoError(t, err)
-	assert.Equal(t, &sealed.Envelope{
-		JTI: vecJTI, IssuedAt: time.Unix(vecIAT, 0).UTC(), EventType: eventType, TenantID: vecTenant,
-		SignKid: vecSignKid, SignFamily: "svc-payments-sign", EncKid: vecEncKid,
-	}, env)
+	assert.Equal(t, positiveEnvelope(), env)
 }
 
 func TestVerifyNegativeVectors(t *testing.T) {

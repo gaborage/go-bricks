@@ -243,8 +243,8 @@ func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, keyErr := opts.Keys.PublicKey(core.inner.Kid); keyErr != nil {
-		return nil, unknownGenerationError(10, core.inner.Kid, tagKeyEncrypt, keyErr, layerJWE)
+	if _, keyErr := opts.Keys.PublicKey(core.env.EncKid); keyErr != nil {
+		return nil, unknownGenerationError(10, core.env.EncKid, tagKeyEncrypt, keyErr, layerJWE)
 	}
 	return core.env, nil
 }
@@ -286,10 +286,8 @@ type OpenedDocument struct {
 // openedCore is what rules 1–10 and rule 12 hand to rule 11: the verified payload document,
 // the Subject's byte span within it, the decrypted Subject plaintext and the rule-12 Envelope.
 type openedCore struct {
-	payload   []byte
-	span      subjectSpan
+	verifiedCore
 	plaintext []byte
-	env       *Envelope
 }
 
 // verifiedCore is what rules 1–9 and rule 10 up to the encrypt-family pin proved, with the rule-12 Envelope built from it.
@@ -297,7 +295,6 @@ type verifiedCore struct {
 	payload      []byte
 	span         subjectSpan
 	innerCompact string
-	inner        cryptoadapter.Header
 	env          *Envelope // EncKid is the pinned inner kid
 }
 
@@ -335,7 +332,7 @@ func verifyCore(body []byte, spec *Spec, opts *OpenOptions) (*verifiedCore, erro
 		return nil, err
 	}
 
-	return &verifiedCore{payload: payload, span: span, innerCompact: innerCompact, inner: inner, env: &Envelope{
+	return &verifiedCore{payload: payload, span: span, innerCompact: innerCompact, env: &Envelope{
 		JTI:        slots.jti,
 		IssuedAt:   time.Unix(slots.issuedAt, 0).UTC(),
 		EventType:  slots.eventType,
@@ -352,11 +349,11 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 	if err != nil {
 		return nil, err
 	}
-	plaintext, err := decryptSubject(v.innerCompact, &v.inner, opts.Keys)
+	plaintext, err := decryptSubject(v.innerCompact, v.env.EncKid, opts.Keys)
 	if err != nil {
 		return nil, err
 	}
-	return &openedCore{payload: v.payload, span: v.span, plaintext: plaintext, env: v.env}, nil
+	return &openedCore{verifiedCore: *v, plaintext: plaintext}, nil
 }
 
 // peekOuter runs rules 1–4 on the peeked, still unauthenticated protected header: the
@@ -430,11 +427,7 @@ func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	return nil
 }
 
-// checkOpenOptionsArgs is the part of the pre-flight Open, OpenDocument and Verify share: a Spec
-// and OpenOptions with a resolver and a declared EventType. It says nothing about spec.Type,
-// which only the typed door (Open) requires — the type-free doors (OpenDocument, Verify) accept
-// a document Spec (NewDocumentSpec) as readily as a scanned one. door names the caller's door
-// in the message, so a wiring mistake is never attributed to another one.
+// checkOpenOptionsArgs is the spec.Type-free pre-flight every door shares, with door naming the caller in the message.
 func checkOpenOptionsArgs(spec *Spec, opts *OpenOptions, door string) error {
 	switch {
 	case spec == nil:
@@ -568,13 +561,13 @@ func checkSubjectHeader(compact, outerKid string, spec *Spec) (cryptoadapter.Hea
 }
 
 // decryptSubject is the rest of rule 10: the PRIVATE key for the pinned inner kid, then the decrypt.
-func decryptSubject(compact string, inner *cryptoadapter.Header, keys bricksjose.KeyResolver) ([]byte, error) {
-	encKey, keyErr := keys.PrivateKey(inner.Kid)
+func decryptSubject(compact, kid string, keys bricksjose.KeyResolver) ([]byte, error) {
+	encKey, keyErr := keys.PrivateKey(kid)
 	if keyErr != nil {
-		return nil, unknownGenerationError(10, inner.Kid, tagKeyEncrypt, keyErr, layerJWE)
+		return nil, unknownGenerationError(10, kid, tagKeyEncrypt, keyErr, layerJWE)
 	}
 	plaintext, _, err := cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
-		ExpectedKid: inner.Kid, AllowedKeyAlgs: openKeyAlgs, AllowedContentEnc: openContents,
+		ExpectedKid: kid, AllowedKeyAlgs: openKeyAlgs, AllowedContentEnc: openContents,
 	})
 	if err != nil {
 		return nil, openError(10, ErrOpenFailed, CodeDecryptFailed, "subject does not decrypt under the wire encrypt kid", layerDetails(layerJWE))

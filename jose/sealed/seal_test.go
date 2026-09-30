@@ -318,32 +318,17 @@ func TestSealRejectsInvalidInputs(t *testing.T) {
 
 func TestOptionsValidateIsAKeyFreePreflight(t *testing.T) {
 	spec := testSpec(t)
-	counting := &countingResolver{inner: testKeys(t).resolver}
+	rec := &recordingResolver{keys: testKeys(t).resolver}
 	opts := testOptions(t)
-	opts.Keys = counting
+	opts.Keys = rec
 	require.NoError(t, opts.Validate(spec))
-	assert.Zero(t, counting.calls, "Validate must not touch key material")
+	assert.Empty(t, rec.calls, "Validate must not touch key material")
 
 	opts.SignKid = "svc-orders-sign-v1"
 	assert.ErrorIs(t, opts.Validate(spec), sealed.ErrKidFamilyMismatch) //nolint:testifylint // nil-receiver branch probed below
 
 	var nilOpts *sealed.Options
 	assert.ErrorIs(t, nilOpts.Validate(spec), sealed.ErrSealFailed)
-}
-
-type countingResolver struct {
-	inner bricksjose.KeyResolver
-	calls int
-}
-
-func (c *countingResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
-	c.calls++
-	return c.inner.PrivateKey(kid)
-}
-
-func (c *countingResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
-	c.calls++
-	return c.inner.PublicKey(kid)
 }
 
 // selfMarshaling drops its subject member on the wire, which the splice must refuse rather

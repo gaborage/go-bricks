@@ -357,6 +357,26 @@ func vectorOptions(k *vectorKeys, tenant *tenantRule) *sealed.OpenOptions {
 	return &sealed.OpenOptions{EventType: eventType, Tenant: want, Keys: k.consumer}
 }
 
+// positiveEnvelope is the Envelope the published positive vector proves.
+func positiveEnvelope() *sealed.Envelope {
+	return &sealed.Envelope{
+		JTI: vecJTI, IssuedAt: time.Unix(vecIAT, 0).UTC(), EventType: eventType, TenantID: vecTenant,
+		SignKid: vecSignKid, SignFamily: "svc-payments-sign", EncKid: vecEncKid,
+	}
+}
+
+// vectorNamed returns the published vector called name.
+func vectorNamed(t *testing.T, vf *vectorFile, name string) vector {
+	t.Helper()
+	for _, v := range vf.Vectors {
+		if v.Name == name {
+			return v
+		}
+	}
+	require.Failf(t, "vector not found", "%s", name)
+	return vector{}
+}
+
 // ---- tests ----
 
 // TestOpenPositiveVector opens the published positive vector and checks the Envelope and DedupKey properties.
@@ -369,10 +389,7 @@ func TestOpenPositiveVector(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, paymentAuthorized{OrderID: "ord-1", Card: &cardData{PAN: "4111111111111111", Exp: "12/29"}, Amount: 1250}, evt)
-	assert.Equal(t, &sealed.Envelope{
-		JTI: vecJTI, IssuedAt: time.Unix(vecIAT, 0).UTC(), EventType: eventType, TenantID: vecTenant,
-		SignKid: vecSignKid, SignFamily: "svc-payments-sign", EncKid: vecEncKid,
-	}, env)
+	assert.Equal(t, positiveEnvelope(), env)
 
 	key := env.DedupKey()
 	assert.Equal(t, 1, strings.Count(key, ":"), "exactly one separator")
@@ -386,10 +403,7 @@ func TestOpenPositiveVector(t *testing.T) {
 	assert.Equal(t, key, env2.DedupKey())
 }
 
-// requireVectorRefusal asserts what every door owes a refused negative vector: the vector's code,
-// rule and details as an *OpenError and a *bricksjose.Error, no slot value in the text (#1307), and
-// the code's sentinel. The leak check runs BEFORE the sentinel switch: the switch is require, and a
-// sentinel regression must not abort before the leak check, an independent property of the same error.
+// requireVectorRefusal asserts the vector's code, rule, details and sentinel, and that no slot value leaks into the text (#1307).
 func requireVectorRefusal(t *testing.T, err error, tc *vector) {
 	t.Helper()
 	var oe *sealed.OpenError
@@ -402,6 +416,7 @@ func requireVectorRefusal(t *testing.T, err error, tc *vector) {
 	var je *bricksjose.Error
 	require.ErrorAs(t, err, &je, "*bricksjose.Error-compatible")
 	assert.Equal(t, tc.Code, je.Code)
+	// The leak check precedes the require-based sentinel switch so a sentinel regression cannot skip it.
 	for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon"} {
 		assert.NotContains(t, err.Error(), secret)
 	}
@@ -415,6 +430,37 @@ func requireVectorRefusal(t *testing.T, err error, tc *vector) {
 	default:
 		require.ErrorIs(t, err, sealed.ErrOpenFailed)
 	}
+}
+
+// wiringCase is one pre-flight mistake a type-free door (OpenDocument, Verify) must refuse.
+type wiringCase struct {
+	name string
+	spec *sealed.Spec
+	opts *sealed.OpenOptions
+}
+
+// wiringMistakes is the pre-flight table the type-free doors share: each row leaves out one argument.
+func wiringMistakes(spec *sealed.Spec, keys bricksjose.KeyResolver) []wiringCase {
+	return []wiringCase{
+		{name: "nil_spec", opts: &sealed.OpenOptions{EventType: eventType, Keys: keys}},
+		{name: "nil_opts", spec: spec},
+		{name: "nil_keys", spec: spec, opts: &sealed.OpenOptions{EventType: eventType}},
+		{name: "empty_event_type", spec: spec, opts: &sealed.OpenOptions{Keys: keys}},
+	}
+}
+
+// requirePreflightRefusal asserts a wiring mistake: an *OpenError with no rule, CodeOptionsInvalid,
+// a message naming the door the caller called, and ErrSealFailed.
+func requirePreflightRefusal(t *testing.T, err error, door string) {
+	t.Helper()
+	var oe *sealed.OpenError
+	require.ErrorAs(t, err, &oe, "every failure of a type-free door is an *OpenError")
+	assert.Zero(t, oe.Rule, "pre-flight, no rule fired")
+	var je *bricksjose.Error
+	require.ErrorAs(t, err, &je)
+	assert.Equal(t, sealed.CodeOptionsInvalid, je.Code)
+	assert.True(t, strings.HasPrefix(je.Message, door+" requires "), "the message names the door the caller called: %q", je.Message)
+	assert.ErrorIs(t, err, sealed.ErrSealFailed)
 }
 
 // TestOpenNegativeVectors asserts the exact code, rule, details and sentinel of every published negative vector.
@@ -690,10 +736,10 @@ func TestOpenRefusesReflectMismatchBeforeAnyKey(t *testing.T) {
 	// A wrong out type is refused before the resolver is consulted.
 	k := loadVectorKeys(t)
 	vf := loadVectors(t, k)
-	r := &countingResolver{inner: k.consumer}
+	r := &recordingResolver{keys: k.consumer}
 	_, err := sealed.Open([]byte(vf.Positive), testSpec(t), &sealed.OpenOptions{EventType: eventType, Keys: r}, new(cardData))
 	require.Error(t, err)
-	assert.Zero(t, r.calls)
+	assert.Empty(t, r.calls)
 }
 
 // recordingResolver records every key request in order, so a test pins where a door resolves each key.
@@ -710,21 +756,6 @@ func (r *recordingResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
 func (r *recordingResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 	r.calls = append(r.calls, "private:"+kid)
 	return r.keys.PrivateKey(kid)
-}
-
-// vectorBody returns the published body of the named vector, or the positive one for "positive".
-func vectorBody(t *testing.T, vf *vectorFile, name string) string {
-	t.Helper()
-	if name == "positive" {
-		return vf.Positive
-	}
-	for _, v := range vf.Vectors {
-		if v.Name == name {
-			return v.Body
-		}
-	}
-	require.Failf(t, "vector not found", "%s", name)
-	return ""
 }
 
 // TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin pins that both opening doors resolve the encrypt PRIVATE key only once the encrypt-family pin has passed.
@@ -745,10 +776,11 @@ func TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin(t *testing.T) {
 	}
 	cases := []struct {
 		name    string
+		body    string
 		want    []string
 		wantErr bool
 	}{
-		{name: "positive", want: []string{"public:" + vecSignKid, "private:" + vecEncKid}},
+		{name: "positive", body: vf.Positive, want: []string{"public:" + vecSignKid, "private:" + vecEncKid}},
 		{name: "strip_and_resign_iss_differs", want: []string{"public:" + vecSignKidV1}, wantErr: true},
 		{name: "inner_cross_family_kid", want: []string{"public:" + vecSignKid}, wantErr: true},
 		{name: "inner_unprovisioned_generation", want: []string{"public:" + vecSignKid, "private:acme-core-enc-v9"}, wantErr: true},
@@ -756,10 +788,14 @@ func TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin(t *testing.T) {
 	for doorName, door := range doors {
 		for _, tc := range cases {
 			t.Run(doorName+"/"+tc.name, func(t *testing.T) {
+				body := tc.body
+				if body == "" {
+					body = vectorNamed(t, vf, tc.name).Body
+				}
 				rec := &recordingResolver{keys: k.consumer}
 				opts := vectorOptions(k, nil)
 				opts.Keys = rec
-				err := door([]byte(vectorBody(t, vf, tc.name)), opts)
+				err := door([]byte(body), opts)
 				assert.Equal(t, tc.want, rec.calls)
 				if tc.wantErr {
 					require.Error(t, err)
