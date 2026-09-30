@@ -283,7 +283,7 @@ func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {
 	assert.Zero(t, codec.scans)
 	assert.Nil(t, h.sealer)
 	data, jti, err := h.Seal(context.Background(), plainEvent{ID: "x"})
-	assert.ErrorIs(t, err, ErrNotSealTagged)
+	require.ErrorIs(t, err, ErrNotSealTagged)
 	assert.Nil(t, data)
 	assert.Empty(t, jti)
 }
@@ -402,7 +402,7 @@ func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
 	assert.Empty(t, client.data)
 	require.ErrorIs(t, err, sealErr)
 	data, jti, err := h.Seal(context.Background(), sealedEvent{ID: "o1"})
-	assert.ErrorIs(t, err, sealErr)
+	require.ErrorIs(t, err, sealErr)
 	assert.Nil(t, data)
 	assert.Empty(t, jti, "a failed seal hands back no jti")
 }

@@ -70,8 +70,8 @@ func Seal(evt any, spec *Spec, opts *Options) (data []byte, jti string, err erro
 	if spec == nil || spec.Type == nil {
 		return nil, "", sealError(CodeOptionsInvalid, "Seal requires a Spec from ScanType", nil)
 	}
-	if err = opts.Validate(spec); err != nil {
-		return nil, "", err
+	if validateErr := opts.Validate(spec); validateErr != nil {
+		return nil, "", validateErr
 	}
 	if t := unwrapPointer(reflect.TypeOf(evt)); t != spec.Type {
 		return nil, "", sealError(CodeTypeMismatch, fmt.Sprintf("event type %v does not match the scanned %v", t, spec.Type), nil)
