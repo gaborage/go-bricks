@@ -336,4 +336,14 @@ type ModuleDeps struct {
 	DBConfigured        bool
 	MessagingConfigured bool
 	CacheConfigured     bool
+
+	// ControlPlaneMessagingAbsent reports that the control-plane key "" is known to hold no
+	// messaging: the store serving "" (Options.ResourceSource, or the built-in one over the
+	// root blocks) answered not_configured for its broker at build. It speaks for "" only,
+	// whatever messaging.tenancy says, so under messaging.tenancy: per-tenant it can read true
+	// while MessagingConfigured also reads true. The zero value is lenient: false means "not
+	// known absent" — "" was served, the store is dynamic, or the ModuleDeps was hand-built.
+	// Framework readers: a shared-ledger outbox (outbox.tenancy: shared) refuses Init when it
+	// is true, because its relay publishes on "" (ADR-128).
+	ControlPlaneMessagingAbsent bool
 }

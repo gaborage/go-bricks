@@ -182,11 +182,13 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 }
 
 // markConfigured sets the three flags from the Resource plan: a kind is configured unless it
-// is unavailable (ADR-127). See ModuleDeps.DBConfigured for the contract.
+// is unavailable (ADR-127). See ModuleDeps.DBConfigured for the contract. It also sets
+// ControlPlaneMessagingAbsent from the messaging row's "" fact alone, never from Tenancy (ADR-128).
 func markConfigured(deps *ModuleDeps, plan resourcePlan) {
 	deps.DBConfigured = !plan.database.unavailable()
 	deps.MessagingConfigured = !plan.messaging.unavailable()
 	deps.CacheConfigured = !plan.cache.unavailable()
+	deps.ControlPlaneMessagingAbsent = plan.messaging.controlPlaneAbsent()
 }
 
 // warnIfDatabaseAbsent emits one advisory startup WARN for a database-free service.

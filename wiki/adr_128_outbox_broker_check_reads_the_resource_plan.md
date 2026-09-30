@@ -2,7 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-09-29
-**Amends:** [ADR-127](adr_127_resource_plan_rule.md) (its #1853 "Unchanged" consequence)
+**Amends:** [ADR-127](adr_127_resource_plan_rule.md) (its #1853 "Unchanged" consequence, and what
+presence feeds under per-tenant Tenancy)
 
 ## Context
 
@@ -48,9 +49,27 @@ The inbox has no broker check: it discards the messaging resolver.
    an AMQP lane, and the flag speaks for it. Under multi-tenant `messaging.tenancy: shared` with no
    control-plane broker it now refuses `Init`, as single-tenant already did.
 
-The shared-ledger arm (`outbox.tenancy: shared`) is unchanged: it still reads the root broker URL
-with its `source.type: dynamic` exemption, and it never reads `MessagingConfigured`, which speaks
-for `deps.Messaging`, not the shared resolver.
+The shared-ledger arm (`outbox.tenancy: shared`) is decided as the next section says.
+
+### Shared ledger
+
+1. **A new field decides.** `app.ModuleDeps` gains `ControlPlaneMessagingAbsent`: the control-plane
+   key `""` is known to hold no broker, because the store serving it answered `not_configured` at
+   build. The app sets it next to the three flags from the plan's `""` presence fact alone, which is
+   independent of Tenancy, never from `MessagingConfigured` or the row's unavailability. A
+   shared-ledger outbox refuses `Init` exactly when it is true. The arm's root-config read and its
+   `source.type: dynamic` exemption are gone: a dynamic store's `""` is knowable only at runtime, so
+   the field stays false.
+2. **The field speaks for `""` only.** The shared relay always publishes on `""` through the app's
+   shared messaging resolver, whatever `messaging.tenancy` says. Under multi-tenant
+   `messaging.tenancy: per-tenant` the field can read true while `MessagingConfigured` also reads
+   true, which is why the shared ledger never reads that flag.
+3. **The zero value is lenient.** False means "not known absent", so a hand-built
+   `app.ModuleDeps{}` no longer aborts a shared ledger on root config; set the field to test the
+   refusal. The name avoids "Shared…", which both tenancy settings use.
+4. **The text is source-neutral.** The refusal says the shared relay publishes on the control-plane
+   key and `""` holds no broker, and names the root `messaging.broker.url` or the custom resource
+   source's answer for `""`.
 
 ## Consequences
 
@@ -60,14 +79,21 @@ for `deps.Messaging`, not the shared resolver.
   `MessagingConfigured: true` for an enabled per-tenant ledger.
 - **Now boots where it refused:** a single-tenant dynamic store with no root broker, and a caller
   static store serving `""` beside an empty root messaging block.
-- **Unchanged:** multi-tenant `messaging.tenancy: per-tenant` (the plan reads the flag true there,
-  whatever the tenants hold), the shared ledger, the inbox, and every `SetSharedResolvers`,
-  `NewModuleRegistry` and `SetMessagingTenancy` signature.
+- **Shared ledger, now refuses where it booted:** a caller static store not serving `""` beside a
+  root broker, single-tenant or multi-tenant.
+- **Shared ledger, now boots where it refused:** a caller static store serving `""` beside an empty
+  root messaging block, single-tenant or multi-tenant `messaging.tenancy: shared` with no static
+  tenants; and any hand-built `ModuleDeps`, whatever its root config. The dynamic-store exemption
+  now comes from the plan instead of `source.type`.
+- **Unchanged:** multi-tenant `messaging.tenancy: per-tenant` for the per-tenant ledger (the plan
+  reads the flag true there, whatever the tenants hold); the shared ledger's refusal of that mode
+  with no root broker; the inbox; and every `SetSharedResolvers`, `NewModuleRegistry` and
+  `SetMessagingTenancy` signature.
 
 ## References
 
 - [ADR-127](adr_127_resource_plan_rule.md): the rule behind `ModuleDeps.MessagingConfigured`
 - [ADR-041](adr_041_shared_ledger_tenancy.md): shared-ledger tenancy
-- [migrations.md](migrations.md) `[C70.7]`, `[C70.8]`
-- `outbox/module.go` (`checkTenancyFanOutGuards`, `checkPerTenantLedgerBroker`),
-  `outbox/module_app_test.go`
+- [migrations.md](migrations.md) `[C70.7]`–`[C70.10]`
+- `outbox/module.go` (`checkTenancyFanOutGuards`, `checkPerTenantLedgerBroker`,
+  `checkSharedLedgerBroker`), `app/bootstrap.go` (`markConfigured`), `outbox/module_app_test.go`
