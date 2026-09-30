@@ -9,15 +9,19 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -471,78 +475,6 @@ func TestBuildServerTLSConfigClientAuth(t *testing.T) {
 	}
 }
 
-// TestServerTLSRequireVerifyHandshake is the light handshake check: a client
-// certificate from the configured CA completes, and no certificate does not.
-func TestServerTLSRequireVerifyHandshake(t *testing.T) {
-	serverCAPEM, issueServer := newTestCA(t, "server-ca")
-	certPEM, keyPEM := issueServer("127.0.0.1")
-	clientCAPEM, issueClient := newTestCAWithSANs(t, "client-ca")
-	clientCertPEM, clientKeyPEM := issueClient("partner", nil, nil, clientAuthLeaf)
-
-	serverCfg, err := buildServerTLSConfig(&config.ServerTLSConfig{
-		Enabled:       true,
-		CertValue:     base64.StdEncoding.EncodeToString(certPEM),
-		KeyValue:      base64.StdEncoding.EncodeToString(keyPEM),
-		ClientAuth:    clientAuthRequireVerify,
-		ClientCAValue: base64.StdEncoding.EncodeToString(clientCAPEM),
-	})
-	require.NoError(t, err)
-
-	roots := x509.NewCertPool()
-	require.True(t, roots.AppendCertsFromPEM(serverCAPEM))
-	clientPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
-	require.NoError(t, err)
-
-	// handshake returns the server side's verdict; the client drains one read so
-	// TLS 1.3's post-handshake certificate check completes before closing.
-	handshake := func(clientCfg *tls.Config) error {
-		serverConn, clientConn := net.Pipe()
-		deadline := time.Now().Add(5 * time.Second)
-		require.NoError(t, serverConn.SetDeadline(deadline))
-		require.NoError(t, clientConn.SetDeadline(deadline))
-		srv := tls.Server(serverConn, serverCfg)
-		cli := tls.Client(clientConn, clientCfg)
-		ctx, cancel := context.WithDeadline(context.Background(), deadline)
-		defer cancel()
-		done := make(chan error, 1)
-		go func() {
-			hsErr := srv.HandshakeContext(ctx)
-			_ = srv.Close()
-			done <- hsErr
-		}()
-		if cli.HandshakeContext(ctx) == nil {
-			_, _ = cli.Read(make([]byte, 1))
-		}
-		_ = cli.Close()
-		return <-done
-	}
-
-	t.Run("valid_client_certificate_accepted", func(t *testing.T) {
-		serverErr := handshake(&tls.Config{
-			RootCAs: roots, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12,
-			Certificates: []tls.Certificate{clientPair},
-		})
-		assert.NoError(t, serverErr)
-	})
-
-	t.Run("no_client_certificate_rejected", func(t *testing.T) {
-		serverErr := handshake(&tls.Config{
-			RootCAs: roots, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12,
-		})
-		require.Error(t, serverErr)
-		assert.Contains(t, serverErr.Error(), "client didn't provide a certificate")
-	})
-
-	t.Run("tls11_client_refused", func(t *testing.T) {
-		serverErr := handshake(&tls.Config{
-			RootCAs: roots, ServerName: "127.0.0.1",
-			MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11,
-			Certificates: []tls.Certificate{clientPair},
-		})
-		require.Error(t, serverErr)
-	})
-}
-
 func TestHasStagedServerTLSMaterial(t *testing.T) {
 	tests := []struct {
 		name string
@@ -564,4 +496,257 @@ func TestHasStagedServerTLSMaterial(t *testing.T) {
 			assert.Equal(t, tt.want, hasStagedServerTLSMaterial(&tt.cfg))
 		})
 	}
+}
+
+// mtlsFixture is a server leaf, the client CA the listener trusts, two clients it
+// signed and one a second CA signed.
+type mtlsFixture struct {
+	serverRoots   *x509.CertPool
+	certPEM       []byte
+	keyPEM        []byte
+	clientCAPEM   []byte
+	allowedClient tls.Certificate
+	otherClient   tls.Certificate
+	rogueClient   tls.Certificate
+}
+
+const allowedClientCN = "allowed-client"
+
+func newMTLSFixture(t *testing.T) mtlsFixture {
+	t.Helper()
+	serverCAPEM, issueServer := newTestCA(t, "server-ca")
+	certPEM, keyPEM := issueServer("127.0.0.1")
+	clientCAPEM, issueClient := newTestCAWithSANs(t, "client-ca")
+	_, issueRogue := newTestCAWithSANs(t, "rogue-ca")
+
+	pair := func(certPEM, keyPEM []byte) tls.Certificate {
+		p, err := tls.X509KeyPair(certPEM, keyPEM)
+		require.NoError(t, err)
+		return p
+	}
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(serverCAPEM))
+	return mtlsFixture{
+		serverRoots:   roots,
+		certPEM:       certPEM,
+		keyPEM:        keyPEM,
+		clientCAPEM:   clientCAPEM,
+		allowedClient: pair(issueClient(allowedClientCN, nil, nil, clientAuthLeaf)),
+		otherClient:   pair(issueClient("other-client", nil, nil, clientAuthLeaf)),
+		rogueClient:   pair(issueRogue(allowedClientCN, nil, nil, clientAuthLeaf)),
+	}
+}
+
+func (f *mtlsFixture) serverTLS(clientAuth string) config.ServerTLSConfig {
+	return config.ServerTLSConfig{
+		Enabled:       true,
+		CertValue:     base64.StdEncoding.EncodeToString(f.certPEM),
+		KeyValue:      base64.StdEncoding.EncodeToString(f.keyPEM),
+		ClientAuth:    clientAuth,
+		ClientCAValue: base64.StdEncoding.EncodeToString(f.clientCAPEM),
+	}
+}
+
+// transport presents cert unconditionally when set. GetClientCertificate forces the
+// send: Go's default selection honors the server's advertised CAs and would send no
+// certificate at all for a client the listener does not trust.
+func (f *mtlsFixture) transport(cert *tls.Certificate) *http.Transport {
+	tlsCfg := &tls.Config{RootCAs: f.serverRoots, MinVersion: tls.VersionTLS12}
+	if cert != nil {
+		tlsCfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return cert, nil
+		}
+	}
+	return &http.Transport{TLSClientConfig: tlsCfg}
+}
+
+// startMTLSServer starts a listener with clientAuth and opts and a /tlsprobe route that
+// answers 200 only when the request carries a verified client chain.
+func startMTLSServer(t *testing.T, f *mtlsFixture, clientAuth string, opts Options) (srv *Server, baseURL string, errCh <-chan error) {
+	t.Helper()
+	cfg := newTestConfig("", "", "")
+	cfg.Server.Timeout.Read = 2 * time.Second
+	cfg.Server.Timeout.Write = 2 * time.Second
+	cfg.Server.TLS = f.serverTLS(clientAuth)
+
+	srv = NewWithOptions(cfg, &testLogger{}, opts)
+	srv.echo.GET("/tlsprobe", func(c *echo.Context) error {
+		tlsState := c.Request().TLS
+		if tlsState == nil || len(tlsState.VerifiedChains) == 0 {
+			return c.NoContent(http.StatusForbidden)
+		}
+		return c.NoContent(http.StatusOK)
+	})
+	ch := make(chan error, 1)
+	go func() { ch <- srv.Start() }()
+	waitForServerReady(t, srv)
+	return srv, "https://" + srv.BoundAddr().String(), ch
+}
+
+// getStatus GETs url through tr, returning the status or the transport error.
+func getStatus(ctx context.Context, tr *http.Transport, url string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := (&http.Client{Transport: tr, Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+// TestServerMutualTLS pins require-verify end to end: a client the CA signed is
+// accepted with a verified chain, and a certless client or one a second CA signed is
+// rejected at the handshake.
+func TestServerMutualTLS(t *testing.T) {
+	f := newMTLSFixture(t)
+	srv, baseURL, errCh := startMTLSServer(t, &f, clientAuthRequireVerify, Options{})
+	defer shutdownAndDrain(t, srv, errCh)
+
+	t.Run("valid_client_cert_accepted", func(t *testing.T) {
+		status, err := getStatus(t.Context(), f.transport(&f.allowedClient), baseURL+"/tlsprobe")
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, status)
+	})
+
+	t.Run("no_client_cert_rejected", func(t *testing.T) {
+		_, err := getStatus(t.Context(), f.transport(nil), baseURL+"/tlsprobe")
+		require.Error(t, err)
+	})
+
+	t.Run("wrong_ca_client_cert_rejected", func(t *testing.T) {
+		_, err := getStatus(t.Context(), f.transport(&f.rogueClient), baseURL+"/tlsprobe")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown certificate authority")
+	})
+}
+
+// allowOnlyCN is a leaf-validation hook admitting only a leaf whose verified CN is cn.
+func allowOnlyCN(cn string, calls *atomic.Int32) func([][]byte, [][]*x509.Certificate) error {
+	return func(_ [][]byte, verifiedChains [][]*x509.Certificate) error {
+		calls.Add(1)
+		if len(verifiedChains) == 0 || verifiedChains[0][0].Subject.CommonName != cn {
+			return errors.New("client not on the allowlist")
+		}
+		return nil
+	}
+}
+
+// TestServerTLSLeafHook pins that the hook runs after chain verification and that its
+// error rejects the handshake.
+func TestServerTLSLeafHook(t *testing.T) {
+	f := newMTLSFixture(t)
+	var calls atomic.Int32
+	srv, baseURL, errCh := startMTLSServer(t, &f, clientAuthRequireVerify,
+		Options{TLSVerifyPeerCertificate: allowOnlyCN(allowedClientCN, &calls)})
+	defer shutdownAndDrain(t, srv, errCh)
+
+	t.Run("hook_accepts", func(t *testing.T) {
+		status, err := getStatus(t.Context(), f.transport(&f.allowedClient), baseURL+"/tlsprobe")
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, status)
+	})
+
+	t.Run("hook_rejects", func(t *testing.T) {
+		_, err := getStatus(t.Context(), f.transport(&f.otherClient), baseURL+"/tlsprobe")
+		require.Error(t, err)
+	})
+}
+
+// TestServerTLSLeafHookOnResumedSession pins the resumption guard: the stdlib skips
+// VerifyPeerCertificate on a resumed session, so the hook must run again through
+// VerifyConnection. Both the resumption precondition and the call count are asserted.
+func TestServerTLSLeafHookOnResumedSession(t *testing.T) {
+	f := newMTLSFixture(t)
+	var calls atomic.Int32
+	srv, baseURL, errCh := startMTLSServer(t, &f, clientAuthRequireVerify,
+		Options{TLSVerifyPeerCertificate: allowOnlyCN(allowedClientCN, &calls)})
+	defer shutdownAndDrain(t, srv, errCh)
+
+	tr := f.transport(&f.allowedClient)
+	tr.TLSClientConfig.ClientSessionCache = tls.NewLRUClientSessionCache(4)
+	defer tr.CloseIdleConnections()
+
+	var resumed []bool
+	ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		TLSHandshakeDone: func(state tls.ConnectionState, _ error) { resumed = append(resumed, state.DidResume) },
+	})
+	for range 2 {
+		status, err := getStatus(ctx, tr, baseURL+"/tlsprobe")
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status)
+		// Without this the second GET reuses the first connection: one handshake total.
+		tr.CloseIdleConnections()
+	}
+
+	require.Equal(t, []bool{false, true}, resumed, "precondition: the second handshake resumed")
+	assert.Equal(t, int32(2), calls.Load(), "the hook runs on the resumed handshake too")
+}
+
+// TestServerTLSHookWithoutVerifyingModeFailsStart pins the fail-closed half: a hook on an
+// enabled listener whose policy never verifies would guard nothing, so Start refuses.
+func TestServerTLSHookWithoutVerifyingModeFailsStart(t *testing.T) {
+	f := newMTLSFixture(t)
+	cfg := newTestConfig("", "", "")
+	cfg.Server.TLS = f.serverTLS("")
+	cfg.Server.TLS.ClientCAValue = ""
+	srv := NewWithOptions(cfg, &testLogger{}, Options{
+		TLSVerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error { return nil },
+	})
+
+	err := requireStartRefusedBeforeBind(t, srv, "Start bound and served with an inert leaf-validation hook")
+	assert.Contains(t, err.Error(), "inert")
+	assert.Contains(t, err.Error(), `"verify"`)
+	assert.Contains(t, err.Error(), `"require-verify"`)
+}
+
+// TestServerTLSHookWithTLSDisabledWarnsAndStarts pins the WARN half: with TLS off a hook
+// is staged ahead of a flip, so Start serves plaintext and says the hook is inert.
+func TestServerTLSHookWithTLSDisabledWarnsAndStarts(t *testing.T) {
+	cfg := newTestConfig("", "", "")
+	log := &testLogger{}
+	srv := NewWithOptions(cfg, log, Options{
+		TLSVerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error { return nil },
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start() }()
+	waitForServerReady(t, srv)
+	defer shutdownAndDrain(t, srv, errCh)
+
+	warned := false
+	for _, entry := range log.logEntries() {
+		if entry.level == "warn" && entry.values["field"] == "server.tls.enabled" {
+			warned = true
+		}
+	}
+	assert.True(t, warned, "expected a WARN naming server.tls.enabled for a hook on a plaintext listener")
+}
+
+// TestGuardLeafHook pins the wrapper both hook seams share: a certless client never
+// reaches the hook, and a hook panic becomes an error naming the panic's type only.
+func TestGuardLeafHook(t *testing.T) {
+	t.Run("certless_client_skips_the_hook", func(t *testing.T) {
+		var calls atomic.Int32
+		guarded := guardLeafHook(allowOnlyCN("nobody", &calls))
+		require.NoError(t, guarded(nil, nil))
+		assert.Zero(t, calls.Load())
+	})
+
+	t.Run("presented_cert_reaches_the_hook", func(t *testing.T) {
+		var calls atomic.Int32
+		guarded := guardLeafHook(allowOnlyCN("nobody", &calls))
+		require.Error(t, guarded([][]byte{{0x30}}, nil))
+		assert.Equal(t, int32(1), calls.Load())
+	})
+
+	t.Run("panic_reported_by_type_only", func(t *testing.T) {
+		const secret = "s3cret-panic-value"
+		guarded := guardLeafHook(func([][]byte, [][]*x509.Certificate) error { panic(secret) })
+		err := guarded([][]byte{{0x30}}, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "type: string")
+		assert.NotContains(t, err.Error(), secret)
+	})
 }

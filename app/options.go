@@ -43,4 +43,9 @@ type Options struct {
 	// and is empty for routes the framework registers itself. With an injected Server the
 	// slice carries no probe descriptors. Nil means no hook.
 	PostRegisterRoutes func(routes []server.RouteDescriptor) error
+
+	// ServerOptions passes programmatic server extensions (e.g. the mTLS
+	// leaf-validation hook) to the framework-constructed server. Ignored when
+	// Options.Server overrides the server entirely.
+	ServerOptions *server.Options
 }

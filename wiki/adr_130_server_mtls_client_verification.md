@@ -58,13 +58,22 @@ way to demand or verify a client certificate: the framework owns the listener's 
    `Start` refuses it again before either bind for a config assembled in Go. `verify` beside the
    probe listener is allowed: a handshake with no client certificate completes under
    `VerifyClientCertIfGiven`.
+8. **A leaf-validation hook, run on every handshake.** `server.Options.TLSVerifyPeerCertificate`
+   (passed through `server.NewWithOptions`, or `app.Options.ServerOptions` for the framework-built
+   server) takes the stdlib `VerifyPeerCertificate` signature and runs after chain verification,
+   for SAN/OU allowlists read from `verifiedChains`; an error rejects the handshake. Go skips
+   `VerifyPeerCertificate` on a resumed session, so the same hook runs again from
+   `VerifyConnection` whenever the session resumed; without it a client admitted once could resume
+   past a tightened allowlist. A client that presents no certificate never reaches the hook:
+   whether one may is `clientauth`'s decision alone, and under `verify` the probe listener's
+   certless check must pass whatever the hook allows. A hook panic becomes a handshake error that
+   names the panic's type, never its value (ADR-081).
+9. **An inert hook fails closed, a staged one warns.** A hook on an enabled listener whose
+   `clientauth` is `""` would guard nothing, so `Start` fails naming `verify` and `require-verify`.
+   A hook with `server.tls.enabled` false is a staged flip: `Start` serves plaintext and WARNs
+   naming `server.tls.enabled`.
 
-**To follow (not in this change):** a leaf-validation hook (SAN/OU allowlists) passed through
-`server.NewWithOptions` and `app.Options.ServerOptions`, run as `VerifyPeerCertificate` after chain
-verification and again from `VerifyConnection` on a resumed session, where `VerifyPeerCertificate`
-is skipped; a hook with TLS enabled and no verifying policy fails `Start` (it would be inert on an
-open endpoint), while a hook with TLS disabled only WARNs; the no-cert, wrong-CA and valid
-handshake matrix; and the ADR-042 and wiki updates.
+**To follow (not in this change):** the ADR-042 amendment and the wiki updates.
 
 ## Consequences
 
@@ -80,5 +89,5 @@ handshake matrix; and the ADR-042 and wiki updates.
 - [ADR-042](adr_042_server_tls.md), [ADR-043](adr_043_forwarded_client_cert.md),
   [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)
 - `config/server_section.go` (`validateServerTLSClientAuth`, `validateServerProbes`),
-  `server/tls.go` (`buildServerTLSConfig`, `parseClientAuth`), `server/server.go`
-  (`startProbeListener`)
+  `server/tls.go` (`buildServerTLSConfig`, `parseClientAuth`, `attachLeafHook`),
+  `server/options.go`, `server/server.go` (`startProbeListener`)

@@ -1878,6 +1878,21 @@ func TestResolveServer(t *testing.T) {
 		result := resolveServer(cfg, log, opts)
 		assert.NotNil(t, result)
 	})
+
+	t.Run("creates new server with server options", func(t *testing.T) {
+		opts := &Options{ServerOptions: &server.Options{}}
+
+		result := resolveServer(cfg, log, opts)
+		assert.IsType(t, &server.Server{}, result)
+	})
+
+	t.Run("provided server wins over server options", func(t *testing.T) {
+		mockServer := &stubServerRunner{}
+		opts := &Options{Server: mockServer, ServerOptions: &server.Options{}}
+
+		result := resolveServer(cfg, log, opts)
+		assert.Equal(t, mockServer, result)
+	})
 }
 
 func TestRegisterCloser(t *testing.T) {
