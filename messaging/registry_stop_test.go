@@ -235,11 +235,7 @@ func TestRegistryStopConsumersJoinsAnInFlightResubscribe(t *testing.T) {
 			})
 
 			close(client.first)
-			select {
-			case <-client.entered:
-			case <-time.After(5 * time.Second):
-				t.Fatal("re-subscribe never started")
-			}
+			awaitResubscribeEntered(t, client)
 
 			var resubscribesAtReturn uint64
 			var runningAtReturn int64
@@ -254,12 +250,7 @@ func TestRegistryStopConsumersJoinsAnInFlightResubscribe(t *testing.T) {
 			<-stopped
 
 			assert.Equal(t, tt.wantResubscribe, resubscribesAtReturn)
-			var abandoned []string
-			for _, line := range log.Lines() {
-				if line.Msg == msgSupervisorsAbandoned {
-					abandoned = append(abandoned, line.Values("running_supervisors")...)
-				}
-			}
+			abandoned := runningSupervisorsLogged(log, msgSupervisorsAbandoned)
 			if tt.wantAbandoned {
 				assert.Equal(t, []string{"1"}, abandoned)
 				return
@@ -271,6 +262,26 @@ func TestRegistryStopConsumersJoinsAnInFlightResubscribe(t *testing.T) {
 				"a re-subscribe landed after StopConsumers returned")
 		})
 	}
+}
+
+func awaitResubscribeEntered(t *testing.T, client *gatedResubscribeClient) {
+	t.Helper()
+	select {
+	case <-client.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("re-subscribe never started")
+	}
+}
+
+// runningSupervisorsLogged collects the running_supervisors value of every msg line.
+func runningSupervisorsLogged(log *recordingLogger, msg string) []string {
+	var counts []string
+	for _, line := range log.Lines() {
+		if line.Msg == msg {
+			counts = append(counts, line.Values("running_supervisors")...)
+		}
+	}
+	return counts
 }
 
 // TestRegistryStopConsumersTwiceReturnsPromptly pins idempotence: Close stops a registry
