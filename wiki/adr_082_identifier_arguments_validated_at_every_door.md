@@ -127,6 +127,13 @@ character now fails where the denylist tolerated it. `[C61.9]`.
 
 ## Addendum (2026-08-23): the escape hatch validates at consumption too
 
+> **Superseded in part on the E61 hop by `[C61.9]`** (the 2026-08-24 addendum
+> above). The alias check described below is a six-substring denylist, and a
+> denylist accepts everything it does not enumerate — `[C61.9]` replaces it with
+> the identifier grammar (`sqllex.IsUnquotedIdentifier`) and deletes
+> `ErrDangerousAlias`. Read this addendum for the funnel (which is unchanged and
+> still correct); take the alias rules from `[C61.9]`.
+
 `RawExpression` is a plain exported struct, so `qb.Expr()` was a door a caller
 could walk around: `dbtypes.RawExpression{SQL: "1", Alias: "x FROM users; DROP
 TABLE t--"}` reached `Select` carrying an alias the constructor refuses, and
@@ -141,27 +148,31 @@ it returns; `QueryBuilder.Select`, `SelectQueryBuilder.GroupBy`,
 `SelectQueryBuilder.OrderBy` and the `JoinFilterFactory` value doors (`Eq`,
 `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, and both bounds of `Between`) call it again at
 consumption, where a struct literal is indistinguishable from a constructed value.
-One copy of the denylist, two call sites for it.
+One copy of the denylist (pre-`[C61.9]`; the identifier grammar since), two call
+sites for it.
 
-What it checks is unchanged and deliberately narrow: empty-or-whitespace SQL, and
-an alias containing `;`, `'`, `"`, `--`, `/*` or `*/`. **The SQL body is still not
-validated** — that is what the hatch is for, and validating it would repeat this
-ADR's own root cause the way `Having` would.
+What it checked was unchanged by this addendum and deliberately narrow:
+empty-or-whitespace SQL, and (pre-`[C61.9]`) an alias containing `;`, `'`, `"`,
+`--`, `/*` or `*/`. **The SQL body is still not validated** — that is what the
+hatch is for, and validating it would repeat this ADR's own root cause the way
+`Having` would.
 
 A consumer records the violation on the builder's existing deferred error, first
 violation wins, and never panics — the ADR-031 split, unchanged. The struct keeps
 its exported fields: a literal still compiles, it just no longer renders.
 
-**Residual, recorded rather than closed.** The alias check is a DENYLIST, not a
-grammar: an alias carrying none of the six sequences still reaches the SELECT
-list verbatim, so `Alias: "a, (SELECT password FROM users) b"` renders. Making
-the alias an identifier — the grammar treatment `Select`'s string columns got
-above — is a separate, larger break, and #1153 asked only that the two
-construction paths converge. They now do: whatever `Expr()` refuses, a literal
+**Residual, recorded rather than closed — since CLOSED by `[C61.9]`.** The
+2026-08-24 addendum above makes the alias an unquoted identifier, so the alias
+below now fails with `ErrInvalidAlias`. As recorded at the time: the alias check
+is a DENYLIST, not a grammar: an alias carrying none of the six sequences still
+reaches the SELECT list verbatim, so `Alias: "a, (SELECT password FROM users)
+b"` renders. Making the alias an identifier — the grammar treatment `Select`'s
+string columns got above — is a separate, larger break, and #1153 asked only that
+the two construction paths converge. They now do: whatever `Expr()` refuses, a literal
 refuses. What `Expr()` accepts is unchanged and remains developer-controlled
 input by contract.
 
-See `[C60.29]` in [migrations.md](migrations.md).
+See `[C60.29]` and `[C61.9]` in [migrations.md](migrations.md).
 
 ## Addendum (2026-08-23): `Columns.As` is a validated door, and it panics
 
