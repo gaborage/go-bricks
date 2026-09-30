@@ -538,6 +538,11 @@ func (s *Server) startProbeListener(tlsCfg *tls.Config) (closeProbes func(), err
 	if collision := s.cfg.Server.CheckProbeCollision(); collision != nil {
 		return nil, collision
 	}
+	// The check presents no client certificate: under require-verify it could never
+	// pass, while verify lets its certless handshake complete (ADR-130).
+	if tlsCfg != nil && tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert {
+		return nil, config.ProbesRequireVerifyError()
+	}
 	if checkErr := s.buildAppListenerCheck(tlsCfg); checkErr != nil {
 		return nil, checkErr
 	}

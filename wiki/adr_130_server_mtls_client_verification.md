@@ -50,19 +50,20 @@ way to demand or verify a client certificate: the framework owns the listener's 
    leaf identifies the hop; the forwarded certificate identifies the end client; both are
    identification. Under that posture the leaf-validation hook sees the proxy's certificate, not the
    end client's, and a SAN or OU allowlist written for partners would reject the proxy.
-7. **The probe listener will refuse only `require-verify`** (decided; ships in a later change).
-   The internal probe listener's application-listener check (ADR-120) dials with no client
-   certificate. Under `require-verify` every such handshake fails and `/ready` would stay 503
-   forever, so `require-verify` beside `server.probes.port > 0` becomes a startup error naming both
-   keys. `verify` beside the probe listener
-   is allowed: a handshake with no client certificate completes under `VerifyClientCertIfGiven`.
+7. **The probe listener refuses only `require-verify`.** The internal probe listener's
+   application-listener check (ADR-120) dials with no client certificate. Under `require-verify`
+   every such handshake fails and `/ready` would stay 503 forever, so `require-verify` beside
+   `server.probes.port > 0` is a startup error naming both keys: config validation refuses it, and
+   `Start` refuses it again before either bind for a config assembled in Go. `verify` beside the
+   probe listener is allowed: a handshake with no client certificate completes under
+   `VerifyClientCertIfGiven`.
 
 **To follow (not in this change):** a leaf-validation hook (SAN/OU allowlists) passed through
 `server.NewWithOptions` and `app.Options.ServerOptions`, run as `VerifyPeerCertificate` after chain
 verification and again from `VerifyConnection` on a resumed session, where `VerifyPeerCertificate`
 is skipped; a hook with TLS enabled and no verifying policy fails `Start` (it would be inert on an
-open endpoint), while a hook with TLS disabled only WARNs; the probe refusal in 7; the no-cert,
-wrong-CA and valid handshake matrix; and the ADR-042 and wiki updates.
+open endpoint), while a hook with TLS disabled only WARNs; the no-cert, wrong-CA and valid
+handshake matrix; and the ADR-042 and wiki updates.
 
 ## Consequences
 
@@ -77,5 +78,6 @@ wrong-CA and valid handshake matrix; and the ADR-042 and wiki updates.
 
 - [ADR-042](adr_042_server_tls.md), [ADR-043](adr_043_forwarded_client_cert.md),
   [ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)
-- `config/server_section.go` (`validateServerTLSClientAuth`), `server/tls.go`
-  (`buildServerTLSConfig`, `parseClientAuth`)
+- `config/server_section.go` (`validateServerTLSClientAuth`, `validateServerProbes`),
+  `server/tls.go` (`buildServerTLSConfig`, `parseClientAuth`), `server/server.go`
+  (`startProbeListener`)

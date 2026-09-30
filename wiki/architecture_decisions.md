@@ -2126,8 +2126,9 @@ without a policy is refused, and an empty, unreadable or corrupt bundle fails `S
 under a disabled listener WARN, as ADR-042's material does. The `MinVersion` floor is unchanged.
 Verification identifies the caller; the deployment still authorizes. It composes with
 `server.forwardedclientcert`: the mTLS leaf identifies the hop, the forwarded certificate the end
-client. Decided, to follow: the leaf-validation hook with its resumption guard, and refusing
-`require-verify` (not `verify`) beside the probe listener.
+client. `require-verify` (not `verify`) is refused beside the probe listener, whose self-check
+presents no client certificate. Decided, to follow: the leaf-validation hook with its resumption
+guard.
 
 **Key Benefits:** app-terminated partner mTLS without an LB, fail-fast on every half-configured
 shape.

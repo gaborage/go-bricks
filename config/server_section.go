@@ -127,7 +127,20 @@ func validateServerProbes(cfg *ServerConfig) error {
 		return NewInvalidFieldError(fieldServerProbesPort, fmt.Sprintf(errInvalidField, cfg.Probes.Port),
 			[]string{"0 (disabled)", portRange})
 	}
+	if cfg.Probes.Port > 0 && cfg.TLS.Enabled && cfg.TLS.ClientAuth == tlsClientAuthRequireVerify {
+		return ProbesRequireVerifyError()
+	}
 	return cfg.CheckProbeCollision()
+}
+
+// ProbesRequireVerifyError is the refusal of server.probes.port beside
+// server.tls.clientauth require-verify: the probe listener's application-listener check
+// presents no client certificate, so /ready could never pass (ADR-130). Config
+// validation and the server's Start-time re-check both return it.
+func ProbesRequireVerifyError() *ConfigError {
+	refusal := NewValidationError(fieldServerProbesPort, errProbesRequireVerify)
+	refusal.Action = actionProbesRequireVerify
+	return refusal
 }
 
 // Rejection reasons from ParseTrustedProxyCIDR. Unexported: only this package

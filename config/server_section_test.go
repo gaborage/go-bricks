@@ -654,3 +654,38 @@ func TestValidateServerTLSClientAuthNamesValidValues(t *testing.T) {
 		assert.Contains(t, err.Error(), "required when server.tls.clientauth is set")
 	})
 }
+
+// TestServerProbesRefuseRequireVerify pins that the probe listener's certless
+// application-listener check rules out require-verify, naming both keys, while verify
+// and a staged policy on a disabled listener stay allowed.
+func TestServerProbesRefuseRequireVerify(t *testing.T) {
+	withProbes := func(cfg ServerConfig) ServerConfig {
+		cfg.Probes = ProbesConfig{Port: 9090}
+		return cfg
+	}
+
+	t.Run("require_verify_refused", func(t *testing.T) {
+		cfg := withProbes(mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, ""))
+		err := checkServer(&cfg)
+		var cfgErr *ConfigError
+		require.ErrorAs(t, err, &cfgErr)
+		assert.Equal(t, fieldServerProbesPort, cfgErr.Field)
+		assert.Contains(t, err.Error(), fieldServerTLSClientAuth)
+	})
+
+	t.Run("verify_allowed", func(t *testing.T) {
+		cfg := withProbes(mtlsServerConfig(tlsClientAuthVerify, testClientCAFile, ""))
+		assert.NoError(t, checkServer(&cfg))
+	})
+
+	t.Run("staged_require_verify_allowed", func(t *testing.T) {
+		cfg := withProbes(mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, ""))
+		cfg.TLS.Enabled = false
+		assert.NoError(t, checkServer(&cfg))
+	})
+
+	t.Run("require_verify_without_probes_allowed", func(t *testing.T) {
+		cfg := mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, "")
+		assert.NoError(t, checkServer(&cfg))
+	})
+}
