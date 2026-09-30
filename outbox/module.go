@@ -38,6 +38,10 @@ type Module struct {
 	getDB  func(context.Context) (dbtypes.Interface, error)
 	getMsg func(context.Context) (messaging.AMQPClient, error)
 
+	// messagingConfigured is ModuleDeps.MessagingConfigured, the Resource plan's answer for
+	// deps.Messaging: false means every call would fail. Read only by the per-tenant ledger.
+	messagingConfigured bool
+
 	// sharedDB/sharedMsg are the control-plane ("" key) resolvers injected by
 	// app.RegisterModule. Used only when outbox.tenancy=shared.
 	sharedDB  func(context.Context) (dbtypes.Interface, error)
@@ -86,6 +90,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.config = deps.Config
 	m.getDB = deps.DB
 	m.getMsg = deps.Messaging
+	m.messagingConfigured = deps.MessagingConfigured
 
 	if m.config != nil {
 		m.cfg = m.config.Outbox
@@ -120,7 +125,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	}
 
 	// Tenancy guard-order: resolver-presence/swap → shared+static-tenants conflict →
-	// messaging-static → per-tenant fan-out guard. Split into two helpers (mirroring
+	// per-tenant fan-out guard → broker check. Split into two helpers (mirroring
 	// validatePublishTimeout below) to keep Init's cyclomatic complexity within budget.
 	if err := m.applySharedTenancy(); err != nil {
 		return err
@@ -181,29 +186,11 @@ func (m *Module) applySharedTenancy() error {
 }
 
 // checkTenancyFanOutGuards fails fast on configurations the relay cannot deliver
-// against, given the resolved tenancy mode: the single-tenant/shared-static-source
-// broker check (issue #366) and the per-tenant fan-out enumerability check. Split out
-// of Init to keep its cyclomatic complexity within budget (gocyclo).
+// against: the per-tenant fan-out enumerability check, then the broker check (issue
+// #366). Fan-out runs first so a multi-tenant deployment with nothing to fan out to gets
+// that actionable error even when messaging is unavailable too. Split out of Init to keep
+// its cyclomatic complexity within budget (gocyclo).
 func (m *Module) checkTenancyFanOutGuards() error {
-	// Fail fast: in single-tenant mode (and shared tenancy with a static source) the
-	// broker URL must be set at startup, otherwise the relay treats the broker as
-	// permanently unreachable and advances every pending event's retry_count on every
-	// poll without ever delivering (issue #366). Multi-tenant per-tenant mode resolves
-	// messaging per-tenant via the resource source, so a static check would yield false
-	// positives — skip it there. Shared tenancy with a dynamic source resolves "" at
-	// runtime too, so it is skipped here as well (relay outage errors stay visible).
-	if m.config != nil && !config.IsMessagingConfigured(&m.config.Messaging) {
-		switch {
-		case !m.config.Multitenant.Enabled && !m.sharedLedger():
-			return errors.New("outbox: messaging is not configured but outbox.enabled=true; " +
-				"set messaging.broker.url (or env MESSAGING_BROKER_URL) or set outbox.enabled=false")
-		case m.sharedLedger() && m.config.Source.Type != config.SourceTypeDynamic:
-			return errors.New("outbox: tenancy=shared with a static source requires the root " +
-				"messaging.broker.url (the shared relay publishes on the control-plane broker); " +
-				"set messaging.broker.url or use a dynamic source that resolves the \"\" key")
-		}
-	}
-
 	// Fail fast on multi-tenant configurations the relay cannot fan out across, rather
 	// than silently never relaying events (the prior behavior: the relay's tenant-less
 	// context could not resolve any tenant's database). Shared tenancy takes the single
@@ -221,6 +208,44 @@ func (m *Module) checkTenancyFanOutGuards() error {
 				"the relay would never deliver any events. Configure multitenant.tenants, set outbox.tenancy=shared, " +
 				"or set outbox.enabled=false")
 		}
+	}
+
+	if m.sharedLedger() {
+		return m.checkSharedLedgerBroker()
+	}
+	return m.checkPerTenantLedgerBroker()
+}
+
+// checkPerTenantLedgerBroker refuses a per-tenant ledger whose messaging the Resource plan
+// found unavailable (ModuleDeps.MessagingConfigured false): every resolve the relay makes
+// would fail, advancing each pending event's retry_count on every poll without ever
+// delivering (issue #366). The flag carries the answer of the store serving the keys
+// (Options.ResourceSource, or the built-in one over the root blocks), not root config
+// (ADR-128). The text follows where messaging resolves: per tenant under multi-tenant
+// messaging.tenancy: per-tenant, otherwise on the control-plane key "".
+func (m *Module) checkPerTenantLedgerBroker() error {
+	if m.messagingConfigured {
+		return nil
+	}
+	if m.config != nil && m.config.Multitenant.Enabled && m.config.Messaging.Tenancy != config.TenancyShared {
+		return errors.New("outbox: messaging is not configured but outbox.enabled=true: under messaging.tenancy: per-tenant " +
+			"no tenant resolves a broker (ModuleDeps.MessagingConfigured is false; a hand-built ModuleDeps must set it); " +
+			"set multitenant.tenants.<id>.messaging.url for each tenant or set outbox.enabled=false")
+	}
+	return errors.New("outbox: messaging is not configured but outbox.enabled=true: the control-plane key \"\" holds no broker " +
+		"(ModuleDeps.MessagingConfigured is false; a hand-built ModuleDeps must set it); set messaging.broker.url " +
+		"(or env MESSAGING_BROKER_URL), have the custom resource source answer \"\" with a broker, or set outbox.enabled=false")
+}
+
+// checkSharedLedgerBroker refuses a shared ledger with a static source when the root
+// messaging.broker.url is empty: the shared relay publishes on the control-plane broker.
+// A dynamic source resolves "" at runtime, so it is exempt (relay outage errors stay
+// visible). Never reads MessagingConfigured, which speaks for deps.Messaging, not the shared resolver.
+func (m *Module) checkSharedLedgerBroker() error {
+	if m.config != nil && !config.IsMessagingConfigured(&m.config.Messaging) && m.config.Source.Type != config.SourceTypeDynamic {
+		return errors.New("outbox: tenancy=shared with a static source requires the root " +
+			"messaging.broker.url (the shared relay publishes on the control-plane broker); " +
+			"set messaging.broker.url or use a dynamic source that resolves the \"\" key")
 	}
 	return nil
 }

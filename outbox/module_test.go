@@ -120,7 +120,8 @@ func TestModuleInitEnabledWithNilMessaging(t *testing.T) {
 func TestModuleInitEnabledWithBothResolvers(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true},
 			Messaging: config.MessagingConfig{
@@ -155,9 +156,10 @@ func TestModuleInitDisabledAllowsNilResolvers(t *testing.T) {
 	require.NoError(t, err, "Nil resolvers should be allowed when outbox is disabled")
 }
 
-// TestModuleInitEnabledMessagingUnconfiguredSingleTenant guards issue #366:
-// outbox.enabled=true with no messaging.broker.url must fail at startup instead of
-// letting the relay advance every event's retry_count each poll without delivering.
+// TestModuleInitEnabledMessagingUnconfiguredSingleTenant guards issue #366: a
+// per-tenant ledger whose MessagingConfigured is false (the Resource plan found no broker
+// for "") must fail at startup instead of letting the relay advance every event's
+// retry_count each poll without delivering.
 func TestModuleInitEnabledMessagingUnconfiguredSingleTenant(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
@@ -177,6 +179,7 @@ func TestModuleInitEnabledMessagingUnconfiguredSingleTenant(t *testing.T) {
 	err := m.Init(deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "messaging is not configured")
+	assert.Contains(t, err.Error(), "messaging.broker.url")
 }
 
 // TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout guards the fail-fast: a
@@ -185,7 +188,8 @@ func TestModuleInitEnabledMessagingUnconfiguredSingleTenant(t *testing.T) {
 func TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 10 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -210,7 +214,8 @@ func TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout(t *testing.T) {
 func TestModuleInitRejectsPublishTimeoutBelowReadyTimeout(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 3 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -234,7 +239,8 @@ func TestModuleInitRejectsPublishTimeoutBelowReadyTimeout(t *testing.T) {
 func TestModuleInitRejectsPublishTimeoutBelowResendDelay(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -258,7 +264,8 @@ func TestModuleInitRejectsPublishTimeoutBelowResendDelay(t *testing.T) {
 func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -282,7 +289,8 @@ func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: oversizedShortStr},
 			Messaging: config.MessagingConfig{
@@ -306,7 +314,8 @@ func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
 func TestModuleInitAllowsAMaxLengthDefaultExchange(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: maxLengthShortStr},
 			Messaging: config.MessagingConfig{
@@ -321,7 +330,7 @@ func TestModuleInitAllowsAMaxLengthDefaultExchange(t *testing.T) {
 }
 
 // TestModuleInitMessagingUnconfiguredErrorPrecedesTimeoutGuard pins Init's error
-// ordering: with no broker URL AND a publishtimeout below connectiontimeout, the
+// ordering: with MessagingConfigured false AND a publishtimeout below connectiontimeout, the
 // actionable root cause ("messaging is not configured") must surface, not the derived
 // timeout complaint (see the validatePublishTimeout call order in Init).
 func TestModuleInitMessagingUnconfiguredErrorPrecedesTimeoutGuard(t *testing.T) {
@@ -389,10 +398,11 @@ func TestModuleInitMultiTenantGuardFiresOnValidatedDefaults(t *testing.T) {
 
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger:    logger.New("info", false),
-		Config:    cfg,
-		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
+		Config:              cfg,
+		DB:                  func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging:           func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
 	}
 
 	err := m.Init(deps)
@@ -401,34 +411,71 @@ func TestModuleInitMultiTenantGuardFiresOnValidatedDefaults(t *testing.T) {
 	assert.Contains(t, err.Error(), "connectiontimeout")
 }
 
-// TestModuleInitEnabledMessagingUnconfiguredMultiTenant verifies the static
-// check is skipped when multitenant.enabled=true — each tenant supplies its
-// own broker URL via the resource source, so a global check would be wrong.
+// TestModuleInitEnabledMessagingUnconfiguredMultiTenant pins the per-tenant ledger under
+// messaging.tenancy: per-tenant: MessagingConfigured, not the empty root broker URL,
+// decides, and the refusal points at the tenants' broker, never at the root key that
+// config rejects beside static tenants.
 func TestModuleInitEnabledMessagingUnconfiguredMultiTenant(t *testing.T) {
-	m := NewModule()
-	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
-		Config: &config.Config{
-			Outbox: config.OutboxConfig{Enabled: true},
-			Multitenant: config.MultitenantConfig{
-				Enabled: true,
-				// Static tenants are required for the relay to fan out; messaging is
-				// resolved per-tenant, so the global broker URL stays intentionally empty.
-				Tenants: map[string]config.TenantEntry{"tenant-a": {}},
-			},
-			// Messaging.Broker.URL intentionally empty.
-		},
-		DB: func(_ context.Context) (dbtypes.Interface, error) {
-			return nil, nil
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, nil
-		},
+	tests := []struct {
+		name       string
+		configured bool
+		wantErr    bool
+	}{
+		{name: "tenant_broker_configured_boots", configured: true},
+		{name: "no_tenant_broker_refuses", wantErr: true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModule()
+			deps := initDeps(&config.Config{
+				Outbox: config.OutboxConfig{Enabled: true},
+				Multitenant: config.MultitenantConfig{
+					Enabled: true,
+					Tenants: map[string]config.TenantEntry{"tenant-a": {
+						Messaging: config.TenantMessagingConfig{URL: "amqp://tenant-a/"},
+					}},
+				},
+				Messaging: config.MessagingConfig{Tenancy: config.TenancyPerTenant},
+			}, stubSharedDB)
+			deps.MessagingConfigured = tt.configured
 
-	err := m.Init(deps)
-	require.NoError(t, err)
-	assert.NotNil(t, m.publisher, "Publisher should be initialized in static multi-tenant mode even with empty global broker URL")
+			err := m.Init(deps)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				assert.NotNil(t, m.publisher)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "messaging is not configured")
+			assert.Contains(t, err.Error(), "multitenant.tenants.")
+			assert.Contains(t, err.Error(), ".messaging.url")
+			assert.NotContains(t, err.Error(), "messaging.broker.url")
+		})
+	}
+}
+
+// TestModuleInitStreamOnlyOutboxRefusesWithoutControlPlaneBroker pins ADR-128's stream-only
+// row: under multi-tenant messaging.tenancy: shared the per-tenant ledger's AMQP lane
+// resolves on "", so with MessagingConfigured false it refuses even when every row targets
+// a super stream — as single-tenant already did.
+func TestModuleInitStreamOnlyOutboxRefusesWithoutControlPlaneBroker(t *testing.T) {
+	deps := initDeps(&config.Config{
+		Outbox: config.OutboxConfig{Enabled: true, SuperStreams: []string{"customers"}},
+		Multitenant: config.MultitenantConfig{
+			Enabled: true,
+			Tenants: map[string]config.TenantEntry{"tenant-a": {}},
+		},
+		Messaging: config.MessagingConfig{
+			Tenancy: config.TenancyShared,
+			Streams: config.StreamsConfig{URI: "rabbitmq-stream://x:5552"},
+		},
+	}, stubSharedDB)
+	deps.MessagingConfigured = false
+
+	err := NewModule().Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging is not configured")
+	assert.Contains(t, err.Error(), "messaging.broker.url")
 }
 
 // outboxTestConfig returns a minimal enabled, single-tenant, static-source
@@ -445,10 +492,11 @@ func outboxTestConfig() *config.Config {
 // resolver are the only axes they vary.
 func initDeps(cfg *config.Config, db func(context.Context) (dbtypes.Interface, error)) *app.ModuleDeps {
 	return &app.ModuleDeps{
-		Logger:    logger.New("disabled", true),
-		Config:    cfg,
-		DB:        db,
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+		MessagingConfigured: true,
+		Logger:              logger.New("disabled", true),
+		Config:              cfg,
+		DB:                  db,
+		Messaging:           func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
 	}
 }
 
@@ -501,7 +549,9 @@ func TestModuleInitPerTenantMultitenantSkipsStartupProbe(t *testing.T) {
 		Outbox: config.OutboxConfig{Enabled: true},
 		Multitenant: config.MultitenantConfig{
 			Enabled: true,
-			Tenants: map[string]config.TenantEntry{"tenant-a": {}},
+			Tenants: map[string]config.TenantEntry{"tenant-a": {
+				Messaging: config.TenantMessagingConfig{URL: "amqp://tenant-a/"},
+			}},
 		},
 	}, func(_ context.Context) (dbtypes.Interface, error) {
 		return nil, errors.New("would fail the probe if it ran")
@@ -594,6 +644,8 @@ func TestModuleInitFailsWhenDatabaseResolverReturnsNilDatabase(t *testing.T) {
 	assert.Contains(t, err.Error(), "returned a nil database")
 }
 
+// TestModuleInitFailsFastForDynamicMultitenant leaves MessagingConfigured false: the
+// fan-out guard runs before the broker check, so its error wins.
 func TestModuleInitFailsFastForDynamicMultitenant(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
@@ -618,7 +670,8 @@ func TestModuleInitFailsFastForDynamicMultitenant(t *testing.T) {
 func TestModuleInitFailsFastForEmptyStaticMultitenant(t *testing.T) {
 	// multitenant enabled + static source (the default) but no tenants configured: the
 	// relay would fan out across zero tenants and silently deliver nothing, so Init must
-	// fail fast rather than register a no-op relay.
+	// fail fast rather than register a no-op relay. MessagingConfigured stays false: the
+	// fan-out guard runs before the broker check, so its error wins.
 	m := NewModule()
 	deps := &app.ModuleDeps{
 		Logger: logger.New("disabled", true),
@@ -786,7 +839,8 @@ func initEnabledModule(t *testing.T, dbVendor string, retention time.Duration) (
 	db := probeReadyDB(dbVendor)
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("disabled", true),
+		MessagingConfigured: true,
+		Logger:              logger.New("disabled", true),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{
 				Enabled:         true,
@@ -1179,7 +1233,8 @@ func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
 func newStreamTargetDeps(t *testing.T, superStreams []string, streamURI string) *app.ModuleDeps {
 	t.Helper()
 	return &app.ModuleDeps{
-		Logger: logger.New("disabled", true),
+		MessagingConfigured: true,
+		Logger:              logger.New("disabled", true),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, SuperStreams: superStreams},
 			Messaging: config.MessagingConfig{

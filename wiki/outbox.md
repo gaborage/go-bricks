@@ -459,6 +459,17 @@ is still a write and will fail against a read-only replica) — and fails `Init`
   `outbox.tablename`/`inbox.tablename`, or `inbox.hold.tablename` when the hold's probe raised it.
 - `database resolver returned a nil database` — a resolver contract violation (`(nil, nil)`).
 
+Before the database probe, the outbox refuses a relay that could never publish (#366), with
+`messaging is not configured`. For the per-tenant ledger (`outbox.tenancy: per-tenant`, the default)
+the Resource plan decides: `Init` refuses exactly when `ModuleDeps.MessagingConfigured` is false,
+the answer of the store serving the keys — `Options.ResourceSource`, or the built-in store over the
+root blocks — not the root `messaging.broker.url` (ADR-128). Where messaging resolves on `""`
+(single-tenant, or multi-tenant `messaging.tenancy: shared`) that is the control-plane broker; under
+`messaging.tenancy: per-tenant` the refusal names `multitenant.tenants.<id>.messaging.url`. The
+per-tenant fan-out guard (dynamic source, or no static tenants) runs first. The shared ledger still
+requires the root `messaging.broker.url` unless `source.type` is `dynamic`. The inbox has no broker
+check.
+
 **Exempt modes** (the `""` key is not statically resolvable at `Init` time, so the check is skipped —
 these deployments keep today's runtime-resolution behavior):
 

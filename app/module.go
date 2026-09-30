@@ -331,6 +331,8 @@ type ModuleDeps struct {
 	// messaging.tenancy: per-tenant) or the store is dynamic. The accessor can still
 	// return IsNotConfigured for the tenant in hand, so a true flag never replaces the
 	// error path; it only spares a throwaway resolve when the answer is already no.
+	// Framework readers: a per-tenant-ledger outbox refuses Init when MessagingConfigured
+	// is false (ADR-128), so a hand-built ModuleDeps handed to it must set the flag.
 	DBConfigured        bool
 	MessagingConfigured bool
 	CacheConfigured     bool
