@@ -49,9 +49,8 @@ unchanged. It runs rule 10 up to the encrypt-family pin, then resolves the inner
 does no decrypt and skips rule 11. `spec` may be a scanned or a document `Spec`, and `opts.Keys`
 is asked for PUBLIC keys only, so a producer can run it. Every refusal is code-identical to
 `Open`'s (a vector test pins all published vectors). What `Verify` accepts and `Open` refuses is
-any Subject that does not decrypt under the named key (the wrong key under the right `kid`, or a
-corrupt encrypted key, IV, ciphertext or tag) and a document that does not decode into the event
-type; among the published vectors, exactly `wrong_key_same_name` and
+any Subject that does not decrypt under the named key and a document that does not decode into
+the event type; among the published vectors, exactly `wrong_key_same_name` and
 `opened_document_wrong_shape`. Nothing before the decrypt can tell either (see "Residual" below).
 `Open` and `OpenDocument` keep their rule order and codes.
 
@@ -95,16 +94,6 @@ satisfies it, and `EventPublisher[T]` is unchanged, so consumer-written fakes ke
 mints placeholder bytes and a `jti`, its `PublishSealed` records a copy of every body, and it
 never seals, verifies or reaches a broker.
 
-### 4. Amendments
-
-- ADR-096: a second, narrow exported path to the wire, valid only on a seal-tagged handle and
-  only for bytes that verify against that handle's own declaration.
-- ADR-097: its Consequences residual "A caller-side retry after exhausted in-loop retries is a
-  new seal and a new `jti`" is withdrawn for producers that persist sealed bytes.
-  Producer-owned sealed-bytes stores join the rotation drain gate, and sign-family step 5
-  removes `v<N>` from the producer's keystore as well as every consumer's (both in
-  [sealing.md's rotation runbooks](sealing.md#rotation-runbooks)).
-
 ## Threat model
 
 - **Forged header over plaintext.** Checks limited to the unauthenticated protected header
@@ -117,8 +106,7 @@ never seals, verifies or reaches a broker.
   the door refuses the stored row with `SEAL_KID_UNKNOWN_GENERATION`, and
   `SealOpenRefusedError.Recoverable` is true as on the consumer, because it names the
   key-provisioning class. The producer still treats a retired generation as final:
-  re-provisioning `v<N>` on the producer alone would admit bytes every consumer refuses, so
-  recovery is a fresh `Seal` with a new `jti`.
+  re-provisioning `v<N>` on the producer alone would admit bytes every consumer refuses.
 - **Cross-tenant replay.** Strict `tid` equality means the signed tenant and the stamp cannot
   diverge.
 - **Ciphertext at rest.** A sealed-bytes store is storage. CVV/CVC, full track data and PIN

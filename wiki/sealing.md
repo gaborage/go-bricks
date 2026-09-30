@@ -22,7 +22,7 @@ declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),
 `messaging.SealTagName`) is the one predicate every door asks; the lane guards use it to
 refuse a seal-tagged `T` on streams and on the outbox struct door. `Publisher[T].Publish`
 seals when `T` is seal-tagged; `Publisher[T].Seal(ctx, evt)` runs the same sealer once and
-returns the body `Publish` would have put on the wire and the bare `jti` signed into it, for the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
+returns the body `Publish` would have put on the wire, for the outbox lane; the consumer side opens through the codec's `messaging.SealOpenerProvider`
 (#1359). Metrics:
 `seal.operation.duration` with `seal.operation = seal|open`, and
 `seal.open.failures.total` with `seal.error.code`.
