@@ -18,8 +18,7 @@ import (
 
 // withPair provisions an RSA generation the way the real keystore serves it: both halves.
 func withPair(s *kstest.MockKeyStore, logical, version string, k *rsa.PrivateKey) *kstest.MockKeyStore {
-	name := logical + "-" + version
-	return s.WithPrivateKey(name, k).WithPublicKey(name, &k.PublicKey).WithGeneration(logical, version, keystore.RolePrivate)
+	return withPrivate(s, logical, version, k).WithPublicKey(logical+"-"+version, &k.PublicKey)
 }
 
 // pairStore is the canonical producer (sign v1 pair, encrypt v1 public) as the real keystore serves it.
@@ -109,23 +108,27 @@ func TestVerifierAcceptsWhatTheSealerProduced(t *testing.T) {
 }
 
 // TestVerifierMapsEveryPublishedVector is the opener's vector test for the producer: the same
-// refusal assertions, and four vectors the verification accepts.
+// refusal assertions, and four vectors the verification accepts, each with its signed tid surfaced.
 func TestVerifierMapsEveryPublishedVector(t *testing.T) {
 	v := newVerifier(t, vectorProducerStore(t))
-	accepted := map[string]bool{
-		"wrong_key_same_name": true, "opened_document_wrong_shape": true, // nothing before the decrypt sees them
-		"tid_mismatch": true, "tid_absent_but_required": true, // the door judges the tid itself, by strict equality
+	accepted := map[string]string{
+		"wrong_key_same_name": vecTenant, "opened_document_wrong_shape": vecTenant, // nothing before the decrypt sees them
+		"tid_mismatch": "tenant-b", "tid_absent_but_required": "", // the door judges the tid itself, by strict equality
 	}
+	hits := 0
 	for _, tc := range loadVectors(t).Vectors {
 		t.Run(tc.Name, func(t *testing.T) {
 			env, err := v.Verify(t.Context(), []byte(tc.Body))
-			if accepted[tc.Name] {
+			if tid, ok := accepted[tc.Name]; ok {
+				hits++
 				require.NoError(t, err)
 				assert.NotEmpty(t, env.JTI)
+				assert.Equal(t, tid, env.TenantID, "the signed tid is surfaced, never judged")
 				return
 			}
 			assert.Zero(t, env)
 			requireSeamRefusal(t, err, tc.Code, tc.Layer, tc.Slot)
 		})
 	}
+	assert.Equal(t, len(accepted), hits, "every accepted vector is still published")
 }

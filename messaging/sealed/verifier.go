@@ -13,31 +13,24 @@ import (
 var _ sealruntime.VerifierProvider = codec{}
 
 // NewVerifier builds the producer's verification for stored sealed bytes: wire kids resolve as
-// PUBLIC keys by entry name, with no activation filter, so every provisioned generation of both
-// families is tagged as seal material here, where the app's role log still sees it.
+// PUBLIC keys by entry name, with no activation filter, so every provisioned RSA generation of
+// both families (never a secret) is tagged as seal material here, where the app's role log still sees it.
 func (codec) NewVerifier(sp sealruntime.Spec, eventType string, rt *sealruntime.Runtime) (sealruntime.Verifier, error) {
-	s, ok := sp.(spec)
-	if !ok || s.inner == nil {
-		return nil, errors.New("messaging/sealed: spec was not produced by this codec")
-	}
-	if rt == nil || rt.KeyStore == nil {
-		return nil, sealruntime.ErrKeyStoreMissing
-	}
-	families, ok := rt.KeyStore.(keystore.FamilyEnumerator)
-	if !ok {
-		return nil, ErrKeyStoreNoFamilies
+	inner, families, err := bind(sp, rt)
+	if err != nil {
+		return nil, err
 	}
 	if eventType == "" {
 		return nil, errors.New("messaging/sealed: a sealed publisher needs a non-empty EventType (the signed etyp is pinned to it)")
 	}
-	for _, logical := range []string{s.inner.SignLogical, s.inner.EncryptLogical} {
+	for _, logical := range []string{inner.SignLogical, inner.EncryptLogical} {
 		for _, gen := range families.Generations(logical) {
 			if gen.Role != keystore.RoleSecret {
 				recordSealRole(rt.KeyStore, gen.Kid())
 			}
 		}
 	}
-	return &verifier{spec: s.inner, eventType: eventType, keys: jose.NewKeyStoreResolver(rt.KeyStore)}, nil
+	return &verifier{spec: inner, eventType: eventType, keys: jose.NewKeyStoreResolver(rt.KeyStore)}, nil
 }
 
 // verifier is bound to one publisher declaration; immutable, shared by every goroutine and tenant.

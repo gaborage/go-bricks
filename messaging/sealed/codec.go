@@ -51,22 +51,15 @@ func (codec) ScanType(t reflect.Type) (sealruntime.Spec, error) {
 // and the encrypt generation a PUBLIC one, and pre-flight the sealer's options without
 // touching key material. Keys themselves resolve per call through jose.KeyResolver.
 func (codec) NewSealer(sp sealruntime.Spec, eventType string, rt *sealruntime.Runtime) (sealruntime.Sealer, error) {
-	s, ok := sp.(spec)
-	if !ok || s.inner == nil {
-		return nil, errors.New("messaging/sealed: spec was not produced by this codec")
-	}
-	if rt == nil || rt.KeyStore == nil {
-		return nil, sealruntime.ErrKeyStoreMissing
-	}
-	families, ok := rt.KeyStore.(keystore.FamilyEnumerator)
-	if !ok {
-		return nil, ErrKeyStoreNoFamilies
-	}
-	signGen, err := activeWithRole(families, rt.Active, s.inner.SignLogical, keystore.RolePrivate, "sign")
+	inner, families, err := bind(sp, rt)
 	if err != nil {
 		return nil, err
 	}
-	encGen, err := activeWithRole(families, rt.Active, s.inner.EncryptLogical, keystore.RolePublicOnly, "encrypt")
+	signGen, err := activeWithRole(families, rt.Active, inner.SignLogical, keystore.RolePrivate, "sign")
+	if err != nil {
+		return nil, err
+	}
+	encGen, err := activeWithRole(families, rt.Active, inner.EncryptLogical, keystore.RolePublicOnly, "encrypt")
 	if err != nil {
 		return nil, err
 	}
@@ -76,12 +69,29 @@ func (codec) NewSealer(sp sealruntime.Spec, eventType string, rt *sealruntime.Ru
 		EventType:  eventType,
 		Keys:       jose.NewKeyStoreResolver(rt.KeyStore),
 	}
-	if err := template.Validate(s.inner); err != nil {
+	if err := template.Validate(inner); err != nil {
 		return nil, err
 	}
 	// Only a producer that will start tags its kids for the dual-role check.
 	recordSealRole(rt.KeyStore, signGen.Kid(), encGen.Kid())
-	return &sealer{spec: s.inner, template: template}, nil
+	return &sealer{spec: inner, template: template}, nil
+}
+
+// bind is the precondition every constructor shares: a spec this codec scanned and a key store
+// that enumerates generation families.
+func bind(sp sealruntime.Spec, rt *sealruntime.Runtime) (*josesealed.Spec, keystore.FamilyEnumerator, error) {
+	s, ok := sp.(spec)
+	if !ok || s.inner == nil {
+		return nil, nil, errors.New("messaging/sealed: spec was not produced by this codec")
+	}
+	if rt == nil || rt.KeyStore == nil {
+		return nil, nil, sealruntime.ErrKeyStoreMissing
+	}
+	families, ok := rt.KeyStore.(keystore.FamilyEnumerator)
+	if !ok {
+		return nil, nil, ErrKeyStoreNoFamilies
+	}
+	return s.inner, families, nil
 }
 
 // activeWithRole resolves the active generation of logical and checks it holds the role

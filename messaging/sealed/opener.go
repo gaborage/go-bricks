@@ -34,35 +34,28 @@ var _ sealruntime.OpenerProvider = codec{}
 // checks provisioning, never activation — the wire kid is still resolved per message,
 // and the startup resolution is a check, never a cache.
 func (codec) NewOpener(sp sealruntime.Spec, eventType string, rt *sealruntime.Runtime) (sealruntime.Opener, error) {
-	s, ok := sp.(spec)
-	if !ok || s.inner == nil {
-		return nil, errors.New("messaging/sealed: spec was not produced by this codec")
-	}
-	if rt == nil || rt.KeyStore == nil {
-		return nil, sealruntime.ErrKeyStoreMissing
-	}
-	families, ok := rt.KeyStore.(keystore.FamilyEnumerator)
-	if !ok {
-		return nil, ErrKeyStoreNoFamilies
+	inner, families, err := bind(sp, rt)
+	if err != nil {
+		return nil, err
 	}
 	if eventType == "" {
 		return nil, errors.New("messaging/sealed: a sealed consumer needs a non-empty EventType (the signed etyp is pinned to it)")
 	}
 	keys := jose.NewKeyStoreResolver(rt.KeyStore)
-	if err := provisionedWithRole(families, keys, s.inner.SignLogical, keystore.RolePublicOnly, "sign"); err != nil {
+	if err := provisionedWithRole(families, keys, inner.SignLogical, keystore.RolePublicOnly, "sign"); err != nil {
 		return nil, err
 	}
-	if err := provisionedWithRole(families, keys, s.inner.EncryptLogical, keystore.RolePrivate, "encrypt"); err != nil {
+	if err := provisionedWithRole(families, keys, inner.EncryptLogical, keystore.RolePrivate, "encrypt"); err != nil {
 		return nil, err
 	}
 	// Every generation above resolved in its role, so the tags below name only entries
 	// this consumer can actually open with.
-	for _, logical := range []string{s.inner.SignLogical, s.inner.EncryptLogical} {
+	for _, logical := range []string{inner.SignLogical, inner.EncryptLogical} {
 		for _, gen := range families.Generations(logical) {
 			recordSealRole(rt.KeyStore, gen.Kid())
 		}
 	}
-	return &opener{spec: s.inner, eventType: eventType, keys: keys}, nil
+	return &opener{spec: inner, eventType: eventType, keys: keys}, nil
 }
 
 // recordSealRole tags the entries sealing startup resolved, so the app can warn when
