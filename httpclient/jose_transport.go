@@ -29,6 +29,18 @@ const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
 // with errors.Is; it survives the client's own wrapping and the *url.Error net/http adds.
 var ErrJOSEPlaintextResponse = errors.New("httpclient: successful response was not JOSE-protected")
 
+// errJOSERejectedSuccess marks every error RoundTrip returns for a 2xx it refused — over
+// the size cap, failing jose.Open, or never unwrapped. The peer already honored the
+// request, so the client's retry loop treats a match as terminal (ADR-107).
+var errJOSERejectedSuccess = errors.New("httpclient: JOSE transport rejected a successful response")
+
+// rejectedSuccessError carries errJOSERejectedSuccess beside the refusal without changing
+// its message, so the cause stays matchable with errors.Is and errors.As.
+type rejectedSuccessError struct{ err error }
+
+func (e *rejectedSuccessError) Error() string   { return e.err.Error() }
+func (e *rejectedSuccessError) Unwrap() []error { return []error{e.err, errJOSERejectedSuccess} }
+
 // errEnvelopeUnbounded names the envelope-plus-unbounded-cap refusal. Build and RoundTrip
 // raise the same code from the same constructor so a caller matches one thing either way.
 func errEnvelopeUnbounded(message string) error {
@@ -194,6 +206,9 @@ func (t *JOSETransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, erro
 		// crypto failure instead of stale-but-readable ciphertext.
 		if resp.Body != nil {
 			_ = resp.Body.Close()
+		}
+		if IsSuccessStatus(resp.StatusCode) {
+			err = &rejectedSuccessError{err: err}
 		}
 		return nil, err
 	}
@@ -481,7 +496,8 @@ func refusalRequestID(req *nethttp.Request) string {
 // materialized on the heap before the overflow is detected.
 //
 // The overflow is mapped to a typed httpclient.ClientError (ValidationError) so
-// callers can distinguish it from network/IO errors via IsErrorType.
+// callers can distinguish it from network/IO errors via IsErrorType; the client
+// returns it with that type rather than re-wrapping it as a NetworkError.
 func readAndCloseBody(body io.ReadCloser, maxBytes int64) ([]byte, error) {
 	if body == nil {
 		return nil, nil

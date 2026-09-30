@@ -1265,8 +1265,146 @@ func TestBuilderWithJOSEPlaintextSuccessIsNotRetried(t *testing.T) {
 
 	resp, err := client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
 	require.ErrorIs(t, err, httpclient.ErrJOSEPlaintextResponse)
+	assert.True(t, httpclient.IsErrorType(err, httpclient.NetworkError), "the refusal keeps its NetworkError typing")
 	assert.Nil(t, resp)
 	assert.Equal(t, int64(1), hits.Load(), "a refused plaintext 2xx must not be re-sent")
+}
+
+// joseStatusServer answers every request with status, an application/jose Content-Type and
+// body, counting the hits.
+func joseStatusServer(status int, body []byte, hits *atomic.Int64) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", jose.ContentType)
+		w.WriteHeader(status)
+		_, _ = w.Write(body)
+	}))
+}
+
+// tamperedCompact seals a valid response and flips one character of its ciphertext segment.
+func tamperedCompact(t *testing.T, f *jositest.BidirectionalFixture) []byte {
+	t.Helper()
+	compact, err := jose.Seal([]byte(`{"ok":true}`), f.PeerOutbound, f.Resolver)
+	require.NoError(t, err)
+	parts := strings.Split(compact, ".")
+	require.Len(t, parts, 5, "the response must be a compact JWE")
+	ciphertext := []byte(parts[3])
+	mid := len(ciphertext) / 2
+	if ciphertext[mid] == 'A' {
+		ciphertext[mid] = 'B'
+	} else {
+		ciphertext[mid] = 'A'
+	}
+	parts[3] = string(ciphertext)
+	return []byte(strings.Join(parts, "."))
+}
+
+// TestBuilderWithJOSERejectedSuccessIsTerminal pins every 2xx the transport rejects after
+// the peer answered as terminal, not only the plaintext refusal: the peer already honored
+// the request, so a retry would duplicate its side effect. The over-cap case also pins the
+// typing — the transport's ValidationError reaches the caller without a NetworkError wrap.
+func TestBuilderWithJOSERejectedSuccessIsTerminal(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	tests := []struct {
+		name     string
+		body     []byte
+		maxBytes int64
+		check    func(t *testing.T, err error)
+	}{
+		{
+			name:     "over_cap_body",
+			body:     bytes.Repeat([]byte("A"), 1024),
+			maxBytes: 256,
+			check: func(t *testing.T, err error) {
+				assert.True(t, httpclient.IsErrorType(err, httpclient.ValidationError),
+					"over-cap must read as ValidationError, got %T: %v", err, err)
+				assert.False(t, httpclient.IsErrorType(err, httpclient.NetworkError), "over-cap must not read as NetworkError")
+				assert.Contains(t, err.Error(), "exceeds")
+			},
+		},
+		{
+			name: "malformed_jose_body",
+			body: []byte("not.a.real.jose.payload"),
+			check: func(t *testing.T, err error) {
+				assert.True(t, httpclient.IsJOSEError(err), "malformed body must be a JOSE error, got %v", err)
+			},
+		},
+		{
+			name: "tampered_jose_body",
+			body: tamperedCompact(t, f),
+			check: func(t *testing.T, err error) {
+				assert.True(t, httpclient.IsJOSEError(err), "tampered body must be a JOSE error, got %v", err)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var hits atomic.Int64
+			server := joseStatusServer(http.StatusOK, tt.body, &hits)
+			defer server.Close()
+
+			client, err := httpclient.NewBuilder(logger.New("info", false)).
+				WithJOSE(httpclient.JOSEConfig{
+					Outbound:         f.ClientOutbound,
+					Inbound:          f.ClientInbound,
+					Resolver:         f.Resolver,
+					MaxResponseBytes: tt.maxBytes,
+				}).
+				WithRetries(2, time.Millisecond).
+				Build()
+			require.NoError(t, err)
+
+			resp, err := client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			tt.check(t, err)
+			assert.Equal(t, int64(1), hits.Load(), "a rejected 2xx must not be re-sent")
+		})
+	}
+}
+
+// TestBuilderWithJOSERejectedFailureStatusStillRetries pins the boundary of that rule: a
+// peer that answered 5xx has not honored the request, so a JOSE failure on it retries up to
+// the budget and keeps its NetworkError typing, exactly as before.
+func TestBuilderWithJOSERejectedFailureStatusStillRetries(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	var hits atomic.Int64
+	server := joseStatusServer(http.StatusServiceUnavailable, []byte("not.a.real.jose.payload"), &hits)
+	defer server.Close()
+
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver}).
+		WithRetries(2, time.Millisecond).
+		Build()
+	require.NoError(t, err)
+
+	_, err = client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
+	require.Error(t, err)
+	assert.True(t, httpclient.IsJOSEError(err))
+	assert.True(t, httpclient.IsErrorType(err, httpclient.NetworkError))
+	assert.Equal(t, int64(3), hits.Load(), "a JOSE failure on a 5xx retries up to the budget")
+}
+
+// TestBuilderWithJOSERefusedConnectionStillRetries pins that a connection the peer never
+// accepted still retries up to the budget under a JOSE client.
+func TestBuilderWithJOSERefusedConnectionStillRetries(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	var attempts atomic.Int64
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver}).
+		WithRetries(2, time.Millisecond).
+		WithRequestInterceptor(func(context.Context, *http.Request) error {
+			attempts.Add(1)
+			return nil
+		}).
+		Build()
+	require.NoError(t, err)
+
+	_, err = client.Post(context.Background(), &httpclient.Request{URL: "http://127.0.0.1:1/", Body: []byte(`{"x":1}`)})
+	require.Error(t, err)
+	assert.True(t, httpclient.IsErrorType(err, httpclient.NetworkError))
+	assert.Equal(t, int64(3), attempts.Load(), "a refused connection retries up to the budget")
 }
 
 // TestBuilderWithJOSEPlaintextSuccessSkipsResponseInterceptors pins the half of the rule a
