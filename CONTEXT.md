@@ -374,9 +374,9 @@ _Avoid_: key pair (ambiguous), sender/receiver keys, role-split kids
 **Typed door**:
 The module-facing publish or consume surface that sees an event as its Go
 type — where declaration-driven behavior (sealing, decoding, validation)
-engages. Raw bytes below it are framework plumbing, not a module surface —
-the Sealed-bytes door is the one exception, and it verifies what it is
-handed — so what the type declares cannot be bypassed at a call site.
+engages. Raw bytes below it are framework plumbing, not a module surface
+(one exception: the Sealed-bytes door, below), so what the type declares
+cannot be bypassed at a call site.
 _Avoid_: typed API, generic publisher/consumer (the mechanism, not the seam),
 high-level client
 

@@ -162,10 +162,9 @@ throughout because each message names the generation that sealed it. The drain g
 same for both families: **queue depth AND the outbox retention window AND DLQ replay policy
 AND inbox parks AND every producer-owned sealed-bytes store** — old-generation rows replay
 byte-identical for the full retention window, and stored sealed bytes republish through
-`PublishSealed` until step 5 removes their generation from the producer, so gating on queue
-depth alone strands them unopenable. The consumers-before-flip gate is
-human-enforced until #769; getting it wrong shows up as a DLQ spike of
-`SEAL_KID_UNKNOWN_GENERATION`.
+`PublishSealed` until step 5 below, so gating on queue depth alone strands them unopenable.
+The consumers-before-flip gate is human-enforced until #769; getting it wrong shows up as a
+DLQ spike of `SEAL_KID_UNKNOWN_GENERATION`.
 
 ### Sign family (`sign=<logical>`)
 
@@ -189,9 +188,9 @@ The roles invert, so the order does too (G3):
 2. Provision the `v<N+1>` **PUBLIC** to the producer.
 3. Flip `messaging.seal.active.<logical>: v<N+1>` on the producer and redeploy.
 4. Drain gate (above).
-5. Remove `v<N>` from producer and consumers — on the producer that also stops `PublishSealed`
-   admitting `v<N>` bytes; destroy the retired privates — until the last one is gone, captured
-   and persisted ciphertext stays readable (no forward secrecy, no revocation).
+5. Remove `v<N>` from producer and consumers (the producer too, as the sign family's step 5
+   explains); destroy the retired privates — until the last one is gone, captured and persisted
+   ciphertext stays readable (no forward secrecy, no revocation).
 
 ### Provisioning a consumer N+1
 
@@ -310,7 +309,8 @@ rejection**; its one replay-related job is to make the message's identity un-for
   `EventType` rename is a coordinated release.
 - A caller-side retry after `Publish` exhausts its in-loop retries is a new seal and a new
   `jti`; business-key idempotency stays the consumer's contract — unless the producer persisted
-  `Seal`'s bytes and republishes them through `PublishSealed`, which keeps the `jti` (ADR-131).
+  `Seal`'s bytes and republishes them through
+  [`PublishSealed`](#republishing-stored-sealed-bytes-publishsealed), which keeps the `jti`.
   A stateless sealed consumer (no ledger) leaves every replay class open — the `WithMeta`
   requirement is the nudge.
 
@@ -339,22 +339,11 @@ err = h.PublishSealed(ctx, client, data)
 | the bytes fail verification | `messaging.ErrSealedBytesRejected`; the chain carries a `*messaging.SealOpenRefusedError` whose `Code` is the rule's `SEAL_*` code, and `errors.As` reaches the `*jose/sealed.OpenError` |
 | the signed `tid` is not the tenant this publish would stamp | `messaging.ErrSealedTenantMismatch` |
 
-**Checks.** Verification runs the opener's rules 1–9 unchanged:
-
-- a compact JWS with `typ` `vnd.gobricks.sealed.v1+json`;
-- the outer `alg`/`cty`/`crit` policy;
-- a sign `kid` that is a Generation of the declared sign family and resolves to a PUBLIC key;
-- the signature;
-- well-formed `jti`/`iat`/`etyp`/`sp` slots;
-- `etyp` equal to the handle's `EventType`;
-- `sp` equal to the declared sealed set.
-
-It then runs rule 10 up to the decrypt: the Subject is a compact JWE whose header passes the
-inner policy, whose `iss` equals the outer `kid`, and whose `kid` is a Generation of the declared
-encrypt family that resolves to a PUBLIC key. It resolves no private key, decrypts nothing and
-decodes nothing. Kids resolve by entry name, with no activation filter. Bytes sealed under
-`v<N>` keep publishing after `messaging.seal.active` flips to `v<N+1>`, until step 5 removes
-`v<N>` from this producer's keystore.
+**Checks.** Verification is `jose/sealed.Verify`, the
+[producer side of the rule order](#opening-rule-order): the opener's rules 1–9 unchanged, then
+rule 10 up to the decrypt. It resolves no private key, decrypts nothing and decodes nothing.
+Kids resolve by entry name, with no activation filter. Bytes sealed under `v<N>` keep publishing
+after `messaging.seal.active` flips to `v<N+1>`, until [rotation step 5](#rotation-runbooks).
 
 **Tenant rule.** The signed `tid` must equal the tenant `Publish` would stamp for the same `ctx`
 and client: the context's tenant, else the client's pool key. An absent `tid` counts as no
@@ -380,8 +369,8 @@ broker NACK, and the caller sees `ErrPublishNacked`.
 **Dedup.** Every republish of the same bytes carries the same `jti`. `Seal` returns it bare, and
 the go-bricks inbox stores `<SignFamily>:<jti>`. A retry is therefore deduplicated only within
 `inbox.retentionperiod` (7 days by default), and only while the bytes' sign and encrypt
-generations are still provisioned on the consumer. After step 5 the producer refuses the stored
-bytes, and recovery is a fresh `Seal`, which mints a new `jti`.
+generations are still provisioned on the consumer. After [rotation step 5](#rotation-runbooks),
+recovery is a fresh `Seal`, which mints a new `jti`.
 
 **Residual.** A body signed by this producer's own sign family but encrypted to the wrong key
 under the right `kid`, or whose document does not decode into `T`, passes the door. The consumer
@@ -393,8 +382,8 @@ outbox's SAD warning ([outbox.md](outbox.md)). Persisted ciphertext stays readab
 retired encrypt private key that sealed it is destroyed (no forward secrecy).
 
 **Tests.** Depend on `messaging.SealedEventPublisher[T]` (`Seal` + `PublishSealed`, which
-`*Publisher[T]` satisfies) and inject `messaging/testing.CaptureSealedPublisher[T]`. It mints
-placeholder bytes and records every body it is handed.
+`*Publisher[T]` satisfies) and inject `messaging/testing.CaptureSealedPublisher[T]`
+([testing.md](testing.md#messaging-publish-testing)).
 
 ## Minting test events with rabbitmqadmin (seal-event CLI)
 
@@ -548,12 +537,8 @@ stay uncapped.
   publish door that sealing engages from removed raw byte publishing (`[C63.1]`, ADR-096).
 - A keystore YAML entry binding a name to material remains a trust act, scoped to that
   entry. Two ids per outbox-lane event (`record.ID` and `jti`), correlated by `traceparent`.
-- `PublishSealed` admits a body its own sign family signed but encrypted to the wrong key under
-  the right `kid`, or whose document does not decode into `T`; the consumer refuses it
-  (ADR-131).
-- A stored sealed body's `jti` dedups a republish only within `inbox.retentionperiod` and while
-  its generations are provisioned on the consumer; after step 5 recovery is a fresh `Seal` and a
-  new `jti`.
+- `PublishSealed` passes some bodies the consumer refuses, and a stored body's `jti` dedups for a
+  bounded window: its [Residual and Dedup notes](#republishing-stored-sealed-bytes-publishsealed).
 
 ## Migration pointers
 
