@@ -335,3 +335,35 @@ func TestRegistryStopConsumersDoesNotWaitAgainAfterAbandoning(t *testing.T) {
 	line := log.Line(t, msgSupervisorsStillAbandoned)
 	assert.Equal(t, []string{"1"}, line.Values("running_supervisors"))
 }
+
+// TestRegistryStopConsumersReportsExitedSupervisorsWhenTheWindowIsSpent pins a stop
+// whose window is already closed on entry: supervisors that exited before the stop
+// began are a clean join, never an abandoned one, even though the drain waiter has not
+// run yet.
+func TestRegistryStopConsumersReportsExitedSupervisorsWhenTheWindowIsSpent(t *testing.T) {
+	client := &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: make(chan amqp.Delivery)}},
+	}
+	log := newRecordingLogger()
+	registry := NewRegistry(client, log)
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, registry.StartConsumers(ctx))
+	cancel()
+	require.Eventually(t, func() bool { return registry.runningSupervisors.Load() == 0 },
+		5*time.Second, time.Millisecond, "supervisor did not exit on its parent's cancel")
+
+	registry.stopBudget = 0
+	registry.StopConsumers()
+
+	log.Line(t, msgAllConsumersStopped)
+	for _, line := range log.Lines() {
+		assert.NotEqual(t, msgSupervisorsAbandoned, line.Msg)
+	}
+}

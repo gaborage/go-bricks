@@ -711,26 +711,44 @@ func (r *Registry) waitSupervisors(ctx context.Context, group *supervisorGroup, 
 		return
 	}
 	if group.abandoned.Load() {
-		select {
-		case <-group.drained():
+		if r.supervisorsExited(group) {
 			r.reportStopped(group)
-		default:
-			r.logger.Warn().
-				Int64("running_supervisors", r.runningSupervisors.Load()).
-				Msg("Consumer supervisors still running from an abandoned stop; not waiting again")
+			return
 		}
+		r.logger.Warn().
+			Int64("running_supervisors", r.runningSupervisors.Load()).
+			Msg("Consumer supervisors still running from an abandoned stop; not waiting again")
 		return
 	}
 	select {
 	case <-group.drained():
 		r.reportStopped(group)
 	case <-ctx.Done():
+		// A ctx already done on entry ties with a drained group in the select above;
+		// re-check so an exited group is never reported as abandoned.
+		if r.supervisorsExited(group) {
+			r.reportStopped(group)
+			return
+		}
 		group.abandoned.Store(true)
 		r.logger.Warn().
 			Int64("running_supervisors", r.runningSupervisors.Load()).
 			Dur("stop_budget", budget).
 			Msg("Consumer supervisors still running after the stop budget; abandoning them")
 	}
+}
+
+// supervisorsExited reports, without blocking, whether group's supervisors have all
+// exited. drained() closes its channel from a waiter goroutine that may not have run
+// yet, so a zero runningSupervisors — which counts every group, this one included —
+// also answers yes: each supervisor decrements it only after superviseConsumer returns.
+func (r *Registry) supervisorsExited(group *supervisorGroup) bool {
+	select {
+	case <-group.drained():
+		return true
+	default:
+	}
+	return r.runningSupervisors.Load() == 0
 }
 
 // reportStopped logs the completed join, once per group.
