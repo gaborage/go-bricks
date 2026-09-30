@@ -444,7 +444,7 @@ func (r *jwksResolver) fetch(ctx context.Context) fetchOutcome {
 	resp, err := r.client.Get(ctx, &httpclient.Request{URL: r.uri})
 	if err != nil {
 		if resp != nil && resp.StatusCode != nethttp.StatusOK {
-			return fetchOutcome{errType: refreshErrorStatus, err: fmt.Errorf("auth: jwks endpoint returned status %d", resp.StatusCode)}
+			return fetchOutcome{errType: refreshErrorStatus, err: &jwksStatusError{code: resp.StatusCode}}
 		}
 		if isOversizedBody(err) {
 			return fetchOutcome{errType: refreshErrorOversized, err: errBodyTooLarge}
@@ -455,7 +455,7 @@ func (r *jwksResolver) fetch(ctx context.Context) fetchOutcome {
 		return fetchOutcome{errType: refreshErrorTransport, err: errors.New("auth: jwks request returned no response")}
 	}
 	if resp.StatusCode != nethttp.StatusOK {
-		return fetchOutcome{errType: refreshErrorStatus, err: fmt.Errorf("auth: jwks endpoint returned status %d", resp.StatusCode)}
+		return fetchOutcome{errType: refreshErrorStatus, err: &jwksStatusError{code: resp.StatusCode}}
 	}
 	// Second line of defense behind the response interceptor, which only the
 	// default client carries: a caller-supplied httpclient.Client has already
@@ -470,7 +470,7 @@ func (r *jwksResolver) fetch(ctx context.Context) fetchOutcome {
 		return fetchOutcome{errType: refreshErrorParse, err: err}
 	}
 	if len(keys) == 0 {
-		return fetchOutcome{errType: refreshErrorEmpty, err: errors.New("auth: jwks document carries no usable RSA signing key")}
+		return fetchOutcome{errType: refreshErrorEmpty, err: errJWKSEmptyKeySet}
 	}
 	return fetchOutcome{keys: keys, dropped: dropped}
 }
