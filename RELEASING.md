@@ -35,9 +35,30 @@ On every push to `main` (and on demand via *Actions → release-please → Run w
 that computes the next version from Conventional-Commit PR titles and writes the
 `CHANGELOG.md` section + bumps `.release-please-manifest.json`. It does **not** tag or publish.
 
+### Land the `llms.txt` ladder before the Release PR
+
+CI's `llms-version` job runs on the Release PR only (its head branch starts with
+`release-please--`) and fails until `llms.txt` agrees with the manifest. It runs
+`scripts/check-llms-version.sh`, which requires two things:
+
+- the Version & Compatibility bullet declares exactly the manifest's version
+  (`- Reflects **go-bricks vX.Y.Z**.`);
+- the same bullet carries a ladder clause for it: `vX.Y.Z` followed by a verb
+  (`v0.70.0 made …`), summarizing that hop's `wiki/migrations.md` section and naming
+  its breaking atoms and ADRs.
+
+So before merging the Release PR, land a normal `docs(llms)` PR that bumps the
+declaration, appends the hop's ladder clause, and extends the Upgrade & Breaking
+Changes section's ladder, heading and table with the new edge. Once it merges,
+release-please rebuilds its branch on top and `llms-version` goes green. A
+`pull_request` run checks out the Release PR merged with `main`, so the job reads
+`main`'s `llms.txt`: re-running it before the docs PR merges stays red. To check locally:
+`scripts/check-llms-version.sh` (or pass `<manifest> <llms.txt>` paths).
+
 ## 2. Cut the release (local)
 
 ```bash
+# 0. The docs(llms) PR for vX.Y.Z has merged and the Release PR's llms-version check is green (§1).
 # 1. Merge the standing "chore(main): release vX.Y.Z" PR. This lands CHANGELOG + manifest on main.
 #    (If the breaking section needs ADR / migration links, add them to CHANGELOG.md in a quick
 #     follow-up commit on main BEFORE the next step.)
