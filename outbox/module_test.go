@@ -120,7 +120,8 @@ func TestModuleInitEnabledWithNilMessaging(t *testing.T) {
 func TestModuleInitEnabledWithBothResolvers(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true},
 			Messaging: config.MessagingConfig{
@@ -185,7 +186,8 @@ func TestModuleInitEnabledMessagingUnconfiguredSingleTenant(t *testing.T) {
 func TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 10 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -210,7 +212,8 @@ func TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout(t *testing.T) {
 func TestModuleInitRejectsPublishTimeoutBelowReadyTimeout(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 3 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -234,7 +237,8 @@ func TestModuleInitRejectsPublishTimeoutBelowReadyTimeout(t *testing.T) {
 func TestModuleInitRejectsPublishTimeoutBelowResendDelay(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -258,7 +262,8 @@ func TestModuleInitRejectsPublishTimeoutBelowResendDelay(t *testing.T) {
 func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second},
 			Messaging: config.MessagingConfig{
@@ -282,7 +287,8 @@ func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: oversizedShortStr},
 			Messaging: config.MessagingConfig{
@@ -306,7 +312,8 @@ func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
 func TestModuleInitAllowsAMaxLengthDefaultExchange(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("info", false),
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: maxLengthShortStr},
 			Messaging: config.MessagingConfig{
@@ -389,10 +396,11 @@ func TestModuleInitMultiTenantGuardFiresOnValidatedDefaults(t *testing.T) {
 
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger:    logger.New("info", false),
-		Config:    cfg,
-		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+		MessagingConfigured: true,
+		Logger:              logger.New("info", false),
+		Config:              cfg,
+		DB:                  func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging:           func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
 	}
 
 	err := m.Init(deps)
@@ -445,10 +453,11 @@ func outboxTestConfig() *config.Config {
 // resolver are the only axes they vary.
 func initDeps(cfg *config.Config, db func(context.Context) (dbtypes.Interface, error)) *app.ModuleDeps {
 	return &app.ModuleDeps{
-		Logger:    logger.New("disabled", true),
-		Config:    cfg,
-		DB:        db,
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+		MessagingConfigured: true,
+		Logger:              logger.New("disabled", true),
+		Config:              cfg,
+		DB:                  db,
+		Messaging:           func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
 	}
 }
 
@@ -786,7 +795,8 @@ func initEnabledModule(t *testing.T, dbVendor string, retention time.Duration) (
 	db := probeReadyDB(dbVendor)
 	m := NewModule()
 	deps := &app.ModuleDeps{
-		Logger: logger.New("disabled", true),
+		MessagingConfigured: true,
+		Logger:              logger.New("disabled", true),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{
 				Enabled:         true,
@@ -1179,7 +1189,8 @@ func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
 func newStreamTargetDeps(t *testing.T, superStreams []string, streamURI string) *app.ModuleDeps {
 	t.Helper()
 	return &app.ModuleDeps{
-		Logger: logger.New("disabled", true),
+		MessagingConfigured: true,
+		Logger:              logger.New("disabled", true),
 		Config: &config.Config{
 			Outbox: config.OutboxConfig{Enabled: true, SuperStreams: superStreams},
 			Messaging: config.MessagingConfig{
