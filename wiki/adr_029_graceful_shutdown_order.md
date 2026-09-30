@@ -3,6 +3,21 @@
 **Status:** Accepted
 **Date:** 2026-06-10
 
+> **Amended (2026-09-30, the consumer stop joins its handlers — breaking):** phase 2 no longer
+> only cancels. `Manager.StopConsumers(ctx)` — and `Registry.StopConsumers(ctx)` and
+> `RegistryInterface`, which gain the same `context.Context` parameter — cancels every consumer,
+> then waits until every consumer supervisor has exited, so no handler runs and no consumer state
+> is written after it returns. The wait is bounded by the EARLIER of the caller's deadline and a
+> fixed 5s cap mirroring the streams shutdown flush budget ([ADR-123](adr_123_streams_lost_topology_supervisor.md), which joins the streams supervisor within that budget):
+> the caller's context can shorten the join but never lengthen it, so the one `App.Shutdown`
+> context the phase is handed is not spent whole on a stuck handler before modules and the
+> telemetry flush run. On expiry it logs a WARN naming how many supervisors are still running and
+> the window it allowed, and returns. `Manager.Close()` keeps no context and joins within the
+> fixed cap alone; a join the stop phase already gave up on is not waited on again, so Close goes
+> on to close the clients. The context parameter is a compile break (`fix(messaging)!:`) rather
+> than an additive `StopConsumersContext`: the no-argument form would have joined on a budget the
+> caller could not see or shorten. See `[C70.14]` in [migrations.md](migrations.md) and #1685.
+>
 > **Amended (2026-08-29, the observability phase is best-effort):** phase 4 no longer
 > contributes to the error `App.Shutdown` — and therefore `App.Run()` — returns. A provider
 > `Shutdown` failure of any kind is logged once at WARN with the error and the phase duration,
@@ -40,8 +55,8 @@ So modules were shut down **first**, while the HTTP server was still serving req
 Reorder `App.Shutdown` to stop **inbound work first**, then tear down what it depends on:
 
 1. **HTTP server** — stop accepting new requests; drain in-flight handlers.
-2. **AMQP consumers** — stop delivering new messages (new `App.shutdownConsumers()` → `Manager.StopConsumers()`), *without* closing connections.
-3. **modules** — no new HTTP requests or AMQP deliveries are admitted; in-flight handlers may still be unwinding after cancellation, but no fresh work is handed to modules being torn down.
+2. **AMQP consumers** — stop delivering new messages (new `App.shutdownConsumers()` → `Manager.StopConsumers()`), *without* closing connections. Since the 2026-09-30 amendment the phase passes its context and joins in-flight handlers within it, capped at 5s.
+3. **modules** — no new HTTP requests or AMQP deliveries are admitted, and since the 2026-09-30 amendment no AMQP handler is still running unless the consumer join ran out of its window; no fresh work is handed to modules being torn down.
 4. **observability** — flush and shut down, best-effort: failures are warned, never folded into the shutdown error (2026-08-29 amendment above).
 5. **closers** (DB pools, messaging connections). Manager cleanup loops were a separate phase
    here until [ADR-067](adr_067_lifecycle_slots.md); each manager now stops its own sweep in
@@ -54,7 +69,7 @@ Reorder `App.Shutdown` to stop **inbound work first**, then tear down what it de
 **Behavioral change (not an API break):**
 
 - Shutdown now drains the HTTP server and stops consumers **before** modules are torn down. Applications whose module `Shutdown()` implicitly relied on the server still serving, or on consumers still running, will see the corrected order. No application code must change; `Manager.StopConsumers` is purely additive.
-- The framework stops handing **new** HTTP requests and AMQP messages to modules before they shut down — closing the dominant race (a message pulled and handled entirely against a shut-down module during a slow shutdown). `Manager.StopConsumers` cancels each consumer's context, which propagates to in-flight handlers, but does **not** synchronously join them; a handler already executing at the moment of cancellation may still briefly overlap module teardown. A fully synchronous drain (joining worker goroutines, with a bounded deadline so a stuck handler cannot hang shutdown) is possible future work.
+- The framework stops handing **new** HTTP requests and AMQP messages to modules before they shut down — closing the dominant race (a message pulled and handled entirely against a shut-down module during a slow shutdown). `Manager.StopConsumers` cancels each consumer's context, which propagates to in-flight handlers, but does **not** synchronously join them; a handler already executing at the moment of cancellation may still briefly overlap module teardown. A fully synchronous drain (joining worker goroutines, with a bounded deadline so a stuck handler cannot hang shutdown) is possible future work. *(Done by the 2026-09-30 amendment: the stop now joins, bounded by the caller's context and a 5s cap; only a handler that outlives that window can still overlap teardown.)*
 
 **Additive API:**
 

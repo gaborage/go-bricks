@@ -131,14 +131,14 @@ func TestManagerStopConsumersStopsRegistriesWithoutClosing(t *testing.T) {
 		consumers: map[string]*consumerEntry{"": {client: client, registry: reg}},
 	}
 
-	m.StopConsumers()
+	m.StopConsumers(context.Background())
 
 	assert.True(t, canceled, "consume context must be canceled so no new messages are delivered")
 	assert.False(t, reg.consumersActive, "registry must mark consumers stopped")
 	assert.False(t, client.closed, "StopConsumers must NOT close the AMQP connection — Close does that later")
 
 	// Idempotent: a second call must be a safe no-op (Close also stops consumers).
-	require.NotPanics(t, m.StopConsumers)
+	require.NotPanics(t, func() { m.StopConsumers(context.Background()) })
 }
 
 func TestMessagingManagerCachesPublishersPerKey(t *testing.T) {
@@ -1500,7 +1500,7 @@ func TestMessagingManagerStopConsumersKeepsReplayState(t *testing.T) {
 	decls := newSetupDeclarations()
 	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
 
-	manager.StopConsumers()
+	manager.StopConsumers(context.Background())
 	snapshot := callCount()
 
 	err := manager.EnsureConsumers(ctx, testTenantID, decls)

@@ -515,14 +515,14 @@ func capitalizeFirst(s string) string {
 // shutdownConsumers stops AMQP consumers from accepting NEW messages before modules are
 // torn down, so the framework stops handing fresh work to modules that are shutting down.
 // It cancels each consumer's context (which propagates to in-flight handlers) and joins them
-// within the messaging stop budget, and does NOT close the underlying connections — the
+// within ctx, capped at the messaging stop budget, and does NOT close the underlying connections — the
 // messaging-manager closer does that later. No-op when messaging is not configured.
-func (a *App) shutdownConsumers() {
+func (a *App) shutdownConsumers(ctx context.Context) {
 	if a.messagingManager == nil {
 		return
 	}
 	a.logger.Info().Msg("Stopping messaging consumers")
-	a.messagingManager.StopConsumers()
+	a.messagingManager.StopConsumers(ctx)
 }
 
 // shutdownObservability flushes and shuts down the observability provider. The phase is

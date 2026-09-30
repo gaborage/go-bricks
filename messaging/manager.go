@@ -624,7 +624,8 @@ func (m *Manager) StopCleanup() {
 // framework calls this during shutdown before tearing down modules so it stops delivering
 // fresh messages to modules that are about to shut down. Cancellation propagates to in-flight
 // handlers via their context, and the call then joins every registry's supervisors under one
-// shared consumerStopBudget, so it returns once no handler is running or the budget ran out.
+// shared window — ctx's deadline, capped at consumerStopBudget — so it returns once no handler
+// is running or the window closed.
 // The join happens after consMu is released, so a handler reading ConsumerStates cannot
 // deadlock it. Idempotent:
 // Registry.StopConsumers guards on its active flag, so a subsequent Close (which also stops
@@ -637,11 +638,11 @@ func (m *Manager) StopCleanup() {
 // so EnsureConsumers short-circuits on the unchanged hash, and a CHANGED hash is a hard error
 // rather than a fresh setup. The ADR-113 pass therefore stays dead for that key until the process
 // restarts; only a direct Registry.StartConsumers caller gets the re-arm.
-func (m *Manager) StopConsumers() {
+func (m *Manager) StopConsumers(ctx context.Context) {
 	m.consMu.Lock()
 	pending := cancelRegistries(m.consumers)
 	m.consMu.Unlock()
-	joinRegistries(pending)
+	joinRegistries(ctx, pending)
 }
 
 // registryJoin is a canceled registry and the supervisors it still has to join.
@@ -665,14 +666,14 @@ func cancelRegistries(consumers map[string]*consumerEntry) []registryJoin {
 	return pending
 }
 
-// joinRegistries waits for every canceled registry's supervisors under ONE shared
-// consumerStopBudget, so N registries cost at most one budget rather than N. Callers must
-// not hold consMu.
-func joinRegistries(pending []registryJoin) {
-	ctx, cancel := context.WithTimeout(context.Background(), consumerStopBudget)
+// joinRegistries waits for every canceled registry's supervisors under ONE shared window,
+// ctx's deadline capped at consumerStopBudget, so N registries cost at most one window
+// rather than N. Callers must not hold consMu.
+func joinRegistries(ctx context.Context, pending []registryJoin) {
+	ctx, cancel, budget := stopWindow(ctx, consumerStopBudget)
 	defer cancel()
 	for _, p := range pending {
-		p.registry.waitSupervisors(ctx, p.supervisors, consumerStopBudget)
+		p.registry.waitSupervisors(ctx, p.supervisors, budget)
 	}
 }
 
@@ -710,7 +711,8 @@ func (m *Manager) Close() error {
 	m.replayedHashs = make(map[string]uint64)
 	m.consMu.Unlock()
 
-	joinRegistries(pending)
+	// Close takes no context: its join is bounded by consumerStopBudget alone.
+	joinRegistries(context.Background(), pending)
 	for key, entry := range consumers {
 		if err := entry.client.Close(); err != nil {
 			allErrs = append(allErrs, fmt.Errorf("error closing consumer for key %s: %w", key, err))

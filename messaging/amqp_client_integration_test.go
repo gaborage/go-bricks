@@ -306,7 +306,7 @@ func TestDeclarativeDLQParksFailedDelivery(t *testing.T) {
 	require.NoError(t, decls.ReplayToRegistry(reg))
 	require.NoError(t, reg.DeclareInfrastructure(ctx))
 	require.NoError(t, reg.StartConsumers(ctx))
-	defer reg.StopConsumers()
+	defer reg.StopConsumers(context.Background())
 
 	dlqName := workQueueName + ".dlq"
 	dlqDeliveries, err := client.Consume(ctx, dlqName)

@@ -51,7 +51,7 @@ type RegistryInterface interface {
 	// Infrastructure lifecycle
 	DeclareInfrastructure(ctx context.Context) error
 	StartConsumers(ctx context.Context) error
-	StopConsumers()
+	StopConsumers(ctx context.Context)
 
 	// Accessor methods for testing/monitoring
 	Exchanges() map[string]*ExchangeDeclaration
@@ -638,11 +638,25 @@ func (r *Registry) rearmRedeclaring(ctx context.Context) {
 // StopConsumers gracefully stops all running consumers and halts topology repair
 // until a later StartConsumers re-arms it. It returns once every consumer
 // supervisor has exited — no handler runs and no consumer state is written after
-// that — or once consumerStopBudget has passed, whichever comes first.
-func (r *Registry) StopConsumers() {
-	ctx, cancel := context.WithTimeout(context.Background(), r.stopBudget)
+// that — or once ctx is done or consumerStopBudget has passed, whichever comes first.
+func (r *Registry) StopConsumers(ctx context.Context) {
+	ctx, cancel, budget := stopWindow(ctx, r.stopBudget)
 	defer cancel()
-	r.waitSupervisors(ctx, r.cancelConsumersAndRepair(), r.stopBudget)
+	r.waitSupervisors(ctx, r.cancelConsumersAndRepair(), budget)
+}
+
+// stopWindow bounds a consumer join by the earlier of ctx's deadline and budget: the
+// caller's deadline can shorten the join but never lengthen it past the budget, so a
+// caller holding a long shutdown deadline does not hand all of it to a stuck handler.
+// It returns the window it allows, for the WARN a timed-out join logs.
+func stopWindow(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc, time.Duration) {
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < budget {
+			budget = remaining
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	return ctx, cancel, budget
 }
 
 // cancelConsumersAndRepair cancels every consumer and halts topology repair, and

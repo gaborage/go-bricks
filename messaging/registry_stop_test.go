@@ -101,11 +101,11 @@ func startStopRegistry(t *testing.T, client AMQPClient, log *recordingLogger, ha
 
 // stopAsync runs StopConsumers on its own goroutine, calls atReturn the moment it
 // returns, and closes the returned channel after that.
-func stopAsync(registry *Registry, atReturn func()) <-chan struct{} {
+func stopAsync(ctx context.Context, registry *Registry, atReturn func()) <-chan struct{} {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		registry.StopConsumers()
+		registry.StopConsumers(ctx)
 		atReturn()
 	}()
 	return stopped
@@ -157,7 +157,7 @@ func TestRegistryStopConsumersJoinsSupervisors(t *testing.T) {
 	}
 
 	var callsAtReturn, finishedAtReturn int64
-	stopped := stopAsync(registry, func() {
+	stopped := stopAsync(context.Background(), registry, func() {
 		callsAtReturn = handler.calls.Load()
 		finishedAtReturn = handler.finished.Load()
 	})
@@ -199,7 +199,7 @@ func TestRegistryStopConsumersAbandonsAStuckHandlerAfterTheBudget(t *testing.T) 
 	}
 
 	start := time.Now()
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	assert.Less(t, time.Since(start), stopReturnsPromptlyLimit, "a stuck handler held StopConsumers past its budget")
 
 	line := log.Line(t, msgSupervisorsAbandoned)
@@ -243,7 +243,7 @@ func TestRegistryStopConsumersJoinsAnInFlightResubscribe(t *testing.T) {
 
 			var resubscribesAtReturn uint64
 			var runningAtReturn int64
-			stopped := stopAsync(registry, func() {
+			stopped := stopAsync(context.Background(), registry, func() {
 				resubscribesAtReturn = registry.ConsumerStates()[0].Resubscribes
 				runningAtReturn = registry.runningSupervisors.Load()
 			})
@@ -295,9 +295,9 @@ func TestRegistryStopConsumersTwiceReturnsPromptly(t *testing.T) {
 	log := newRecordingLogger()
 	registry := startStopRegistry(t, client, log, &countingTestHandler{})
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	start := time.Now()
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	assert.Less(t, time.Since(start), stopReturnsPromptlyLimit)
 	assert.Zero(t, registry.runningSupervisors.Load())
 	for _, line := range log.Lines() {
@@ -329,12 +329,12 @@ func TestRegistryStopConsumersDoesNotWaitAgainAfterAbandoning(t *testing.T) {
 	}
 
 	registry.stopBudget = shortStopBudgetForTests
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	log.Line(t, msgSupervisorsAbandoned)
 
 	registry.stopBudget = consumerStopBudget
 	start := time.Now()
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	assert.Less(t, time.Since(start), stopReturnsPromptlyLimit, "a second stop waited again on abandoned supervisors")
 	line := log.Line(t, msgSupervisorsStillAbandoned)
 	assert.Equal(t, []string{"1"}, line.Values("running_supervisors"))
@@ -364,10 +364,66 @@ func TestRegistryStopConsumersReportsExitedSupervisorsWhenTheWindowIsSpent(t *te
 		5*time.Second, time.Millisecond, "supervisor did not exit on its parent's cancel")
 
 	registry.stopBudget = 0
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	log.Line(t, msgAllConsumersStopped)
 	for _, line := range log.Lines() {
 		assert.NotEqual(t, msgSupervisorsAbandoned, line.Msg)
+	}
+}
+
+// TestRegistryStopConsumersIsBoundedByTheCallersContext pins the stop window: the caller's
+// deadline shortens the join, and the stop budget caps a caller deadline longer than it.
+// Either way a stuck handler cannot hold the stop past the window, and the WARN names it.
+func TestRegistryStopConsumersIsBoundedByTheCallersContext(t *testing.T) {
+	tests := []struct {
+		name           string
+		budget         time.Duration
+		callerDeadline time.Duration
+		wantBudgetMax  time.Duration
+	}{
+		{name: "caller_deadline_shortens_the_budget", budget: consumerStopBudget, callerDeadline: shortStopBudgetForTests, wantBudgetMax: shortStopBudgetForTests},
+		{name: "budget_caps_a_longer_caller_deadline", budget: shortStopBudgetForTests, callerDeadline: time.Hour, wantBudgetMax: shortStopBudgetForTests},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &resubscribingMockClient{
+				simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+				results:              []consumeResult{{ch: deliveriesFor(1)}},
+			}
+			log := newRecordingLogger()
+			handler := newGatedHandler()
+			registry := startStopRegistry(t, client, log, handler)
+			registry.stopBudget = tt.budget
+			t.Cleanup(func() {
+				close(handler.release)
+				require.Eventually(t, func() bool { return registry.runningSupervisors.Load() == 0 },
+					5*time.Second, time.Millisecond, "supervisor did not exit once released")
+			})
+
+			select {
+			case <-handler.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("handler never entered")
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), tt.callerDeadline)
+			defer cancel()
+			stopped := stopAsync(ctx, registry, func() {})
+			select {
+			case <-stopped:
+			case <-time.After(stopReturnsPromptlyLimit):
+				t.Fatal("a stuck handler held StopConsumers past its window")
+			}
+
+			line := log.Line(t, msgSupervisorsAbandoned)
+			assert.Equal(t, []string{"1"}, line.Values("running_supervisors"))
+			logged := line.Values("stop_budget")
+			require.Len(t, logged, 1)
+			window, err := time.ParseDuration(logged[0])
+			require.NoError(t, err)
+			assert.LessOrEqual(t, window, tt.wantBudgetMax, "the WARN must name the window the stop actually allowed")
+			assert.Positive(t, window)
+		})
 	}
 }

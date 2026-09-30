@@ -100,9 +100,9 @@ func (m *MockRegistry) StartConsumers(ctx context.Context) error {
 }
 
 // StopConsumers implements messaging.RegistryInterface
-func (m *MockRegistry) StopConsumers() {
+func (m *MockRegistry) StopConsumers(ctx context.Context) {
 	if m.hasExpectation("StopConsumers") {
-		m.Called()
+		m.Called(ctx)
 	}
 }
 
@@ -224,7 +224,7 @@ func (m *MockRegistry) ExpectStartConsumers(err error) *mock.Call {
 
 // ExpectStopConsumers sets up a stop consumers expectation
 func (m *MockRegistry) ExpectStopConsumers() *mock.Call {
-	return m.On("StopConsumers").Return()
+	return m.On("StopConsumers", mock.Anything).Return()
 }
 
 // ExpectValidatePublisher sets up a validate publisher expectation
