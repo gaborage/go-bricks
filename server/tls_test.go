@@ -518,13 +518,15 @@ func TestServerTLSRequireVerifyHandshake(t *testing.T) {
 		require.NoError(t, clientConn.SetDeadline(deadline))
 		srv := tls.Server(serverConn, serverCfg)
 		cli := tls.Client(clientConn, clientCfg)
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
 		done := make(chan error, 1)
 		go func() {
-			hsErr := srv.Handshake()
+			hsErr := srv.HandshakeContext(ctx)
 			_ = srv.Close()
 			done <- hsErr
 		}()
-		if cli.Handshake() == nil {
+		if cli.HandshakeContext(ctx) == nil {
 			_, _ = cli.Read(make([]byte, 1))
 		}
 		_ = cli.Close()
@@ -550,7 +552,7 @@ func TestServerTLSRequireVerifyHandshake(t *testing.T) {
 	t.Run("tls11_client_refused", func(t *testing.T) {
 		serverErr := handshake(&tls.Config{
 			RootCAs: roots, ServerName: "127.0.0.1",
-			MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11, //nolint:gosec // the point is the server refusing it
+			MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11,
 			Certificates: []tls.Certificate{clientPair},
 		})
 		require.Error(t, serverErr)
