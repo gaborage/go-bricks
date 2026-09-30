@@ -162,10 +162,11 @@ func defaultJWKSClient(cfg *Config, log logger.Logger) (httpclient.Client, error
 
 // newJWKSHTTPClient is the net/http client the default carries, and exists only
 // to install jwksCheckRedirect: Builder has no redirect-policy option, and the
-// *http.Client it shallow-copies is the single seam that survives Build. Its
-// Transport is deliberately left nil — Build preserves it, so the client dials
-// through net/http's default transport exactly as before — and its Timeout is
-// filled from WithTimeout.
+// *http.Client it shallow-copies is the single seam that survives Build; the
+// pinned policy replaces httpclient's default one, whose https→http refusal it
+// subsumes by refusing every non-https hop. Its Transport is deliberately left
+// nil — Build preserves it, so the client dials through net/http's default
+// transport exactly as before — and its Timeout is filled from WithTimeout.
 func newJWKSHTTPClient() *nethttp.Client {
 	return &nethttp.Client{CheckRedirect: jwksCheckRedirect}
 }

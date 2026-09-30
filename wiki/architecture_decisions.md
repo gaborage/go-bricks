@@ -2098,6 +2098,19 @@ control-plane one by where messaging resolves; the shared ledger is unchanged. A
 
 **Key Benefits:** the outbox and the app answer "can this relay publish?" from the same store.
 
+### [ADR-129: httpclient Refuses a Credential-Carrying https→http Redirect Client-Wide](adr_129_httpclient_refuses_credentialed_https_downgrade.md)
+
+**Date:** 2026-09-29 | **Status:** Accepted | **Breaking:** a followed `https`→`http` redirect whose hop carried `Authorization`, `Cookie` or `Proxy-Authorization` now fails with `ErrRedirectDowngrade`; the redirect-cap error reads `httpclient: stopped after 10 redirects`
+
+net/http strips credential headers on a redirect by hostname only, never scheme or port. Every
+client whose `*http.Client` has no `CheckRedirect` now gets the policy bearer-token-file clients
+had: a hop from an `https` URL to an `http` one, carrying any of the three
+request-credential headers of net/http's six sensitive ones, is refused, terminally, with the
+exported `httpclient.ErrRedirectDowngrade`; ten redirects stay the cap. A caller's
+`CheckRedirect` governs entirely. See [migrations.md](migrations.md) `[C70.13]`.
+
+**Key Benefits:** no credential source reaches a cleartext hop by default, whichever option set it.
+
 ---
 
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
@@ -2870,7 +2883,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-128) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-129) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -269,7 +269,9 @@ func (b *Builder) WithPeerName(name string) *Builder {
 // that already carries its own Transport, does not silently override it
 // either — Build fails with an error wrapping ErrUnsafeTransportComposition
 // instead (see discardsClientTransport). The copy is shallow: reference
-// fields such as the cookie Jar remain shared with the caller's client.
+// fields such as the cookie Jar remain shared with the caller's client. A
+// CheckRedirect on the provided client replaces the default redirect policy
+// that refuses a credential-carrying hop from https to http (see ErrRedirectDowngrade).
 func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 	b.httpClient = client
 	return b
@@ -652,7 +654,7 @@ func (b *Builder) Build() (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	guardBearerRedirects(httpClient, bearer)
+	guardRedirects(httpClient)
 
 	if rt != nil {
 		httpClient.Transport = rt
@@ -962,6 +964,7 @@ func executionError(err error) error {
 	if errors.As(err, &clientErr) {
 		return clientErr
 	}
+	stripURLUserinfo(err)
 	return NewNetworkError(errMsgRequestExecutionFailed, err)
 }
 
@@ -1079,7 +1082,7 @@ func (c *client) shouldRetryOnError(ctx context.Context, err error, attempt, max
 	// change, since the JOSE transport refused the response itself, not a transport fault.
 	// A refused redirect downgrade is terminal too: every retry meets the same redirect.
 	if errors.Is(err, ErrJOSEPlaintextResponse) || errors.Is(err, errJOSERejectedSuccess) ||
-		errors.Is(err, errBearerRedirectDowngrade) {
+		errors.Is(err, ErrRedirectDowngrade) {
 		return false, executionError(err)
 	}
 	if c.isTimeout(err) {
