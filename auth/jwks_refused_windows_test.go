@@ -11,7 +11,7 @@ import (
 )
 
 func TestIsConnectionRefusedRecognizesWinsockRefusal(t *testing.T) {
-	refused := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connectex", wsaeConnRefused)}
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connectex", errWinsockConnRefused)}
 
 	assert.True(t, isConnectionRefused(refused))
 	assert.Equal(t, fetchFailure{class: fetchFailureOutage, stage: fetchStageConnect}, classifyFetchFailure(refused))
