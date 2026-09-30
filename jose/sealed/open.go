@@ -87,12 +87,12 @@ type OpenOptions struct {
 	EventType string
 	// Tenant is the tid rule for this delivery.
 	Tenant TenantExpectation
-	// Keys resolves the two wire kids per message: sign PUBLIC to verify, encrypt PRIVATE to decrypt.
+	// Keys resolves the two wire kids per message: sign PUBLIC to verify, encrypt PRIVATE to decrypt (Verify asks for PUBLIC keys only).
 	Keys bricksjose.KeyResolver
 }
 
-// Envelope is what a verified, decrypted message proves about itself. IssuedAt is the
-// signed seal time, informational only — nothing here compared it to a clock.
+// Envelope is what a verified message proves about itself (Open and OpenDocument also decrypted it; Verify did not).
+// IssuedAt is the signed seal time, informational only — nothing here compared it to a clock.
 type Envelope struct {
 	JTI        string
 	IssuedAt   time.Time
@@ -234,6 +234,23 @@ func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, 
 	return newOpenedDocument(core), nil
 }
 
+// Verify checks body as Open does, resolving both wire kids as PUBLIC keys, and stops before the decrypt.
+// It never examines the Subject's ciphertext, IV, tag or encrypted key, so it proves neither that the Subject decrypts nor that it decodes.
+// It judges no freshness, replay or authorization, and judges the tid only by the caller's TenantExpectation.
+func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
+	if err := checkOpenOptionsArgs(spec, opts, "Verify"); err != nil {
+		return nil, err
+	}
+	core, err := verifyCore(body, spec, opts, provisionedInKeySet)
+	if err != nil {
+		return nil, err
+	}
+	if key, keyErr := opts.Keys.PublicKey(core.env.EncKid); keyErr != nil || key == nil {
+		return nil, unknownGenerationError(10, core.env.EncKid, tagKeyEncrypt, provisionedInKeySet, keyErr, layerJWE)
+	}
+	return core.env, nil
+}
+
 // newOpenedDocument keeps the verified payload and Subject span privately for Render.
 func newOpenedDocument(core *openedCore) *OpenedDocument {
 	return &OpenedDocument{
@@ -271,19 +288,24 @@ type OpenedDocument struct {
 // openedCore is what rules 1–10 and rule 12 hand to rule 11: the verified payload document,
 // the Subject's byte span within it, the decrypted Subject plaintext and the rule-12 Envelope.
 type openedCore struct {
-	payload   []byte
-	span      subjectSpan
+	verifiedCore
 	plaintext []byte
-	env       *Envelope
 }
 
-// openCore runs rules 1–10 and rule 12. It is shared so Open and OpenDocument refuse
-// identically and differ only in what they do with the plaintext at rule 11.
-func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
+// verifiedCore is what rules 1–9 and rule 10 up to the encrypt-family pin proved, with the rule-12 Envelope built from it.
+type verifiedCore struct {
+	payload      []byte
+	span         subjectSpan
+	innerCompact string
+	env          *Envelope // EncKid is the pinned inner kid
+}
+
+// verifyCore runs rules 1–9 and rule 10 up to the encrypt-family pin and builds the rule-12 Envelope; no encrypt key is resolved.
+// where is the rule-4 refusal's wording for the calling door.
+func verifyCore(body []byte, spec *Spec, opts *OpenOptions, where string) (*verifiedCore, error) {
 	compact := string(body)
 
-	// Rules 1–4 on the unauthenticated peek; rule 5 authenticates the header.
-	signKid, signFamily, signKey, err := peekOuter(compact, spec, opts.Keys)
+	signKid, signFamily, signKey, err := peekOuter(compact, spec, opts.Keys, where)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +314,6 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 		return nil, openError(5, ErrOpenFailed, CodeSignatureInvalid, "signature does not verify under the wire kid", nil)
 	}
 
-	// Rule 6 — authenticated slots (G7); rules 7–9 — the pins against the declaration.
 	slots, err := checkSlots(&hdr)
 	if err != nil {
 		return nil, err
@@ -301,7 +322,6 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 		return nil, pinErr
 	}
 
-	// Rule 10 — the payload document, the inner JWE's header, authorship, encrypt family, decrypt.
 	span, err := locateSubject(payload, spec.SubjectPath)
 	if err != nil {
 		return nil, openCause(10, CodePayloadUndecodable, fmt.Sprintf("cannot pin subject member %q", spec.SubjectPath), err)
@@ -310,27 +330,39 @@ func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 	if unquoteErr := json.Unmarshal(span.value, &innerCompact); unquoteErr != nil || !isCompactJOSE(innerCompact) {
 		return nil, openError(10, ErrOpenFailed, CodePayloadUndecodable, "subject member is not a compact JWE string", nil)
 	}
-	plaintext, encKid, err := openSubject(innerCompact, hdr.Kid, spec, opts.Keys)
+	inner, err := checkSubjectHeader(innerCompact, hdr.Kid, spec)
 	if err != nil {
 		return nil, err
 	}
 
-	// Rule 12 — the envelope. Every slot was validated by rule 6.
-	return &openedCore{payload: payload, span: span, plaintext: plaintext, env: &Envelope{
+	return &verifiedCore{payload: payload, span: span, innerCompact: innerCompact, env: &Envelope{
 		JTI:        slots.jti,
 		IssuedAt:   time.Unix(slots.issuedAt, 0).UTC(),
 		EventType:  slots.eventType,
 		TenantID:   slots.tenantID,
 		SignKid:    hdr.Kid,
 		SignFamily: signFamily,
-		EncKid:     encKid,
+		EncKid:     inner.Kid,
 	}}, nil
+}
+
+// openCore composes verifyCore and decryptSubject, so Open and OpenDocument refuse identically and differ only at rule 11.
+func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
+	v, err := verifyCore(body, spec, opts, provisionedOnConsumer)
+	if err != nil {
+		return nil, err
+	}
+	plaintext, err := decryptSubject(v.innerCompact, v.env.EncKid, opts.Keys)
+	if err != nil {
+		return nil, err
+	}
+	return &openedCore{verifiedCore: *v, plaintext: plaintext}, nil
 }
 
 // peekOuter runs rules 1–4 on the peeked, still unauthenticated protected header: the
 // structural check and typ, G5 policy, the sign-family pin, and the PUBLIC key for the
 // Generation. It returns the wire kid, its family and the key rule 5 verifies with.
-func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver) (kid, family string, key *rsa.PublicKey, err error) {
+func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver, where string) (kid, family string, key *rsa.PublicKey, err error) {
 	// Rule 1 — structural: exactly three segments whose first is a JSON object, typ = v1.
 	if strings.Count(compact, ".") != 2 {
 		return "", "", nil, openError(1, ErrNotSealed, CodeNotSealed, "body is not a compact JWS", nil)
@@ -354,8 +386,8 @@ func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver) (kid, fa
 		return "", "", nil, familyError(3, peek.Kid, spec.SignLogical, tagKeySign, "")
 	}
 	key, keyErr := keys.PublicKey(peek.Kid)
-	if keyErr != nil {
-		return "", "", nil, unknownGenerationError(4, peek.Kid, tagKeySign, keyErr, "")
+	if keyErr != nil || key == nil {
+		return "", "", nil, unknownGenerationError(4, peek.Kid, tagKeySign, where, keyErr, "")
 	}
 	return peek.Kid, family, key, nil
 }
@@ -379,7 +411,7 @@ func checkPins(slots *authenticatedSlots, spec *Spec, opts *OpenOptions) error {
 // checkOpenArgs is the key-free pre-flight: wiring mistakes, reported with the sealer's
 // SEAL_OPTIONS_INVALID / SEAL_TYPE_MISMATCH codes (same sentinel, same class of error) as
 // an *OpenError with Rule 0, so every Open failure is one error type. Open additionally
-// requires spec.Type, unlike OpenDocument's checkOpenOptionsArgs below: out must decode into
+// requires spec.Type, unlike the type-free doors (OpenDocument, Verify): out must decode into
 // a concrete Go type, and a document Spec (nil Type) has none.
 func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	if spec == nil || spec.Type == nil {
@@ -398,11 +430,7 @@ func checkOpenArgs(spec *Spec, opts *OpenOptions, out any) error {
 	return nil
 }
 
-// checkOpenOptionsArgs is the part of the pre-flight Open and OpenDocument share: a Spec and
-// OpenOptions with a resolver and a declared EventType. It says nothing about spec.Type,
-// which only the typed door (Open) requires — OpenDocument is type-free and accepts a
-// document Spec (NewDocumentSpec) as readily as a scanned one. door names the caller's door
-// in the message, so a wiring mistake is never attributed to the other one.
+// checkOpenOptionsArgs is the spec.Type-free pre-flight every door shares, with door naming the caller in the message.
 func checkOpenOptionsArgs(spec *Spec, opts *OpenOptions, door string) error {
 	switch {
 	case spec == nil:
@@ -513,36 +541,41 @@ func checkTenant(slots *authenticatedSlots, want TenantExpectation) error {
 	return nil
 }
 
-// openSubject is the inner half of rule 10: the JWE's protected header under G5 with the
-// outer codes and a layer=jwe detail, iss == the outer kid, the encrypt family pin, a
-// PRIVATE key for the Generation, then the decrypt itself.
-func openSubject(compact, outerKid string, spec *Spec, keys bricksjose.KeyResolver) (plaintext []byte, encKid string, err error) {
+// checkSubjectHeader is rule 10's key-free inner half: a compact JWE whose header passes G5
+// (outer codes, layer=jwe), whose iss equals the outer kid, and whose kid is a Generation
+// of the declared encrypt family.
+func checkSubjectHeader(compact, outerKid string, spec *Spec) (cryptoadapter.Header, error) {
 	inner, peekErr := cryptoadapter.PeekProtectedHeader(compact)
 	if peekErr != nil || strings.Count(compact, ".") != 4 {
-		return nil, "", openError(10, ErrOpenFailed, CodePayloadUndecodable, "subject member is not a compact JWE", nil)
+		return cryptoadapter.Header{}, openError(10, ErrOpenFailed, CodePayloadUndecodable, "subject member is not a compact JWE", nil)
 	}
 	algAllowed := inner.Alg == string(keyAlg) && inner.Enc == string(enc)
 	if policyErr := checkHeaderPolicy(10, &inner, algAllowed, layerJWE); policyErr != nil {
-		return nil, "", policyErr
+		return cryptoadapter.Header{}, policyErr
 	}
 	if iss, _ := inner.ExtraString(HeaderIssuer); iss != outerKid {
-		return nil, "", openError(10, ErrOpenFailed, CodeAuthorshipMismatch, "inner iss does not equal the outer kid", layerDetails(layerJWE))
+		return cryptoadapter.Header{}, openError(10, ErrOpenFailed, CodeAuthorshipMismatch, "inner iss does not equal the outer kid", layerDetails(layerJWE))
 	}
 	encFamily, _, ok := SplitGenerationKid(inner.Kid)
 	if !ok || encFamily != spec.EncryptLogical {
-		return nil, "", familyError(10, inner.Kid, spec.EncryptLogical, tagKeyEncrypt, layerJWE)
+		return cryptoadapter.Header{}, familyError(10, inner.Kid, spec.EncryptLogical, tagKeyEncrypt, layerJWE)
 	}
-	encKey, keyErr := keys.PrivateKey(inner.Kid)
-	if keyErr != nil {
-		return nil, "", unknownGenerationError(10, inner.Kid, tagKeyEncrypt, keyErr, layerJWE)
+	return inner, nil
+}
+
+// decryptSubject is the rest of rule 10: the PRIVATE key for the pinned inner kid, then the decrypt.
+func decryptSubject(compact, kid string, keys bricksjose.KeyResolver) ([]byte, error) {
+	encKey, keyErr := keys.PrivateKey(kid)
+	if keyErr != nil || encKey == nil {
+		return nil, unknownGenerationError(10, kid, tagKeyEncrypt, provisionedOnConsumer, keyErr, layerJWE)
 	}
-	plaintext, _, err = cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
-		ExpectedKid: inner.Kid, AllowedKeyAlgs: openKeyAlgs, AllowedContentEnc: openContents,
+	plaintext, _, err := cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
+		ExpectedKid: kid, AllowedKeyAlgs: openKeyAlgs, AllowedContentEnc: openContents,
 	})
 	if err != nil {
-		return nil, "", openError(10, ErrOpenFailed, CodeDecryptFailed, "subject does not decrypt under the wire encrypt kid", layerDetails(layerJWE))
+		return nil, openError(10, ErrOpenFailed, CodeDecryptFailed, "subject does not decrypt under the wire encrypt kid", layerDetails(layerJWE))
 	}
-	return plaintext, inner.Kid, nil
+	return plaintext, nil
 }
 
 // familyError is the sealer's checkFamily verdict (same sentinel, code and wording) at
@@ -553,10 +586,16 @@ func familyError(rule int, kid, logical, role, layer string) error {
 	return &OpenError{Err: je, Rule: rule, Details: layerDetails(layer)}
 }
 
-// unknownGenerationError is the recoverable class: a well-formed Generation this consumer has not provisioned.
-func unknownGenerationError(rule int, kid, role string, cause error, layer string) error {
+// Verify also runs on producers, so its wording names no role; Open and OpenDocument keep the consumer wording.
+const (
+	provisionedOnConsumer = "on this consumer"
+	provisionedInKeySet   = "in this key set"
+)
+
+// unknownGenerationError is the recoverable class: a well-formed Generation the resolver has not provisioned.
+func unknownGenerationError(rule int, kid, role, where string, cause error, layer string) error {
 	err := openError(rule, ErrKidUnknownGeneration, CodeKidUnknownGeneration,
-		fmt.Sprintf("%s kid generation is not provisioned on this consumer", role), layerDetails(layer))
+		fmt.Sprintf("%s kid generation is not provisioned %s", role, where), layerDetails(layer))
 	err.Err.Kid, err.Err.Cause = kid, cause
 	return err
 }

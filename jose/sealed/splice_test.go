@@ -252,7 +252,7 @@ func openedFrom(t *testing.T, doc string) *OpenedDocument {
 	payload := []byte(doc)
 	span, err := locateSubject(payload, "card")
 	require.NoError(t, err)
-	return newOpenedDocument(&openedCore{payload: payload, span: span, plaintext: span.value})
+	return newOpenedDocument(&openedCore{verifiedCore: verifiedCore{payload: payload, span: span}, plaintext: span.value})
 }
 
 func TestNextMemberReadsOneMember(t *testing.T) {
