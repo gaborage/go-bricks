@@ -200,8 +200,11 @@ partner header value is unforgeable purely because "the ALB set it."
 `server.forwardedclientcert` and `server.tls.clientauth` are independent: neither changes the
 other's behavior, and enabling both is not an error. A proxy (Envoy, nginx) that authenticates
 to the application over mTLS while forwarding the end client's certificate in a header is a
-legitimate and stronger posture than either alone — the mTLS leaf proves the hop came from the
-trusted proxy, which is what makes the forwarded header trustworthy.
+legitimate and stronger posture than either alone, on one condition: the proxy must set the
+forwarded identity from the end client's certificate it verified itself, and overwrite or strip
+any copy of those headers the caller sent. The mTLS leaf proves the hop came from the trusted
+proxy; it does not prove the header's content, so a proxy that relays a caller-supplied header
+unchanged lets any caller claim any identity.
 
 - The **mTLS leaf** identifies the **hop** (the proxy).
 - The **forwarded certificate** identifies the **end client**.
