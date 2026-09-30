@@ -6,8 +6,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,20 +53,44 @@ type vectorFile struct {
 	} `json:"vectors"`
 }
 
+var (
+	vectorKeysOnce sync.Once
+	vectorKeys     map[string]*rsa.PrivateKey
+	vectorKeysErr  error
+)
+
 // vectorKey is one fixed private key of the published vectors (testdata/keys.json).
 func vectorKey(t *testing.T, kid string) *rsa.PrivateKey {
 	t.Helper()
+	vectorKeysOnce.Do(func() { vectorKeys, vectorKeysErr = parseVectorKeys() })
+	require.NoError(t, vectorKeysErr)
+	k, ok := vectorKeys[kid]
+	require.True(t, ok, "keys.json holds %s", kid)
+	return k
+}
+
+func parseVectorKeys() (map[string]*rsa.PrivateKey, error) {
 	raw, err := os.ReadFile(filepath.Join(vectorsDir, "keys.json"))
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	var file struct {
 		Keys map[string]string `json:"keys"`
 	}
-	require.NoError(t, json.Unmarshal(raw, &file))
-	der, err := base64.StdEncoding.DecodeString(file.Keys[kid])
-	require.NoError(t, err)
-	k, err := x509.ParsePKCS1PrivateKey(der)
-	require.NoError(t, err)
-	return k
+	if err = json.Unmarshal(raw, &file); err != nil {
+		return nil, err
+	}
+	parsed := make(map[string]*rsa.PrivateKey, len(file.Keys))
+	for kid, encoded := range file.Keys {
+		der, decodeErr := base64.StdEncoding.DecodeString(encoded)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("%s: %w", kid, decodeErr)
+		}
+		if parsed[kid], err = x509.ParsePKCS1PrivateKey(der); err != nil {
+			return nil, fmt.Errorf("%s: %w", kid, err)
+		}
+	}
+	return parsed, nil
 }
 
 // vectorSignStore holds both provisioned sign generations of the vectors as PUBLIC keys.

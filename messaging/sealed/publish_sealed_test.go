@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gaborage/go-bricks/jose"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
 	"github.com/gaborage/go-bricks/messaging"
@@ -69,7 +68,7 @@ func pairHandle(t *testing.T) *messaging.Publisher[paymentAuthorized] {
 func rotatingSignStore(t *testing.T) *kstest.MockKeyStore {
 	t.Helper()
 	keys(t)
-	return withPublic(withPair(withPair(kstest.NewMockKeyStore(), signFamily, "v1", signPriv), signFamily, "v2", sign2), encFamily, "v1", &encPriv.PublicKey)
+	return withPair(pairStore(t), signFamily, "v2", sign2)
 }
 
 func sealFor[T any](t *testing.T, h *messaging.Publisher[T], tenant string, evt T) []byte {
@@ -126,6 +125,7 @@ func requireRejected(t *testing.T, err error, code string) {
 	var refused *messaging.SealOpenRefusedError
 	require.ErrorAs(t, err, &refused)
 	assert.Equal(t, code, refused.Code)
+	assert.Equal(t, code == josesealed.CodeKidUnknownGeneration, refused.Recoverable)
 	assert.Equal(t, code, openErrorOf(t, err).Err.Code)
 }
 
@@ -222,9 +222,6 @@ func TestPublishSealedRefusesBeforeAnyPublish(t *testing.T) {
 			b := withPublic(withPair(kstest.NewMockKeyStore(), signFamily, "v2", sign2), encFamily, "v1", &encPriv.PublicKey)
 			return sealThenSwap(t, rotatingSignStore(t), map[string]string{signFamily: "v1"}, b)
 		}, check: func(t *testing.T, err error) {
-			var refused *messaging.SealOpenRefusedError
-			require.ErrorAs(t, err, &refused)
-			assert.True(t, refused.Recoverable, "a removed generation is the recoverable class")
 			require.ErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
 		}},
 		{name: "encrypt_generation_removed", code: josesealed.CodeKidUnknownGeneration, arrange: func(t *testing.T) doorCall {
@@ -280,7 +277,8 @@ func TestPublishSealedAcceptsBytesSealedBeforeAnActivationFlip(t *testing.T) {
 	store := rotatingSignStore(t)
 	configureStore(t, store, map[string]string{signFamily: "v1"})
 	data := sealFor(t, declare(t), "", doorEvent())
-	before, err := josesealed.Verify(data, mustSpec(t), &josesealed.OpenOptions{EventType: eventType, Keys: jose.NewKeyStoreResolver(store)})
+	v := newVerifier(t, store)
+	before, err := v.Verify(context.Background(), data)
 	require.NoError(t, err)
 	require.Equal(t, signFamily+"-v1", before.SignKid, "the stored bytes were sealed under v1")
 
@@ -292,7 +290,7 @@ func TestPublishSealedAcceptsBytesSealedBeforeAnActivationFlip(t *testing.T) {
 	assert.Equal(t, data, rec.data[0])
 
 	fresh := sealFor(t, after, "", doorEvent())
-	env, err := josesealed.Verify(fresh, mustSpec(t), &josesealed.OpenOptions{EventType: eventType, Keys: jose.NewKeyStoreResolver(store)})
+	env, err := v.Verify(context.Background(), fresh)
 	require.NoError(t, err)
 	assert.Equal(t, signFamily+"-v2", env.SignKid, "the flip took effect for new seals")
 }

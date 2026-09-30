@@ -59,6 +59,11 @@ func (c *verifyingCodec) NewVerifier(sealruntime.Spec, string, *sealruntime.Runt
 	return c.verifier, nil
 }
 
+// sealedFakeCodec returns a fresh codec whose sealer mints fixed bytes; never share one, it counts calls.
+func sealedFakeCodec() *fakeCodec {
+	return &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes"), jti: "jti-1"}}
+}
+
 func declareWithCodec(t *testing.T, codec sealruntime.Codec, opts *PublisherOptions) *Publisher[sealedEvent] {
 	t.Helper()
 	sealruntime.Reset()
@@ -73,10 +78,7 @@ func declareWithCodec(t *testing.T, codec sealruntime.Codec, opts *PublisherOpti
 
 func declareVerifying(t *testing.T, opts *PublisherOptions, verifier sealruntime.Verifier) *Publisher[sealedEvent] {
 	t.Helper()
-	return declareWithCodec(t, &verifyingCodec{
-		fakeCodec: &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes"), jti: "jti-1"}},
-		verifier:  verifier,
-	}, opts)
+	return declareWithCodec(t, &verifyingCodec{fakeCodec: sealedFakeCodec(), verifier: verifier}, opts)
 }
 
 func TestPublishSealedRefusesAPlainHandle(t *testing.T) {
@@ -110,9 +112,9 @@ func TestPublishSealedNeedsACodecThatVerifies(t *testing.T) {
 		want  error
 		text  string
 	}{
-		{name: "codec_without_verification", codec: &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}}, want: ErrSealingNotLinked},
-		{name: "verifier_startup_error", codec: &verifyingCodec{fakeCodec: &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}}, verifierErr: boom}, want: boom},
-		{name: "codec_returns_no_verifier", codec: &verifyingCodec{fakeCodec: &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}}}, text: "returned no verifier"},
+		{name: "codec_without_verification", codec: sealedFakeCodec(), want: ErrSealingNotLinked},
+		{name: "verifier_startup_error", codec: &verifyingCodec{fakeCodec: sealedFakeCodec(), verifierErr: boom}, want: boom},
+		{name: "codec_returns_no_verifier", codec: &verifyingCodec{fakeCodec: sealedFakeCodec()}, text: "returned no verifier"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -25,7 +25,7 @@ func withPair(s *kstest.MockKeyStore, logical, version string, k *rsa.PrivateKey
 func pairStore(t *testing.T) *kstest.MockKeyStore {
 	t.Helper()
 	keys(t)
-	return withPublic(withPair(kstest.NewMockKeyStore(), signFamily, "v1", signPriv), encFamily, "v1", &encPriv.PublicKey)
+	return producerStore(t).WithPublicKey(signFamily+"-v1", &signPriv.PublicKey)
 }
 
 func configureStore(t *testing.T, store *kstest.MockKeyStore, active map[string]string) {
@@ -39,18 +39,22 @@ func vectorProducerStore(t *testing.T) *kstest.MockKeyStore {
 	return withPublic(vectorSignStore(t), encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey)
 }
 
-func newVerifier(t *testing.T, store *kstest.MockKeyStore) sealruntime.Verifier {
+func verifierProvider(t *testing.T) sealruntime.VerifierProvider {
 	t.Helper()
 	provider, ok := sealruntime.Registered().(sealruntime.VerifierProvider)
 	require.True(t, ok, "messaging/sealed's codec implements the producer verification")
-	v, err := provider.NewVerifier(spec(t), eventType, &sealruntime.Runtime{KeyStore: store})
+	return provider
+}
+
+func newVerifier(t *testing.T, store *kstest.MockKeyStore) sealruntime.Verifier {
+	t.Helper()
+	v, err := verifierProvider(t).NewVerifier(spec(t), eventType, &sealruntime.Runtime{KeyStore: store})
 	require.NoError(t, err)
 	return v
 }
 
 func TestNewVerifierStartupMatrix(t *testing.T) {
-	provider, ok := sealruntime.Registered().(sealruntime.VerifierProvider)
-	require.True(t, ok)
+	provider := verifierProvider(t)
 	store := vectorProducerStore(t)
 	cases := []struct {
 		name      string

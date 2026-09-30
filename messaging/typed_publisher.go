@@ -164,16 +164,16 @@ func (h *Publisher[T]) Publish(ctx context.Context, client AMQPClient, evt T) er
 // Seal returns evt's sealed wire bytes and the jti signed into them without publishing;
 // a plain (not seal-tagged) T returns ErrNotSealTagged.
 func (h *Publisher[T]) Seal(ctx context.Context, evt T) (data []byte, jti string, err error) {
-	if h.sealer == nil && h.sealErr == nil {
-		return nil, "", fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
+	if !h.sealTagged() {
+		return nil, "", h.notSealTaggedError()
 	}
 	return h.seal(ctx, nil, evt)
 }
 
 // PublishSealed verifies data against this handle's declaration, then publishes that copy as Publish would (ADR-131).
 func (h *Publisher[T]) PublishSealed(ctx context.Context, client AMQPClient, data []byte) error {
-	if h.sealer == nil && h.sealErr == nil {
-		return fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
+	if !h.sealTagged() {
+		return h.notSealTaggedError()
 	}
 	if h.sealErr != nil {
 		return h.sealErr
@@ -199,7 +199,7 @@ func (h *Publisher[T]) PublishSealed(ctx context.Context, client AMQPClient, dat
 // encode is the one place the handle turns an event into bytes: seal when T is
 // seal-tagged, marshal otherwise.
 func (h *Publisher[T]) encode(ctx context.Context, client AMQPClient, evt T) ([]byte, error) {
-	if h.sealer != nil || h.sealErr != nil {
+	if h.sealTagged() {
 		data, _, err := h.seal(ctx, client, evt)
 		return data, err
 	}
@@ -228,6 +228,13 @@ func (h *Publisher[T]) seal(ctx context.Context, client AMQPClient, evt T) (data
 		return nil, "", fmt.Errorf("messaging: seal %s event: %w", h.eventType, err)
 	}
 	return data, jti, nil
+}
+
+// sealTagged reports whether T carries seal tags, whether or not its sealer could be built.
+func (h *Publisher[T]) sealTagged() bool { return h.sealer != nil || h.sealErr != nil }
+
+func (h *Publisher[T]) notSealTaggedError() error {
+	return fmt.Errorf("%w (event type %q)", ErrNotSealTagged, h.eventType)
 }
 
 // contentType is what this handle actually encoded: a compact JWS when T is
