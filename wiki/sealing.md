@@ -109,9 +109,10 @@ type PaymentAuthorized struct {
   `deps.Outbox.Publish(ctx, tx, event)` with those bytes as the payload: the record keeps
   that one seal result and the relay republishes it byte-identical on every drive, so the
   `jti` is stable across redeliveries; a second `Seal` call is a new seal and a new `jti`.
-  The returned `jti` is the bare signed slot (`""` on error): a consumer keying its own
-  ledger on it uses it as is, while the go-bricks inbox stores `<SignFamily>:<jti>`
-  ([ADR-131](adr_131_sealed_bytes_publish_door.md)).
+  The returned `jti` is the bare signed slot (`""` on error), held by the caller of `Seal`
+  (the producer): a producer keying its own ledger on it uses it as is, while a consuming
+  app gets the namespaced `Meta.DedupKey()`, `<SignFamily>:<jti>`, which the go-bricks
+  inbox stores ([ADR-131](adr_131_sealed_bytes_publish_door.md)).
   `Seal` on a plain `T` is `messaging.ErrNotSealTagged` (#1358).
 
 ## Keys
