@@ -25,6 +25,7 @@ func TestMain(m *testing.M) {
 	})
 	frameworkDoor = framework
 	code := m.Run()
+	closeSharedBroker()
 	publishdoor.Swap(framework)
 	os.Exit(code)
 }
