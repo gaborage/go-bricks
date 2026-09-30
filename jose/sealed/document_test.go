@@ -388,31 +388,12 @@ func TestOpenDocumentRejectsWiringMistakes(t *testing.T) {
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
 	wire, err := sealed.SealDocument(sampleDocument(), documentSpec(t), testOptions(t))
 	require.NoError(t, err)
-	spec := documentSpec(t)
 
-	cases := []struct {
-		name string
-		spec *sealed.Spec
-		opts *sealed.OpenOptions
-	}{
-		{name: "nil_spec", spec: nil, opts: &sealed.OpenOptions{EventType: eventType, Keys: consumer}},
-		{name: "nil_opts", spec: spec, opts: nil},
-		{name: "nil_keys", spec: spec, opts: &sealed.OpenOptions{EventType: eventType}},
-		{name: "empty_event_type", spec: spec, opts: &sealed.OpenOptions{Keys: consumer}},
-	}
-	for _, tc := range cases {
+	for _, tc := range wiringMistakes(documentSpec(t), consumer) {
 		t.Run(tc.name, func(t *testing.T) {
 			opened, err := sealed.OpenDocument(wire, tc.spec, tc.opts)
 			assert.Nil(t, opened)
-
-			var oe *sealed.OpenError
-			require.ErrorAs(t, err, &oe, "every OpenDocument failure is an *OpenError")
-			assert.Zero(t, oe.Rule, "pre-flight, no rule fired")
-			var je *bricksjose.Error
-			require.ErrorAs(t, err, &je)
-			assert.Equal(t, sealed.CodeOptionsInvalid, je.Code)
-			assert.True(t, strings.HasPrefix(je.Message, "OpenDocument requires "), "the message names the door the caller called: %q", je.Message)
-			assert.ErrorIs(t, err, sealed.ErrSealFailed)
+			requirePreflightRefusal(t, err, "OpenDocument")
 		})
 	}
 }

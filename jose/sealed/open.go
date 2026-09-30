@@ -87,12 +87,12 @@ type OpenOptions struct {
 	EventType string
 	// Tenant is the tid rule for this delivery.
 	Tenant TenantExpectation
-	// Keys resolves the two wire kids per message: sign PUBLIC to verify, encrypt PRIVATE to decrypt.
+	// Keys resolves the two wire kids per message: sign PUBLIC to verify, encrypt PRIVATE to decrypt (Verify asks for PUBLIC keys only).
 	Keys bricksjose.KeyResolver
 }
 
-// Envelope is what a verified, decrypted message proves about itself. IssuedAt is the
-// signed seal time, informational only — nothing here compared it to a clock.
+// Envelope is what a verified message proves about itself (Open and OpenDocument also decrypted it; Verify did not).
+// IssuedAt is the signed seal time, informational only — nothing here compared it to a clock.
 type Envelope struct {
 	JTI        string
 	IssuedAt   time.Time
@@ -234,6 +234,21 @@ func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, 
 	return newOpenedDocument(core), nil
 }
 
+// Verify checks body as Open does, resolving both wire kids as PUBLIC keys, and stops before the decrypt.
+func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
+	if err := checkOpenOptionsArgs(spec, opts, "Verify"); err != nil {
+		return nil, err
+	}
+	core, err := verifyCore(body, spec, opts)
+	if err != nil {
+		return nil, err
+	}
+	if _, keyErr := opts.Keys.PublicKey(core.inner.Kid); keyErr != nil {
+		return nil, unknownGenerationError(10, core.inner.Kid, tagKeyEncrypt, keyErr, layerJWE)
+	}
+	return core.env, nil
+}
+
 // newOpenedDocument keeps the verified payload and Subject span privately for Render.
 func newOpenedDocument(core *openedCore) *OpenedDocument {
 	return &OpenedDocument{
@@ -277,7 +292,7 @@ type openedCore struct {
 	env       *Envelope
 }
 
-// verifiedCore is what rules 1–9 and rule 10 up to the encrypt-family pin proved.
+// verifiedCore is what rules 1–9 and rule 10 up to the encrypt-family pin proved, with the rule-12 Envelope built from it.
 type verifiedCore struct {
 	payload      []byte
 	span         subjectSpan
@@ -286,7 +301,7 @@ type verifiedCore struct {
 	env          *Envelope // EncKid is the pinned inner kid
 }
 
-// verifyCore runs rules 1–9 and rule 10 up to the encrypt-family pin; no encrypt key is resolved.
+// verifyCore runs rules 1–9 and rule 10 up to the encrypt-family pin and builds the rule-12 Envelope; no encrypt key is resolved.
 func verifyCore(body []byte, spec *Spec, opts *OpenOptions) (*verifiedCore, error) {
 	compact := string(body)
 
@@ -331,8 +346,7 @@ func verifyCore(body []byte, spec *Spec, opts *OpenOptions) (*verifiedCore, erro
 	}}, nil
 }
 
-// openCore runs rules 1–10 and rule 12. It is shared so Open and OpenDocument refuse
-// identically and differ only in what they do with the plaintext at rule 11.
+// openCore composes verifyCore and decryptSubject, so Open and OpenDocument refuse identically and differ only at rule 11.
 func openCore(body []byte, spec *Spec, opts *OpenOptions) (*openedCore, error) {
 	v, err := verifyCore(body, spec, opts)
 	if err != nil {

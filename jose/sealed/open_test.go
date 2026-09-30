@@ -723,17 +723,20 @@ func vectorBody(t *testing.T, vf *vectorFile, name string) string {
 	return ""
 }
 
+// TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin pins that both opening doors resolve the encrypt PRIVATE key only once the encrypt-family pin has passed.
 func TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin(t *testing.T) {
 	k := loadVectorKeys(t)
 	vf := loadVectors(t, k)
 	spec := testSpec(t)
-	doors := map[string]func(body []byte, opts *sealed.OpenOptions){
-		"open": func(body []byte, opts *sealed.OpenOptions) {
+	doors := map[string]func(body []byte, opts *sealed.OpenOptions) error{
+		"open": func(body []byte, opts *sealed.OpenOptions) error {
 			var evt paymentAuthorized
-			_, _ = sealed.Open(body, spec, opts, &evt)
+			_, err := sealed.Open(body, spec, opts, &evt)
+			return err
 		},
-		"open_document": func(body []byte, opts *sealed.OpenOptions) {
-			_, _ = sealed.OpenDocument(body, spec, opts)
+		"open_document": func(body []byte, opts *sealed.OpenOptions) error {
+			_, err := sealed.OpenDocument(body, spec, opts)
+			return err
 		},
 	}
 	cases := []struct {
@@ -751,8 +754,13 @@ func TestOpenResolvesTheEncryptKeyOnlyAfterTheFamilyPin(t *testing.T) {
 				rec := &recordingResolver{keys: k.consumer}
 				opts := vectorOptions(k, nil)
 				opts.Keys = rec
-				door([]byte(vectorBody(t, vf, tc.name)), opts)
+				err := door([]byte(vectorBody(t, vf, tc.name)), opts)
 				assert.Equal(t, tc.want, rec.calls)
+				if tc.name == "positive" {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
 			})
 		}
 	}
