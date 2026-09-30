@@ -93,7 +93,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	body, err := sealed.SealDocument(doc, spec, &sealed.Options{
+	body, _, err := sealed.SealDocument(doc, spec, &sealed.Options{
 		SignKid:    cfg.signKid,
 		EncryptKid: cfg.encryptKid,
 		EventType:  cfg.eventType,

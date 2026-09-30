@@ -58,7 +58,7 @@ func producerOptions(t *testing.T) *sealed.OpenOptions {
 func TestVerifyAcceptsWhatSealProduced(t *testing.T) {
 	spec, opts := testSpec(t), testOptions(t)
 	opts.TenantID = "tenant-a"
-	wire, err := sealed.Seal(sampleEvent(), spec, opts)
+	wire, _, err := sealed.Seal(sampleEvent(), spec, opts)
 	require.NoError(t, err)
 
 	env, err := sealed.Verify(wire, spec, producerOptions(t))
@@ -74,7 +74,7 @@ func TestVerifyAcceptsWhatSealProduced(t *testing.T) {
 
 func TestVerifyResolvesTheEncryptKidAsPublic(t *testing.T) {
 	spec := testSpec(t)
-	wire, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
+	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	require.NoError(t, err)
 	k := testKeys(t)
 	opts := &sealed.OpenOptions{EventType: eventType, Keys: publicOnlyResolver{t: t, keys: jositest.NewTestResolver(map[string]any{
@@ -209,7 +209,7 @@ func requireUnprovisionedEncryptRefusal(t *testing.T, env *sealed.Envelope, err 
 func TestVerifyJudgesTidOnlyByTheCallersRule(t *testing.T) {
 	spec, opts := testSpec(t), testOptions(t)
 	opts.TenantID = "tenant-a"
-	wire, err := sealed.Seal(sampleEvent(), spec, opts)
+	wire, _, err := sealed.Seal(sampleEvent(), spec, opts)
 	require.NoError(t, err)
 	cases := []struct {
 		name     string
@@ -240,7 +240,7 @@ func TestVerifyJudgesTidOnlyByTheCallersRule(t *testing.T) {
 
 func TestVerifyAcceptsADocumentSpec(t *testing.T) {
 	spec := documentSpec(t)
-	wire, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
+	wire, _, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
 	require.NoError(t, err)
 
 	env, err := sealed.Verify(wire, spec, producerOptions(t))

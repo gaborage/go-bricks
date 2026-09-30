@@ -92,7 +92,7 @@ func TestSealDocumentRoundTripsThroughOpen(t *testing.T) {
 	opts := testOptions(t)
 	opts.TenantID = "tenant-a"
 
-	wire, err := sealed.SealDocument(sampleDocument(), documentSpec(t), opts)
+	wire, _, err := sealed.SealDocument(sampleDocument(), documentSpec(t), opts)
 	require.NoError(t, err)
 
 	var evt paymentAuthorized
@@ -116,7 +116,7 @@ func TestSealDocumentPreservesCallerBytes(t *testing.T) {
 	k := testKeys(t)
 	doc := sampleDocument()
 
-	wire, err := sealed.SealDocument(doc, documentSpec(t), testOptions(t))
+	wire, _, err := sealed.SealDocument(doc, documentSpec(t), testOptions(t))
 	require.NoError(t, err)
 
 	payload, _, innerJWE := openWire(t, wire, &k.signPriv.PublicKey)
@@ -134,7 +134,7 @@ func TestSealDocumentAcceptsAScannedSpec(t *testing.T) {
 	doc, err := json.Marshal(sampleEvent())
 	require.NoError(t, err)
 
-	wire, err := sealed.SealDocument(doc, testSpec(t), testOptions(t))
+	wire, _, err := sealed.SealDocument(doc, testSpec(t), testOptions(t))
 	require.NoError(t, err)
 	payload, _, _ := openWire(t, wire, &k.signPriv.PublicKey)
 	assert.Equal(t, []string{"orderId", docSubjectPath, "amount"}, topLevelKeys(t, payload))
@@ -155,7 +155,7 @@ func TestSealDocumentRejectsInvalidDocuments(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wire, err := sealed.SealDocument([]byte(tc.doc), documentSpec(t), testOptions(t))
+			wire, _, err := sealed.SealDocument([]byte(tc.doc), documentSpec(t), testOptions(t))
 			assert.Nil(t, wire)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
@@ -192,7 +192,7 @@ func TestSealDocumentRejectsInvalidOptions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wire, err := sealed.SealDocument(sampleDocument(), tc.spec, tc.opts)
+			wire, _, err := sealed.SealDocument(sampleDocument(), tc.spec, tc.opts)
 			assert.Nil(t, wire)
 			var jerr *bricksjose.Error
 			require.ErrorAs(t, err, &jerr)
@@ -207,13 +207,13 @@ func TestTypedDoorsRefuseADocumentSpec(t *testing.T) {
 	k := testKeys(t)
 	spec := documentSpec(t)
 
-	_, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
+	_, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	var sealErr *bricksjose.Error
 	require.ErrorAs(t, err, &sealErr)
 	assert.Equal(t, sealed.CodeOptionsInvalid, sealErr.Code)
 	assert.Contains(t, sealErr.Message, "ScanType")
 
-	wire, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
+	wire, _, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
 	require.NoError(t, err)
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
 	var evt paymentAuthorized
@@ -246,7 +246,7 @@ func TestOpenDocumentOpensWhatSealDocumentProduced(t *testing.T) {
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
 	opts := testOptions(t)
 	opts.TenantID = "tenant-a"
-	wire, err := sealed.SealDocument(sampleDocument(), documentSpec(t), opts)
+	wire, _, err := sealed.SealDocument(sampleDocument(), documentSpec(t), opts)
 	require.NoError(t, err)
 
 	openOpts := &sealed.OpenOptions{
@@ -275,7 +275,7 @@ func TestOpenDocumentOpensWhatSealDocumentProduced(t *testing.T) {
 func TestOpenDocumentOpensAPrettyPrintedDocument(t *testing.T) {
 	k := testKeys(t)
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
-	wire, err := sealed.SealDocument(prettyDocument(), documentSpec(t), testOptions(t))
+	wire, _, err := sealed.SealDocument(prettyDocument(), documentSpec(t), testOptions(t))
 	require.NoError(t, err)
 
 	opened, err := sealed.OpenDocument(wire, documentSpec(t), &sealed.OpenOptions{EventType: eventType, Keys: consumer})
@@ -324,7 +324,7 @@ func TestOpenDocumentSubjectAtLocatesTheRemovedMember(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wire, err := sealed.SealDocument(tc.doc, documentSpec(t), testOptions(t))
+			wire, _, err := sealed.SealDocument(tc.doc, documentSpec(t), testOptions(t))
 			require.NoError(t, err)
 
 			opened, err := sealed.OpenDocument(wire, documentSpec(t), &sealed.OpenOptions{EventType: eventType, Keys: consumer})
@@ -355,7 +355,7 @@ func TestOpenDocumentSubjectAtSplicesAReplacementThroughOddLayout(t *testing.T) 
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
 	doc := []byte("{\"" + docSubjectPath + "\":" + cardPlaintext + " \t,\n  \"amount\": 1250}")
 
-	wire, err := sealed.SealDocument(doc, documentSpec(t), testOptions(t))
+	wire, _, err := sealed.SealDocument(doc, documentSpec(t), testOptions(t))
 	require.NoError(t, err)
 	opened, err := sealed.OpenDocument(wire, documentSpec(t), &sealed.OpenOptions{EventType: eventType, Keys: consumer})
 	require.NoError(t, err)
@@ -386,7 +386,7 @@ func TestOpenDocumentSubjectAtSplicesAReplacementThroughOddLayout(t *testing.T) 
 func TestOpenDocumentRejectsWiringMistakes(t *testing.T) {
 	k := testKeys(t)
 	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
-	wire, err := sealed.SealDocument(sampleDocument(), documentSpec(t), testOptions(t))
+	wire, _, err := sealed.SealDocument(sampleDocument(), documentSpec(t), testOptions(t))
 	require.NoError(t, err)
 
 	for _, tc := range wiringMistakes(documentSpec(t), consumer) {
@@ -499,4 +499,15 @@ func TestOpenDocumentAcceptsWhatOpenRefusesOnlyForItsType(t *testing.T) {
 	assert.NotNil(t, opened.Envelope)
 	assert.NotContains(t, topLevelKeys(t, opened.Document), docSubjectPath)
 	assert.JSONEq(t, `"not-an-object"`, string(opened.Subject))
+}
+
+func TestSealDocumentReturnsTheJTIItSigned(t *testing.T) {
+	spec := documentSpec(t)
+	wire, jti, err := sealed.SealDocument(sampleDocument(), spec, testOptions(t))
+	require.NoError(t, err)
+	hdr, _ := decodeSegment0(t, string(wire))
+	assert.Equal(t, jti, hdr["jti"])
+	env, err := sealed.Verify(wire, spec, producerOptions(t))
+	require.NoError(t, err)
+	assert.Equal(t, jti, env.JTI)
 }

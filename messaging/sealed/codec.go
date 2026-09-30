@@ -120,7 +120,7 @@ func (s *sealer) Seal(ctx context.Context, evt any) ([]byte, error) {
 		return nil, err
 	}
 	opts.TenantID = tenant
-	wire, err := josesealed.Seal(evt, s.spec, &opts)
+	wire, _, err := josesealed.Seal(evt, s.spec, &opts)
 	sealruntime.Instruments().RecordOperation(ctx, sealruntime.OpSeal, time.Since(start))
 	return wire, err
 }

@@ -60,27 +60,28 @@ type Options struct {
 // plaintext, and sign the whole document as a compact JWS (PS256, TypV1, signed `sp`,
 // `jti`, `iat`, `etyp`, `tid`). Seal runs once per call: a fresh `jti` is minted here and
 // nothing the caller passes can choose it. The result is the exact body to publish or
-// persist — a redelivery is the same bytes.
+// persist — a redelivery is the same bytes. It returns the wire bytes and the jti it
+// minted and signed — the bare slot value, "" on any failure.
 //
 // evt must be a value or pointer of spec.Type. Failures are *jose.Error values: a key the
 // resolver cannot supply propagates the resolver's own error; everything else carries one
 // of this package's sentinels and codes.
-func Seal(evt any, spec *Spec, opts *Options) ([]byte, error) {
+func Seal(evt any, spec *Spec, opts *Options) (data []byte, jti string, err error) {
 	if spec == nil || spec.Type == nil {
-		return nil, sealError(CodeOptionsInvalid, "Seal requires a Spec from ScanType", nil)
+		return nil, "", sealError(CodeOptionsInvalid, "Seal requires a Spec from ScanType", nil)
 	}
-	if err := opts.Validate(spec); err != nil {
-		return nil, err
+	if validateErr := opts.Validate(spec); validateErr != nil {
+		return nil, "", validateErr
 	}
 	if t := unwrapPointer(reflect.TypeOf(evt)); t != spec.Type {
-		return nil, sealError(CodeTypeMismatch, fmt.Sprintf("event type %v does not match the scanned %v", t, spec.Type), nil)
+		return nil, "", sealError(CodeTypeMismatch, fmt.Sprintf("event type %v does not match the scanned %v", t, spec.Type), nil)
 	}
-	plain, err := json.Marshal(evt)
-	if err != nil {
+	plain, marshalErr := json.Marshal(evt)
+	if marshalErr != nil {
 		// SECURITY: encoding/json embeds value bytes in some marshal errors (an invalid
 		// json.Number literal, a MarshalJSON syntax error); the Subject may be among them,
 		// so the cause is reported by type only (ADR-081 class).
-		return nil, sealError(CodeSealFailed, "failed to marshal event", marshalErrorType(err))
+		return nil, "", sealError(CodeSealFailed, "failed to marshal event", marshalErrorType(marshalErr))
 	}
 	return sealCore(plain, spec, opts)
 }
@@ -88,18 +89,18 @@ func Seal(evt any, spec *Spec, opts *Options) ([]byte, error) {
 // sealCore is the body both doors share: it takes the serialized document, pins the Subject
 // member, encrypts it, splices the compact JWE in its place and signs the result. Only the
 // origin of the bytes differs above it — Seal marshals an event, SealDocument is handed one.
-func sealCore(plain []byte, spec *Spec, opts *Options) ([]byte, error) {
+func sealCore(plain []byte, spec *Spec, opts *Options) ([]byte, string, error) {
 	signKey, err := opts.Keys.PrivateKey(opts.SignKid)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	encKey, err := opts.Keys.PublicKey(opts.EncryptKid)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	span, err := pinSubject(plain, spec.SubjectPath)
 	if err != nil {
-		return nil, sealError(CodeDocumentInvalid, fmt.Sprintf("cannot pin subject member %q", spec.SubjectPath), err)
+		return nil, "", sealError(CodeDocumentInvalid, fmt.Sprintf("cannot pin subject member %q", spec.SubjectPath), err)
 	}
 
 	subjectJWE, err := cryptoadapter.Encrypt(span.value, encKey, &cryptoadapter.EncryptOptions{
@@ -110,35 +111,36 @@ func sealCore(plain []byte, spec *Spec, opts *Options) ([]byte, error) {
 		Extra:  map[string]any{HeaderIssuer: opts.SignKid},
 	})
 	if err != nil {
-		return nil, sealError(CodeSealFailed, "failed to encrypt subject", err)
+		return nil, "", sealError(CodeSealFailed, "failed to encrypt subject", err)
 	}
 	doc, err := splice(plain, span, subjectJWE)
 	if err != nil {
-		return nil, sealError(CodeSealFailed, "failed to splice subject", err)
+		return nil, "", sealError(CodeSealFailed, "failed to splice subject", err)
 	}
 
+	jti := uuid.NewString()
 	compact, err := cryptoadapter.Sign(doc, signKey, &cryptoadapter.SignOptions{
 		Kid:    opts.SignKid,
 		SigAlg: sigAlg,
 		Cty:    ContentTypeJSON,
 		Typ:    TypV1,
-		Extra:  outerExtra(spec, opts),
+		Extra:  outerExtra(spec, opts, jti),
 	})
 	if err != nil {
-		return nil, sealError(CodeSealFailed, "failed to sign sealed document", err)
+		return nil, "", sealError(CodeSealFailed, "failed to sign sealed document", err)
 	}
-	return []byte(compact), nil
+	return []byte(compact), jti, nil
 }
 
-// outerExtra builds the signed slots: sp, jti (minted here), iat, etyp and tid when a tenant resolved.
-func outerExtra(spec *Spec, opts *Options) map[string]any {
+// outerExtra builds the signed slots: sp, the jti sealCore minted, iat, etyp and tid when a tenant resolved.
+func outerExtra(spec *Spec, opts *Options, jti string) map[string]any {
 	now := time.Now
 	if opts.Now != nil {
 		now = opts.Now
 	}
 	extra := map[string]any{
 		HeaderSealedPaths: spec.SealedPaths(),
-		HeaderJTI:         uuid.NewString(),
+		HeaderJTI:         jti,
 		HeaderIssuedAt:    now().Unix(),
 		HeaderEventType:   opts.EventType,
 	}
