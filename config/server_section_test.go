@@ -88,6 +88,60 @@ func TestValidateServerSuccess(t *testing.T) {
 			},
 		},
 		{
+			name: "tls_mtls_valid",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:       true,
+					CertFile:      "/etc/tls/cert.pem",
+					KeyFile:       "/etc/tls/key.pem",
+					ClientAuth:    tlsClientAuthRequireVerify,
+					ClientCAValue: "aGVsbG8=",
+				},
+			},
+		},
+		{
+			name: "tls_verify_with_client_ca_file",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:      true,
+					CertFile:     "/etc/tls/cert.pem",
+					KeyFile:      "/etc/tls/key.pem",
+					ClientAuth:   tlsClientAuthVerify,
+					ClientCAFile: "/etc/tls/client-ca.pem",
+				},
+			},
+		},
+		{
+			name: "tls_disabled_ignores_staged_clientauth",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:    false,
+					ClientAuth: "request",
+				},
+			},
+		},
+		{
+			name: "tls_mtls_beside_forwardedcert",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:      true,
+					CertFile:     "/etc/tls/cert.pem",
+					KeyFile:      "/etc/tls/key.pem",
+					ClientAuth:   tlsClientAuthRequireVerify,
+					ClientCAFile: "/etc/tls/client-ca.pem",
+				},
+				ForwardedClientCert: ForwardedClientCertConfig{Enabled: true, Require: true},
+			},
+		},
+		{
 			name: "forwardedcert_enabled_valid",
 			cfg: ServerConfig{
 				Port:    8080,
@@ -328,6 +382,109 @@ func TestValidateServerFailures(t *testing.T) {
 				},
 			},
 			expectedError: "server.tls.minversion",
+		},
+		{
+			name: "tls_bad_clientauth",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:      true,
+					CertFile:     "/etc/tls/cert.pem",
+					KeyFile:      "/etc/tls/key.pem",
+					ClientAuth:   "mtls",
+					ClientCAFile: "/etc/tls/client-ca.pem",
+				},
+			},
+			expectedError: "server.tls.clientauth",
+		},
+		{
+			name: "tls_clientauth_request_rejected",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:      true,
+					CertFile:     "/etc/tls/cert.pem",
+					KeyFile:      "/etc/tls/key.pem",
+					ClientAuth:   "request",
+					ClientCAFile: "/etc/tls/client-ca.pem",
+				},
+			},
+			expectedError: "server.tls.clientauth",
+		},
+		{
+			name: "tls_clientauth_require_rejected",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:      true,
+					CertFile:     "/etc/tls/cert.pem",
+					KeyFile:      "/etc/tls/key.pem",
+					ClientAuth:   "require",
+					ClientCAFile: "/etc/tls/client-ca.pem",
+				},
+			},
+			expectedError: "server.tls.clientauth",
+		},
+		{
+			name: "tls_verify_without_client_ca",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:    true,
+					CertFile:   "/etc/tls/cert.pem",
+					KeyFile:    "/etc/tls/key.pem",
+					ClientAuth: tlsClientAuthVerify,
+				},
+			},
+			expectedError: "server.tls.clientcafile",
+		},
+		{
+			name: "tls_client_ca_without_verify",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:      true,
+					CertFile:     "/etc/tls/cert.pem",
+					KeyFile:      "/etc/tls/key.pem",
+					ClientCAFile: "/etc/tls/client-ca.pem",
+				},
+			},
+			expectedError: "server.tls.clientcafile",
+		},
+		{
+			name: "tls_client_ca_value_without_verify",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:       true,
+					CertFile:      "/etc/tls/cert.pem",
+					KeyFile:       "/etc/tls/key.pem",
+					ClientCAValue: "aGVsbG8=",
+				},
+			},
+			expectedError: "server.tls.clientcafile",
+		},
+		{
+			name: "tls_client_ca_file_and_value_both_set",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:       true,
+					CertFile:      "/etc/tls/cert.pem",
+					KeyFile:       "/etc/tls/key.pem",
+					ClientAuth:    tlsClientAuthRequireVerify,
+					ClientCAFile:  "/etc/tls/client-ca.pem",
+					ClientCAValue: "aGVsbG8=",
+				},
+			},
+			expectedError: "server.tls.clientcafile",
 		},
 		{
 			name: "forwardedcert_require_without_enabled",
@@ -600,4 +757,33 @@ func TestLoadServerProbesCollisionFailsLoad(t *testing.T) {
 	var cfgErr *ConfigError
 	require.ErrorAs(t, err, &cfgErr)
 	assert.Equal(t, "server.probes.port", cfgErr.Field)
+}
+
+// TestValidateServerTLSClientAuthNamesValidValues pins that a refused policy,
+// including the stdlib's unverified request/require, names both valid values.
+func TestValidateServerTLSClientAuthNamesValidValues(t *testing.T) {
+	for name, refused := range map[string]string{"request": "request", "require": "require", "capitalized_verify": "Verify"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := ServerTLSConfig{
+				Enabled: true, CertFile: "/etc/tls/cert.pem", KeyFile: "/etc/tls/key.pem",
+				ClientAuth: refused, ClientCAFile: "/etc/tls/client-ca.pem",
+			}
+			err := validateServerTLS(&cfg)
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, fieldServerTLSClientAuth, cfgErr.Field)
+			assert.Contains(t, err.Error(), tlsClientAuthVerify)
+			assert.Contains(t, err.Error(), tlsClientAuthRequireVerify)
+		})
+	}
+
+	t.Run("required_when_names_the_policy", func(t *testing.T) {
+		cfg := ServerTLSConfig{
+			Enabled: true, CertFile: "/etc/tls/cert.pem", KeyFile: "/etc/tls/key.pem",
+			ClientAuth: tlsClientAuthVerify,
+		}
+		err := validateServerTLS(&cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "required when server.tls.clientauth is set")
+	})
 }

@@ -313,3 +313,269 @@ func TestServerStaleMaterialWarnsWhenDisabled(t *testing.T) {
 
 	shutdownAndDrain(t, srv, errCh)
 }
+
+func clientAuthLeaf(c *x509.Certificate) {
+	c.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+}
+
+func TestParseClientAuth(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want tls.ClientAuthType
+	}{
+		{name: "empty_is_off", in: "", want: tls.NoClientCert},
+		{name: "verify_verifies_if_given", in: clientAuthVerify, want: tls.VerifyClientCertIfGiven},
+		{name: "require_verify_requires_and_verifies", in: clientAuthRequireVerify, want: tls.RequireAndVerifyClientCert},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseClientAuth(tt.in)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	for name, refused := range map[string]string{
+		"refuses_request": "request", "refuses_require": "require",
+		"refuses_capitalized_verify": "Verify", "refuses_underscore_spelling": "require_verify",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseClientAuth(refused)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `"verify"`)
+			assert.Contains(t, err.Error(), `"require-verify"`)
+		})
+	}
+}
+
+func TestBuildServerTLSConfigClientAuth(t *testing.T) {
+	serverCAPEM, issueServer := newTestCA(t, "server-ca")
+	certPEM, keyPEM := issueServer("127.0.0.1")
+	clientCAPEM, _ := newTestCA(t, "client-ca")
+
+	base := func(mut func(*config.ServerTLSConfig)) *config.ServerTLSConfig {
+		cfg := &config.ServerTLSConfig{
+			Enabled:   true,
+			CertValue: base64.StdEncoding.EncodeToString(certPEM),
+			KeyValue:  base64.StdEncoding.EncodeToString(keyPEM),
+		}
+		mut(cfg)
+		return cfg
+	}
+
+	wantPool := x509.NewCertPool()
+	require.True(t, wantPool.AppendCertsFromPEM(clientCAPEM))
+
+	t.Run("off_leaves_client_cas_unset", func(t *testing.T) {
+		tlsCfg, err := buildServerTLSConfig(base(func(*config.ServerTLSConfig) {}))
+		require.NoError(t, err)
+		assert.Equal(t, tls.NoClientCert, tlsCfg.ClientAuth)
+		assert.Nil(t, tlsCfg.ClientCAs)
+	})
+
+	t.Run("value_sourced_bundle", func(t *testing.T) {
+		tlsCfg, err := buildServerTLSConfig(base(func(c *config.ServerTLSConfig) {
+			c.ClientAuth = clientAuthRequireVerify
+			c.ClientCAValue = base64.StdEncoding.EncodeToString(clientCAPEM)
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, tls.RequireAndVerifyClientCert, tlsCfg.ClientAuth)
+		require.NotNil(t, tlsCfg.ClientCAs)
+		assert.True(t, wantPool.Equal(tlsCfg.ClientCAs))
+	})
+
+	t.Run("file_sourced_bundle", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "client-ca.pem")
+		require.NoError(t, os.WriteFile(path, clientCAPEM, 0o600))
+		tlsCfg, err := buildServerTLSConfig(base(func(c *config.ServerTLSConfig) {
+			c.ClientAuth = clientAuthVerify
+			c.ClientCAFile = path
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, tls.VerifyClientCertIfGiven, tlsCfg.ClientAuth)
+		require.NotNil(t, tlsCfg.ClientCAs)
+		assert.True(t, wantPool.Equal(tlsCfg.ClientCAs))
+	})
+
+	t.Run("server_ca_is_not_the_client_pool", func(t *testing.T) {
+		tlsCfg, err := buildServerTLSConfig(base(func(c *config.ServerTLSConfig) {
+			c.ClientAuth = clientAuthVerify
+			c.ClientCAValue = base64.StdEncoding.EncodeToString(clientCAPEM)
+		}))
+		require.NoError(t, err)
+		serverPool := x509.NewCertPool()
+		require.True(t, serverPool.AppendCertsFromPEM(serverCAPEM))
+		assert.False(t, serverPool.Equal(tlsCfg.ClientCAs))
+	})
+
+	for _, minVersion := range []struct {
+		in   string
+		want uint16
+	}{{in: "", want: tls.VersionTLS12}, {in: "1.3", want: tls.VersionTLS13}} {
+		t.Run("min_version_preserved_"+minVersion.in, func(t *testing.T) {
+			tlsCfg, err := buildServerTLSConfig(base(func(c *config.ServerTLSConfig) {
+				c.MinVersion = minVersion.in
+				c.ClientAuth = clientAuthRequireVerify
+				c.ClientCAValue = base64.StdEncoding.EncodeToString(clientCAPEM)
+			}))
+			require.NoError(t, err)
+			assert.Equal(t, minVersion.want, tlsCfg.MinVersion)
+		})
+	}
+
+	emptyPath := filepath.Join(t.TempDir(), "empty.pem")
+	require.NoError(t, os.WriteFile(emptyPath, nil, 0o600))
+
+	failures := []struct {
+		name string
+		mut  func(*config.ServerTLSConfig)
+		want string
+	}{
+		{
+			name: "missing_bundle",
+			mut:  func(c *config.ServerTLSConfig) { c.ClientAuth = clientAuthVerify },
+			want: "client ca: no material provided",
+		},
+		{
+			name: "unreadable_bundle_file",
+			mut: func(c *config.ServerTLSConfig) {
+				c.ClientAuth = clientAuthVerify
+				c.ClientCAFile = filepath.Join(t.TempDir(), "absent.pem")
+			},
+			want: "client ca: read file",
+		},
+		{
+			name: "empty_bundle_file",
+			mut: func(c *config.ServerTLSConfig) {
+				c.ClientAuth = clientAuthRequireVerify
+				c.ClientCAFile = emptyPath
+			},
+			want: "client ca: no CERTIFICATE block found",
+		},
+		{
+			name: "unparseable_bundle",
+			mut: func(c *config.ServerTLSConfig) {
+				c.ClientAuth = clientAuthRequireVerify
+				c.ClientCAValue = base64.StdEncoding.EncodeToString([]byte("-----BEGIN CERTIFICATE-----\nnot a cert\n-----END CERTIFICATE-----\n"))
+			},
+			want: "client ca:",
+		},
+		{
+			name: "bad_base64_bundle",
+			mut: func(c *config.ServerTLSConfig) {
+				c.ClientAuth = clientAuthVerify
+				c.ClientCAValue = "not-valid-base64!!!"
+			},
+			want: "client ca: base64 decode failed",
+		},
+		{
+			name: "refused_policy",
+			mut: func(c *config.ServerTLSConfig) {
+				c.ClientAuth = "require"
+				c.ClientCAValue = base64.StdEncoding.EncodeToString(clientCAPEM)
+			},
+			want: "clientauth",
+		},
+	}
+	for _, tt := range failures {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildServerTLSConfig(base(tt.mut))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+// TestServerTLSRequireVerifyHandshake is the light handshake check: a client
+// certificate from the configured CA completes, and no certificate does not.
+func TestServerTLSRequireVerifyHandshake(t *testing.T) {
+	serverCAPEM, issueServer := newTestCA(t, "server-ca")
+	certPEM, keyPEM := issueServer("127.0.0.1")
+	clientCAPEM, issueClient := newTestCAWithSANs(t, "client-ca")
+	clientCertPEM, clientKeyPEM := issueClient("partner", nil, nil, clientAuthLeaf)
+
+	serverCfg, err := buildServerTLSConfig(&config.ServerTLSConfig{
+		Enabled:       true,
+		CertValue:     base64.StdEncoding.EncodeToString(certPEM),
+		KeyValue:      base64.StdEncoding.EncodeToString(keyPEM),
+		ClientAuth:    clientAuthRequireVerify,
+		ClientCAValue: base64.StdEncoding.EncodeToString(clientCAPEM),
+	})
+	require.NoError(t, err)
+
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(serverCAPEM))
+	clientPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
+	require.NoError(t, err)
+
+	// handshake returns the server side's verdict; the client drains one read so
+	// TLS 1.3's post-handshake certificate check completes before closing.
+	handshake := func(clientCfg *tls.Config) error {
+		serverConn, clientConn := net.Pipe()
+		deadline := time.Now().Add(5 * time.Second)
+		require.NoError(t, serverConn.SetDeadline(deadline))
+		require.NoError(t, clientConn.SetDeadline(deadline))
+		srv := tls.Server(serverConn, serverCfg)
+		cli := tls.Client(clientConn, clientCfg)
+		done := make(chan error, 1)
+		go func() {
+			hsErr := srv.Handshake()
+			_ = srv.Close()
+			done <- hsErr
+		}()
+		if cli.Handshake() == nil {
+			_, _ = cli.Read(make([]byte, 1))
+		}
+		_ = cli.Close()
+		return <-done
+	}
+
+	t.Run("valid_client_certificate_accepted", func(t *testing.T) {
+		serverErr := handshake(&tls.Config{
+			RootCAs: roots, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12,
+			Certificates: []tls.Certificate{clientPair},
+		})
+		assert.NoError(t, serverErr)
+	})
+
+	t.Run("no_client_certificate_rejected", func(t *testing.T) {
+		serverErr := handshake(&tls.Config{
+			RootCAs: roots, ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12,
+		})
+		require.Error(t, serverErr)
+		assert.Contains(t, serverErr.Error(), "client didn't provide a certificate")
+	})
+
+	t.Run("tls11_client_refused", func(t *testing.T) {
+		serverErr := handshake(&tls.Config{
+			RootCAs: roots, ServerName: "127.0.0.1",
+			MinVersion: tls.VersionTLS10, MaxVersion: tls.VersionTLS11, //nolint:gosec // the point is the server refusing it
+			Certificates: []tls.Certificate{clientPair},
+		})
+		require.Error(t, serverErr)
+	})
+}
+
+func TestHasStagedServerTLSMaterial(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.ServerTLSConfig
+		want bool
+	}{
+		{name: "nothing_set", cfg: config.ServerTLSConfig{}, want: false},
+		{name: "cert_file", cfg: config.ServerTLSConfig{CertFile: "/c.pem"}, want: true},
+		{name: "cert_value", cfg: config.ServerTLSConfig{CertValue: "aGVsbG8="}, want: true},
+		{name: "key_file", cfg: config.ServerTLSConfig{KeyFile: "/k.pem"}, want: true},
+		{name: "key_value", cfg: config.ServerTLSConfig{KeyValue: "aGVsbG8="}, want: true},
+		{name: "client_auth", cfg: config.ServerTLSConfig{ClientAuth: clientAuthRequireVerify}, want: true},
+		{name: "client_ca_file", cfg: config.ServerTLSConfig{ClientCAFile: "/ca.pem"}, want: true},
+		{name: "client_ca_value", cfg: config.ServerTLSConfig{ClientCAValue: "aGVsbG8="}, want: true},
+		{name: "min_version_alone", cfg: config.ServerTLSConfig{MinVersion: "1.3"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasStagedServerTLSMaterial(&tt.cfg))
+		})
+	}
+}
