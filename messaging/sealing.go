@@ -193,7 +193,7 @@ func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[se
 // declaration, a producer that cannot resolve its Activation, or a codec that returns no
 // sealer. Every error is recorded on the Declarations and surfaces from Validate as a
 // startup failure.
-func newSealer(t reflect.Type, eventType string) (Sealer, SealSpec, error) {
+func newSealer(t reflect.Type, eventType string) (sealer Sealer, spec SealSpec, err error) {
 	codec := sealruntime.Registered()
 	if codec == nil {
 		return nil, nil, fmt.Errorf("%w (event type %q, Go type %v)", ErrSealingNotLinked, eventType, t)
@@ -205,14 +205,14 @@ func newSealer(t reflect.Type, eventType string) (Sealer, SealSpec, error) {
 	if rt.KeyStore == nil {
 		return nil, nil, fmt.Errorf("%w (event type %q)", sealruntime.ErrKeyStoreMissing, eventType)
 	}
-	spec, err := codec.ScanType(t)
+	spec, err = codec.ScanType(t)
 	if err != nil {
 		return nil, nil, fmt.Errorf("messaging: seal declaration of %v (event type %q): %w", t, eventType, err)
 	}
 	if spec == nil {
 		return nil, nil, fmt.Errorf("messaging: %v carries seal tags the codec did not recognize (event type %q)", t, eventType)
 	}
-	sealer, err := codec.NewSealer(spec, eventType, rt)
+	sealer, err = codec.NewSealer(spec, eventType, rt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("messaging: sealing producer for %v (event type %q): %w", t, eventType, err)
 	}
