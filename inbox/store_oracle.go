@@ -80,7 +80,7 @@ func (s *oracleStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Reco
 	if err != nil {
 		return false, fmt.Errorf("inbox oracle: build mark processed failed: %w", err)
 	}
-	_, err = tx.Exec(ctx, query, args...)
+	_, err = tx.Exec(database.WithExpectedError(ctx, database.IsUniqueViolation), query, args...)
 	if err != nil {
 		if database.IsUniqueViolation(err) {
 			return false, nil // already processed

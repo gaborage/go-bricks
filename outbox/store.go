@@ -140,8 +140,12 @@ func leadRow(ctx context.Context, db dbtypes.Interface, vendor, leaderTable, loc
 		return nil, fmt.Errorf("outbox %s: begin leader transaction failed: %w", vendor, err)
 	}
 
+	// Only the lock statement declares lock-not-available as expected: a non-leader
+	// losing the NOWAIT race is ErrNotLeader, logged at DEBUG (ADR-088), while the same
+	// code on Begin, the probe or Rollback stays a real failure.
+	lockCtx := database.WithExpectedError(ctx, database.IsLockNotAvailable)
 	var id int64
-	if err := tx.QueryRow(ctx, lockSQL, lockArgs...).Scan(&id); err != nil {
+	if err := tx.QueryRow(lockCtx, lockSQL, lockArgs...).Scan(&id); err != nil {
 		_ = tx.Rollback(ctx)
 		switch {
 		case database.IsLockNotAvailable(err):
