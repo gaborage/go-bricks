@@ -11211,10 +11211,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `messaging.Registry`, `messaging.RegistryInterface` and `mocks.MockRegistry`; `Close()` is
   unchanged. Behavior: the call used to cancel and return at once. It now waits until every
   consumer supervisor — its worker pool and any re-subscribe in flight included — has exited, so
-  no handler runs and no consumer state is written after it returns; the wait ends at the earlier
+  when the join completes within the window no handler runs and no consumer state is written after
+  it returns; the wait ends at the earlier
   of `ctx`'s deadline and a fixed 5s cap, and on expiry it logs `Consumer supervisors still
   running after the stop budget; abandoning them` at WARN with `running_supervisors` and
-  `stop_budget`. `Manager.Close()` joins within the cap alone before closing the consumer
+  `stop_budget`, and returns while those supervisors may still run handlers and write consumer
+  state. Known limit: `Manager.StopConsumers(ctx)` takes the manager's consumer lock before its
+  context applies, and an in-flight `EnsureConsumers` setup holds it for up to `infraSetupTimeout`
+  (45s), so a racing stop can wait past its deadline; the context bounds the join, not the lock
+  wait. `Manager.Close()` joins within the cap alone before closing the consumer
   clients, and a stop that already gave up is not waited on again. `App.Shutdown` passes its
   shutdown context to the consumer stop phase, so up to 5s of that budget can now go to handlers
   that ignore cancellation.

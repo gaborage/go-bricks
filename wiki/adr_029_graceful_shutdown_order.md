@@ -6,13 +6,17 @@
 > **Amended (2026-09-30, the consumer stop joins its handlers — breaking):** phase 2 no longer
 > only cancels. `Manager.StopConsumers(ctx)` — and `Registry.StopConsumers(ctx)` and
 > `RegistryInterface`, which gain the same `context.Context` parameter — cancels every consumer,
-> then waits until every consumer supervisor has exited, so no handler runs and no consumer state
+> then waits until every consumer supervisor has exited, so, when the join completes within the window, no handler runs and no consumer state
 > is written after it returns. The wait is bounded by the EARLIER of the caller's deadline and a
 > fixed 5s cap mirroring the streams shutdown flush budget ([ADR-123](adr_123_streams_lost_topology_supervisor.md), which joins the streams supervisor within that budget):
 > the caller's context can shorten the join but never lengthen it, so the one `App.Shutdown`
 > context the phase is handed is not spent whole on a stuck handler before modules and the
 > telemetry flush run. On expiry it logs a WARN naming how many supervisors are still running and
-> the window it allowed, and returns. `Manager.Close()` keeps no context and joins within the
+> the window it allowed, and returns while those supervisors may still run handlers and write consumer
+> state. Known limit: `Manager.StopConsumers(ctx)` acquires the manager's consumer lock before its
+> context applies, and an in-flight `EnsureConsumers` setup holds that lock for up to
+> `infraSetupTimeout` (45s, `messaging/constants.go`), so a stop that races a consumer setup can wait
+> on the lock past its deadline; the context bounds the join, not that lock wait. `Manager.Close()` keeps no context and joins within the
 > fixed cap alone; a join the stop phase already gave up on is not waited on again, so Close goes
 > on to close the clients. The context parameter is a compile break (`fix(messaging)!:`) rather
 > than an additive `StopConsumersContext`: the no-argument form would have joined on a budget the
@@ -66,13 +70,13 @@ Reorder `App.Shutdown` to stop **inbound work first**, then tear down what it de
 
 ## Consequences
 
-**Behavioral change (not an API break):**
+**Behavioral change (not an API break at adoption; the 2026-09-30 amendment later made `StopConsumers` take a context, which is breaking, [C70.14]):**
 
-- Shutdown now drains the HTTP server and stops consumers **before** modules are torn down. Applications whose module `Shutdown()` implicitly relied on the server still serving, or on consumers still running, will see the corrected order. No application code must change; `Manager.StopConsumers` is purely additive.
+- Shutdown now drains the HTTP server and stops consumers **before** modules are torn down. Applications whose module `Shutdown()` implicitly relied on the server still serving, or on consumers still running, will see the corrected order. No application code had to change at adoption; `Manager.StopConsumers` was purely additive then (since broken by the 2026-09-30 amendment, [C70.14]).
 - The framework stops handing **new** HTTP requests and AMQP messages to modules before they shut down — closing the dominant race (a message pulled and handled entirely against a shut-down module during a slow shutdown). `Manager.StopConsumers` cancels each consumer's context, which propagates to in-flight handlers, but does **not** synchronously join them; a handler already executing at the moment of cancellation may still briefly overlap module teardown. A fully synchronous drain (joining worker goroutines, with a bounded deadline so a stuck handler cannot hang shutdown) is possible future work. *(Done by the 2026-09-30 amendment: the stop now joins, bounded by the caller's context and a 5s cap; only a handler that outlives that window can still overlap teardown.)*
 
-**Additive API:**
+**Additive API (at adoption; superseded by the 2026-09-30 amendment, breaking, [C70.14]):**
 
-- `messaging.Manager` gains `StopConsumers()` for callers that want to quiesce consumers without tearing down the manager.
+- `messaging.Manager` gained `StopConsumers()` (now `StopConsumers(ctx)`) for callers that want to quiesce consumers without tearing down the manager.
 
 See [migrations.md](migrations.md) for the operator-facing note.
