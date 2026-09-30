@@ -35,6 +35,8 @@ const (
 	msgDBOperationNoRows = "Database operation returned no rows"
 	msgDBTxFinalized     = "Database transaction already finalized"
 	msgDBOperationError  = "Database operation error"
+	// Emitted at DEBUG for an error the caller declared via WithExpectedError.
+	msgDBOperationExpectedError = "Database operation returned an expected error"
 
 	// Database vendor normalization constants matching OTel semantic conventions
 	dbVendorPostgreSQL = "postgresql"
@@ -92,8 +94,8 @@ func SetObservabilityEnabled(enabled bool) {
 // TrackDBOperation is a no-op if tc or its Logger is nil. It records the operation's duration to
 // request-scoped metrics, clamps the query string to the configured maximum length, and — when
 // enabled — includes a sanitized form of parameters suitable for logging. If err is non-nil the
-// error is logged (with sql.ErrNoRows and sql.ErrTxDone both logged at debug level as benign,
-// non-error cases); if there is no error and the duration exceeds the configured slow-query
+// error is logged (with sql.ErrNoRows, sql.ErrTxDone and errors declared via WithExpectedError
+// logged at debug level as benign, non-error cases); if there is no error and the duration exceeds the configured slow-query
 // threshold a warning is emitted, otherwise a debug message is emitted.
 //
 // The rowsAffected parameter represents the number of rows affected by write operations (INSERT, UPDATE, DELETE).
@@ -139,11 +141,6 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	// short-circuited when the level is disabled. WithContext binds first: a context-bound
 	// logger may carry a different level, so enablement is only accurate after binding.
 	//
-	// Treat sql.ErrNoRows and sql.ErrTxDone specially - not actual errors, log as debug.
-	// ErrTxDone is returned by the deferred Rollback of an already-committed transaction
-	// (e.g. the WithTx helper), which is benign. errors.Is(nil, target) is false, so a nil
-	// err correctly falls through to the slow/default branches.
-	//
 	// Request-severity note: the WARN (slow-query) and ERROR branches escalate request
 	// severity via the adapter's Msg/Msgf -> trackSeverity -> escalateSeverity hook (see
 	// logger/adapter.go and server/logger.go), which suppresses the per-request action
@@ -152,22 +149,7 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	// Msg to escalate. The Enabled() short-circuit below preserves this exactly: it still
 	// calls event.Msg before returning, so severity escalation is unchanged; only the field
 	// construction is skipped (the allocation win).
-	log := tc.Logger.WithContext(ctx)
-	var event logger.LogEvent
-	var message string
-	var driverErr error
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		event, message = log.Debug(), msgDBOperationNoRows
-	case errors.Is(err, sql.ErrTxDone):
-		event, message = log.Debug(), msgDBTxFinalized
-	case err != nil:
-		event, message, driverErr = log.Error(), msgDBOperationError, err
-	case elapsed > tc.Settings.SlowQueryThreshold():
-		event, message = log.Warn(), fmt.Sprintf("Slow database operation detected (%s)", elapsed)
-	default:
-		event, message = log.Debug(), msgDBOperationExecuted
-	}
+	event, message, driverErr := selectLogEvent(ctx, tc.Logger.WithContext(ctx), err, elapsed, tc.Settings.SlowQueryThreshold())
 
 	// Short-circuit before building any fields when the chosen level is disabled. This
 	// is below the metric/span/counter block so observability is never gated by LOG_LEVEL.
@@ -220,6 +202,31 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	}
 
 	event.Msg(message)
+}
+
+// selectLogEvent picks the level and message for a completed operation, plus the
+// driver error whose type is recorded on the line (nil when none is recorded). Every
+// benign error — isBenignError — logs at DEBUG and therefore never escalates request
+// severity; ErrNoRows and ErrTxDone keep their own messages, and a caller-declared
+// expected error keeps its error_type. errors.Is(nil, target) is false, so a nil err
+// falls through to the slow/default branches.
+func selectLogEvent(ctx context.Context, log logger.Logger, err error, elapsed, slowThreshold time.Duration) (event logger.LogEvent, message string, driverErr error) {
+	switch {
+	case err != nil && !isBenignError(ctx, err):
+		return log.Error(), msgDBOperationError, err
+	case errors.Is(err, sql.ErrNoRows):
+		return log.Debug(), msgDBOperationNoRows, nil
+	case errors.Is(err, sql.ErrTxDone):
+		// Returned by the deferred Rollback of an already-committed transaction
+		// (e.g. the WithTx helper).
+		return log.Debug(), msgDBTxFinalized, nil
+	case err != nil:
+		return log.Debug(), msgDBOperationExpectedError, err
+	case elapsed > slowThreshold:
+		return log.Warn(), fmt.Sprintf("Slow database operation detected (%s)", elapsed), nil
+	default:
+		return log.Debug(), msgDBOperationExecuted, nil
+	}
 }
 
 // extractRowsAffected safely extracts the number of rows affected from a sql.Result.
@@ -290,7 +297,7 @@ func SanitizeArgs(args []any, maxLen int) []any {
 // db.query.text attribute, and the scrub has to precede the length truncation below.
 // It sets standard DB and network attributes (including `db.system.name`, `db.query.text`, `db.operation.name`,
 // `db.collection.name`, `db.namespace`, `server.address`, and `server.port`) when available, records errors
-// (excluding `sql.ErrNoRows` and `sql.ErrTxDone`) on the span, and ends the span.
+// (excluding the benign ones — see isBenignError) on the span, and ends the span.
 func createDBSpan(ctx context.Context, tc *Context, query string, start time.Time, err error) {
 	tracer := otel.Tracer(dbTracerName)
 
@@ -345,14 +352,12 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 	span.SetAttributes(attrs...)
 
 	// Record error status
-	if err != nil {
-		// sql.ErrNoRows (empty result) and sql.ErrTxDone (deferred rollback after
-		// commit) are not actual errors - do not mark the span as failed.
-		if !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, sql.ErrTxDone) {
-			// SECURITY: a unique-constraint violation echoes back the value that
-			// collided — type only, on both span sinks (ADR-083).
-			observability.RecordErrorByType(span, err)
-		}
+	// Benign errors (ErrNoRows, ErrTxDone, caller-declared expected) leave the
+	// status Unset.
+	if err != nil && !isBenignError(ctx, err) {
+		// SECURITY: a unique-constraint violation echoes back the value that
+		// collided — type only, on both span sinks (ADR-083).
+		observability.RecordErrorByType(span, err)
 	}
 
 	// End the span (will use current time, giving us the correct duration)

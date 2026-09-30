@@ -187,7 +187,11 @@ it is real churn, and such deployments should size that timeout against
 
 **Exactly one replica per ledger now drains.** An alert or dashboard that expected every
 replica to report a relay cycle will fire falsely; the others log `another instance leads this
-ledger` at DEBUG. Similarly, a dashboard reading `retry_count` as liveness will see a parked
+ledger` at DEBUG. That promise holds through the database tracking layer too: the leader
+lock's `Scan` runs under `database.WithExpectedError(ctx, database.IsLockNotAvailable)`, so a
+non-leader's `55P03` / `ORA-00054` is logged at DEBUG with its span status Unset instead of as
+a `Database operation error` — while Begin, the leadership probe and Rollback keep their
+ordinary tracking, and a `lock_timeout` 55P03 anywhere else stays an ERROR. Similarly, a dashboard reading `retry_count` as liveness will see a parked
 key as a stall, because a parked row's count deliberately does not move.
 
 **The table name is bounded at 49 bytes for its last segment.** Every identifier the store

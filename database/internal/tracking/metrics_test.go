@@ -2,7 +2,6 @@ package tracking
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -14,7 +13,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/gaborage/go-bricks/internal/testutil"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
@@ -222,42 +220,6 @@ func TestRecordDBMetricsMultipleOperations(t *testing.T) {
 
 	// Duration histogram should exist with multiple data points
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
-}
-
-func TestIsSQLNoRowsError(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected bool
-	}{
-		{
-			name:     "nil_error",
-			err:      nil,
-			expected: false,
-		},
-		{
-			name:     "sql_err_no_rows",
-			err:      sql.ErrNoRows,
-			expected: true,
-		},
-		{
-			name:     "wrapped_sql_err_no_rows",
-			err:      errors.New("query failed: " + sql.ErrNoRows.Error()),
-			expected: false, // errors.New doesn't wrap, so errors.Is returns false
-		},
-		{
-			name:     "other_error",
-			err:      errors.New(testutil.TestConnectionRefused),
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isSQLNoRowsError(tt.err)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 func TestGetDBMeterInitialization(t *testing.T) {

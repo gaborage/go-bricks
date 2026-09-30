@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
+	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
 const (
@@ -457,6 +459,36 @@ func TestTrackDBOperationDisabledErrorStillEscalates(t *testing.T) {
 	if strings.Contains(event.Msg, failure.Error()) {
 		t.Fatalf("log message must not leak the raw driver error, got %q", event.Msg)
 	}
+}
+
+// TestTrackDBOperationDisabledDeclaredExpectedErrorDoesNotEscalate is the
+// counterpart of TestTrackDBOperationDisabledErrorStillEscalates: the same failure,
+// declared expected on the context, is a DEBUG event and never reaches the
+// severity hook, while the undeclared control still escalates.
+func TestTrackDBOperationDisabledDeclaredExpectedErrorDoesNotEscalate(t *testing.T) {
+	failure := errors.New("boom")
+	expected := func(err error) bool { return errors.Is(err, failure) }
+	ctx := WithExpectedError(logger.WithDBCounter(context.Background()), expected)
+	recLogger := newRecordingLoggerWithDisabled(levelError)
+	settings := Settings{slowQueryThreshold: time.Second}
+
+	start := time.Now().Add(-10 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, failure)
+
+	events := recLogger.events()
+	require.Len(t, events, 1)
+	assert.Equal(t, levelDebug, events[0].Level)
+	assert.Equal(t, msgDBOperationExpectedError, events[0].Msg)
+
+	disabled := &Context{Logger: logger.New(testconsts.TestLoggerLevelDisabled, false), Vendor: "postgresql", Settings: settings}
+
+	declaredCtx, declaredLevels := severityHookCtx(WithExpectedError(context.Background(), expected))
+	TrackDBOperation(declaredCtx, disabled, selectOne, nil, start, 0, failure)
+	assert.Empty(t, declaredLevels(), "a declared-expected error must not escalate request severity")
+
+	controlCtx, controlLevels := severityHookCtx(context.Background())
+	TrackDBOperation(controlCtx, disabled, selectOne, nil, start, 0, failure)
+	assert.Equal(t, []zerolog.Level{zerolog.ErrorLevel}, controlLevels())
 }
 
 // TestTrackDBOperationDisabledDebugErrNoRows verifies the disabled-DEBUG sql.ErrNoRows

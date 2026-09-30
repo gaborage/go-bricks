@@ -43,6 +43,20 @@ var (
 	// RepositoryMethodFromContext returns the repository method name stored on ctx
 	// by WithRepositoryMethod, and whether one was set.
 	RepositoryMethodFromContext = tracking.RepositoryMethodFromContext
+
+	// WithExpectedError declares errors matching expected as an anticipated outcome
+	// of the database operations run with the returned context. Tracking then logs a
+	// matching failure at DEBUG (not ERROR), leaves its span status Unset and does not
+	// escalate request severity; the caller still receives the error unchanged.
+	// Scope it to the single statement whose failure is expected:
+	//
+	//	lockCtx := database.WithExpectedError(ctx, database.IsLockNotAvailable)
+	//	err := tx.QueryRow(lockCtx, "SELECT ... FOR UPDATE NOWAIT").Scan(&id)
+	//
+	// Do not declare it on blocking statements: a PostgreSQL 55P03 raised by an
+	// expired lock_timeout is a real failure. Nested declarations compose — an error
+	// is expected when either predicate matches.
+	WithExpectedError = tracking.WithExpectedError
 )
 
 // Re-export internal constants

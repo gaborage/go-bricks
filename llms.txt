@@ -630,6 +630,7 @@ func (m *UserModule) PingDB(ctx context.Context) error {
 - Use `database.NewQueryBuilder(db.DatabaseType())` for type-safe, vendor-agnostic queries (auto-handles placeholders and Oracle reserved-word quoting)
 - Always `defer rows.Close()` and check `rows.Err()` after the loop — when you hold `*sql.Rows` yourself via `db.Query`; `ExecuteQueryMany`/`ExecuteQuerySingle` own `Close` and `rows.Err()` for you
 - For atomicity: `db.Begin(ctx)` → `defer tx.Rollback(ctx)` → work via `database.Execute*(ctx, tx, q, "op")` (both `Interface` and `Tx` satisfy `database.Executor`) → `tx.Commit(ctx)` at the end
+- **Expected driver errors:** tracking logs any other failed statement as `Database operation error` at ERROR, marks its span `Error` and escalates request severity. When one statement's failure is an outcome you handle (a `FOR UPDATE NOWAIT` losing the row, a duplicate you treat as already-done), declare it on that statement's context only: `lockCtx := database.WithExpectedError(ctx, database.IsLockNotAvailable)` — a match is logged at DEBUG with its `error_type`, leaves the span Unset and does not escalate; you still receive the error unchanged. Nested declarations compose (either predicate matches). Never declare it on a blocking statement: PostgreSQL `55P03` from an expired `lock_timeout` is a real failure
 
 ## Typed HTTP Handlers
 
