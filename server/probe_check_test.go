@@ -514,9 +514,7 @@ func TestServerProbeReadyPassesUnderVerifyWithARejectingHook(t *testing.T) {
 	cfg.Server.TLS = f.serverTLS(clientAuthVerify)
 	log := &testLogger{}
 	rejectAll := func([][]byte, [][]*x509.Certificate) error { return errors.New("rejected") }
-	srv := newServer(cfg, log, withEphemeralProbeListener(), func(s *Server) {
-		s.opts = Options{TLSVerifyPeerCertificate: rejectAll}
-	})
+	srv := newServer(cfg, log, withEphemeralProbeListener(), withOptions(Options{TLSVerifyPeerCertificate: rejectAll}))
 	errCh := startProbeServer(t, srv)
 
 	res, err := doRequest(t.Context(), noKeepAliveClient(), http.MethodGet, probeURL(srv, testReadyRoute))

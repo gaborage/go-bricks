@@ -61,6 +61,10 @@ func buildServerTLSConfig(cfg *config.ServerTLSConfig) (*tls.Config, error) {
 	return tlsCfg, nil
 }
 
+// inertLeafHookWarnMsg is the WARN Start logs for a leaf-validation hook on a
+// plaintext listener.
+const inertLeafHookWarnMsg = "a TLS leaf-validation hook is set but server.tls.enabled is false; the hook is inert"
+
 // leafVerifier is the stdlib VerifyPeerCertificate signature a leaf-validation
 // hook takes (Options.TLSVerifyPeerCertificate).
 type leafVerifier = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error

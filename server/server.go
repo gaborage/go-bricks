@@ -199,7 +199,12 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 // NewWithOptions is New plus programmatic options; New(cfg, log) is
 // NewWithOptions(cfg, log, Options{}).
 func NewWithOptions(cfg *config.Config, log logger.Logger, opts Options) *Server {
-	return newServer(cfg, log, func(s *Server) { s.opts = opts })
+	return newServer(cfg, log, withOptions(opts))
+}
+
+// withOptions installs the programmatic extensions NewWithOptions received.
+func withOptions(opts Options) serverOption {
+	return func(s *Server) { s.opts = opts }
 }
 
 func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Server {
@@ -513,7 +518,7 @@ func (s *Server) serverTLSConfig() (*tls.Config, error) {
 	if s.opts.TLSVerifyPeerCertificate != nil {
 		s.logger.Warn().
 			Str("field", "server.tls.enabled").
-			Msg("a TLS leaf-validation hook is set but server.tls.enabled is false; the hook is inert")
+			Msg(inertLeafHookWarnMsg)
 	}
 	if hasStagedServerTLSMaterial(&s.cfg.Server.TLS) {
 		// Fail-open is deliberate — staging material ahead of a flip is a
