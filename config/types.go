@@ -101,11 +101,12 @@ type ServerConfig struct {
 
 	// TrustedProxies holds CIDR ranges of reverse proxies whose
 	// X-Forwarded-For entries are believed when deriving the client IP for
-	// rate limiting and request logging. Loopback, link-local and RFC1918
-	// ranges are trusted by default, so a service behind an in-VPC load
-	// balancer needs no entry here; add one only when a proxy sits on a
-	// public address. An invalid entry fails startup rather than silently
-	// changing who is trusted.
+	// rate limiting and request logging, and whose X-Forwarded-Proto decides
+	// the request scheme (and so whether the HSTS header is sent). Loopback,
+	// link-local and RFC1918 ranges are trusted by default, so a service
+	// behind an in-VPC load balancer needs no entry here; add one only when a
+	// proxy sits on a public address. An invalid entry fails startup rather
+	// than silently changing who is trusted.
 	TrustedProxies []string `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
 
 	// BodyLimit is the maximum request body size in bytes. A value of 0 is filled

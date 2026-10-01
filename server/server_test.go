@@ -1267,6 +1267,15 @@ func extractClientIP(srv *Server, remoteAddr, headerName, headerValue string) st
 	return srv.echo.IPExtractor(req)
 }
 
+// extractScheme runs the installed scheme extractor against a synthetic request carrying
+// X-Forwarded-Proto: https from remoteAddr (set explicitly, as in extractClientIP).
+func extractScheme(srv *Server, remoteAddr string) string {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
+	return srv.echo.SchemeExtractor(req)
+}
+
 // TestServerIPExtractorIgnoresForgedXFFFromUntrustedPeer pins the finding this
 // change exists to close: a caller talking straight to the service cannot move
 // its rate-limit bucket by writing X-Forwarded-For.
@@ -1352,6 +1361,63 @@ func TestServerIPExtractorRejectsTrustWideningFromUnvalidatedConfig(t *testing.T
 
 			assert.NotEqual(t, "1.2.3.4", got, "a trust-widening entry must not let a forged XFF value through")
 			assert.Equal(t, "203.0.113.5", got, "the entry must be dropped, leaving the peer as the client IP")
+		})
+	}
+}
+
+// TestServerSchemeExtractorTrustsForwardedProtoLikeTheIPWalk pins that server.trustedproxies
+// governs X-Forwarded-Proto exactly as it governs X-Forwarded-For: a public peer's header is
+// ignored unless that peer is listed, a private peer is trusted by default, and an entry the
+// re-vet drops widens nothing.
+func TestServerSchemeExtractorTrustsForwardedProtoLikeTheIPWalk(t *testing.T) {
+	tests := []struct {
+		name           string
+		trustedProxies []string
+		remoteAddr     string
+		want           string
+	}{
+		{name: "public_peer_unlisted_is_ignored", remoteAddr: "203.0.113.5:41234", want: schemeHTTP},
+		{name: "private_peer_trusted_by_default", remoteAddr: "10.0.0.5:41234", want: schemeHTTPS},
+		{name: "public_peer_listed_is_trusted", trustedProxies: []string{"203.0.113.0/24"}, remoteAddr: "203.0.113.5:41234", want: schemeHTTPS},
+		{name: "dropped_default_route_widens_nothing", trustedProxies: []string{"0.0.0.0/0"}, remoteAddr: "203.0.113.5:41234", want: schemeHTTP},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newIPExtractorServer(tt.trustedProxies...)
+
+			assert.Equal(t, tt.want, extractScheme(srv, tt.remoteAddr))
+		})
+	}
+}
+
+// TestServerHSTSFollowsTrustedProxies pins the consumer-visible effect end to end: behind a
+// proxy on a public address the Secure middleware sends Strict-Transport-Security only when
+// that proxy is in server.trustedproxies (echo v5.4.0 stopped believing X-Forwarded-Proto from
+// any peer).
+func TestServerHSTSFollowsTrustedProxies(t *testing.T) {
+	tests := []struct {
+		name           string
+		trustedProxies []string
+		wantHSTS       bool
+	}{
+		{name: "public_proxy_unlisted_drops_hsts"},
+		{name: "public_proxy_listed_keeps_hsts", trustedProxies: []string{"203.0.113.0/24"}, wantHSTS: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newIPExtractorServer(tt.trustedProxies...)
+			srv.echo.GET("/hsts", okEchoHandler)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/hsts", http.NoBody)
+			req.RemoteAddr = "203.0.113.5:41234"
+			req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
+			rec := httptest.NewRecorder()
+
+			srv.echo.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantHSTS, rec.Header().Get(echo.HeaderStrictTransportSecurity) != "")
 		})
 	}
 }

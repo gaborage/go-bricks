@@ -74,14 +74,12 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 				attrs := v.MetricAttributes()
 
 				// Override url.scheme with a proxy-aware value. The library derives
-				// url.scheme from r.TLS alone; we additionally honor X-Forwarded-Proto.
-				// Appended after the defaults so our value wins attribute.Set's
-				// last-value-wins de-duplication (a duplicate url.scheme key is harmless).
-				scheme := schemeHTTP
-				if c.Request().TLS != nil || c.Request().Header.Get("X-Forwarded-Proto") == schemeHTTPS {
-					scheme = schemeHTTPS
-				}
-				attrs = append(attrs, attribute.String("url.scheme", scheme))
+				// url.scheme from r.TLS alone; c.Scheme() also honors X-Forwarded-Proto,
+				// but only from a peer server.trustedproxies (or echo's private-range
+				// default) trusts. Appended after the defaults so our value wins
+				// attribute.Set's last-value-wins de-duplication (a duplicate url.scheme
+				// key is harmless).
+				attrs = append(attrs, attribute.String("url.scheme", c.Scheme()))
 
 				// Add error.type for 4xx/5xx responses (status code as string per HTTP semconv).
 				if v.HTTPResponseStatusCode >= 400 {
