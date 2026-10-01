@@ -11377,8 +11377,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `otel_scope_name`); for `server.address`, `server.port` or `http.request.method_original` on
   `http.server.request.duration`, `http.server.request.body.size` or
   `http.server.response.body.size`; for `http.request.body.size` or `http.response.body.size` on
-  spans; for a `network.protocol.version` value of `2.0` or `3.0`; and for span `error.type`
-  filters, which matched a Go type name such as `*echo.HTTPError`.
+  spans; for a `network.protocol.version` value of `2.0` or `3.0`; for span `error.type`
+  filters, which matched a Go type name such as `*echo.HTTPError`; and for span status
+  descriptions matched on `[PANIC RECOVER]`.
 - scope: the incoming-HTTP spans and metrics the framework emits when `observability.enabled` is
   true. Their instrumentation scope is now `github.com/labstack/echo-otel/v5`, where it was
   `github.com/labstack/echo-opentelemetry`. The metrics no longer carry `server.address`,
@@ -11391,7 +11392,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   for a 5xx whose error carries one (`StatusCode() int`, as `*echo.HTTPError` does), and still the
   Go type for any other 5xx error, and now also set on a 5xx with no error. A request aborted before any status was sent records no
   `http.response.status_code`. A panic is recorded on the span as an error whose status reads
-  `panic: panic (type: <T>)`. **Unchanged**: span names, `http.route`, `url.path` (still the routed
+  `panic: panic (type: <T>)`, where a handler panic used to read `[PANIC RECOVER] panic (type:
+  <T>) <stack>` (Recover's `PanicStackError`) and a panic in a middleware outside `Recover` left
+  no span status at all. With observability enabled, an `app.name` the instrumentation cannot
+  parse as `host[:port]` now makes `Server.Start` return an error naming `app.name` before
+  binding. That covers a value with no host such as `:8080`, which v5 rejects and v0.0.4
+  accepted, and a non-numeric port such as `svc:abc`, which already panicked at construction. **Unchanged**: span names, `http.route`, `url.path` (still the routed
   path), the trusted-peer `url.scheme`, metric `error.type` (the status code on every 4xx/5xx),
   `service.name`, and every Go API.
 - class note: `breaking`, not `silent-behavior`: nothing fails to compile or start, but a query
@@ -11399,14 +11405,18 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   rather than a value change.
 - gate: match = anything reads the framework's HTTP server telemetry by scope name, by a metric's
   `server.address`/`server.port`/`http.request.method_original`, by a span's body-size attribute, or
-  by a `network.protocol.version` of `2.0`/`3.0`, or by span `error.type`. no-match = otherwise.
+  by a `network.protocol.version` of `2.0`/`3.0`, by span `error.type`, or by a span status
+  description beginning `[PANIC RECOVER]`, or `observability.enabled` is true and `app.name`
+  starts with `:`. no-match = otherwise.
 - apply: replace the scope filter with `github.com/labstack/echo-otel/v5`, or match both during the
   rollout. Group by `service.name` instead of `server.address`. Read
   `http.request.method_original` from spans, not metrics. Read body sizes from the two body-size
   histograms; a span-level consumer has no framework hook to restore them, so file an issue if one
   needs it. Match `network.protocol.version` on `2`/`3`, or on both spellings during the rollout.
   Find 4xx spans by `http.response.status_code`, not `error.type`, and match a 5xx span's
-  `error.type` on the status code as well as the Go type.
+  `error.type` on the status code as well as the Go type. Match panicking requests on a span
+  status description starting `panic: panic (type: `, not `[PANIC RECOVER]`; the stack trace is
+  no longer on the span. Give `app.name` a host before `:` if it has one (`APP_NAME`).
   Expect a series break on the HTTP server metrics at the upgrade.
 - verify: after the bump, one request's span reports scope `github.com/labstack/echo-otel/v5`, and
   `http.server.request.duration` has no `server.address` label.

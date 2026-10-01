@@ -46,6 +46,13 @@ it reaches the span as its type. A panic in any middleware between the instrumen
    repeat `cfg.App.Name`, which every series already carries as the `service.name` resource
    attribute. The framework still appends the trusted-peer `url.scheme` and the status-code
    `error.type` for every 4xx/5xx.
+4. Check `app.name` before handing it to the instrumentation as its server name.
+   `NewMiddlewareWithConfig` panics when the name does not parse as `host[:port]`: a
+   non-numeric port, or, new in v5, no host at all (`:8080`). With observability enabled,
+   `server.New` runs the same `SplitAddress` check first, leaves the instrumentation off when
+   it fails, and `Start` returns an error naming `app.name` before binding. That is fail-fast
+   without a panic. A `config.Validate` rule would catch it earlier, but `app.name` also seeds
+   the cache prefix and the AMQP app id, so that rule is left to its own change.
 
 ## Consequences
 

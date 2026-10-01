@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
@@ -805,5 +807,76 @@ func assertSpanCarriesPanicTypeOnly(t *testing.T, span *tracetest.SpanStub, secr
 		for _, kv := range ev.Attributes {
 			assert.NotContains(t, kv.Value.String(), secret, "event %s attribute %s", ev.Name, kv.Key)
 		}
+	}
+}
+
+// TestOTelServerNameError pins the shapes echo-otel/v5 would panic on: a port it cannot
+// parse, and (new in v5) an address with no host. A plain name, a host:port and an empty
+// name (which the library skips) pass.
+func TestOTelServerNameError(t *testing.T) {
+	tests := []struct {
+		name    string
+		appName string
+		wantErr string
+	}{
+		{name: "plain_name", appName: testServiceName},
+		{name: "host_and_port", appName: "api.example.com:8443"},
+		{name: "empty_name_is_skipped", appName: ""},
+		{name: "no_host", appName: ":8080", wantErr: "it has no host"},
+		{name: "non_numeric_port", appName: "svc:abc", wantErr: "not a valid host[:port]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := otelServerNameError(tt.appName)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "app.name")
+			assert.Contains(t, err.Error(), strconv.Quote(tt.appName))
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestServerStartRefusesAnUnusableOTelServerName pins the startup path: with observability
+// enabled, an app.name the instrumentation would panic on builds a server without it, and
+// Start returns the error before binding. With observability off the name is never parsed.
+func TestServerStartRefusesAnUnusableOTelServerName(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		observability bool
+		wantErr       bool
+	}{
+		{name: "observability_enabled_refuses", observability: true, wantErr: true},
+		{name: "observability_disabled_ignores_the_name", observability: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.LoadFromMap(map[string]any{"observability.enabled": tc.observability})
+			require.NoError(t, err)
+			base := newTestConfig("", "", "")
+			cfg.App = base.App
+			cfg.App.Name = ":8080"
+			cfg.Server = base.Server
+
+			var srv *Server
+			require.NotPanics(t, func() { srv = New(cfg, &testLogger{}) })
+
+			if !tc.wantErr {
+				assert.NoError(t, srv.setupErr)
+				return
+			}
+			select {
+			case err = <-startServer(srv):
+			case <-time.After(5 * time.Second):
+				_ = srv.Shutdown(context.Background())
+				t.Fatal("Start bound and served instead of refusing the app.name")
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `app.name ":8080"`)
+			assert.Nil(t, srv.boundAddr.Load(), "Start must refuse before binding")
+		})
 	}
 }

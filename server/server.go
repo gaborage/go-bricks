@@ -38,6 +38,7 @@ type Server struct {
 	readyMu      sync.RWMutex
 	readyHandler echo.HandlerFunc
 	conflicts    *routeConflictTracker
+	setupErr     error                    // a construction-time configuration error Start returns before binding
 	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
 	ready        chan struct{}
 	started      atomic.Bool
@@ -262,7 +263,13 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 
 	// Setup middlewares with probe endpoint paths for tenant skipper. The OTel HTTP
 	// middleware is registered only when observability is enabled (zero overhead when off).
-	SetupMiddlewares(e, log, cfg, cfg.Bool("observability.enabled", false), healthPath, readyPath)
+	// An app.name the instrumentation cannot parse would panic inside it, so it is left
+	// off and Start refuses with setupErr instead.
+	observabilityEnabled := cfg.Bool("observability.enabled", false)
+	if observabilityEnabled {
+		s.setupErr = otelServerNameError(cfg.App.Name)
+	}
+	SetupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath)
 
 	if s.probeAddr != "" {
 		s.probeEcho = newProbeEngine(e, cfg, log, healthRoute, readyRoute)
@@ -456,6 +463,9 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 //
 // A duplicate method+path registration recorded on this server (RouteConflicts) refuses
 // Start before either bind with a *DuplicateRouteError, which matches ErrDuplicateRoute.
+//
+// With observability enabled, an app.name the HTTP instrumentation cannot use as its
+// host[:port] server name refuses Start before either bind (ADR-132).
 func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrServerAlreadyStarted
@@ -463,6 +473,10 @@ func (s *Server) Start() error {
 	if s.stopping.Load() {
 		s.closeProbeErrs()
 		return http.ErrServerClosed
+	}
+	if s.setupErr != nil {
+		s.closeProbeErrs()
+		return s.setupErr
 	}
 	if err := duplicateRouteError(s.RouteConflicts()); err != nil {
 		s.closeProbeErrs()

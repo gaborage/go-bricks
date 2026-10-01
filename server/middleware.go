@@ -123,6 +123,24 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	}
 }
 
+// otelServerNameError reports why name cannot be the instrumentation's ServerName.
+// echo-otel/v5 parses it as host[:port] and panics in NewMiddlewareWithConfig when the
+// parse fails or leaves no host, so newServer checks it first and Start returns this error
+// instead (ADR-132). An empty name is skipped by the library and passes.
+func otelServerNameError(name string) error {
+	if name == "" {
+		return nil
+	}
+	host, _, err := echootel.SplitAddress(name)
+	if err != nil {
+		return fmt.Errorf("app.name %q is not a valid host[:port] for the OpenTelemetry server.address: %w", name, err)
+	}
+	if host == "" {
+		return fmt.Errorf("app.name %q is not a valid host[:port] for the OpenTelemetry server.address: it has no host", name)
+	}
+	return nil
+}
+
 // useOTelMiddleware registers the HTTP server instrumentation and, immediately inside it, a
 // panic-value sanitizer. echo-otel/v5 recovers a panic from the chain below it, records
 // "panic: <value>" as the span status description, and re-panics. Recover and its own
