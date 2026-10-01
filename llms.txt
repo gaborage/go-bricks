@@ -5435,7 +5435,7 @@ When `observability.enabled: true`, the framework auto-emits:
 
 | Component | Span Name | Key Attributes | Trigger |
 |---|---|---|---|
-| HTTP server | `HTTP {method} {route}` | `http.request.method`, `http.route`, `http.response.status_code`, `http.request.body_size` | Every incoming request |
+| HTTP server | `HTTP {method} {route}` | `http.request.method`, `http.route`, `http.response.status_code` | Every incoming request |
 | Database | `db.query` / `db.exec` | `db.system.name`, `db.query.text`, `db.namespace` | Every `Query`/`Exec`/`QueryRow` |
 | AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.destination.routing_key` | Every `Publisher[T].Publish` |
 | AMQP consume | `{queue} receive` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.exchange` | Every message received |
@@ -6018,7 +6018,7 @@ observability:
 
 **HTTP requests are automatically traced** when `observability.enabled: true`. Each incoming request creates a span:
 - Span name: `HTTP {method} {route}` (e.g., `HTTP POST /users`)
-- Attributes: `http.request.method`, `http.route`, `http.response.status_code`, `http.request.body_size`
+- Attributes: `http.request.method`, `http.route`, `http.response.status_code`
 - W3C `traceparent` header propagation (cross-service tracing)
 
 **No code changes required for basic tracing** — just enable in config.
