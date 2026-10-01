@@ -215,7 +215,7 @@ verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors
 # locally until GOWORK=off let the directive win. Nothing else about the verdict
 # moves: only *called* vulnerabilities exit nonzero, and the reachable package set
 # is identical in both modes (tools/migration is a separate module, excluded from
-# ./... either way, and CI scans it in its own vuln-migrate-tool job).
+# ./... either way, and CI scans it in migrate-tool-build's govulncheck step).
 vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 

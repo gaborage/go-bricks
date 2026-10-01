@@ -735,7 +735,8 @@ jobs:
     # Gates on `code` (not `migrate_tool`) so the tool's coverage is part of
     # every merged report — otherwise a framework-only change would omit it and
     # SonarCloud would score tools/migration as 0% covered. The tool's other
-    # jobs (build/lint/security/vuln) stay scoped to `migrate_tool` below.
+    # jobs (build, which also runs its lint and vuln steps, and security) stay
+    # scoped to `migrate_tool` below.
     if: needs.changes.outputs.code == 'true'
     strategy:
       matrix:
@@ -816,6 +817,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -855,34 +858,24 @@ jobs:
           ./go-bricks-migrate.exe --help
           Write-Host "CLI validation passed"
 
-      - name: Verify go mod (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        run: make verify-mod
-
-  lint-migrate-tool:
-    permissions:
-      contents: read
-    needs: changes
-    if: needs.changes.outputs.migrate_tool == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: tools/migration/go.mod
-          cache: true
-          cache-dependency-path: tools/migration/go.sum
-
+      # The steps below run on the Linux leg only, keyed on runner.os rather
+      # than the matrix label so pinning that label cannot silently skip them.
+      # !cancelled() lets lint and vuln still report when the build fails; for
+      # a Windows-leg failure that relies on fail-fast: false above, since a
+      # fail-fast matrix would cancel this leg and skip them. verify-mod stays
+      # last: `go mod tidy` rewrites go.mod/go.sum in place. The golangci-lint
+      # steps set no GOWORK, so unlike download/build they lint the workspace
+      # union, not the pinned graph.
+      #
       # Two platform-scoped passes. golangci-lint analyzes exactly one GOOS —
       # the runner's unless told otherwise — so a single ubuntu run never type-
       # checks a `//go:build windows` file. The tool module has no GOOS-
       # constrained files today; this pass exists so it cannot silently acquire
-      # one. Cross-compiled analysis is cheap enough that this beats adding a
-      # windows-latest matrix leg (see lint-framework for the same rationale).
+      # one. Cross-compiled analysis on this Linux leg is cheap enough that it
+      # beats running golangci-lint natively on the windows-latest leg
+      # (Windows-runner minute multiplier; see lint-framework).
       - name: golangci-lint (migrate tool, linux)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
           version: v2.14.0
@@ -890,6 +883,7 @@ jobs:
           args: --timeout=5m
 
       - name: golangci-lint (migrate tool, windows)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         env:
           GOOS: windows
@@ -902,8 +896,16 @@ jobs:
       # Delegated to the make target so local and CI run one definition; this module
       # has no race-tagged file, so it skips.
       - name: golangci-lint race pass (migrate tool)
-        working-directory: tools/migration
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: make lint-race
+
+      - name: Run govulncheck (migrate tool)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: make vuln
+
+      - name: Verify go mod (Ubuntu only)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: make verify-mod
 
   security-migrate-tool:
     permissions:
@@ -965,7 +967,7 @@ jobs:
           # the tools/migration module boundary, but golangci-lint's v2 workspace
           # mode would otherwise pull that unioned module in; GOWORK=off disables
           # the workspace so the separately-versioned submodule (covered by
-          # lint-migrate-tool) can't leak into framework findings, and lint
+          # migrate-tool-build) can't leak into framework findings, and lint
           # resolves against the framework's own go.mod — the dependency view its
           # consumers actually see.
           GOWORK: "off"
@@ -1028,28 +1030,6 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
       - name: Run govulncheck (framework)
-        run: make vuln
-
-  vuln-migrate-tool:
-    permissions:
-      contents: read
-    needs: changes
-    if: needs.changes.outputs.migrate_tool == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: tools/migration
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: tools/migration/go.mod
-          cache: true
-          cache-dependency-path: tools/migration/go.sum
-      - name: Run govulncheck (migrate tool)
         run: make vuln
 
   vuln-weekly:
@@ -1405,12 +1385,10 @@ jobs:
       - framework-build
       - migrate-tool-test
       - migrate-tool-build
-      - lint-migrate-tool
       - security-migrate-tool
       - lint-framework
       - security-framework
       - vuln-framework
-      - vuln-migrate-tool
       - lint-docs
       - llms-version
       - apidiff

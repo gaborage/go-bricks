@@ -32,8 +32,9 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # One entry per tag, each naming the pass that reads it. A NEGATED occurrence
 # still requires its base name here: `!x` implies an `x` side somewhere that
 # needs a pass of its own, so the guard asks for the entry either way.
-#   integration — golangci `run.build-tags: [integration]` (make lint, both CI
-#                 lint jobs) and gosec invocation 1 (`-tags integration`).
+#   integration — golangci `run.build-tags: [integration]` (make lint, CI's
+#                 lint passes for both modules) and gosec invocation 1
+#                 (`-tags integration`).
 #   race        — make lint-race and gosec invocation 2 (`-tags integration,race`),
 #                 both over --packages-for race.
 #   windows     — CI's `GOOS: windows` golangci pass and gosec invocation 3
