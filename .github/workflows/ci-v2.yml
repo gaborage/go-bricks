@@ -190,25 +190,29 @@ jobs:
     # merged SonarCloud report complete. See the `code` filter rationale.
     if: needs.changes.outputs.code == 'true'
     # The Windows leg is framework-test-windows below. This one-entry matrix
-    # keeps every matrix.os guard in the shared steps resolving.
+    # keeps every matrix.os guard in the steps below resolving.
     strategy:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
 
-    # An alias copies this list exactly (GitHub has no `<<:` merge keys), so a
-    # step for one leg only stays in this list behind a matrix.os guard.
-    steps: &framework-test-steps
-      - uses: actions/checkout@v7
+    # framework-test-windows aliases the three anchored steps, so an edit to
+    # one of them here changes both jobs (GitHub has no `<<:` merge keys).
+    steps:
+      - &fw-checkout
+        uses: actions/checkout@v7
 
-      - name: Set up Go
+      - &fw-setup-go
+        name: Set up Go
+        id: setupgo
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Download dependencies
+      - &fw-download
+        name: Download dependencies
         run: go mod download
 
       - name: Run tests (Unix)
@@ -250,9 +254,64 @@ jobs:
           # `make test-alloc` target so the command lives in exactly one place.
           make test-alloc
 
-      - name: Run tests (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Upload unit test coverage artifact (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-unit
+          path: coverage.out
+          retention-days: 1
+
+  # framework-test's Windows leg, split out so framework-merge-coverage does not
+  # wait on a leg that uploads no coverage.
+  framework-test-windows:
+    permissions:
+      contents: read
+    name: framework-test
+    needs: changes
+    # The tests gate on `code`, the build on `framework` (which alone lists all
+    # of scripts/**), so the job runs on either.
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.framework == 'true'
+    strategy:
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - *fw-checkout
+
+      - *fw-setup-go
+
+      - *fw-download
+
+      # framework-build's Windows leg, overlapping the tests. It gates in its
+      # body, not with if: (a wait on a skipped background step is
+      # undocumented). Wait steps take no timeout, so timeout-minutes bounds a
+      # hung build.
+      - name: Build (Windows)
+        id: winbuild
+        background: true
+        timeout-minutes: 10
         shell: pwsh
+        env:
+          FW: ${{ needs.changes.outputs.framework }}
+        run: |
+          if ($env:FW -ne 'true') { exit 0 }
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
+          if (-not $packages) {
+            Write-Host "No packages found to build"
+            exit 1
+          }
+          go build -v $packages
+
+      - name: Run tests (Windows)
+        if: needs.changes.outputs.code == 'true'
+        shell: pwsh
+        env:
+          # On a cache miss setup-go saves the default GOCACHE after the job, so
+          # the race build goes elsewhere and the saved entry keeps the plain
+          # build output. On a hit, the empty value falls back to the warm default.
+          GOCACHE: ${{ steps.setupgo.outputs.cache-hit != 'true' && format('{0}\go-build-race', runner.temp) || '' }}
         run: |
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
           if (-not $packages) {
@@ -309,28 +368,10 @@ jobs:
           Write-Host "All unexpected Windows test failures resolved or matched known issues." -ForegroundColor Green
           exit 0
 
-      - name: Upload unit test coverage artifact (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-unit
-          path: coverage.out
-          retention-days: 1
-
-  # framework-test's Windows leg, split out so framework-merge-coverage does not
-  # wait on a leg that uploads no coverage.
-  framework-test-windows:
-    permissions:
-      contents: read
-    name: framework-test
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    strategy:
-      matrix:
-        os: [windows-latest]
-    runs-on: ${{ matrix.os }}
-
-    steps: *framework-test-steps
+      # Joins winbuild; its failure fails the job here. Wait steps always run
+      # and reject if:.
+      - name: Wait for Windows build
+        wait: winbuild
 
   framework-integration-test:
     permissions:
@@ -701,10 +742,11 @@ jobs:
       contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
+    # The Windows build runs in framework-test-windows. Keep this one-entry
+    # matrix: without it the verify-mod guard below is false and skips silently.
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
-      fail-fast: false
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -731,17 +773,6 @@ jobs:
             echo "No packages found to build"
             exit 1
           fi
-
-      - name: Build (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
-          if (-not $packages) {
-            Write-Host "No packages found to build"
-            exit 1
-          }
-          go build -v $packages
 
       - name: Verify go mod (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
