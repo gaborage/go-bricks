@@ -1303,9 +1303,10 @@ from a redacted connect-time parse error (or no error at all) to a validation er
 `database.tls` and the fix — at boot for static configs, at acquisition for dynamic records. **Watch:** this is **breaking** — previously-booting configurations now
 abort. A valid mode *without* material stays allowed, `disable` included, and a `connectionstring`
 with ssl parameters embedded remains the escape hatch for pgx-native semantics the rules refuse.
-Not covered: unrecognized-scheme DSNs (the vendor dispatch's `default` arm) and the
-`tools/migration` CLI, which never calls `config.Validate`; dynamic `DBConfigProvider` records
-ARE covered since #1002 routed that seam through the vendor gate. See
+Not covered: a DSN that infers no vendor at all (the vendor dispatch's `default` arm) — narrowed
+2026-09-13, since a keyword/value DSN now infers `postgresql` (`[C65.3]`). Dynamic
+`DBConfigProvider` records ARE covered since #1002 routed that seam through the vendor gate, and
+the `tools/migration` CLI since #1006 wrapped its provider in the same validation. See
 [migrations.md](migrations.md) `[C59.11]`.
 
 ### [ADR-063: Native stream publishing is synchronous and confirmed, correlated by message pointer](adr_063_streams_native_publishing.md)
@@ -1341,7 +1342,9 @@ the correlation rests on a vendor-internal guarantee that a client upgrade must 
 integration round trip is what fails loudly if it stops holding). Publisher close sweeps every
 outstanding waiter with `ErrPublisherClosed`, because the client's `entityClosed` confirmations cannot
 reach a send that never enqueued. An outstanding-send limit, deduplication, key routing, sub-entry
-batching, compression and outbox relay are all deferred. See [streams.md](streams.md).
+batching and compression stay deferred. The outbox relay to super streams has since shipped under
+[ADR-088](adr_088_outbox_ordered_leader_relay.md) (`outbox.superstreams`); its readiness is checked
+per target producer inside `Ship`, not by a lane-wide pre-flight. See [streams.md](streams.md).
 
 ### [ADR-064: The App Validates Every Config It Is Handed](adr_064_app_validates_every_config.md)
 
@@ -1361,8 +1364,8 @@ reach every construction path instead of only `config.Load` output. `Validate` i
 revalidating already-loaded config costs microseconds. **Watch:** this is **breaking** — a hand-built
 config that `config.Validate` rejects (missing `app.name`/`app.version`, zero server timeouts, an
 invalid vendor) now fails at construction instead of booting on whatever the mirrors papered over;
-the fix is named in the `ConfigError`'s action line. The app-side mirrors themselves become dead
-weight and are deleted in a follow-up PR. See [migrations.md](migrations.md) `[C59.12]`.
+the fix is named in the `ConfigError`'s action line. The app-side mirrors themselves became dead
+weight and were deleted in the follow-up #1021. See [migrations.md](migrations.md) `[C59.12]`.
 
 ---
 
@@ -2265,9 +2268,12 @@ the server to reject. `vendorRenderer` now supplies `ValidateSegment` over
 `database/identifier`, and each door runs the shape grammar first and then the vendor's
 alphabet on every unquoted segment of every identifier position, reading the patterns' named
 groups to know which tokens those are. Quoted segments and the wildcard are skipped, an
-unknown vendor inherits PostgreSQL's grammar by embedding, and Oracle is unchanged. Byte caps
-(#1437) and struct db-tag names remain unjudged at the doors — both recorded as residuals. See
-[migrations.md](migrations.md) `[C64.3]`.
+unknown vendor inherits PostgreSQL's grammar by embedding, and Oracle is unchanged. Amended
+2026-09-06: each door judges the shape, then the vendor's per-segment byte cap (`MaxBytes()` —
+63 on PostgreSQL, 128 on Oracle, a quoted segment's interior included), then the vendor alphabet
+(#1437); `InsertStruct` and `InsertFields` judge struct db-tag names through the same
+`validateInsertColumns` funnel (#1449); and the outbox store bounds its schema segment by the
+store's vendor (#1495). See [migrations.md](migrations.md) `[C64.3]`.
 
 ---
 
@@ -2539,8 +2545,9 @@ enforces it; and a leak class closed at the seam instead of per-site. **Migratio
 
 ### [ADR-082: Identifier Arguments Are Validated At Every Door, and the Renderer Escapes Wherever It Quotes](adr_082_identifier_arguments_validated_at_every_door.md)
 
-**Date:** 2026-08-23 | **Status:** Accepted (decision); implementation staged — the renderer and table
-arguments ship here, the `Select`/`Insert` column and Filter/JoinFilter stages are tracked in #1143 |
+**Date:** 2026-08-23 | **Status:** Accepted; implemented in stages — the renderer escape and table
+arguments (#1104), the `Select`/`Insert` columns (#1155), and the Filter/JoinFilter columns (#1159,
+closing #1143) |
 **Supersedes:** the Filter exclusion in ADR-031
 
 ADR-031 closed the M9 identifier-injection class on `From`, the JOIN family, `OrderBy`,
@@ -2555,10 +2562,11 @@ interior quotes wherever the renderer already quotes — narrow, since quoting a
 PostgreSQL identifier would refold its case (ADR-007/M7). Table arguments join the rule on
 all five INSERT and upsert doors. `Having` takes a predicate, not an identifier, so it is
 documented as a raw-SQL door instead (#1146) rather than validated against a grammar no real
-call could satisfy. Lands in stages; the remaining doors are #1143.
+call could satisfy. Landed in stages; the last, the Filter and JoinFilter columns, closed #1143.
 
 **Key Benefits:** one rule at every door instead of a per-method accident; a renderer that is correct for
-every shape except the function-shaped pass-through it documents as a known gap; and a glossary that now names identifier
+every shape, the function-shaped pass-through it documented as a known gap having since been
+deleted (#1149); and a glossary that now names identifier
 argument and bound value apart, so the conflation cannot be restated without contradicting
 it. **Migration:** [migrations.md](migrations.md) `[C60.24]`, `[C60.25]`.
 
@@ -2877,8 +2885,10 @@ request-id charset would discard every dotted key. Streams lane untouched. See `
 `ValidateTraceState`) are shared by every ingress door — HTTP, the AMQP classic and streams lanes,
 the outbox relay and the exported extractor — as functions rather than constants, so a later clause
 cannot reach one door and miss another. The C60.17 delivery-identity checks are narrower: they apply
-to the classic AMQP lane only, since streams surfaces none of those fields today. The emit side is explicitly not covered:
-see `[C60.17]`, `#1121` and `#1123` for what remains.
+to the classic AMQP lane only, since streams surfaces none of those fields today. The emit side, first left
+uncovered, is closed by the 2026-08-28 amendments: a pre-set outbound `traceparent` is validated
+before reuse (#1121, `[C61.14]`), and the publish frame's other shortstrs are length-checked
+(#1123, `[C61.17]`); only the context's own parent, first-party API, goes out unvalidated.
 **Watch:** previously-accepted identifiers are now discarded — see `[C60.8]` and `[C60.17]`; an
 upstream gateway emitting a long or punctuated request id falls through to the id derived from its
 `traceparent`, and only to a framework-minted one when no valid traceparent accompanies it.
@@ -2913,7 +2923,7 @@ classic lane counted `messaging.client.consumed.messages` at receive with a hard
 streams lane at completion with `error.type`; the streams lane extracted no trace context and
 installed no per-message lease scope; three issues rewrote `processMessage` in a month without
 reaching the streams copy. `messaging/internal/delivery` now owns everything between "bytes arrived"
-and "outcome recorded" — the AMQP lane runs on it as shipped, the streams lane in a named follow-up — carrier extraction, the Consumer span, the lease scope, `EnsureTraceID`, the
+and "outcome recorded" — both lanes run on it, the streams lane since the 2026-08-19 amendment — carrier extraction, the Consumer span, the lease scope, `EnsureTraceID`, the
 handler, panic-to-error, one `RecordConsume`, the lane's outcome line — behind
 `Run(ctx, *Request) *Result`. Settlement stays lane-side, so "never requeue" and ADR-059's "commit
 only after success" do not move.
