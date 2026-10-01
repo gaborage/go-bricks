@@ -6,8 +6,8 @@
 # profiles repeat the blocks they share. This prints the mode line once, then
 # each block once in first-appearance order with its counts merged the way
 # go tool cover merges them: summed in count/atomic mode, OR'd (max) in set
-# mode. A block's key is its line minus the count, so a file name may hold a
-# space. Counts print as integers (exact below 2^53).
+# mode. A block's key is its `file:L.C,L.C` range (NumStmt and count stripped),
+# so a file name may hold a space. Counts print as integers (exact below 2^53).
 #
 # Exits 2 with a message on stderr, before printing anything, on: empty input;
 # a first line other than `mode: set|count|atomic`; no blocks; a blank line; a
