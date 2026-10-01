@@ -2177,7 +2177,7 @@ stored bytes keeps its `jti`, so the consumer's ledger dedups it.
 
 `echo-opentelemetry` is deprecated in favor of `echo-otel/v5`, which keeps its API but renames the
 instrumentation scope, drops the client-chosen `server.address`/`server.port` from metrics, adds
-native `error.type`, and recovers panics, recording `panic: <value>` as the span status before
+derives span `error.type` from the status, and recovers panics, recording `panic: <value>` as the span status before
 re-panicking. A second `sanitizePanicValue()` registered immediately inside the instrumentation
 re-panics every panic below it as its type first, so a panic in a middleware between the
 instrumentation and `Recover` cannot put its value on a span (ADR-081). See

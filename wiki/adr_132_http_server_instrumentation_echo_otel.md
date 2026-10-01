@@ -17,7 +17,9 @@ framework's code change is the import path. Its behavior differs in ways a consu
 - `http.request.method_original` leaves metrics too (spans keep it), spans stop carrying
   `http.request.body.size`/`http.response.body.size` (the body-size histograms keep recording
   them), and HTTP/2 and HTTP/3 report `network.protocol.version` as `2`/`3` instead of `2.0`/`3.0`.
-- It records `error.type` natively on spans and metrics, omits `http.response.status_code` when
+- It derives `error.type` from the status on spans and metrics: unset on a 4xx, the status code
+  for a 5xx error carrying one, the Go type for any other error, where v0.0.3 set the Go type of
+  every returned error on the span, 4xx included. It omits `http.response.status_code` when
   no status was sent, and takes `http.route` from the matched Echo route. It also moves to semconv
   v1.40.
 - **It recovers panics.** A panic from the chain below it, or a `middleware.PanicStackError`
@@ -53,7 +55,8 @@ it reaches the span as its type. A panic in any middleware between the instrumen
   `http.request.method_original` from metrics, body sizes from spans, or a
   `network.protocol.version` of `2.0`/`3.0`. The series identity of
   `http.server.request.duration` changes, so its history is discontinuous at the upgrade.
-- Spans of 5xx responses gain `error.type`, and a request aborted before any status was sent has
+- Span `error.type` disappears from a returned 4xx error and reads the status code for a 5xx
+  `*echo.HTTPError`, so span queries on a Go type name must be repointed. A request aborted before any status was sent has
   no `http.response.status_code`.
 - No Go API changes for consumers: `echo.*` stays off the consumer surface (ADR-034).
 - A panic between the instrumentation and `Recover` is still re-panicked to the outermost
