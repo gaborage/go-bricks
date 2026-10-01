@@ -267,7 +267,7 @@ jobs:
     name: framework-test
     needs: changes
     # The tests gate on `code`, the build on `framework` (which alone lists all
-    # of scripts/**), so the job runs on either.
+    # of scripts/**) or a cache miss, so the job runs on either filter.
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.framework == 'true'
     strategy:
       matrix:
