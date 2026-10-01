@@ -119,14 +119,16 @@ trade the key exists to make, and it is why it is opt-in rather than the default
 
 **Neutral:** `Manager.StopConsumers()` has one production caller (`app/lifecycle.go:464`, shutdown),
 so the "consumers are never revived after a stop" behavior sits entirely inside a closing process
-and cannot produce a readiness verdict. That `StopConsumers` cancels its supervisors without joining
-them is deliberate (ADR-029) and is the reason the state layer masks a stopped registry rather than
-clearing it; whether to join them is tracked as **#1685**, out of scope here.
+and cannot produce a readiness verdict. When this was decided `StopConsumers` canceled its
+supervisors without joining them (ADR-029), which is why the state layer masks a stopped registry
+rather than clearing it. Since #1685 (ADR-029's 2026-09-30 amendment) the stop joins them within
+the caller's context, capped at 5s; the mask stays, because a supervisor that outlives that window
+is abandoned, not joined.
 
 ## References
 
-- #1666 — this decision; #1618 — the shared WARN threshold; #1685 — `StopConsumers` does not join
-  its supervisors
+- #1666 — this decision; #1618 — the shared WARN threshold; #1685 — `StopConsumers(ctx)` joins
+  its supervisors within the caller's context (ADR-029 amendment)
 - `config/types.go` — `MessagingConsumersConfig`; `config/config.go` — `IsMessagingConsumersCritical`
 - `app/slot.go` — `messagingSlot.describe`; `app/readiness.go` — `errConsumerResubscribeExhausted`
 - `messaging/registry.go` — `ConsumerState.GivenUp`, `consumerResubscribeWarnFromAttempt`

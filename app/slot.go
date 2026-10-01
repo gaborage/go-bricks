@@ -287,7 +287,7 @@ func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 		kindPresent(s.app.messagingManager != nil), s.app.preWarmMessaging), nil
 }
 
-func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }
+func (s *messagingSlot) stop(ctx context.Context) { s.app.shutdownConsumers(ctx) }
 
 func (s *messagingSlot) closer() (namedCloser, bool) {
 	return slotCloser("messaging manager", s.app.messagingManager)

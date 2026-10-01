@@ -364,7 +364,7 @@ func TestRegistryStartConsumersSuccessSimple(t *testing.T) {
 	assert.NotNil(t, registry.cancelConsumers)
 
 	// Clean up
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 func TestRegistryStartConsumersClientNotReadySimple(t *testing.T) {
@@ -385,7 +385,7 @@ func TestRegistryStopConsumersSuccessSimple(t *testing.T) {
 	registry.consumersActive = true
 	registry.cancelConsumers = cancel
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	assert.False(t, registry.consumersActive)
 	assert.Nil(t, registry.cancelConsumers)
@@ -595,14 +595,14 @@ func TestRegistryStartConsumersNoHandlersSimple(t *testing.T) {
 	assert.NotNil(t, registry.cancelConsumers)
 
 	// Clean up
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 func TestRegistryStopConsumersNotActiveSimple(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
 	// StopConsumers when not active should be no-op
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	assert.False(t, registry.consumersActive)
 	assert.Nil(t, registry.cancelConsumers)
@@ -1702,7 +1702,7 @@ func TestRegistryStartConsumersWithMultipleConsumers(t *testing.T) {
 	// Clean up
 	close(deliveries1)
 	close(deliveries2)
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 func TestRegistryStartConsumersWithPartialFailure(t *testing.T) {
@@ -1788,7 +1788,7 @@ func TestRegistryStartConsumersAlreadyStarted(t *testing.T) {
 	assert.True(t, registry.consumersActive)
 
 	// Clean up
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 func TestRegistryStartConsumersNilClient(t *testing.T) {
@@ -1815,7 +1815,7 @@ func TestRegistryStartConsumersOnlyDocumentationConsumers(t *testing.T) {
 	assert.True(t, registry.consumersActive)
 
 	// Clean up
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 func TestRegistryRegisterPublisherNeverBlocked(t *testing.T) {
@@ -2290,7 +2290,7 @@ func TestRegistryConsumerResubscribesAfterDeliveryChannelCloses(t *testing.T) {
 	// Prove the new subscription is live: a delivery on ch2 is processed.
 	deliverAndAwaitAck(t, ch2, handler)
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 // TestRegistryConsumerResubscribeRetriesUntilClientReady verifies the
@@ -2334,7 +2334,7 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 
 	deliverAndAwaitAck(t, ch2, handler)
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	// errNotConnected is not an *amqp.Error, so its failure lines carry no broker reply.
 	var failures int
@@ -2383,7 +2383,7 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 		return client.consumeCallCount() >= 2
 	}, time.Second, 2*time.Millisecond, "supervisor did not enter the re-subscribe retry loop")
 
-	registry.StopConsumers() // cancel while the supervisor is retrying
+	registry.StopConsumers(context.Background()) // cancel while the supervisor is retrying
 
 	// Cancellation interrupts resubscribe's backoff select immediately (it
 	// selects on ctx.Done alongside the backoff timer), so the supervisor exits
@@ -2441,7 +2441,7 @@ func TestRegistryConsumerResubscribeEscalatesToWarnFromFifthFailure(t *testing.T
 	require.Eventually(t, func() bool {
 		return slices.ContainsFunc(log.Lines(), func(ln recordedLine) bool { return ln.Msg == resubscribedMsg })
 	}, 5*time.Second, 2*time.Millisecond, "consumer did not re-subscribe after the failure streak")
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	var levels []string
 	for _, ln := range log.Lines() {
@@ -2514,7 +2514,7 @@ func TestRegistryConsumerStatesTrackSubscriptionAndResubscribe(t *testing.T) {
 	assert.False(t, after[0].LastResubscribeAt.IsZero(), "a successful re-subscribe stamps the time")
 	assert.Zero(t, after[0].FailStreak)
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 // TestConsumerStateGivenUp pins the predicate: a consumer counts as abandoned only
@@ -2566,7 +2566,7 @@ func TestRegistryConsumerStatesCountFailedResubscribeAttempts(t *testing.T) {
 	assert.False(t, recovered.GivenUp())
 	assert.Equal(t, uint64(1), recovered.Resubscribes)
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	stopped := registry.ConsumerStates()[0]
 	assert.False(t, stopped.Subscribed)
@@ -2587,7 +2587,7 @@ func TestRegistryConsumerStatesMaskGivenUpAfterStopConsumers(t *testing.T) {
 		return registry.ConsumerStates()[0].GivenUp()
 	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	stopped := registry.ConsumerStates()[0]
 	assert.False(t, stopped.Subscribed)
@@ -2642,7 +2642,7 @@ func TestRegistryAnyGivenUpMasksAStoppedRegistry(t *testing.T) {
 	require.Len(t, states, 1)
 	assert.True(t, states[0].GivenUp(), "the predicate and the snapshot must agree")
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	assert.False(t, registry.anyGivenUp(), "a stopped registry has no consumer that gave up")
 	states = registry.ConsumerStates()
@@ -2708,10 +2708,10 @@ func TestRegistryConsumerStatesStartEachRunWithAFreshSession(t *testing.T) {
 		return registry.ConsumerStates()[0].GivenUp()
 	}, 5*time.Second, 2*time.Millisecond, "failure streak did not reach the threshold")
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	client.setFailing(false)
 	require.NoError(t, registry.StartConsumers(context.Background()))
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 
 	restarted := registry.ConsumerStates()[0]
 	assert.True(t, restarted.Subscribed)
@@ -2941,7 +2941,7 @@ func TestRegistryConsumerStatesCoverEveryDeclaredConsumerInOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, registry.StartConsumers(ctx))
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 
 	states := registry.ConsumerStates()
 	require.Len(t, states, 3)
@@ -3231,7 +3231,7 @@ func TestRegistryRedeclaresLostTopologyBeforeResubscribing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -3260,7 +3260,7 @@ func TestRegistryRedeclareRepeatsThePassiveStep(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistryOn(ctx, t, client, &stubLogger{}, handler, NewExternalExchange(testExternalExchange))
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() { client.generation++ })
@@ -3286,7 +3286,7 @@ func TestRegistryRedeclarePassiveConflictSkipsLikeAnyStep(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistryOn(ctx, t, client, log, handler, NewExternalExchange(testExternalExchange))
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	mismatch := &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent arg 'type'", Server: true}
@@ -3317,7 +3317,7 @@ func TestRegistryRedeclaresOncePerChannelGeneration(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -3340,7 +3340,7 @@ func TestRegistryRedeclareDoesNotRetryFailedPassOnSameChannel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -3370,7 +3370,7 @@ func TestRegistryRedeclaresOncePerGenerationAcrossConsumers(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
 	first, second := awaitSubscription(t, client, 0), awaitSubscription(t, client, 1)
@@ -3399,7 +3399,7 @@ func TestRegistryRedeclaresBindingsToAnUndeclaredExchange(t *testing.T) {
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Workers: 1, Handler: &countingTestHandler{}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
 	first := awaitSubscription(t, client, 0)
@@ -3420,7 +3420,7 @@ func TestRegistryRedeclaresAgainWhenTheChannelIsReplacedMidPass(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -3442,7 +3442,7 @@ func TestRegistryResubscribeOnSameChannelDoesNotRedeclare(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	close(awaitSubscription(t, client, 0))
 
 	deliverAndAwaitAck(t, awaitSubscription(t, client, 1), handler)
@@ -3463,7 +3463,7 @@ func TestRegistryResubscribeWithoutChannelGenerationDoesNotRedeclare(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, &countingTestHandler{})
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 
 	close(ch1)
 	require.Eventually(t, func() bool {
@@ -3485,7 +3485,7 @@ func TestRegistryRedeclareSkipsDeclarationRejectedWithPreconditionFailed(t *test
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, log, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	mismatch := &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent arg 'x-queue-type'", Server: true}
@@ -3540,7 +3540,7 @@ func TestRegistryRedeclareSkipsOnlyTheRejectedBinding(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			registry := startRedeclareRegistry(ctx, t, client, log, &countingTestHandler{}, tt.rejected, tt.sibling)
-			defer registry.StopConsumers()
+			defer registry.StopConsumers(context.Background())
 			first := awaitSubscription(t, client, 0)
 
 			mismatch := &amqp.Error{Code: amqp.PreconditionFailed, Reason: "PRECONDITION_FAILED - inequivalent binding", Server: true}
@@ -3569,7 +3569,7 @@ func TestRegistryRedeclareRetriesFailedDeclarationOnNextChannel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, log, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() {
@@ -3625,7 +3625,7 @@ func awaitDeclares(t *testing.T, client *reconnectingMockClient, key string, wan
 func TestRegistryRedeclaresForPublisherOnlyRegistry(t *testing.T) {
 	client := newReconnectingMockClient()
 	registry := newPublisherOnlyRegistry(t, client)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 
 	client.newChannel()
 	awaitDeclares(t, client, "exchange:"+testExchangeName, "1", "2")
@@ -3646,7 +3646,7 @@ func TestRegistryRedeclaresOncePerGenerationWhenTheObserverWinsTheChannel(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.newChannel()
@@ -3667,7 +3667,7 @@ func TestRegistryRedeclaresOncePerGenerationWhenTheConsumerWinsTheChannel(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	first := awaitSubscription(t, client, 0)
 
 	client.locked(func() { client.generation++ })
@@ -3697,7 +3697,7 @@ func awaitObserverExit(t *testing.T, done <-chan struct{}) {
 func TestRegistryRedeclareObserverStopsWhenTheClientCloses(t *testing.T) {
 	client := newReconnectingMockClient()
 	registry := newPublisherOnlyRegistry(t, client)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 
 	require.NoError(t, client.Close())
 
@@ -3713,7 +3713,7 @@ func TestRegistryStartsNoRedeclareObserverWithoutTheAnnouncement(t *testing.T) {
 	require.False(t, announces)
 
 	registry := newPublisherOnlyRegistry(t, client)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 
 	assert.Nil(t, registry.redeclareObserverDone)
 }
@@ -3725,7 +3725,7 @@ func TestRegistryRedeclareObserverStopsOnStopConsumers(t *testing.T) {
 	client := newReconnectingMockClient()
 	registry := newPublisherOnlyRegistry(t, client)
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	awaitObserverExit(t, registry.redeclareObserverDone)
 }
@@ -3747,7 +3747,7 @@ func TestRegistryStopsARedeclarePassAlreadyInFlight(t *testing.T) {
 	client.newChannel()
 	<-gate.Started
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	gate.Release()
 	awaitObserverExit(t, registry.redeclareObserverDone)
 
@@ -4729,7 +4729,7 @@ func TestSuperviseConsumerStreamResume(t *testing.T) {
 			// must have been applied to a copy.
 			assert.Equal(t, tt.declaredArgs, registry.Consumers()[0].Args)
 
-			registry.StopConsumers()
+			registry.StopConsumers(context.Background())
 		})
 	}
 }
@@ -4837,7 +4837,7 @@ func TestStartConsumerWidensDeclaredIntOffset(t *testing.T) {
 	assert.Equal(t, map[string]any{argStreamOffset: int(1) << 32}, declared,
 		"the declaration's map must be untouched")
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 func TestRegistryProcessMessageRecordsSettlementOutcome(t *testing.T) {
@@ -4968,7 +4968,7 @@ func tokenFor(source channelGenerationer) *redeclareToken {
 func TestRegistryRedeclareGuardIsPerSource(t *testing.T) {
 	client := newReconnectingMockClient()
 	registry := newPublisherOnlyRegistry(t, client)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	key := "exchange:" + testExchangeName
 	require.Equal(t, []string{"1"}, client.declaresOf(key), "DeclareInfrastructure declares once")
 
@@ -4989,7 +4989,7 @@ func TestRegistryRefusesARedeclarePassOnceStopped(t *testing.T) {
 	client := newReconnectingMockClient()
 	registry := newPublisherOnlyRegistry(t, client)
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	registry.redeclareTopologyFrom(context.Background(), tokenFor(&staticRedeclareSource{generation: 2}))
 
 	assert.Equal(t, []string{"1"}, client.declaresOf("exchange:"+testExchangeName))
@@ -5004,7 +5004,7 @@ func TestRegistryRefusesARedeclarePassOnceStopped(t *testing.T) {
 func TestRegistryRedeclaresOnTheFirstGenerationASourceIsSeenAt(t *testing.T) {
 	client := newReconnectingMockClient()
 	registry := newPublisherOnlyRegistry(t, client)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	key := "exchange:" + testExchangeName
 	require.Equal(t, []string{"1"}, client.declaresOf(key), "DeclareInfrastructure declares once")
 
@@ -5023,7 +5023,7 @@ func TestRegistryRunsNoRedeclarePassBeforeDeclareInfrastructure(t *testing.T) {
 	registry := NewRegistry(client, &stubLogger{})
 	registry.RegisterExchange(&ExchangeDeclaration{Name: testExchangeName, Type: ExchangeTypeTopic, Durable: true})
 	registry.RegisterPublisher(&PublisherDeclaration{Exchange: testExchangeName, RoutingKey: testKeyValue, EventType: testEventType})
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	key := "exchange:" + testExchangeName
 
 	registry.redeclareTopologyFrom(context.Background(), tokenFor(&staticRedeclareSource{generation: 2}))
@@ -5054,7 +5054,7 @@ func TestRegistryRedeclaresThroughAnUncomparableClientWrapper(t *testing.T) {
 	client := newReconnectingMockClient()
 	wrapper := uncomparableClientWrapper{reconnectingMockClient: client, tags: map[string]string{"lane": "wrapped"}}
 	registry := newPublisherOnlyRegistry(t, wrapper)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 
 	client.newChannel()
 
@@ -5071,10 +5071,10 @@ func TestRegistryRepairsTopologyAfterAStopStartCycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	awaitSubscription(t, client, 0)
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	require.NoError(t, registry.StartConsumers(ctx))
 	restarted := awaitSubscription(t, client, 1)
 
@@ -5137,7 +5137,7 @@ func TestRegistryStartsOneRedeclareObserverAcrossRepeatedDeclares(t *testing.T) 
 	require.NoError(t, registry.DeclareInfrastructure(context.Background()))
 
 	assert.Equal(t, first, registry.redeclareObserverDone, "a second DeclareInfrastructure started a second observer")
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	awaitObserverExit(t, first)
 }
 
@@ -5193,7 +5193,7 @@ func TestDeclareInfrastructureTakesRedeclareMuBeforeMu(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("DeclareInfrastructure never returned")
 	}
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 }
 
 // TestRegistryRestartsItsObserverAfterAStopStartCycle pins the residual 2a left
@@ -5208,7 +5208,7 @@ func TestRegistryRestartsItsObserverAfterAStopStartCycle(t *testing.T) {
 	registry := newPublisherOnlyRegistry(t, client)
 	key := "exchange:" + testExchangeName
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	awaitObserverExit(t, registry.redeclareObserverDone)
 
 	require.NoError(t, registry.StartConsumers(context.Background()))
@@ -5248,7 +5248,7 @@ func TestRegistryRearmsWhileThePreviousObserverIsParkedMidPass(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no pass reached the gate: the registry is running no observer to park")
 	}
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	started := make(chan struct{})
 	done := make(chan struct{})
@@ -5302,7 +5302,7 @@ func TestRegistryRepairsATopologyRotatedWhileHalted(t *testing.T) {
 	registry.redeclareTopologyFrom(context.Background(), pooledToken)
 	awaitDeclares(t, registryClient, key, "1", "1")
 
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 
 	// The operator's exchange delete: only the pooled publisher's channel takes the
 	// 404, and it rotates while repair is halted.
@@ -5341,7 +5341,7 @@ func TestRegistryRepairsATopologyPassCutShortByHalt(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no pass reached the gate: the registry is running no observer to park")
 	}
-	registry.StopConsumers()
+	registry.StopConsumers(context.Background())
 	client.locked(func() { client.parkOn, client.parkGate = "", nil })
 	gate.Release()
 	awaitObserverExit(t, registry.redeclareObserverDone)

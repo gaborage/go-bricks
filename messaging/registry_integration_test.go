@@ -81,7 +81,7 @@ func TestRegistryRedeclaresDeletedQueueAfterReconnect(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.NoError(t, registry.StartConsumers(ctx))
 	generation, _ := client.channelGeneration()
@@ -137,7 +137,7 @@ func TestRegistryConsumesFromAnExternalExchangeWithoutConfigurePermission(t *tes
 	registry.RegisterBinding(&BindingDeclaration{Queue: queue, Exchange: exchange, RoutingKey: "orders.#"})
 	registry.RegisterConsumer(&ConsumerDeclaration{Queue: queue, EventType: testEventType, Workers: 1, Handler: handler})
 
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	require.NoError(t, registry.DeclareInfrastructure(ctx), "a passive declare must not need configure permission")
 	require.NoError(t, registry.StartConsumers(ctx))
 
@@ -232,7 +232,7 @@ func TestRegistryRedeclaresDeletedExchangeForPublisherOnlyService(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer registry.StopConsumers()
+	defer registry.StopConsumers(context.Background())
 	require.NoError(t, registry.DeclareInfrastructure(ctx))
 	require.Empty(t, registry.Consumers())
 	generation, _ := client.channelGeneration()

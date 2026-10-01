@@ -2186,3 +2186,25 @@ func (m *describerModule) DescribeModule() ModuleDescriptor {
 func (m *describerModule) DescribeRoutes() []server.RouteDescriptor {
 	return []server.RouteDescriptor{}
 }
+
+// TestMessagingSlotStopBoundsTheConsumerJoinByItsContext pins that the shutdown context reaches
+// the consumer join: a supervisor held inside a re-subscribe that ignores cancellation cannot
+// keep the messaging stop phase past the deadline the phase was handed. Were the phase to join
+// on a context of its own, it would wait out the full messaging stop budget instead.
+func TestMessagingSlotStopBoundsTheConsumerJoinByItsContext(t *testing.T) {
+	f := newTestAppFixture(t)
+	client := newConsumerOutageClient()
+	f.withSupervisedConsumer(t, client)
+
+	client.parkOn(1)
+	client.beginOutage()
+	client.awaitParked(t, 1)
+	t.Cleanup(func() { client.releaseParked(t, 1) }) // before the manager's own Close cleanup
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	slotOf(t, f.app, componentMessaging).stop(ctx)
+
+	assert.Less(t, time.Since(start), time.Second, "the messaging stop phase outlived its context")
+}

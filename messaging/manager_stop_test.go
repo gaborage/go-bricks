@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestManagerCloseDoesNotWaitAgainForAnAbandonedStop(t *testing.T) {
 		t.Fatal("handler never entered")
 	}
 
-	registry.StopConsumers() // the manager's own stop would spend the full 5s budget
+	registry.StopConsumers(context.Background()) // the manager's own stop would spend the full 5s budget
 	log.Line(t, msgSupervisorsAbandoned)
 
 	start := time.Now()

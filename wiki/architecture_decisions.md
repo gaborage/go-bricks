@@ -349,12 +349,15 @@ modules → observability → closers**, with a new additive
 Superseded in part by [ADR-067](adr_067_lifecycle_slots.md): the manager-cleanup-loop phase is
 gone — each manager stops its own sweep in `Close()`, which the closers still run last.
 Amended 2026-08-29: the observability phase is best-effort — its failures are warned, never
-folded into the error `App.Run()` returns (#1225).
+folded into the error `App.Run()` returns (#1225). Amended 2026-09-30 (breaking):
+`StopConsumers(ctx)` joins the consumer supervisors within the caller's deadline, capped at 5s;
+`Close()` joins within the 5s cap alone (#1685).
 
-**Behavioral change (not an API break):** the framework stops admitting new HTTP requests and
-AMQP deliveries before modules are torn down (consumers are cancelled, not synchronously
-joined, so in-flight handlers may briefly overlap teardown); no application code must change.
-`messaging.Manager.StopConsumers()` is additive.
+**Behavioral change (not an API break at adoption; the 2026-09-30 amendment is breaking, [C70.14]):** the framework stops admitting new HTTP requests and
+AMQP deliveries before modules are torn down (consumers were cancelled, not synchronously
+joined, until the 2026-09-30 amendment made the stop join them within its window); no application
+code had to change.
+`messaging.Manager.StopConsumers()` was additive at adoption; it now takes a context (breaking, [C70.14]).
 
 **Key Benefits:** No shutdown-window panics, in-flight work drains against live modules, consumer-quiesce hook
 

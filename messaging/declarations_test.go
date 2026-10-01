@@ -77,8 +77,8 @@ func (m *mockRegistry) StartConsumers(ctx context.Context) error {
 	return args.Error(0)
 }
 
-func (m *mockRegistry) StopConsumers() {
-	m.Called()
+func (m *mockRegistry) StopConsumers(ctx context.Context) {
+	m.Called(ctx)
 }
 
 func (m *mockRegistry) Exchanges() map[string]*ExchangeDeclaration {
