@@ -755,6 +755,25 @@ instrumentation.
 (a method or function name). Because it becomes a metric attribute, interpolating
 per-request data such as IDs or emails would explode metric cardinality.
 
+## Expected Errors
+
+Tracking classifies a statement's error before the caller sees it: anything other than
+`sql.ErrNoRows` or `sql.ErrTxDone` is logged as `Database operation error` at ERROR, marks
+the span `Error` and escalates request severity. When a statement's failure is an outcome
+the caller handles, declare it on that statement's context with
+`database.WithExpectedError(ctx, predicate)`; the existing classifiers
+(`database.IsLockNotAvailable`, `database.IsUniqueViolation`, …) already fit the predicate
+type. A matching error is logged at DEBUG as `Database operation returned an expected error`
+with its `error_type`, the span status stays Unset, and request severity is not escalated.
+The caller still receives the error unchanged, and metrics are unaffected (the duration
+histogram carries no error dimension). A nested declaration composes with an outer one: the
+error is expected when either predicate matches.
+
+Scope the declaration to the one statement whose failure is expected. The same code on any
+other statement is a real failure: PostgreSQL `55P03` is also raised when `lock_timeout`
+expires on a blocking statement, and Oracle `ORA-00054` also covers DDL blocked by another
+session's uncommitted DML — so never declare `IsLockNotAvailable` on a statement that waits.
+
 ## Execute Helpers
 
 `database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert` collapse the repeated `ToSQL()` → `Query`/`Exec` → `Scan`/`RowsAffected` → error-wrap glue that every SQL repository re-implements. Each helper takes a `database.Executor` (a 2-method `Query`/`Exec` interface satisfied by both `database.Interface` and `database.Tx`, so the same call works inside or outside a transaction) and a `database.SQLProvider` (implemented by every query-builder result, or by `database.Raw(sql, args...)` for hand-written SQL). An `op string` label identifies the call site in errors — it labels errors only and does not feed metrics or tracing; use `database.WithRepositoryMethod(ctx, ...)` for attribution.
@@ -798,7 +817,9 @@ if errors.Is(err, database.ErrNoRows) {
 ```go
 // One relay instance leads this ledger: the loser gets 55P03 / ORA-00054, not a wait.
 lead := qb.Select("id").From(ledger + "_leader").Where(f.Eq("id", 1)).ForUpdateNoWait()
-err := database.ExecuteQuerySingle(ctx, tx, lead, "lead", &id)
+// Losing the lock is an outcome, not a failure: declare it on this statement only.
+lockCtx := database.WithExpectedError(ctx, database.IsLockNotAvailable)
+err := database.ExecuteQuerySingle(lockCtx, tx, lead, "lead", &id)
 if database.IsLockNotAvailable(err) {
     return errAnotherInstanceLeads
 }

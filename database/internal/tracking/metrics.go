@@ -2,8 +2,6 @@ package tracking
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -215,7 +213,9 @@ func getDBMeter() metric.Meter {
 // execution.
 //
 // Note: The rowsAffected and error parameters are currently unused and retained for future
-// instrumentation enhancements.
+// instrumentation enhancements. The metric carries no error dimension, so a benign error
+// (see isBenignError), a caller-declared expected error and a real failure are recorded
+// alike; errors are classified on the span and the log line only.
 func recordDBMetrics(ctx context.Context, tc *Context, query string, duration time.Duration, _ int64, _ error) {
 	meter := getDBMeter()
 	if meter == nil {
@@ -250,12 +250,6 @@ func recordDBMetrics(ctx context.Context, tc *Context, query string, duration ti
 		durationSec := float64(duration.Nanoseconds()) / 1e9 // Convert ns to seconds per OTel spec
 		dbDurationHistogram.Record(ctx, durationSec, metric.WithAttributes(attrs...))
 	}
-}
-
-// isSQLNoRowsError checks if the error is sql.ErrNoRows, which is not treated as a failure.
-// sql.ErrNoRows indicates an empty result set, which is a normal query outcome.
-func isSQLNoRowsError(err error) bool {
-	return errors.Is(err, sql.ErrNoRows)
 }
 
 var (

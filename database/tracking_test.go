@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -823,6 +825,53 @@ func TestWithRepositoryMethodReExport(t *testing.T) {
 	// Absent by default.
 	_, ok = RepositoryMethodFromContext(context.Background())
 	assert.False(t, ok)
+}
+
+func TestWithExpectedErrorReExport(t *testing.T) {
+	t.Parallel()
+
+	ctx := WithExpectedError(context.Background(), IsLockNotAvailable)
+	assert.NotEqual(t, context.Background(), ctx)
+	assert.Nil(t, WithExpectedError(nil, IsLockNotAvailable))
+}
+
+// TestTrackedQueryRowScanHonorsExpectedError proves a declaration survives the
+// deferred tracking of a QueryRow, which classifies the error inside Scan: the
+// declared 55P03 does not escalate request severity, the undeclared one does, and
+// the caller receives the driver error unchanged either way.
+func TestTrackedQueryRowScanHonorsExpectedError(t *testing.T) {
+	t.Parallel()
+	const lockSQL = "SELECT id FROM leader WHERE id = $1 FOR UPDATE NOWAIT"
+
+	tests := []struct {
+		name      string
+		declare   bool
+		wantLevel []zerolog.Level
+	}{
+		{name: "declared_is_benign", declare: true, wantLevel: nil},
+		{name: "undeclared_escalates", declare: false, wantLevel: []zerolog.Level{zerolog.ErrorLevel}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mock, tracked, ctx := setupTracked(t, true)
+			lockErr := &pgconn.PgError{Code: "55P03", Message: "could not obtain lock on row"}
+			mock.ExpectQuery(regexp.QuoteMeta(lockSQL)).WithArgs(1).WillReturnError(lockErr)
+
+			var levels []zerolog.Level
+			ctx = logger.WithSeverityHook(ctx, func(level zerolog.Level) { levels = append(levels, level) })
+			if tt.declare {
+				ctx = WithExpectedError(ctx, IsLockNotAvailable)
+			}
+
+			var id int
+			err := tracked.QueryRow(ctx, lockSQL, 1).Scan(&id)
+
+			require.ErrorIs(t, err, lockErr)
+			assert.True(t, IsLockNotAvailable(err))
+			assert.Equal(t, tt.wantLevel, levels)
+		})
+	}
 }
 
 func TestTrackedConnectionClose(t *testing.T) {
