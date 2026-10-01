@@ -75,9 +75,13 @@ build: ## Build the project
 test: ## Run unit tests only
 	go test -race $(PKGS)
 
+# Packages whose compiled test files mention AllocsStable: a superset of what
+# -run 'AllocsStable' can select, so a new guard is picked up wherever it lands.
+# Recursive `=`, so only test-alloc pays for the lookup.
+ALLOC_PKGS = $(shell go list -f '{{$$p := .ImportPath}}{{$$d := .Dir}}{{range .TestGoFiles}}{{$$p}}{{"\t"}}{{$$d}}/{{.}}{{"\n"}}{{end}}{{range .XTestGoFiles}}{{$$p}}{{"\t"}}{{$$d}}/{{.}}{{"\n"}}{{end}}' $(PKGS) | awk -F'\t' '{ while ((getline l < $$2) > 0) if (index(l, "AllocsStable")) { print $$1; break }; close($$2) }' | sort -u)
+
 test-alloc: ## Enforce ADR-026 alloc-stability guards WITHOUT -race (the detector inflates testing.AllocsPerRun counts; see internal/racedetect)
-	# Every package: a new AllocsStable guard is picked up wherever it lands, with no edit here.
-	go test $(PKGS) -run 'AllocsStable' -count=1 -v
+	go test $(or $(ALLOC_PKGS),$(error test-alloc: no AllocsStable guard found)) -run 'AllocsStable' -count=1 -v
 
 test-integration: docker-check ## Run integration tests (requires Docker)
 	@echo "Running integration tests with testcontainers..."
