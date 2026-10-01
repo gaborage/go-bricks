@@ -67,6 +67,9 @@ type Server struct {
 	appCheckFlight singleflight.Group
 	// probeStopBudget bounds the probe listener's graceful stop; only a test shortens it.
 	probeStopBudget time.Duration
+
+	// opts carries the programmatic extensions NewWithOptions received.
+	opts Options
 }
 
 // probeListener is the probe listener's server and the socket it serves, stored together
@@ -191,6 +194,17 @@ func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.Trus
 // With server.probes.port set it also builds the probe listener's engine (ADR-120).
 func New(cfg *config.Config, log logger.Logger) *Server {
 	return newServer(cfg, log)
+}
+
+// NewWithOptions is New plus programmatic options; New(cfg, log) is
+// NewWithOptions(cfg, log, Options{}).
+func NewWithOptions(cfg *config.Config, log logger.Logger, opts Options) *Server {
+	return newServer(cfg, log, withOptions(opts))
+}
+
+// withOptions installs the programmatic extensions NewWithOptions received.
+func withOptions(opts Options) serverOption {
+	return func(s *Server) { s.opts = opts }
 }
 
 func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Server {
@@ -490,7 +504,21 @@ func (s *Server) Start() error {
 // serverTLSConfig builds the application listener's TLS config, or nil when TLS is off.
 func (s *Server) serverTLSConfig() (*tls.Config, error) {
 	if s.cfg.Server.TLS.Enabled {
-		return buildServerTLSConfig(&s.cfg.Server.TLS)
+		tlsCfg, err := buildServerTLSConfig(&s.cfg.Server.TLS)
+		if err != nil {
+			return nil, err
+		}
+		if err := attachLeafHook(tlsCfg, s.cfg.Server.TLS.ClientAuth, s.opts.TLSVerifyPeerCertificate); err != nil {
+			return nil, err
+		}
+		return tlsCfg, nil
+	}
+	// A hook with TLS off WARNs (a staged flip is legitimate); with TLS on and no
+	// verifying policy it errors in attachLeafHook, where it would guard nothing.
+	if s.opts.TLSVerifyPeerCertificate != nil {
+		s.logger.Warn().
+			Str("field", "server.tls.enabled").
+			Msg(inertLeafHookWarnMsg)
 	}
 	if hasStagedServerTLSMaterial(&s.cfg.Server.TLS) {
 		// Fail-open is deliberate — staging material ahead of a flip is a

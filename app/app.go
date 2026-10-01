@@ -177,6 +177,9 @@ func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerR
 		log.Debug().Msg("Using provided server instance")
 		return opts.Server
 	}
+	if opts != nil && opts.ServerOptions != nil {
+		return server.NewWithOptions(cfg, log, *opts.ServerOptions)
+	}
 
 	return server.New(cfg, log)
 }

@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 
 	"github.com/gaborage/go-bricks/config"
@@ -58,6 +59,62 @@ func buildServerTLSConfig(cfg *config.ServerTLSConfig) (*tls.Config, error) {
 	}
 	tlsCfg.ClientCAs = pool
 	return tlsCfg, nil
+}
+
+// inertLeafHookWarnMsg is the WARN Start logs for a leaf-validation hook on a
+// plaintext listener.
+const inertLeafHookWarnMsg = "a TLS leaf-validation hook is set but server.tls.enabled is false; the hook is inert"
+
+// leafVerifier is the stdlib VerifyPeerCertificate signature a leaf-validation
+// hook takes (Options.TLSVerifyPeerCertificate).
+type leafVerifier = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error
+
+// attachLeafHook installs hook on tlsCfg as VerifyPeerCertificate and, because
+// the stdlib skips VerifyPeerCertificate on a resumed session, runs it again
+// from VerifyConnection whenever the session resumed. A nil hook is a no-op.
+// A hook under a non-verifying policy fails closed: it would guard nothing.
+func attachLeafHook(tlsCfg *tls.Config, clientAuth string, hook leafVerifier) error {
+	if hook == nil {
+		return nil
+	}
+	if tlsCfg.ClientAuth != tls.VerifyClientCertIfGiven && tlsCfg.ClientAuth != tls.RequireAndVerifyClientCert {
+		return fmt.Errorf("server: tls: clientauth %s never verifies client certificates, so the leaf-validation hook would be inert: use %q or %q",
+			secretfile.SafeRef(clientAuth), clientAuthVerify, clientAuthRequireVerify)
+	}
+	verify := guardLeafHook(hook)
+	tlsCfg.VerifyPeerCertificate = verify
+	// SECURITY: VerifyPeerCertificate is skipped on resumed sessions, so the
+	// same policy must also run via VerifyConnection, which always fires.
+	tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if !cs.DidResume {
+			return nil // full handshake: already checked by VerifyPeerCertificate
+		}
+		raw := make([][]byte, 0, len(cs.PeerCertificates))
+		for _, c := range cs.PeerCertificates {
+			raw = append(raw, c.Raw)
+		}
+		return verify(raw, cs.VerifiedChains)
+	}
+	return nil
+}
+
+// guardLeafHook skips hook for a client that presented no certificate — whether
+// one may do that is server.tls.clientauth's decision alone, and the probe
+// listener's certless self-check must pass under verify — and turns a hook
+// panic into a handshake error that names the panic's type, never its value
+// (ADR-081): net/http's own recover would log the value.
+func guardLeafHook(hook leafVerifier) leafVerifier {
+	return func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) (err error) {
+		if len(rawCerts) == 0 {
+			return nil
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("server: tls: leaf-validation hook panicked (type: %T)", r)
+			}
+		}()
+		return hook(rawCerts, verifiedChains)
+	}
 }
 
 // server.tls.clientauth values; "" turns client verification off. The

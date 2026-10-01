@@ -504,6 +504,27 @@ func TestServerStartRefusesRequireVerifyBesideProbeListener(t *testing.T) {
 	assert.Contains(t, cfgErr.Error(), "server.tls.clientauth")
 }
 
+// TestServerProbeReadyPassesUnderVerifyWithARejectingHook pins why verify stays allowed
+// beside the probe listener: the check's certless handshake completes, and the
+// leaf-validation hook is not asked about a client that presented no certificate, so
+// even a hook that rejects everyone leaves /ready passing.
+func TestServerProbeReadyPassesUnderVerifyWithARejectingHook(t *testing.T) {
+	f := newMTLSFixture(t)
+	cfg := newProbeTestConfig(probeTestBase)
+	cfg.Server.TLS = f.serverTLS(clientAuthVerify)
+	log := &testLogger{}
+	rejectAll := func([][]byte, [][]*x509.Certificate) error { return errors.New("rejected") }
+	srv := newServer(cfg, log, withEphemeralProbeListener(), withOptions(Options{TLSVerifyPeerCertificate: rejectAll}))
+	errCh := startProbeServer(t, srv)
+
+	res, err := doRequest(t.Context(), noKeepAliveClient(), http.MethodGet, probeURL(srv, testReadyRoute))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, res.code)
+	assert.Nil(t, findLogEntry(log.logEntries(), appListenerUnresponsiveMsg))
+
+	shutdownAndDrain(t, srv, errCh)
+}
+
 // TestPinnedLeafTLSConfigLeafSources pins where the pin's leaf comes from: the loaded
 // certificate's parsed Leaf, else its first DER certificate, and an error when neither
 // yields one.

@@ -2143,9 +2143,10 @@ under a disabled listener WARN, as ADR-042's material does. The `MinVersion` flo
 Only a presented, verified client certificate identifies the caller (`verify` admits a client
 with none, so handlers read `VerifiedChains`); the deployment still authorizes. It composes with
 `server.forwardedclientcert`: the mTLS leaf identifies the hop, the forwarded certificate the end
-client. `require-verify` (not `verify`) is refused beside the probe listener, whose self-check
-presents no client certificate. Decided, to follow: the leaf-validation hook with its resumption
-guard.
+client. A leaf-validation hook (`server.Options.TLSVerifyPeerCertificate`, via
+`server.NewWithOptions` or `app.Options.ServerOptions`) runs after chain verification and again
+from `VerifyConnection` on a resumed session, skips a certless client, and fails `Start` under a
+non-verifying policy. `require-verify` (not `verify`) is refused beside the probe listener.
 
 **Key Benefits:** app-terminated partner mTLS without an LB, fail-fast on every half-configured
 shape.
