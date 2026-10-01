@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
@@ -25,7 +27,7 @@ import (
 )
 
 // httpServerDurationMetric is the OTel semconv name for the HTTP server request
-// duration histogram emitted by the echo-opentelemetry middleware.
+// duration histogram emitted by the echo-otel middleware.
 const httpServerDurationMetric = "http.server.request.duration"
 
 const (
@@ -53,7 +55,7 @@ func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{App: config.AppConfig{Name: testServiceName}}
-	// observabilityEnabled = false → the echootel middleware must not be registered.
+	// observabilityEnabled = false → the echo-otel middleware must not be registered.
 	SetupMiddlewares(e, log, cfg, false, testHealthPath, testReadyPath)
 	var captured context.Context
 	e.GET("/test", func(c *echo.Context) error {
@@ -81,6 +83,30 @@ func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryExporter) {
 	t.Helper()
 
+	exporter := installTestTracerProvider(t)
+
+	// Create Echo instance with middleware
+	e := echo.New()
+	cfg := &config.Config{
+		App: config.AppConfig{
+			Name: testServiceName,
+		},
+	}
+	log := logger.New("disabled", false)
+
+	// Setup middlewares (including OTel)
+	healthPath := testHealthPath
+	readyPath := testReadyPath
+	SetupMiddlewares(e, log, cfg, true, healthPath, readyPath)
+
+	return e, exporter
+}
+
+// installTestTracerProvider installs a synchronous in-memory tracer provider and the W3C
+// propagator globally for the test, restoring the originals on cleanup.
+func installTestTracerProvider(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
+
 	// Save original global state to restore after test
 	originalTP := otel.GetTracerProvider()
 	originalPropagator := otel.GetTextMapPropagator()
@@ -103,21 +129,7 @@ func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryEx
 		otel.SetTextMapPropagator(originalPropagator)
 	})
 
-	// Create Echo instance with middleware
-	e := echo.New()
-	cfg := &config.Config{
-		App: config.AppConfig{
-			Name: testServiceName,
-		},
-	}
-	log := logger.New("disabled", false)
-
-	// Setup middlewares (including OTel)
-	healthPath := testHealthPath
-	readyPath := testReadyPath
-	SetupMiddlewares(e, log, cfg, true, healthPath, readyPath)
-
-	return e, exporter
+	return exporter
 }
 
 func TestOTelMiddlewareSpanCreation(t *testing.T) {
@@ -553,7 +565,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 
 // setupTestServerWithMetrics creates a test Echo server with the OTel middleware
 // wired to an in-memory metric reader so recorded HTTP server metrics can be
-// asserted. echo-opentelemetry captures otel.GetMeterProvider() at middleware
+// asserted. echo-otel captures otel.GetMeterProvider() at middleware
 // construction time, so the test meter provider is installed before
 // SetupMiddlewares runs. Global state is saved and restored to avoid pollution.
 func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProvider) {
@@ -607,7 +619,8 @@ func dataPointAttrs(dp metricdata.HistogramDataPoint[float64]) map[string]string
 // issue #508: the custom MetricAttributes callback must EXTEND the library's
 // default semconv attribute set, not replace it. Before the fix, the standard
 // attributes (http.request.method, http.response.status_code, http.route,
-// server.address, url.scheme) were dropped from the duration histogram.
+// url.scheme) were dropped from the duration histogram. server.address is the
+// one default echo-otel/v5 no longer puts on metrics (ADR-132).
 func TestOTelMiddlewareMetricAttributesIncludeDefaults(t *testing.T) {
 	e, mp := setupTestServerWithMetrics(t)
 
@@ -628,7 +641,8 @@ func TestOTelMiddlewareMetricAttributesIncludeDefaults(t *testing.T) {
 	assert.Equal(t, "GET", attrs["http.request.method"], "http.request.method must be present")
 	assert.Equal(t, "200", attrs["http.response.status_code"], "http.response.status_code must be present")
 	assert.Equal(t, testUserAPIEndpoint, attrs["http.route"], "http.route must be present")
-	assert.Equal(t, testServiceName, attrs["server.address"], "server.address must be present")
+	_, hasServerAddress := attrs["server.address"]
+	assert.False(t, hasServerAddress, "server.address is Opt-In and must stay off metrics (ADR-132)")
 	// Custom attribute (proxy-aware), preserved alongside the defaults.
 	assert.Equal(t, "http", attrs["url.scheme"], "url.scheme must be present")
 	// No error.type on a 2xx response.
@@ -702,7 +716,7 @@ func TestOTelMiddlewareMetricAttributesProxyScheme(t *testing.T) {
 
 // TestOTelMiddlewareSpanURLPathIsTheRoutedPath pins the incoming-request span's url.path to the
 // path the router keyed on (routerPath), so it agrees with the http.route on the same span and
-// with the access log; echo-opentelemetry's own value is the decoded r.URL.Path (#1817).
+// with the access log; echo-otel's own value is the decoded r.URL.Path (#1817).
 func TestOTelMiddlewareSpanURLPathIsTheRoutedPath(t *testing.T) {
 	e, exporter := setupTestServerWithTracing(t)
 
@@ -734,4 +748,135 @@ func TestOTelMiddlewareSpanURLPathIsTheRoutedPath(t *testing.T) {
 	assert.Equal(t, probeSkipEncodedHlth, urlPaths[0], "url.path must be the path the router keyed on")
 	assert.NotEqual(t, req.URL.Path, urlPaths[0], "url.path must not name the route the decoded path would have matched")
 	assert.Equal(t, probeSkipModuleRoute, route, "http.route must be the template this same request matched")
+}
+
+// TestOTelMiddlewareNeverRecordsAPanicValue pins ADR-081 against echo-otel/v5's own recover,
+// which writes "panic: <value>" into the span status before re-panicking (ADR-132). A panic in
+// a middleware between the instrumentation and Recover reaches that recover directly; a
+// handler panic reaches it as Recover's PanicStackError. Either way the span must carry the
+// panic's type and never its value.
+func TestOTelMiddlewareNeverRecordsAPanicValue(t *testing.T) {
+	const secret = "panic-value-s3cr3t"
+
+	t.Run("middleware_between_otel_and_recover", func(t *testing.T) {
+		exporter := installTestTracerProvider(t)
+		e := echo.New()
+		useOTelMiddleware(e, &config.Config{App: config.AppConfig{Name: testServiceName}},
+			func(*echo.Context) bool { return false })
+		e.Use(func(echo.HandlerFunc) echo.HandlerFunc {
+			return func(*echo.Context) error { panic(secret) }
+		})
+		e.GET(testAPIEndpoint, okEchoHandler)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
+
+		// No Recover sits outside this bare engine, so the re-panic reaches the test.
+		assert.Panics(t, func() { e.ServeHTTP(httptest.NewRecorder(), req) })
+
+		spans := exporter.GetSpans()
+		require.Len(t, spans, 1)
+		assertSpanCarriesPanicTypeOnly(t, &spans[0], secret)
+	})
+
+	t.Run("handler", func(t *testing.T) {
+		e, exporter := setupTestServerWithTracing(t)
+		e.GET(testAPIEndpoint, func(*echo.Context) error { panic(secret) })
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
+		rec := httptest.NewRecorder()
+
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
+		spans := exporter.GetSpans()
+		require.Len(t, spans, 1)
+		assertSpanCarriesPanicTypeOnly(t, &spans[0], secret)
+	})
+}
+
+// assertSpanCarriesPanicTypeOnly asserts the span recorded the panic as an error naming its
+// type, and that the value appears nowhere on it: status, attributes or events.
+func assertSpanCarriesPanicTypeOnly(t *testing.T, span *tracetest.SpanStub, secret string) {
+	t.Helper()
+
+	assert.Equal(t, codes.Error, span.Status.Code)
+	assert.Contains(t, span.Status.Description, "string", "the panic's type must be recorded")
+	assert.NotContains(t, span.Status.Description, secret)
+	for _, kv := range span.Attributes {
+		assert.NotContains(t, kv.Value.String(), secret, "attribute %s", kv.Key)
+	}
+	for _, ev := range span.Events {
+		for _, kv := range ev.Attributes {
+			assert.NotContains(t, kv.Value.String(), secret, "event %s attribute %s", ev.Name, kv.Key)
+		}
+	}
+}
+
+// TestOTelServerNameError pins the shapes echo-otel/v5 would panic on: a port it cannot
+// parse, and (new in v5) an address with no host. A plain name, a host:port and an empty
+// name (which the library skips) pass.
+func TestOTelServerNameError(t *testing.T) {
+	tests := []struct {
+		name    string
+		appName string
+		wantErr string
+	}{
+		{name: "plain_name", appName: testServiceName},
+		{name: "host_and_port", appName: "api.example.com:8443"},
+		{name: "empty_name_is_skipped", appName: ""},
+		{name: "no_host", appName: ":8080", wantErr: "it has no host"},
+		{name: "non_numeric_port", appName: "svc:abc", wantErr: "not a valid host[:port]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := otelServerNameError(tt.appName)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "app.name")
+			assert.Contains(t, err.Error(), strconv.Quote(tt.appName))
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestServerStartRefusesAnUnusableOTelServerName pins the startup path: with observability
+// enabled, an app.name the instrumentation would panic on builds a server without it, and
+// Start returns the error before binding. With observability off the name is never parsed.
+func TestServerStartRefusesAnUnusableOTelServerName(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		observability bool
+		wantErr       bool
+	}{
+		{name: "observability_enabled_refuses", observability: true, wantErr: true},
+		{name: "observability_disabled_ignores_the_name", observability: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.LoadFromMap(map[string]any{"observability.enabled": tc.observability})
+			require.NoError(t, err)
+			base := newTestConfig("", "", "")
+			cfg.App = base.App
+			cfg.App.Name = ":8080"
+			cfg.Server = base.Server
+
+			var srv *Server
+			require.NotPanics(t, func() { srv = New(cfg, &testLogger{}) })
+
+			if !tc.wantErr {
+				assert.NoError(t, srv.setupErr)
+				return
+			}
+			select {
+			case err = <-startServer(srv):
+			case <-time.After(5 * time.Second):
+				_ = srv.Shutdown(context.Background())
+				t.Fatal("Start bound and served instead of refusing the app.name")
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `app.name ":8080"`)
+			assert.Nil(t, srv.boundAddr.Load(), "Start must refuse before binding")
+		})
+	}
 }

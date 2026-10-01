@@ -2171,6 +2171,22 @@ stored bytes keeps its `jti`, so the consumer's ledger dedups it.
 
 ---
 
+### [ADR-132: HTTP Server Instrumentation Moves to `echo-otel/v5`, Sanitized Inside It](adr_132_http_server_instrumentation_echo_otel.md)
+
+**Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** the HTTP server instrumentation scope becomes `github.com/labstack/echo-otel/v5`, and HTTP server metrics lose `server.address`/`server.port`
+
+`echo-opentelemetry` is deprecated in favor of `echo-otel/v5`, which keeps its API but renames the
+instrumentation scope, drops the client-chosen `server.address`/`server.port` from metrics, adds
+derives span `error.type` from the status, and recovers panics, recording `panic: <value>` as the span status before
+re-panicking. A second `sanitizePanicValue()` registered immediately inside the instrumentation
+re-panics every panic below it as its type first, so a panic in a middleware between the
+instrumentation and `Recover` cannot put its value on a span (ADR-081). See
+[migrations.md](migrations.md) `[C70.17]`.
+
+**Key Benefits:** a maintained instrumentation library, with ADR-081 kept on its new recover path.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2948,7 +2964,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-131) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-132) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
