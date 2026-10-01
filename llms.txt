@@ -3189,7 +3189,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// outbox-dedup consumer below dedups through it, so fail at startup rather than
 	// nacking the first delivery on a nil handle.
 	if deps.Inbox == nil {
-		return errors.New("orders: register inbox.NewModule() before this module")
+		return errors.New("orders: set inbox.enabled=true and register inbox.NewModule() before this module")
 	}
 	m.inbox = deps.Inbox
 	m.svc = NewOrderService(deps.DB, deps.Messaging) // see Step 3
@@ -3739,10 +3739,11 @@ type Module struct {
 }
 
 // Init captures the inbox: a sealed consumer dedups through it, so a deployment without
-// the inbox module fails here at startup instead of panicking on the first delivery.
+// the inbox module, or with it disabled, fails here at startup instead of panicking on the
+// first delivery.
 func (m *Module) Init(deps *app.ModuleDeps) error {
     if deps.Inbox == nil {
-        return errors.New("payments: register inbox.NewModule() before this module")
+        return errors.New("payments: set inbox.enabled=true and register inbox.NewModule() before this module")
     }
     m.inbox = deps.Inbox
     return nil
