@@ -2124,7 +2124,8 @@ unverifying `request`/`require` are refused naming the valid values. On an enabl
 verifying policy needs exactly one of `server.tls.clientcafile`/`clientcavalue`, a client CA
 without a policy is refused, and an empty, unreadable or corrupt bundle fails `Start`; staged keys
 under a disabled listener WARN, as ADR-042's material does. The `MinVersion` floor is unchanged.
-Verification identifies the caller; the deployment still authorizes. It composes with
+Only a presented, verified client certificate identifies the caller (`verify` admits a client
+with none, so handlers read `VerifiedChains`); the deployment still authorizes. It composes with
 `server.forwardedclientcert`: the mTLS leaf identifies the hop, the forwarded certificate the end
 client. `require-verify` (not `verify`) is refused beside the probe listener, whose self-check
 presents no client certificate. Decided, to follow: the leaf-validation hook with its resumption

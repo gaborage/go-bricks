@@ -42,7 +42,8 @@ way to demand or verify a client certificate: the framework owns the listener's 
 5. **Identification, not authorization.** A verified chain says the caller holds a key certified by
    one of the configured CAs. It does not say what the caller may do: the handler, or the leaf hook
    below, still authorizes, as with ADR-043's forwarded identity and ADR-109's `Principal`. Handlers
-   read `VerifiedChains`, never `PeerCertificates`.
+   read `VerifiedChains`, never `PeerCertificates`. Under `verify` a client may present no
+   certificate at all: an empty `VerifiedChains` means the caller is unidentified, not verified.
 6. **Independent of `server.forwardedclientcert`.** The two compose and neither changes the other.
    A proxy (Envoy, nginx) that authenticates to the application over mTLS while forwarding the end
    client's certificate in a header is a legitimate and stronger posture: the mTLS leaf proves the
