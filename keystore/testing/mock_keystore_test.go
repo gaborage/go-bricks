@@ -1,6 +1,7 @@
 package testing
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestMockKeyStoreSecretRoundTrip(t *testing.T) {
 
 	got, err := m.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	assert.True(t, bytes.Equal(want, got), "secret bytes differ: want %d bytes, got %d", len(want), len(got))
 }
 
 func TestMockKeyStoreSecretNotFound(t *testing.T) {
@@ -37,12 +38,12 @@ func TestMockKeyStoreSecretIsolatedFromCallerMutation(t *testing.T) {
 
 	got, err := m.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("original-key"), got, "WithSecret must copy its input")
+	assert.True(t, bytes.Equal([]byte("original-key"), got), "WithSecret must copy its input: got %d bytes", len(got))
 
 	got[1] ^= 0xFF // mutate the returned slice
 	again, err := m.Secret("mac")
 	require.NoError(t, err)
-	assert.Equal(t, []byte("original-key"), again, "Secret must return a defensive copy")
+	assert.True(t, bytes.Equal([]byte("original-key"), again), "Secret must return a defensive copy: got %d bytes", len(again))
 }
 
 func TestMockKeyStoreGenerationsSortsAscendingLikeTheStore(t *testing.T) {

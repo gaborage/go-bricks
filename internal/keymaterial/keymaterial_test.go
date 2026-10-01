@@ -34,6 +34,20 @@ func assertNoKeyBytes(t *testing.T, data []byte) {
 	}
 }
 
+// assertSameSecretBytes compares secret, key or password bytes by value, reporting
+// LENGTHS only on a mismatch — never the bytes themselves (ADR-102).
+func assertSameSecretBytes(t *testing.T, want, got []byte) {
+	t.Helper()
+	assert.True(t, bytes.Equal(want, got), "bytes differ: want %d bytes, got %d", len(want), len(got))
+}
+
+// assertSamePrivateKey compares private keys with the key's own Equal, reporting
+// TYPES only on a mismatch — never D or the primes (ADR-102).
+func assertSamePrivateKey(t *testing.T, want, got *rsa.PrivateKey) {
+	t.Helper()
+	assert.True(t, want.Equal(got), "private key mismatch: want a %T, got a %T", want, got)
+}
+
 func TestLoadBytes(t *testing.T) {
 	t.Run("file_path_reads", func(t *testing.T) {
 		dir := t.TempDir()
@@ -43,7 +57,7 @@ func TestLoadBytes(t *testing.T) {
 
 		got, err := LoadBytes(path, "")
 		require.NoError(t, err)
-		assert.Equal(t, want, got)
+		assertSameSecretBytes(t, want, got)
 	})
 
 	t.Run("base64_value_decodes", func(t *testing.T) {
@@ -52,7 +66,7 @@ func TestLoadBytes(t *testing.T) {
 
 		got, err := LoadBytes("", encoded)
 		require.NoError(t, err)
-		assert.Equal(t, want, got)
+		assertSameSecretBytes(t, want, got)
 	})
 
 	t.Run("neither_set_nil_nil", func(t *testing.T) {
@@ -72,7 +86,7 @@ func TestLoadBytes(t *testing.T) {
 		// skipped without error.
 		got, err := LoadBytes(path, "bm90IHRoZSBmaWxl")
 		require.NoError(t, err)
-		assert.Equal(t, want, got)
+		assertSameSecretBytes(t, want, got)
 	})
 
 	t.Run("bad_base64_errors", func(t *testing.T) {
@@ -103,7 +117,7 @@ func TestLoadSecretBytes(t *testing.T) {
 
 		got, err := LoadSecretBytes(path, "")
 		require.NoError(t, err)
-		assert.Equal(t, syntheticSecret, got)
+		assertSameSecretBytes(t, syntheticSecret, got)
 	})
 
 	t.Run("base64_value_decodes", func(t *testing.T) {
@@ -111,7 +125,7 @@ func TestLoadSecretBytes(t *testing.T) {
 
 		got, err := LoadSecretBytes("", encoded)
 		require.NoError(t, err)
-		assert.Equal(t, syntheticSecret, got)
+		assertSameSecretBytes(t, syntheticSecret, got)
 	})
 
 	t.Run("neither_set_nil_nil", func(t *testing.T) {
@@ -208,7 +222,7 @@ func TestParseRSAPrivateKey(t *testing.T) {
 
 		got, err := ParseRSAPrivateKey(der)
 		require.NoError(t, err)
-		assert.Equal(t, priv.D, got.D)
+		assertSamePrivateKey(t, priv, got)
 	})
 
 	t.Run("valid_pkcs1_der_fallback", func(t *testing.T) {
@@ -216,7 +230,7 @@ func TestParseRSAPrivateKey(t *testing.T) {
 
 		got, err := ParseRSAPrivateKey(der)
 		require.NoError(t, err)
-		assert.Equal(t, priv.D, got.D)
+		assertSamePrivateKey(t, priv, got)
 	})
 
 	t.Run("garbage_der_errors", func(t *testing.T) {
@@ -256,13 +270,13 @@ func TestLoadRSAPrivateKey(t *testing.T) {
 
 		got, err := LoadRSAPrivateKey(path, "")
 		require.NoError(t, err)
-		assert.Equal(t, priv.D, got.D)
+		assertSamePrivateKey(t, priv, got)
 	})
 
 	t.Run("base64_value", func(t *testing.T) {
 		got, err := LoadRSAPrivateKey("", base64.StdEncoding.EncodeToString(privDER))
 		require.NoError(t, err)
-		assert.Equal(t, priv.D, got.D)
+		assertSamePrivateKey(t, priv, got)
 	})
 
 	t.Run("neither_set_errors", func(t *testing.T) {
@@ -376,7 +390,7 @@ func TestProducerKeys(t *testing.T) {
 	t.Run("sign_kid_returns_private", func(t *testing.T) {
 		got, err := keys.PrivateKey("sign-v1")
 		require.NoError(t, err)
-		assert.Equal(t, signPriv.D, got.D)
+		assertSamePrivateKey(t, signPriv, got)
 	})
 
 	t.Run("encrypt_kid_returns_public", func(t *testing.T) {
@@ -453,7 +467,7 @@ func TestConsumerKeys(t *testing.T) {
 	t.Run("encrypt_kid_returns_private", func(t *testing.T) {
 		got, err := keys.PrivateKey("enc-v1")
 		require.NoError(t, err)
-		assert.Equal(t, encPriv.D, got.D)
+		assertSamePrivateKey(t, encPriv, got)
 	})
 
 	t.Run("unknown_public_kid_errors", func(t *testing.T) {

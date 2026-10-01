@@ -95,7 +95,7 @@ func TestLoadPassword(t *testing.T) {
 
 		got, err := LoadPassword("KEYMATERIAL_TEST_P12_PASSWORD", "")
 		require.NoError(t, err)
-		assert.Equal(t, password, got)
+		assertSameSecretBytes(t, []byte(password), []byte(got))
 	})
 
 	t.Run("env_unset_errors_name_elided", func(t *testing.T) {
@@ -119,7 +119,7 @@ func TestLoadPassword(t *testing.T) {
 
 		got, err := LoadPassword("", path)
 		require.NoError(t, err)
-		assert.Equal(t, " "+password, got)
+		assertSameSecretBytes(t, []byte(" "+password), []byte(got))
 	})
 
 	t.Run("file_unreadable_errors_path_elided", func(t *testing.T) {

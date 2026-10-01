@@ -62,7 +62,7 @@ func TestKeyStoreResolverFindsRegisteredKey(t *testing.T) {
 
 	gotPriv, err := r.PrivateKey("ours")
 	require.NoError(t, err)
-	assert.Equal(t, priv, gotPriv)
+	assert.True(t, priv.Equal(gotPriv), "private key mismatch: want a %T, got a %T", priv, gotPriv)
 
 	gotPub, err := r.PublicKey("ours")
 	require.NoError(t, err)
