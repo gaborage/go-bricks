@@ -29,6 +29,10 @@ GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_V
 # Hosted runners are 4-vCPU/16GB; 2 workers bounds peak memory (each worker keeps its
 # own copy of the module tree).
 MUTATE_BASELINE_WORKERS ?= 2
+# Delete the GOCACHE files each package's gremlins run adds, once it exits. On
+# by default only on GitHub Actions: a shared GOCACHE also receives concurrent
+# builds' files, which the prune would delete. Only 1, true, yes or on enable it.
+MUTATE_BASELINE_PRUNE ?= $(GITHUB_ACTIONS)
 # Used only when the per-package coefficient cannot be computed. Generous on
 # purpose: too small silently reports every mutant as TIMED OUT, which the
 # advisory baseline would publish as a clean score (wiki/testing.md#timeout-ceiling).
@@ -252,7 +256,10 @@ mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main mu
 # and the merge prefixes file_name with the package dir (gremlins emits paths
 # relative to the package it was pointed at, which are ambiguous repo-wide).
 # scripts/ excluded: gremlins misverdicts that nested package main
-# (wiki/testing.md#mutation-gate).
+# (wiki/testing.md#mutation-gate). gremlins walks the whole tree under its
+# target, so each run excludes the listed packages nested under it (their own
+# runs mutate them); unlisted subdirectories such as testdata stay with their
+# nearest listed ancestor.
 #
 # The per-package timeout coefficient is not optional: gremlins derives each
 # mutant's ceiling from a CACHE-SERVED replay of the package's tests, while every
@@ -261,16 +268,25 @@ mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main mu
 # which this job would publish as a clean score. See scripts/mutatediff/timeout.go.
 mutate-baseline: ## Full-repo mutation baseline, one engine process per package (advisory; consumed by the nightly workflow)
 	@rm -rf .gremlins-reports gremlins-report.json && mkdir -p .gremlins-reports
-	@go list ./... > /dev/null   # fail fast on a broken tree — inside the loop pipeline a go list failure would vanish into sort's exit status
-	@i=0; for dir in $$(go list -f '{{.Dir}}' ./... | sed -e "s|^$$(pwd)/||" -e "s|^$$(pwd)$$|.|" | grep -v '^scripts/' | sort -u); do \
+	@go list ./... > /dev/null   # fail fast on a broken tree — inside the dirs=$$(...) pipeline a go list failure would vanish into sort's exit status
+	@dirs=$$(go list -f '{{.Dir}}' ./... | sed -e "s|^$$(pwd)/||" -e "s|^$$(pwd)$$|.|" | grep -v '^scripts/' | sort -u); \
+	prune="$(MUTATE_BASELINE_PRUNE)"; case "$$prune" in 1|true|yes|on) ;; *) prune=;; esac; if [ -n "$$prune" ]; then gc=$$(go env GOCACHE); $(GREMLINS_CMD) --version >/dev/null; fi; \
+	i=0; for dir in $$dirs; do \
 		i=$$((i+1)); \
 		echo "== mutating ./$$dir"; \
 		out=".gremlins-reports/$$i-$$(echo "$$dir" | tr / -).json"; \
 		coeff=$$(go run ./scripts/mutatediff -coefficient "./$$dir") \
 			|| { echo "ERROR: coefficient measurement for ./$$dir was canceled or could not run — stopping the baseline"; exit 1; }; \
 		case "$$coeff" in ''|*[!0-9]*) echo "WARN: no coefficient for ./$$dir, falling back to $(MUTATE_FALLBACK_COEFFICIENT)"; coeff=$(MUTATE_FALLBACK_COEFFICIENT);; esac; \
-		$(GREMLINS_CMD) unleash --workers $(MUTATE_BASELINE_WORKERS) --timeout-coefficient "$$coeff" --output "$$out" "./$$dir" \
+		case "$$dir" in .) pre=;; *) pre="$$dir/";; esac; \
+		alt=; for sub in $$dirs; do \
+			case "$$sub" in "$$dir") ;; "$$pre"*) alt="$$alt$${alt:+|}$$(printf '%s\n' "$${sub#"$$pre"}" | sed 's/[][\\.^$$*+?(){}|]/\\&/g')";; esac; \
+		done; \
+		snap=; if [ -n "$$prune" ]; then snap=$$(mktemp) && find "$$gc" -type f | LC_ALL=C sort > "$$snap" && [ -s "$$snap" ] \
+			|| { echo "WARN: GOCACHE snapshot failed for ./$$dir, prune skipped"; rm -f "$$snap"; snap=; }; fi; \
+		$(GREMLINS_CMD) unleash --workers $(MUTATE_BASELINE_WORKERS) --timeout-coefficient "$$coeff" --output "$$out" $${alt:+--exclude-files "^($$alt)/"} "./$$dir" \
 			|| echo "WARN: gremlins exited non-zero for ./$$dir (advisory)"; \
+		if [ -n "$$snap" ]; then find "$$gc" -type f | LC_ALL=C sort | LC_ALL=C comm -13 "$$snap" - | tr '\n' '\0' | xargs -0 rm -f --; rm -f "$$snap"; fi; \
 		if [ -f "$$out" ]; then \
 			jq --arg d "$$dir" '.files = ((.files // []) | map(.file_name = ($$d + "/" + .file_name)))' "$$out" > "$$out.tmp" && mv "$$out.tmp" "$$out" \
 				|| { echo "WARN: ./$$dir produced an unparsable report, dropped (advisory)"; rm -f "$$out" "$$out.tmp"; }; \

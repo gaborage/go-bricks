@@ -566,6 +566,7 @@ Knobs (all `?=`, so the environment overrides):
 | `MUTATE_WORKERS` | 2 | Concurrent gremlins workers for `make mutate`. **Not** a core count — each worker is a full `go test`, whose own parallelism `MUTATE_CPU` is what bounds. |
 | `MUTATE_COOLDOWN` | 30s | Pause after each mutated package so the machine sheds heat. Any `time.ParseDuration` string; `0` disables. Skipped after a skipped package and after the last one. |
 | `MUTATE_BASELINE_WORKERS` | 2 | Same as `MUTATE_WORKERS`, for the nightly baseline; also bounds peak memory. Unbudgeted — CI runs at full speed. |
+| `MUTATE_BASELINE_PRUNE` | `$(GITHUB_ACTIONS)` | After each package's gremlins run in the nightly baseline, deletes the `GOCACHE` files that run added; the snapshot is taken after the coefficient pass, so warm-up and coefficient entries stay. On in GitHub Actions, off elsewhere: a shared `GOCACHE` also receives concurrent builds' files, which the prune would delete. Only `1`, `true`, `yes` or `on` enable it; any other value, including `false` and `0`, disables it. A failed or empty snapshot skips that package's prune with a WARN. |
 | `MUTATE_CEILING_FLOOR` | 30s | Minimum per-mutant ceiling (any `time.ParseDuration` string). |
 | `MUTATE_FALLBACK_COEFFICIENT` | 600 | Used only when a package's coefficient cannot be computed. |
 | `MUTATE_NO_CACHE` | *(empty)* | Any non-empty value bypasses the result cache below and re-mutates every package in the diff. |
