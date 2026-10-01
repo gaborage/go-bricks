@@ -345,7 +345,9 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 // TestMessagingDeclarationsGateAsksTheMessagingRow takes the plan as given: declarations are
 // refused exactly when the messaging row is unavailable, whatever the database row beside it
 // says. Shared messaging with no root broker resolves only on an absent "", so it refuses; a
-// dynamic store answers "" only at runtime, so it boots.
+// dynamic store answers "" only at runtime, so it boots. Per-tenant messaging whose static
+// tenants set no messaging.url refuses too, advising the tenant keys, never the root broker
+// config rejects beside static tenants (#1853).
 func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 	decls := messaging.NewDeclarations()
 	publisherDeclaringModule{}.DeclareMessaging(decls)
@@ -356,9 +358,10 @@ func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		plan    resourcePlan
-		refuses bool
+		name      string
+		plan      resourcePlan
+		refuses   bool
+		perTenant bool // the advice names the tenant keys
 	}{
 		{
 			name: "messaging_absent_beside_a_database", refuses: true,
@@ -372,6 +375,9 @@ func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 		{name: "multitenant_shared_without_a_root_broker", plan: planned("mt shared"), refuses: true},
 		{name: "dynamic_store_without_a_root_broker", plan: planned("dynamic")},
 		{name: "dynamic_store_with_a_root_broker", plan: planned("dynamic broker")},
+		{name: "static_tenants_without_a_messaging_url", plan: planned("mt tenants"), refuses: true, perTenant: true},
+		{name: "static_tenants_with_a_messaging_url", plan: planned("mt tenanturl")},
+		{name: "static_tenants_without_a_messaging_url_behind_a_caller_store", plan: planned("mt tenants caller")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -382,6 +388,13 @@ func TestMessagingDeclarationsGateAsksTheMessagingRow(t *testing.T) {
 
 			if tt.refuses {
 				require.ErrorContains(t, err, "messaging is not configured")
+				if tt.perTenant {
+					assert.Contains(t, err.Error(), "multitenant.tenants.")
+					assert.Contains(t, err.Error(), ".messaging.url")
+					assert.NotContains(t, err.Error(), "messaging.broker.url")
+					return
+				}
+				assert.Contains(t, err.Error(), "messaging.broker.url")
 				return
 			}
 			require.NoError(t, err)

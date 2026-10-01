@@ -237,17 +237,22 @@ var _ probeRunner = (*server.Server)(nil)
 
 // assertMessagingConfiguredIfDeclared fails fast when a module has declared messaging
 // infrastructure but the messaging row of the Resource plan is unavailable — without this check
-// the declarations would be silently dropped (issue #366).
+// the declarations would be silently dropped (issue #366). The advice follows the row: the tenant
+// keys when it is unavailable per tenant, the root broker otherwise.
 func (a *App) assertMessagingConfiguredIfDeclared(decls *messaging.Declarations) error {
 	if decls == nil || decls.IsEmpty() || !a.plan.messaging.unavailable() {
 		return nil
 	}
+	action := "set messaging.broker.url (or env MESSAGING_BROKER_URL)"
+	if a.plan.messaging.tenantKeysAbsent() {
+		action = "no static tenant sets messaging.url under messaging.tenancy: per-tenant; " +
+			"set multitenant.tenants.<id>.messaging.url"
+	}
 	s := decls.Stats()
 	return fmt.Errorf("messaging declarations were registered "+
 		"(exchanges=%d, queues=%d, bindings=%d, publishers=%d, consumers=%d) "+
-		"but messaging is not configured; "+
-		"set messaging.broker.url (or env MESSAGING_BROKER_URL)",
-		s.Exchanges, s.Queues, s.Bindings, s.Publishers, s.Consumers)
+		"but messaging is not configured; %s",
+		s.Exchanges, s.Queues, s.Bindings, s.Publishers, s.Consumers, action)
 }
 
 // registerDebugHandlers sets up debug endpoints if enabled in configuration. The error is

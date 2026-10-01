@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 var errLookupOutlastedTest = errors.New("lookup outlasted the test's one-second bound")
@@ -89,11 +90,14 @@ func servesNothing() map[string]error {
 // planMode is one deployment mode the build accepts. spec switches inputs on: mt, shared
 // (messaging.tenancy), dynamic (source.type dynamic beside a dynamic store), caller (a static
 // Options.ResourceSource answering not_configured for "") or serves (one serving ""),
-// cacheconn, the db, broker and cache root blocks, and dbconn (a root database named by its
-// connection string alone). want is the plan's answer per kind (database, messaging, cache).
+// cacheconn, the db, broker and cache root blocks, dbconn (a root database named by its
+// connection string alone), and static tenants: tenants (none sets messaging.url), tenanturl
+// (one does) or blankurl (each sets it to whitespace). want is the plan's answer per kind
+// (database, messaging, cache); tenantKeys is the messaging row's tenant-keys fact.
 type planMode struct {
 	name, spec string
 	want       [3]string
+	tenantKeys keyPresence
 }
 
 // Plan cells, spelled as renderPlan renders them: "<tenancy>/<presence>" then every yes answer.
@@ -104,6 +108,7 @@ const (
 	stRuntime     = "st/runtime prewarm"
 	ptPresent     = "pt/present per_tenant"
 	ptAbsent      = "pt/absent per_tenant"
+	ptUnavailable = "pt/absent unavailable per_tenant"
 	ptAbsentSkip  = "pt/absent skip per_tenant"
 	ptRuntime     = "pt/runtime per_tenant"
 	sharedPresent = "shared/present preinit prewarm"
@@ -138,10 +143,19 @@ var planModes = []planMode{
 	{name: "st_caller_cacheconn", spec: "caller cacheconn", want: kinds{stAbsent, stAbsent, stPresent}},
 	// ST-cacheconn, ST-noroot-cacheconn
 	{name: "st_cacheconn_noroot", spec: "cacheconn", want: kinds{stAbsent, stAbsent, stPresent}},
-	// MT-static-tenants, MT-static-notenants-noroot, MT-static-pt
+	// MT-static-notenants-noroot
 	{name: "mt_noroot", spec: "mt", want: kinds{ptAbsent, ptAbsent, ptAbsentSkip}},
-	// MT-static-tenants-rootcache
 	{name: "mt_rootcache", spec: "mt cache", want: kinds{ptAbsent, ptAbsent, ptPresent}},
+	// MT-static-tenants, MT-static-pt
+	{name: "mt_tenants_url", spec: "mt tenanturl", want: kinds{ptAbsent, ptAbsent, ptAbsentSkip}, tenantKeys: keyPresent},
+	// MT-static-tenants-rootcache
+	{name: "mt_tenants_url_rootcache", spec: "mt tenanturl cache", want: kinds{ptAbsent, ptAbsent, ptPresent}, tenantKeys: keyPresent},
+	// no static tenant can reach a broker (#1853)
+	{name: "mt_tenants_no_url", spec: "mt tenants", want: kinds{ptAbsent, ptUnavailable, ptAbsentSkip}, tenantKeys: keyAbsent},
+	// the built-in store serves a whitespace URL, so it counts as set
+	{name: "mt_tenants_blank_url", spec: "mt blankurl", want: kinds{ptAbsent, ptAbsent, ptAbsentSkip}, tenantKeys: keyPresent},
+	// a caller store decides the tenant keys, not the tenants block
+	{name: "mt_tenants_no_url_caller", spec: "mt tenants caller", want: kinds{ptAbsent, ptAbsent, ptAbsentSkip}},
 	// MT-static-notenants-rootdb, MT-notenants-pt-root
 	{name: "mt_root", spec: "mt db broker", want: kinds{ptPresent, ptPresent, ptAbsentSkip}},
 	// MT-dynsrc, MT-dyn-pt
@@ -169,6 +183,24 @@ type planModeInputs struct {
 	caller *answeringStore
 }
 
+// staticTenants spells the tenants, tenanturl and blankurl words: two static tenants, acme alone
+// with a messaging.url, or both with an all-whitespace one; nil when no word is on.
+func staticTenants(on map[string]bool) map[string]config.TenantEntry {
+	if !on["tenants"] && !on["tenanturl"] && !on["blankurl"] {
+		return nil
+	}
+	tenants := map[string]config.TenantEntry{"acme": {}, "globex": {}}
+	if on["tenanturl"] {
+		tenants["acme"] = config.TenantEntry{Messaging: config.TenantMessagingConfig{URL: "amqp://acme/"}}
+	}
+	if on["blankurl"] {
+		for id := range tenants {
+			tenants[id] = config.TenantEntry{Messaging: config.TenantMessagingConfig{URL: "  "}}
+		}
+	}
+	return tenants
+}
+
 func (m *planMode) inputs() planModeInputs {
 	on := map[string]bool{}
 	for _, word := range strings.Fields(m.spec) {
@@ -191,6 +223,7 @@ func (m *planMode) inputs() planModeInputs {
 		cfg.Messaging.Broker.URL = "amqp://broker/"
 	}
 	cfg.Cache.Enabled = on["cache"]
+	cfg.Multitenant.Tenants = staticTenants(on)
 
 	var opts *Options
 	var caller *answeringStore
@@ -215,7 +248,7 @@ func (m *planMode) inputs() planModeInputs {
 
 func (in planModeInputs) plan(t *testing.T) resourcePlan {
 	t.Helper()
-	plan, err := planResources(context.Background(), in.cfg, in.opts, in.store)
+	plan, err := planResources(context.Background(), in.cfg, in.opts, in.store, in.opts == nil || in.opts.ResourceSource == nil)
 	require.NoError(t, err)
 	return plan
 }
@@ -227,7 +260,7 @@ func fixturePlan(cfg *config.Config) resourcePlan {
 		return resourcePlan{}
 	}
 	opts := &Options{CacheConnector: func(context.Context, string) (cache.Cache, error) { return nil, nil }}
-	plan, err := planResources(context.Background(), cfg, opts, config.NewTenantStore(cfg))
+	plan, err := planResources(context.Background(), cfg, opts, config.NewTenantStore(cfg), true)
 	if err != nil {
 		panic(err) // the built-in store answers "" with a configuration or not_configured only
 	}
@@ -265,14 +298,18 @@ func renderPlan(p resourcePlan) [3]string {
 	return out
 }
 
-// TestResourcePlan pins the plan's answers in every mode, and who planning asks: a static caller
-// store once per kind (never for the cache behind a CacheConnector), a dynamic store never.
+// TestResourcePlan pins the plan's answers in every mode, that only the messaging row knows its
+// tenant keys, and who planning asks: a static caller store once per kind (never for the cache
+// behind a CacheConnector), a dynamic store never.
 func TestResourcePlan(t *testing.T) {
 	for _, m := range planModes {
 		t.Run(m.name, func(t *testing.T) {
 			in := m.inputs()
 
-			assert.Equal(t, m.want, renderPlan(in.plan(t)))
+			plan := in.plan(t)
+			assert.Equal(t, m.want, renderPlan(plan))
+			assert.Equal(t, [3]keyPresence{keyAtRuntime, m.tenantKeys, keyAtRuntime},
+				[3]keyPresence{plan.database.tenantKeys, plan.messaging.tenantKeys, plan.cache.tenantKeys})
 
 			if in.caller == nil {
 				return
@@ -366,7 +403,7 @@ func TestResourcePlanLookupFailureFailsStartup(t *testing.T) {
 		t.Run(tt.kind, func(t *testing.T) {
 			store := &answeringStore{answers: tt.answer}
 
-			plan, err := planResources(context.Background(), &config.Config{}, nil, store)
+			plan, err := planResources(context.Background(), &config.Config{}, nil, store, false)
 
 			require.ErrorIs(t, err, cause)
 			require.EqualError(t, err, "resource plan: "+tt.kind+` lookup of the control-plane key "": secrets backend unreachable`)
@@ -387,7 +424,7 @@ func TestResourcePlanLookupHonorsTheKindBudget(t *testing.T) {
 		componentMessaging: config.NewNotConfiguredError(componentMessaging, "", ""),
 	}}
 
-	plan, err := planResources(context.Background(), cfg, nil, store)
+	plan, err := planResources(context.Background(), cfg, nil, store, false)
 
 	require.NoError(t, err)
 	startup := cfg.App.Startup
@@ -399,7 +436,7 @@ func TestResourcePlanLookupHonorsTheKindBudget(t *testing.T) {
 
 	cfg.App.Startup = config.StartupConfig{Database: 20 * time.Millisecond, Messaging: 20 * time.Millisecond, Cache: 20 * time.Millisecond}
 	blocking := &answeringStore{block: true}
-	_, err = planResources(context.Background(), cfg, nil, blocking)
+	_, err = planResources(context.Background(), cfg, nil, blocking, false)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.ErrorContains(t, err, `resource plan: database lookup of the control-plane key ""`)
 }
@@ -439,13 +476,15 @@ func TestNewWithConfigCarriesTheResourcePlan(t *testing.T) {
 				cfg.Source.Type = config.SourceTypeDynamic
 			}
 			var store TenantStore = config.NewTenantStore(cfg)
+			builtInStore := true
 			if tt.opts != nil && tt.opts.ResourceSource != nil {
 				store = tt.opts.ResourceSource
+				builtInStore = false
 			}
 
 			app := newConfiguredApp(t, cfg, tt.opts)
 
-			want, err := planResources(context.Background(), cfg, tt.opts, store)
+			want, err := planResources(context.Background(), cfg, tt.opts, store, builtInStore)
 			require.NoError(t, err)
 			assert.Equal(t, want, app.plan)
 			gotPresence := [3]keyPresence{app.plan.database.presence, app.plan.messaging.presence, app.plan.cache.presence}
@@ -467,4 +506,58 @@ func TestNewWithConfigFailsOnAControlPlaneLookupError(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, `resource plan: messaging lookup of the control-plane key "": vault sealed`)
 	assert.Zero(t, store.calls[componentCache], "planning stops at the first failed kind")
+}
+
+// staticTenantsWithoutMessaging is the #1853 shape: per-tenant messaging with static tenants,
+// none of which sets messaging.url.
+func staticTenantsWithoutMessaging() *config.Config {
+	cfg := defaultTestConfig()
+	cfg.Database = config.DatabaseConfig{}
+	cfg.Messaging = config.MessagingConfig{Tenancy: config.TenancyPerTenant}
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = "header"
+	cfg.Multitenant.Tenants = map[string]config.TenantEntry{
+		"acme": {Database: config.DatabaseConfig{Type: config.PostgreSQL, Host: "db.internal", Port: 5432, Database: "acme", Username: "acme"}},
+	}
+	return cfg
+}
+
+// TestNewWithConfigStaticTenantsWithoutMessagingURL pins that the built-in store's tenant keys
+// decide MessagingConfigured, and that a caller store, which may serve tenants the config does
+// not name, keeps it true.
+func TestNewWithConfigStaticTenantsWithoutMessagingURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       func(*config.Config) *Options
+		configured bool
+	}{
+		{name: "built_in_store", opts: func(*config.Config) *Options { return nil }},
+		{
+			name:       "caller_static_store",
+			opts:       func(cfg *config.Config) *Options { return &Options{ResourceSource: config.NewTenantStore(cfg)} },
+			configured: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := staticTenantsWithoutMessaging()
+
+			app := newConfiguredApp(t, cfg, tt.opts(cfg))
+
+			assert.Equal(t, tt.configured, app.registry.deps.MessagingConfigured)
+		})
+	}
+}
+
+// TestStaticTenantsWithoutMessagingURLFailTheAccessor is the positive control for the false
+// flag: with a tenant in context, the accessor fails with config_missing.
+func TestStaticTenantsWithoutMessagingURLFailTheAccessor(t *testing.T) {
+	app := newConfiguredApp(t, staticTenantsWithoutMessaging(), nil)
+
+	_, err := app.registry.deps.Messaging(multitenant.SetTenant(context.Background(), "acme"))
+
+	var cfgErr *config.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "missing", cfgErr.Category)
+	assert.Contains(t, err.Error(), "config_missing")
 }

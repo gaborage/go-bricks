@@ -2,8 +2,10 @@
 
 **Status:** Accepted
 **Date:** 2026-09-29
-**Amends:** [ADR-127](adr_127_resource_plan_rule.md) (its #1853 "Unchanged" consequence, and what
-presence feeds under per-tenant Tenancy)
+**Amends:** [ADR-127](adr_127_resource_plan_rule.md) (its #1853 "Unchanged" consequence, what
+presence feeds under per-tenant Tenancy, its rule table and resolves-on paragraph, its "Unchanged"
+MT per-tenant answers and flags, and the #366 error's root keys),
+[ADR-126](adr_126_resource_plan.md) (the row's two facts, and its unavailable rule)
 
 ## Context
 
@@ -71,6 +73,55 @@ The shared-ledger arm (`outbox.tenancy: shared`) is decided as the next section 
    key and `""` holds no broker, and names the root `messaging.broker.url` or the custom resource
    source's answer for `""`.
 
+### Per-tenant messaging with no tenant broker
+
+1. **The row gains a third fact.** Under multi-tenant `messaging.tenancy: per-tenant` with the
+   built-in store (no `Options.ResourceSource`) and at least one static tenant, config validation
+   allows every tenant to omit `messaging.url` (all or none), and then every `deps.Messaging` call
+   with a tenant in context fails with `config_missing` while the plan read messaging available: the
+   per-tenant-ledger relay published nothing and the #366 gate let declarations through. Each
+   kind's row now carries what the tenant keys hold, beside its Tenancy and what `""` holds. It is
+   decided only for per-tenant messaging on the built-in store with static tenants — absent when
+   none sets `messaging.url`, present otherwise — and is knowable only at runtime everywhere else,
+   so a zero or hand-built row stays inert. The planner is told whether the store is the built-in
+   one by its caller (`opts == nil || opts.ResourceSource == nil`); it never infers it, and never
+   type-asserts the store, since a caller may pass `config.NewTenantStore(cfg)` and add tenants at
+   runtime.
+2. **Unavailable follows either fact.** A kind is unavailable when it resolves on `""` and `""` is
+   known absent, or when it resolves per tenant and the tenant keys are known absent. The `""`
+   conjunct stays, so a multi-tenant database or cache whose `""` is absent is still available, and
+   the `""` fact itself is unchanged: `ControlPlaneMessagingAbsent` keeps reading it alone. In the
+   D4 shape `MessagingConfigured` reads false, a per-tenant-ledger outbox refuses `Init` with the
+   per-tenant text, and the #366 declarations gate refuses too.
+3. **Not vacuous.** Zero static tenants (tenants omitted) is not "no tenant has messaging": that
+   reading would change existing answers, and the per-tenant fan-out guard already refuses it.
+4. **The store's own test.** The predicate is the built-in store's untrimmed `messaging.url == ""`,
+   not the validator's trimmed check: a trimmed test would read false while `deps.Messaging`
+   returns a client with a nil error, and false must stay definitive.
+5. **Error kinds stay.** Per-tenant accessor errors remain the store's `config_missing` or
+   `ErrNoTenantInContext`, neither of which satisfies `config.IsNotConfigured`; the `ModuleDeps`
+   flag contract now says so.
+6. **The #366 text follows the row.** `App.assertMessagingConfiguredIfDeclared` keeps
+   `messaging is not configured` and chooses its advice from the plan's messaging row, never from
+   config: when the row resolves per tenant and its tenant keys are absent it says no static tenant
+   sets `messaging.url` under `messaging.tenancy: per-tenant` and to set
+   `multitenant.tenants.<id>.messaging.url`; otherwise it names `messaging.broker.url`.
+7. **Readiness and startup logs are unchanged.** The messaging readiness status keeps its
+   `per_tenant` label (the probe reads Tenancy only), and the runtime-consumer step still logs that
+   consumers start per tenant on demand.
+8. **Known gaps.** Each keeps `MessagingConfigured` (or `CacheConfigured`) true while every resolve
+   fails, and none is fixed here:
+   - the D4 shape behind a caller static `ResourceSource` whose tenant answers are all absent: the
+     plan cannot enumerate a caller store;
+   - `messaging.tenancy: per-tenant` on the built-in store with zero static tenants, where every
+     tenant resolve fails with `config_missing`;
+   - a tenant fleet whose `messaging.url` values are all whitespace: it reads available while its
+     clients never become ready;
+   - the cache analog, multi-tenant with no tenant cache. D4 covers messaging only because a
+     startup reader refuses on it — the per-tenant-ledger relay and the #366 gate turn an absent
+     broker into rows that never publish — while no startup reader refuses on the cache, which a
+     service may run without by design (`config.IsNotConfigured` on `deps.Cache`).
+
 ## Consequences
 
 - **Now refuses where it booted:** multi-tenant `messaging.tenancy: shared` with no control-plane
@@ -85,8 +136,14 @@ The shared-ledger arm (`outbox.tenancy: shared`) is decided as the next section 
   root messaging block, single-tenant or multi-tenant `messaging.tenancy: shared` with no static
   tenants; and any hand-built `ModuleDeps`, whatever its root config. The dynamic-store exemption
   now comes from the plan instead of `source.type`.
-- **Unchanged:** multi-tenant `messaging.tenancy: per-tenant` for the per-tenant ledger (the plan
-  reads the flag true there, whatever the tenants hold); the shared ledger's refusal of that mode
+- **Per-tenant messaging with no tenant broker, now refuses where it booted:** multi-tenant
+  `messaging.tenancy: per-tenant` on the built-in store with static tenants none of which sets
+  `messaging.url` — a per-tenant-ledger outbox refuses `Init`, and any messaging declarations
+  refuse startup with the per-tenant #366 text. Behind a caller static store the same config
+  still boots.
+- **Unchanged:** multi-tenant `messaging.tenancy: per-tenant` for the per-tenant ledger wherever
+  a tenant sets `messaging.url`, the store is a caller's, or there are no static tenants (the plan
+  reads the flag true there); the shared ledger's refusal of that mode
   with no root broker; the inbox; and every `SetSharedResolvers`, `NewModuleRegistry` and
   `SetMessagingTenancy` signature.
 
@@ -94,6 +151,8 @@ The shared-ledger arm (`outbox.tenancy: shared`) is decided as the next section 
 
 - [ADR-127](adr_127_resource_plan_rule.md): the rule behind `ModuleDeps.MessagingConfigured`
 - [ADR-041](adr_041_shared_ledger_tenancy.md): shared-ledger tenancy
-- [migrations.md](migrations.md) `[C70.7]`–`[C70.10]`
+- [migrations.md](migrations.md) `[C70.7]`–`[C70.11]`
 - `outbox/module.go` (`checkTenancyFanOutGuards`, `checkPerTenantLedgerBroker`,
-  `checkSharedLedgerBroker`), `app/bootstrap.go` (`markConfigured`), `outbox/module_app_test.go`
+  `checkSharedLedgerBroker`), `app/bootstrap.go` (`markConfigured`), `outbox/module_app_test.go`,
+  `app/resource_plan.go` (`tenantKeysOf`, `kindPlan.unavailable`), `app/lifecycle.go`
+  (`assertMessagingConfiguredIfDeclared`)

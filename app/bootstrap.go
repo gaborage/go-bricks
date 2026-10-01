@@ -100,7 +100,8 @@ func closeManagersOnDependencyError(dbManager *database.DbManager, messagingMana
 func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
 	resolver := newFactoryResolverForConfig(b.opts, b.cfg)
 	resourceSource := resolver.ResourceSource(b.cfg)
-	plan, err := planResources(startupCtx, b.cfg, b.opts, resourceSource)
+	builtInStore := b.opts == nil || b.opts.ResourceSource == nil
+	plan, err := planResources(startupCtx, b.cfg, b.opts, resourceSource, builtInStore)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +183,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 }
 
 // markConfigured sets the three flags from the Resource plan: a kind is configured unless it
-// is unavailable (ADR-127). See ModuleDeps.DBConfigured for the contract. It also sets
+// is unavailable (ADR-127, ADR-128). See ModuleDeps.DBConfigured for the contract. It also sets
 // ControlPlaneMessagingAbsent from the messaging row's "" fact alone, never from Tenancy (ADR-128).
 func markConfigured(deps *ModuleDeps, plan resourcePlan) {
 	deps.DBConfigured = !plan.database.unavailable()

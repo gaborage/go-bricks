@@ -9,6 +9,12 @@
 > "planning dials nothing and makes no store lookup" no longer hold: a static store is asked for
 > `""` once per kind at build (still a config lookup, no dial), and a lookup error other than
 > not-configured fails startup.
+>
+> **Amended (2026-09-29, [ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md)):** a
+> row holds three facts, not two: what the tenant keys hold joins Tenancy and presence, decided
+> only for per-tenant messaging on the built-in store with static tenants. Decision 1's "two facts"
+> and the "gate bites the plan" consequence read three facts, and the rule table's `unavailable`
+> row also holds when the kind resolves per tenant and the tenant keys are known absent.
 
 ## Context
 

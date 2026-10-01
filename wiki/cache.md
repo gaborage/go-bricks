@@ -131,11 +131,16 @@ have already resolved, or read `deps.CacheConfigured` when you only need the ans
 `MessagingConfigured`). A flag is false exactly when the kind resolves on the control-plane key
 `""` and the store serving `""` — a static `Options.ResourceSource`, or the built-in one over the
 root blocks — answered not_configured for it at build ([ADR-127](adr_127_resource_plan_rule.md)).
-False is definitive: every call would fail. True means `""` was served at build, a custom
-`CacheConnector` dials the cache, or the answer is per key at runtime — the kind resolves per
-tenant under multi-tenancy, or the store is dynamic. A resolve can still return
-`IsNotConfigured` for the tenant in hand, so the flag never replaces the accessor's error path —
-it only spares you a throwaway resolve when the answer is already no.
+`MessagingConfigured` is also false under `messaging.tenancy: per-tenant` on the built-in store
+when static tenants exist and none sets `messaging.url`
+([ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md)). False is definitive: every
+call would fail. True means `""` was served at build, a custom `CacheConnector` dials the cache,
+or the answer is per key at runtime — the kind resolves per tenant under multi-tenancy, or the
+store is dynamic. A per-tenant resolve fails with the store's `config_missing` or
+`ErrNoTenantInContext`, which do not satisfy `IsNotConfigured`, and a true flag can still hide a
+kind no tenant holds — the cache under multi-tenancy with no tenant cache included — so the flag
+never replaces the accessor's error path; it only spares you a throwaway resolve when the answer
+is already no.
 
 ## Key Operations
 

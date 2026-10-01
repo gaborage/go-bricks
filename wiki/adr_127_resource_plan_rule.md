@@ -12,6 +12,15 @@ and under `messaging.tenancy: shared`), [ADR-126](adr_126_resource_plan.md) (the
 > outbox's #366 broker check for a per-tenant ledger reads `ModuleDeps.MessagingConfigured`, the
 > plan's answer, and for a shared ledger `ModuleDeps.ControlPlaneMessagingAbsent`, the plan's `""`
 > fact, instead of root config; the inbox has no broker check.
+>
+> **Amended (2026-09-29, [ADR-128](adr_128_outbox_broker_check_reads_the_resource_plan.md)):** the
+> rule gains a third fact, what the tenant keys hold, decided only for per-tenant messaging on the
+> built-in store with static tenants. Decision 1's `unavailable` row also holds when the kind
+> resolves per tenant and the tenant keys are known absent: per-tenant messaging on the built-in
+> store, with static tenants none of which sets `messaging.url`, is unavailable, and every other
+> per-tenant row stays available. The #366 error then names `multitenant.tenants.<id>.messaging.url`
+> instead of the root keys. In that shape `MessagingConfigured` reads false and the #366 gate refuses
+> declarations; the readiness label and the consumer-start log are unchanged.
 
 ## Context
 
