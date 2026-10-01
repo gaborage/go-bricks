@@ -331,9 +331,9 @@ jobs:
       TESTCONTAINERS_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       # Every test binary shares the reaper above, and Ryuk exits 10s after its
       # last client disconnects. `go test` starts packages in command-line order,
-      # up to -p at a time; the 28 packages (21 internal/*, jose, keystore,
-      # logger) queued between the database/inbox group and messaging filled the
-      # slots for ~9-10s, so messaging reused a reaper that was already exiting
+      # up to -p at a time; the internal/*, jose, keystore and logger packages
+      # queued between the database/inbox group and messaging filled the slots
+      # for ~9-10s, so messaging reused a reaper that was already exiting
       # ("wait for reaper <id>: context deadline exceeded", or a handshake EOF
       # followed by "RWLayer of container <id> is unexpectedly nil" when Ryuk's
       # exit prune deleted the fresh container). 2m outlives any inter-package
@@ -436,10 +436,11 @@ jobs:
           echo "Running integration tests with testcontainers..."
           # ./migration, the slowest package, is listed first so it starts first;
           # go test drops the duplicate ./... match. The guard fails the job if
-          # the list ever matches a different package set than ./... alone.
+          # the list ever matches a different package set than ./... alone; -e
+          # leaves package load errors to go test's per-package report.
           pkgs=(./migration ./...)
-          want="$(go list -tags=integration ./... | sort -u)"
-          got="$(go list -tags=integration "${pkgs[@]}" | sort -u)"
+          want="$(go list -e -tags=integration ./... | sort -u)"
+          got="$(go list -e -tags=integration "${pkgs[@]}" | sort -u)"
           if [ "$got" != "$want" ]; then
             echo "::error::integration packages (${pkgs[*]}) differ from ./..."
             diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") || true
