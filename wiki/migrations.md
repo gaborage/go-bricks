@@ -11205,8 +11205,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: `git grep -nE '\.StopConsumers\(\)|StopConsumers\(\) *\{|On\("StopConsumers"\)' -- '*.go'`
   — callers of `messaging.Manager.StopConsumers` or `messaging.Registry.StopConsumers`, and types
-  implementing `messaging.RegistryInterface` (hand-written fakes included). Not
-  `streams.Manager.StopConsumers`, which is unchanged.
+  implementing `messaging.RegistryInterface` (hand-written fakes included). The grep is a
+  shortlist: it also matches the unchanged `streams.Manager.StopConsumers()` and the stream-runtime
+  interfaces that mirror it, so check that each hit's receiver is a `messaging.Manager`,
+  `messaging.Registry` or `RegistryInterface` fake before adding a context.
 - scope: `StopConsumers()` becomes `StopConsumers(ctx context.Context)` on `messaging.Manager`,
   `messaging.Registry`, `messaging.RegistryInterface` and `mocks.MockRegistry`; `Close()` is
   unchanged. Behavior: the call used to cancel and return at once. It now waits until every
@@ -11228,8 +11230,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `context.Background()` to accept the 5s cap; add `ctx context.Context` to a
   `RegistryInterface` fake's `StopConsumers`; `mocks.MockRegistry.ExpectStopConsumers()` now
   matches any context. If a handler must stop faster, honor its context's cancellation.
-- verify: build; on shutdown, no `Consumer supervisors still running` WARN unless a handler
-  ignores cancellation.
+- verify: build; on shutdown, no `Consumer supervisors still running` WARN unless some supervisor
+  outlasts the window — a handler that ignores cancellation, or a re-subscribe in flight (a slow
+  `ConsumeFromQueue` or redeclare against a degraded broker) even when every handler honors it.
 - ref: [ADR-029](adr_029_graceful_shutdown_order.md) (2026-09-30 amendment) · #1685 ·
   `messaging/registry.go` (`StopConsumers`, `stopWindow`), `messaging/manager.go`
 
