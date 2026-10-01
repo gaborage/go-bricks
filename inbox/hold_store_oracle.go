@@ -114,7 +114,7 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 		return false, fmt.Errorf("inbox oracle: build park row failed: %w", err)
 	}
 	inserted := true
-	if _, err := tx.Exec(ctx, insert, insertArgs...); err != nil {
+	if _, err := tx.Exec(database.WithExpectedError(ctx, database.IsUniqueViolation), insert, insertArgs...); err != nil {
 		if !database.IsUniqueViolation(err) {
 			return false, fmt.Errorf("inbox oracle: park row failed: %w", err)
 		}
@@ -160,7 +160,7 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 			return nil
 		}
 
-		_, err = tx.Exec(ctx, insert, insertArgs...)
+		_, err = tx.Exec(database.WithExpectedError(ctx, database.IsUniqueViolation), insert, insertArgs...)
 		if err == nil {
 			return nil
 		}

@@ -354,11 +354,23 @@ func (f *fakeAMQP) Close() error { return nil }
 type recordingLogger struct {
 	mu     *sync.Mutex
 	lines  *[]string
+	levels *[]string
 	fields *map[string]int64
 }
 
 func newRecordingLogger() *recordingLogger {
-	return &recordingLogger{mu: &sync.Mutex{}, lines: &[]string{}, fields: &map[string]int64{}}
+	return &recordingLogger{mu: &sync.Mutex{}, lines: &[]string{}, levels: &[]string{}, fields: &map[string]int64{}}
+}
+
+// leveled returns each recorded line as "<level> <message>".
+func (l *recordingLogger) leveled() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(*l.lines))
+	for i, msg := range *l.lines {
+		out[i] = (*l.levels)[i] + " " + msg
+	}
+	return out
 }
 
 func (l *recordingLogger) messages() []string {
@@ -379,21 +391,27 @@ func (l *recordingLogger) numbers() map[string]int64 {
 	return out
 }
 
-func (l *recordingLogger) event() logger.LogEvent                  { return &recordingEvent{owner: l} }
-func (l *recordingLogger) Info() logger.LogEvent                   { return l.event() }
-func (l *recordingLogger) Error() logger.LogEvent                  { return l.event() }
-func (l *recordingLogger) Debug() logger.LogEvent                  { return l.event() }
-func (l *recordingLogger) Warn() logger.LogEvent                   { return l.event() }
-func (l *recordingLogger) Fatal() logger.LogEvent                  { return l.event() }
+func (l *recordingLogger) event(level string) logger.LogEvent {
+	return &recordingEvent{owner: l, level: level}
+}
+func (l *recordingLogger) Info() logger.LogEvent                   { return l.event("INFO") }
+func (l *recordingLogger) Error() logger.LogEvent                  { return l.event("ERROR") }
+func (l *recordingLogger) Debug() logger.LogEvent                  { return l.event("DEBUG") }
+func (l *recordingLogger) Warn() logger.LogEvent                   { return l.event("WARN") }
+func (l *recordingLogger) Fatal() logger.LogEvent                  { return l.event("FATAL") }
 func (l *recordingLogger) WithContext(any) logger.Logger           { return l }
 func (l *recordingLogger) WithFields(map[string]any) logger.Logger { return l }
 
-type recordingEvent struct{ owner *recordingLogger }
+type recordingEvent struct {
+	owner *recordingLogger
+	level string
+}
 
 func (e *recordingEvent) Msg(msg string) {
 	e.owner.mu.Lock()
 	defer e.owner.mu.Unlock()
 	*e.owner.lines = append(*e.owner.lines, msg)
+	*e.owner.levels = append(*e.owner.levels, e.level)
 }
 
 func (e *recordingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
