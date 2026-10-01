@@ -623,7 +623,10 @@ func (m *Manager) StopCleanup() {
 // consume contexts) WITHOUT closing the underlying AMQP connections — Close does that. The
 // framework calls this during shutdown before tearing down modules so it stops delivering
 // fresh messages to modules that are about to shut down. Cancellation propagates to in-flight
-// handlers via their context, but they are not synchronously joined here. Idempotent:
+// handlers via their context, and the call then joins every registry's supervisors under one
+// shared consumerStopBudget, so it returns once no handler is running or the budget ran out.
+// The join happens after consMu is released, so a handler reading ConsumerStates cannot
+// deadlock it. Idempotent:
 // Registry.StopConsumers guards on its active flag, so a subsequent Close (which also stops
 // consumers) is safe. Registry.StopConsumers also halts topology repair, outside its active-flag
 // guard so a publisher-only registry stops too. Unlike Close it does not mark the manager closed
@@ -636,11 +639,40 @@ func (m *Manager) StopCleanup() {
 // restarts; only a direct Registry.StartConsumers caller gets the re-arm.
 func (m *Manager) StopConsumers() {
 	m.consMu.Lock()
-	defer m.consMu.Unlock()
-	for _, entry := range m.consumers {
+	pending := cancelRegistries(m.consumers)
+	m.consMu.Unlock()
+	joinRegistries(pending)
+}
+
+// registryJoin is a canceled registry and the supervisors it still has to join.
+type registryJoin struct {
+	registry    *Registry
+	supervisors *supervisorGroup
+}
+
+// cancelRegistries cancels every entry's consumers and topology repair without waiting.
+// Callers hold consMu.
+func cancelRegistries(consumers map[string]*consumerEntry) []registryJoin {
+	pending := make([]registryJoin, 0, len(consumers))
+	for _, entry := range consumers {
 		if entry.registry != nil {
-			entry.registry.StopConsumers()
+			pending = append(pending, registryJoin{
+				registry:    entry.registry,
+				supervisors: entry.registry.cancelConsumersAndRepair(),
+			})
 		}
+	}
+	return pending
+}
+
+// joinRegistries waits for every canceled registry's supervisors under ONE shared
+// consumerStopBudget, so N registries cost at most one budget rather than N. Callers must
+// not hold consMu.
+func joinRegistries(pending []registryJoin) {
+	ctx, cancel := context.WithTimeout(context.Background(), consumerStopBudget)
+	defer cancel()
+	for _, p := range pending {
+		p.registry.waitSupervisors(ctx, p.supervisors, consumerStopBudget)
 	}
 }
 
@@ -667,19 +699,23 @@ func (m *Manager) Close() error {
 		}
 	}
 
-	// Close all consumers (and their registries)
+	// Close all consumers (and their registries). The clients close only after the
+	// supervisors are joined, so no handler is still running on one; the join runs outside
+	// consMu, which the swap below makes safe: ensureConsumersInternal re-checks closed
+	// under consMu and never sees these entries again.
 	m.consMu.Lock()
-	for key, entry := range m.consumers {
-		if entry.registry != nil {
-			entry.registry.StopConsumers()
-		}
+	consumers := m.consumers
+	pending := cancelRegistries(consumers)
+	m.consumers = make(map[string]*consumerEntry)
+	m.replayedHashs = make(map[string]uint64)
+	m.consMu.Unlock()
+
+	joinRegistries(pending)
+	for key, entry := range consumers {
 		if err := entry.client.Close(); err != nil {
 			allErrs = append(allErrs, fmt.Errorf("error closing consumer for key %s: %w", key, err))
 		}
 	}
-	m.consumers = make(map[string]*consumerEntry)
-	m.replayedHashs = make(map[string]uint64)
-	m.consMu.Unlock()
 
 	if len(allErrs) > 0 {
 		return fmt.Errorf("errors closing messaging clients: %w", errors.Join(allErrs...))
