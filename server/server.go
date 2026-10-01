@@ -208,7 +208,12 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 	// caller-authored whenever the proxy does not overwrite it, and honoring it
 	// would reopen the hole for deployments whose proxy strips XFF.
 	// This discharges the trusted-proxy follow-up recorded in ADR-015 (see ADR-057).
-	e.IPExtractor = echo.ExtractIPFromXFFHeader(trustedProxyOptions(cfg.Server.TrustedProxies, log)...)
+	// The same trust decides Scheme(), which gates the Secure middleware's HSTS header:
+	// X-Forwarded-Proto counts only from a peer the IP walk would also believe, so a
+	// proxy on a public address needs the same server.trustedproxies entry for both.
+	trust := trustedProxyOptions(cfg.Server.TrustedProxies, log)
+	e.IPExtractor = echo.ExtractIPFromXFFHeader(trust...)
+	e.SchemeExtractor = echo.ExtractSchemeFromHeaders(trust...)
 	e.Validator = NewValidator()
 
 	// Initialize server with path configuration
@@ -283,12 +288,14 @@ func httpErrorHandler(cfg *config.Config, log logger.Logger) echo.HTTPErrorHandl
 }
 
 // newProbeEngine builds the probe listener's engine (ADR-120). It shares the application
-// engine's error handler, and its client-IP extractor so the probe access log resolves
-// client.address by the same trusted-proxy walk; it gets its own minimal chain.
+// engine's error handler, its client-IP extractor so the probe access log resolves
+// client.address by the same trusted-proxy walk, and its scheme extractor so the probe
+// chain's HSTS header trusts the same proxies; it gets its own minimal chain.
 func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healthRoute, readyRoute string) *echo.Echo {
 	pe := echo.New()
 	pe.HTTPErrorHandler = app.HTTPErrorHandler
 	pe.IPExtractor = app.IPExtractor
+	pe.SchemeExtractor = app.SchemeExtractor
 	setupProbeMiddlewares(pe, log, cfg, healthRoute, readyRoute)
 	return pe
 }

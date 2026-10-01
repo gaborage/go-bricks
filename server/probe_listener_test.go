@@ -800,6 +800,35 @@ func TestServerProbeEngineSharesTheClientIPExtractor(t *testing.T) {
 	assert.Equal(t, []string{"203.0.113.9"}, actionLogValues(log, "client.address"))
 }
 
+// TestServerProbeEngineSharesTheSchemeExtractor pins that the probe chain's HSTS header trusts
+// X-Forwarded-Proto from the same server.trustedproxies as the application engine; the unlisted
+// case proves the listed one is not vacuous (httptest's 192.0.2.1 peer is public).
+func TestServerProbeEngineSharesTheSchemeExtractor(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		trustedProxies []string
+		wantHSTS       bool
+	}{
+		{name: "unlisted_peer_drops_hsts"},
+		{name: "listed_peer_keeps_hsts", trustedProxies: []string{"192.0.2.0/24"}, wantHSTS: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newProbeTestConfig("")
+			cfg.Server.TrustedProxies = tc.trustedProxies
+			srv := newProbeTestServer(cfg, &testLogger{})
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, healthRoute, http.NoBody)
+			req.RemoteAddr = "192.0.2.1:1234"
+			req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
+			rec := httptest.NewRecorder()
+
+			srv.probeEcho.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tc.wantHSTS, rec.Header().Get(echo.HeaderStrictTransportSecurity) != "")
+		})
+	}
+}
+
 // TestProbeListenerStubRoutesKeepGlobalMiddleware verifies the exemption stays harmless with
 // server.probes.port set: on the application engine the probe paths are 404 stubs (the probe
 // listener serves the real probes), so exempting them reaches no consumer code, while the

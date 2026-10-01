@@ -20,7 +20,7 @@ const (
 	msgRateLimitExceeded = "Rate limit exceeded"
 )
 
-// URL schemes the OTel url.scheme attribute and the application-listener check use.
+// URL schemes the application-listener check uses.
 const (
 	schemeHTTP  = "http"
 	schemeHTTPS = "https"

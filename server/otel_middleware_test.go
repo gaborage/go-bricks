@@ -660,28 +660,44 @@ func TestOTelMiddlewareMetricAttributesErrorType(t *testing.T) {
 }
 
 // TestOTelMiddlewareMetricAttributesProxyScheme verifies that the proxy-aware
-// url.scheme override wins over the library default. Because the callback appends
+// url.scheme override wins over the library default, and that it believes
+// X-Forwarded-Proto only from a trusted peer. Because the callback appends
 // url.scheme after seeding from v.MetricAttributes() (which derives scheme from
 // r.TLS only), attribute.Set's last-value-wins de-duplication yields our value.
 func TestOTelMiddlewareMetricAttributesProxyScheme(t *testing.T) {
-	e, mp := setupTestServerWithMetrics(t)
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{name: "private_peer_is_trusted", remoteAddr: "10.0.0.1:1234", want: schemeHTTPS},
+		// httptest's default peer: public, so a client cannot flip the label.
+		{name: "public_peer_is_ignored", remoteAddr: "192.0.2.1:1234", want: schemeHTTP},
+	}
 
-	e.GET(testAPIEndpoint, func(c *echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e, mp := setupTestServerWithMetrics(t)
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
-	req.Header.Set("X-Forwarded-Proto", "https")
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code)
+			e.GET(testAPIEndpoint, func(c *echo.Context) error {
+				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+			})
 
-	dps := durationDataPoints(t, mp)
-	require.Len(t, dps, 1)
-	attrs := dataPointAttrs(dps[0])
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
+			req.RemoteAddr = tt.remoteAddr
+			req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
 
-	assert.Equal(t, "https", attrs["url.scheme"], "X-Forwarded-Proto=https must override the default scheme")
-	assert.Equal(t, "GET", attrs["http.request.method"], "default attributes must still be present")
+			dps := durationDataPoints(t, mp)
+			require.Len(t, dps, 1)
+			attrs := dataPointAttrs(dps[0])
+
+			assert.Equal(t, tt.want, attrs["url.scheme"])
+			assert.Equal(t, "GET", attrs["http.request.method"], "default attributes must still be present")
+		})
+	}
 }
 
 // TestOTelMiddlewareSpanURLPathIsTheRoutedPath pins the incoming-request span's url.path to the
