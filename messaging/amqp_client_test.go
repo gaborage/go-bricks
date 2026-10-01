@@ -930,12 +930,17 @@ func TestPreparePublishingRegeneratesAMalformedHeaderTraceParent(t *testing.T) {
 func TestPublishBytesAckSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
+	// See TestPublishBasicMethodDelegation.
+	c.connectionTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
 	)
 
-	if err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
+	if err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
 		t.Fatalf("publish ack success expected, got %v", err)
 	}
 }
@@ -1850,6 +1855,11 @@ func TestPublishBytesMultipleRetriesBeforeSuccess(t *testing.T) {
 func TestPublishBytesCustomHeaders(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
+	// See TestPublishBasicMethodDelegation.
+	c.connectionTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -1868,7 +1878,7 @@ func TestPublishBytesCustomHeaders(t *testing.T) {
 		Immediate:  false,
 	}
 
-	err := c.publishBytes(context.Background(), options, []byte("custom-msg"))
+	err := c.publishBytes(ctx, options, []byte("custom-msg"))
 	if err != nil {
 		t.Fatalf("expected success with custom headers, got: %v", err)
 	}
@@ -1909,9 +1919,11 @@ func TestPublishBytesCustomHeaders(t *testing.T) {
 func TestPublishBytesContextTrackingOnSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
+	// See TestPublishBasicMethodDelegation.
+	c.connectionTimeout = 5 * time.Second
 
-	// Create context with counters for tracking
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -2422,13 +2434,22 @@ func TestPublishBytesDeadlineAfterNackWrapsNackCause(t *testing.T) {
 func TestPublishBasicMethodDelegation(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
+	// The helper's 15ms confirm wait loses to a scheduler stall: the attempt times
+	// out, the retry takes a tag nothing acks, and with no attempt ceiling and no
+	// deadline the loop spun until the package timeout (ci-v2 run 35490776633).
+	// 5s widens that window; the ctx bounds the failure path should a stall still
+	// outlast it. See the note in TestPublishBytesUnboundedWhenMaxAttemptsZero.
+	c.connectionTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
 	)
 
 	// Test the basic Publish method delegates to publishBytes
-	err := c.publishBytes(context.Background(), publishOptions{RoutingKey: testQueue}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{RoutingKey: testQueue}, []byte("msg"))
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
