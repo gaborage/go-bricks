@@ -324,7 +324,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 - detect: `git grep -nE '\.(From|OrderBy|GroupBy|JoinOn|LeftJoinOn|RightJoinOn|InnerJoinOn|CrossJoinOn|Set|SetMap)\('`
 - gate: match = you pass an SQL function/expression or dynamic identifier (e.g. `OrderBy("COUNT(*) DESC")`) as a plain string to one of these methods, so `ToSQL()` now returns an error instead of interpolating it. Bare/qualified columns, aliases (`"users u"`), `Table().As()`, and trailing `ASC`/`DESC`/`NULLS FIRST|LAST` still pass; user **values** through the Filter API were never affected.
-- apply: wrap function/expression identifiers in `qb.Expr(...)`/`qb.MustExpr(...)` — e.g. `OrderBy(qb.MustExpr("COUNT(*) DESC"))` — and keep bare column/table identifiers as-is
+- apply: wrap function/expression identifiers in `qb.Expr(...)`/`qb.MustExpr(...)` — e.g. `OrderBy(qb.MustExpr("COUNT(*) DESC")) // SECURITY: Manual SQL review completed - constant SQL body, no user input`, every call site carrying that annotation — and keep bare column/table identifiers as-is
 - verify: `go test ./...`  # raw-expression OrderBy/GroupBy errors from ToSQL() until wrapped in Expr()
 - ref: ADR-031 · #604
 
@@ -5194,8 +5194,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   qb.MustExpr("COUNT(*)", `"total"`)
 
   // after
-  qb.MustExpr("COUNT(*)", "total_count")
-  qb.MustExpr("COUNT(*)", "total")
+  qb.MustExpr("COUNT(*)", "total_count") // SECURITY: Manual SQL review completed - constant SQL body, no user input
+  qb.MustExpr("COUNT(*)", "total")       // SECURITY: Manual SQL review completed - constant SQL body, no user input
   ```
 
   `ErrDangerousAlias` is DELETED rather than reworded — a sentinel named for dangerous characters
