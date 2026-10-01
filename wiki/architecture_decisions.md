@@ -1690,6 +1690,10 @@ fetched fail-fast at construction, refreshed on a ticker and on an unknown `kid`
 rate-floored, detached from the caller's cancellation), and served past its TTL only until
 `staleceiling`, after which every lookup answers `ErrKeySetUnavailable` → 503. Deliberately absent:
 ECDSA, a claim/authorization hook, a `ModuleDeps` slot, and cookie or query-string credentials.
+Amended 2026-09-30 (#1752): `auth.WithDeferredKeySet()`, a `NewVerifier`-only option, lets a
+partially guarded service start through an issuer outage — an outage-class first-fetch failure
+(refused, timeout, temporary DNS, 5xx, 429) leaves a never-fetched key set answering 503 until a
+fetch fills it; configuration-class failures still abort startup, and fail-fast stays the default.
 
 **Key Benefits:** framework bearer verification in three lines instead of a 450-line hand-roll; a
 401/503 split the caller can act on, with an RFC 6750 challenge and a `Retry-After` derived from the

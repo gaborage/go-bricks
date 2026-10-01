@@ -1205,6 +1205,10 @@ Behavior and limits (see [wiki/auth.md](wiki/auth.md) / ADR-109):
   `auth.jwt.telemetry.enduserid: true` records it as the `enduser.id` span attribute. `Principal` elides its subject and claims
   under `%v`/`%s`/`%q`/`%#v` and `json.Marshal` — but NOT under `logger.Interface`/`WithFields`,
   whose reflective filter reads exported fields directly (#1602). Don't hand it one.
+- **Deferred key set** (opt-in, no config key): `auth.NewVerifier(cfg, log, mp, nil, auth.WithDeferredKeySet())`
+  starts through an outage-class first-fetch failure (refused, timeout, temporary DNS, 5xx, 429):
+  guarded routes answer 503 until a fetch fills the set. TLS/NXDOMAIN/other status/bad document
+  still fail construction. `JWKSOption` does not compile at `NewVerifierWithResolver`.
 - **Pinned keys**: `auth.NewVerifierWithResolver(cfg, log, auth.NewStaticKeyResolver(keys))`
   fetches nothing and owns nothing — its `Close` is a no-op. It records no metrics unless given
   `auth.WithMeterProvider(deps.MeterProvider)`, which adds `auth.verification.total` (no `auth.keyset.*`).

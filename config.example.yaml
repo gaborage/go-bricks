@@ -178,7 +178,9 @@ auth:
     audience:                                       # Accepted "aud" values (one must match)
       - "api://orders"
     # The issuer's key set endpoint, fetched by auth.NewVerifier BEFORE it returns:
-    # an unreachable endpoint aborts startup instead of failing every request. No
+    # an unreachable endpoint aborts startup instead of failing every request. The
+    # code-only opt-in auth.WithDeferredKeySet() (no config key) tolerates an issuer
+    # outage there and answers 503 until a fetch fills the key set. No
     # OIDC discovery - name the endpoint. Omit it only when pinning keys in process
     # through auth.NewVerifierWithResolver, which fetches nothing.
     jwksuri: "https://issuer.example.com/.well-known/jwks.json"  # https only, hostname required

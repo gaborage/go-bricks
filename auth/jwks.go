@@ -46,6 +46,13 @@ const (
 
 	// schemeHTTPS is the only scheme a key set hop may use.
 	schemeHTTPS = "https"
+
+	// Deferred key set log fields. Only an outage is ever tolerated, so the
+	// class is a constant.
+	logFieldFailureClass = "failure_class"
+	logFieldFailureStage = "failure_stage"
+	logFieldKeys         = "keys"
+	failureClassOutage   = "outage"
 )
 
 var _ PublicKeyResolver = (*jwksResolver)(nil)
@@ -81,12 +88,16 @@ type jwksResolver struct {
 	keys map[string]*rsa.PublicKey
 	// fetchedAt is when keys was fetched; lastAttempt is when a refresh was last
 	// STARTED, successful or not. The rate floor reads lastAttempt, so a failing
-	// issuer cannot be hammered any harder than a healthy one.
+	// issuer cannot be hammered any harder than a healthy one. A tolerated
+	// construction failure zeroes it: see tolerateInitialFailure.
 	fetchedAt   time.Time
 	lastAttempt time.Time
 	// closed is set by close. It gates every attempt, so a stopped resolver
 	// issues no further requests even when an unknown kid keeps arriving.
 	closed bool
+	// awaitingFirstFill is set when construction tolerated a failed fetch, and
+	// cleared by the first fetch that fills the key set, which it announces.
+	awaitingFirstFill bool
 
 	// now is the clock behind the TTL, stale-ceiling and rate-floor comparisons.
 	// Tests in this package replace it directly, exactly as Verifier does; there
@@ -99,9 +110,11 @@ type jwksResolver struct {
 	unregisterGauges func()
 }
 
-// newJWKSResolver builds the resolver, performs the fail-fast initial fetch and
-// starts the background refresh. Every failure leaves nothing running.
-func newJWKSResolver(cfg *Config, log logger.Logger, m *authMetrics, client httpclient.Client) (*jwksResolver, error) {
+// newJWKSResolver builds the resolver, performs the initial fetch and starts the
+// background refresh. A failed initial fetch is fatal and leaves nothing
+// running, unless deferred is set and the failure is outage-class: the resolver
+// then starts with a never-fetched key set.
+func newJWKSResolver(cfg *Config, log logger.Logger, m *authMetrics, client httpclient.Client, deferred bool) (*jwksResolver, error) {
 	if isNilInterface(client) {
 		built, err := defaultJWKSClient(cfg, log)
 		if err != nil {
@@ -130,13 +143,47 @@ func newJWKSResolver(cfg *Config, log logger.Logger, m *authMetrics, client http
 	ctx, cancel := context.WithTimeout(base, jwksFetchTimeout)
 	defer cancel()
 	if err := r.fetchAndStore(ctx, true); err != nil {
-		baseCancel()
-		return nil, fmt.Errorf("auth: initial issuer key set fetch failed: %w", err)
+		failure := classifyFetchFailure(err)
+		if !deferred || failure.class != fetchFailureOutage {
+			baseCancel()
+			return nil, fmt.Errorf("auth: initial issuer key set fetch failed: %w", err)
+		}
+		r.tolerateInitialFailure(failure)
 	}
 
 	r.unregisterGauges = m.registerKeySetGauges(r, cfg.Issuer)
 	go r.refreshLoop()
 	return r, nil
+}
+
+// tolerateInitialFailure puts the resolver into the never-fetched state after an
+// outage-class construction failure. The failed attempt is forgotten, so the
+// first lookup may fetch at once instead of waiting out the rate floor. The WARN
+// names the failure by class and stage only: the error text can carry the
+// endpoint's address, and the response body is never logged.
+func (r *jwksResolver) tolerateInitialFailure(failure fetchFailure) {
+	r.mu.Lock()
+	r.lastAttempt = time.Time{}
+	r.awaitingFirstFill = true
+	r.mu.Unlock()
+	if r.log == nil {
+		return
+	}
+	r.log.Warn().
+		Str(logFieldFailureClass, failureClassOutage).
+		Str(logFieldFailureStage, failure.stage).
+		Msg("auth: issuer key set fetch failed at startup; verifier starts without it")
+}
+
+// announceFirstFill logs the first fetch that fills a key set construction
+// started without.
+func (r *jwksResolver) announceFirstFill(keys int) {
+	if r.log == nil {
+		return
+	}
+	r.log.Info().
+		Int(logFieldKeys, keys).
+		Msg("auth: issuer key set fetched; deferred key set filled")
 }
 
 // defaultJWKSClient builds the httpclient used when the caller supplies none.
@@ -260,7 +307,8 @@ func isOversizedBody(err error) bool {
 // auth.jwt.jwks.minrefreshinterval and coalesced across concurrent callers — and
 // the lookup is retried against the result. A key set past its stale ceiling is
 // no key set at all: every lookup then reports ErrKeySetUnavailable, and there
-// is deliberately no path that accepts a credential it cannot verify.
+// is deliberately no path that accepts a credential it cannot verify. So is a
+// key set no fetch has filled yet, which WithDeferredKeySet allows.
 //
 // A CLOSED resolver still answers from the key set it last held, until that set
 // passes its stale ceiling; it simply never fetches again.
@@ -398,7 +446,12 @@ func (r *jwksResolver) fetchAndStore(ctx context.Context, force bool) error {
 	r.mu.Lock()
 	r.keys = outcome.keys
 	r.fetchedAt = r.now()
+	firstFill := r.awaitingFirstFill
+	r.awaitingFirstFill = false
 	r.mu.Unlock()
+	if firstFill {
+		r.announceFirstFill(len(outcome.keys))
+	}
 	return nil
 }
 

@@ -136,6 +136,23 @@ func (m *Module) Shutdown() error {
 }
 ```
 
+**Deferred key set.** Where only some routes are guarded, an issuer outage at deploy would
+otherwise abort startup and take the unguarded routes down with it. Opt in per verifier —
+there is no config key:
+
+```go
+v, err := auth.NewVerifier(cfg, deps.Logger, deps.MeterProvider, nil, auth.WithDeferredKeySet())
+```
+
+An **outage-class** first-fetch failure — a refused connection, any timeout, a temporary DNS
+failure, a 5xx or a 429 — then returns a working verifier with a nil error, whose guarded
+routes answer 503 until a fetch fills the key set (see
+[Key-set lifecycle](#key-set-lifecycle)). A **configuration-class** failure still returns the
+error: a TLS verification failure, a host that does not exist (NXDOMAIN), any other non-200, a
+refused redirect, or an oversized, unparseable or empty document. Anything unrecognized counts
+as configuration. `WithDeferredKeySet` returns a `JWKSOption`, which `NewVerifierWithResolver`
+does not accept, so passing it there is a compile error.
+
 **Pinned keys instead of JWKS.** `auth.NewVerifierWithResolver(cfg, log, resolver)` takes any
 `auth.PublicKeyResolver` — `auth.NewStaticKeyResolver(map[string]*rsa.PublicKey{...})` ships
 for out-of-band keys. That verifier fetches nothing, leaves the whole `auth.jwt.jwks.*` group
@@ -215,8 +232,23 @@ bare quote would close the parameter.
 
 ## Key-set lifecycle
 
-- **Fail-fast first fetch.** `NewVerifier` fetches before it returns; a failure is an error,
-  and nothing is left running.
+- **Fail-fast first fetch.** `NewVerifier` fetches before it returns (10s timeout, no retry);
+  a failure is an error, and nothing is left running. With `auth.WithDeferredKeySet()`, an
+  outage-class failure is tolerated instead, and the key set goes through three states:
+  1. **Never-fetched.** Construction logs one WARN,
+     `auth: issuer key set fetch failed at startup; verifier starts without it`, with
+     `failure_class="outage"` and `failure_stage` one of `status`, `connect`, `timeout`,
+     `dns` — never the error text or the response body. Every lookup answers
+     `ErrKeySetUnavailable`, so `auth.Middleware` returns 503 with
+     `Retry-After: <minrefreshinterval>`; never a 401 for an unknown `kid`. The failed
+     construction attempt does not start the rate floor, so the first lookup may fetch at
+     once; the floor applies from that attempt on. The refresh ticker runs on its usual
+     cadence, the key-set gauges are registered but emit no series, and `Close` stops it all
+     as usual.
+  2. **First fill.** The first successful fetch — on demand or from the ticker — logs one
+     INFO, `auth: issuer key set fetched; deferred key set filled`, with `keys=<count>`.
+  3. **Normal.** From then on the verifier behaves exactly like one whose construction fetch
+     succeeded: stale ceiling, refresh and rate floor unchanged. Neither log line repeats.
 - **Background refresh.** A ticker at `max(ttl/2, minrefreshinterval)` refreshes ahead of the
   TTL, taking the same singleflight path as an on-demand refresh, so a tick landing on an
   in-flight fetch joins it instead of opening a second connection.
@@ -306,7 +338,18 @@ Exactly one `auth.verification.total` observation is recorded per `Verify` call,
 `missing_credential` one for a request with no usable `Authorization` header. The gauges are
 registered only on the JWKS path and observe nothing before the first successful fetch.
 `error.type` names the **stage** that failed, never the underlying error text, so the
-dimension stays low-cardinality.
+dimension stays low-cardinality. A failed construction fetch is counted as a `failure` too,
+including one `auth.WithDeferredKeySet()` tolerates; the outage/configuration class is not a
+metric attribute and appears only in the construction WARN.
+
+**Alerting on a deferred key set.** A verifier that started without its key set is otherwise
+healthy-looking, so alert on the counters:
+
+| Signal | Meaning |
+| --- | --- |
+| `auth.keyset.refresh.total{auth.result="failure"}` increasing with no `auth.result="success"` in the window | The issuer is still unreachable. Fires without traffic, since the ticker keeps trying. |
+| `auth.verification.total{auth.result="key_set_unavailable"}` above zero | Guarded routes are answering 503 to callers right now. |
+| No `auth.keyset.age` series for the issuer | The key set was never filled (the gauges emit nothing before the first success). |
 
 ## Security
 
