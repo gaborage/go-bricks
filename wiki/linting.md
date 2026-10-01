@@ -318,9 +318,9 @@ appears that does not:
 
 | tag | read by |
 | --- | --- |
-| `integration` | `run.build-tags` above (`make lint`, both CI lint jobs) and gosec invocation 1 |
+| `integration` | `run.build-tags` above (`make lint`, CI's lint passes for both modules) and gosec invocation 1 |
 | `!integration` | the same passes — the untagged side is the default build |
-| `race` | `make lint-race` (a second golangci invocation, also a step in both CI lint jobs) and gosec invocation 2 |
+| `race` | `make lint-race` (a second golangci invocation, also a CI step for both modules) and gosec invocation 2 |
 | `!race` | the default build, read by every pass that does not name `race` |
 | `windows` | CI's `GOOS: windows` golangci pass (**CI-only** — `make lint` does not cross-lint) and gosec invocation 3 |
 | `!windows` | the default build on a non-Windows host |
