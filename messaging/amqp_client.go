@@ -1269,6 +1269,17 @@ func (c *AMQPClientImpl) BindQueue(ctx context.Context, binding *BindingDeclarat
 	return channel.QueueBind(binding.Queue, binding.RoutingKey, binding.Exchange, binding.NoWait, toTable(binding.Args))
 }
 
+// isClosed reports whether Close has begun. Close closes c.done under c.m, so
+// a true answer here is final; a nil done (hand-built test client) reads open.
+func (c *AMQPClientImpl) isClosed() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // Close gracefully shuts down the AMQP client.
 func (c *AMQPClientImpl) Close() error {
 	c.m.Lock()
@@ -1340,6 +1351,10 @@ func (c *AMQPClientImpl) handleReconnect() {
 
 		conn, err := c.connect()
 		if err != nil {
+			if c.isClosed() {
+				c.log.Debug().Err(err).Msg("AMQP connect ended after client close")
+				return
+			}
 			attempt++
 			delay := computeBackoff(c.reconnectDelay, c.reconnectMaxDelay, attempt)
 			c.log.Error().Err(err).
@@ -1400,8 +1415,13 @@ func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Store as interface and also return underlying real connection when available
-	c.changeConnection(ac)
+	// Store as interface and also return underlying real connection when available.
+	// A dial that finished after Close must not be installed: Close already ran
+	// its teardown, so nothing else would ever close this connection.
+	if !c.changeConnection(ac) {
+		_ = ac.Close()
+		return nil, errAlreadyClosed
+	}
 
 	tracking.RecordConnectionEvent("create", nil)
 
@@ -1413,22 +1433,35 @@ func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	return nil, nil
 }
 
+// reInitConnection wraps a real connection into the adapter, falling back to the
+// installed one when none is given.
+func (c *AMQPClientImpl) reInitConnection(conn *amqp.Connection) amqpConnection {
+	if conn != nil {
+		return realConnection{c: conn}
+	}
+	return c.connection
+}
+
 // handleReInit manages channel initialization and reinitialization.
 func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 	for {
+		// The select below picks at random among ready cases, so a close
+		// notification can win over done after Close; start no init then.
+		if c.isClosed() {
+			return true
+		}
 		c.m.Lock()
 		c.isReady = false
 		c.m.Unlock()
 
-		// Wrap real connection into adapter if needed
-		var ac amqpConnection
-		if conn != nil {
-			ac = realConnection{c: conn}
-		} else {
-			ac = c.connection
-		}
-		err := c.init(ac)
+		err := c.init(c.reInitConnection(conn))
 		if err != nil {
+			// Any init error once Close has begun is shutdown noise, whatever
+			// its value; the same error on an open client is a real failure.
+			if c.isClosed() {
+				c.log.Debug().Err(err).Msg("AMQP channel init ended after client close")
+				return true
+			}
 			c.log.Error().Err(err).Msg("Failed to initialize AMQP channel, retrying...")
 
 			select {
@@ -1469,7 +1502,10 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 		return err
 	}
 
-	c.changeChannel(ch)
+	if !c.changeChannel(ch) {
+		_ = ch.Close()
+		return errAlreadyClosed
+	}
 	c.markReady()
 
 	tracking.RecordChannelEvent("create", nil)
@@ -1480,14 +1516,20 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 
 // changeConnection updates the connection and sets up close notifications.
 // The connection/notify fields are written under c.m so a concurrent Close
-// (which reads c.connection under the same lock) cannot race this write.
-func (c *AMQPClientImpl) changeConnection(connection amqpConnection) {
+// (which reads c.connection under the same lock) cannot race this write. It
+// reports false, installing nothing, when Close has already run.
+func (c *AMQPClientImpl) changeConnection(connection amqpConnection) bool {
 	c.m.Lock()
+	if c.closed {
+		c.m.Unlock()
+		return false
+	}
 	c.connection = connection
 	c.notifyConnClose = make(chan *amqp.Error, 1)
 	notify := c.notifyConnClose
 	c.m.Unlock()
 	connection.NotifyClose(notify)
+	return true
 }
 
 // confirmKey scopes a pending-publish entry to a single channel incarnation.
@@ -1506,8 +1548,9 @@ type confirmKey struct {
 // listeners, and starts a fresh dispatcher pinned to the new generation.
 // Acquires publishSerial unconditionally — this is the
 // reconnect path, with no caller deadline — so it is mutually exclusive with
-// in-flight publish-handshake critical sections.
-func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
+// in-flight publish-handshake critical sections. It reports false, installing
+// nothing, when Close has already run.
+func (c *AMQPClientImpl) changeChannel(channel amqpChannel) bool {
 	c.publishSerial.acquireUncond()
 	defer c.publishSerial.release()
 
@@ -1518,6 +1561,10 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	// Close and the c.m-guarded readers cannot race this write. Lock order is
 	// publishSerial → c.m, matching publishBytes.
 	c.m.Lock()
+	if c.closed {
+		c.m.Unlock()
+		return false
+	}
 	c.generation++
 	newGen := c.generation
 	c.channel = channel
@@ -1539,6 +1586,7 @@ func (c *AMQPClientImpl) changeChannel(channel amqpChannel) {
 	// dispatcher, which is still running until its source channel closes)
 	// route only to entries of THAT generation — never to ours.
 	go c.dispatchConfirms(c.notifyConfirm, returns, newGen)
+	return true
 }
 
 // drainPendingPublishesWithNack signals every pending publish from the given
