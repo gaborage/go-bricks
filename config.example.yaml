@@ -41,7 +41,7 @@ server:
   #   keyvalue: ""
   #   minversion: "1.2"     # "" or "1.2" (floor, default); "1.3" opts up
   #   clientauth: ""        # Client-cert verification (ADR-130): "" off | verify (if given) | require-verify (mandatory)
-  #   clientcafile: /etc/tls/partner-ca.pem   # Client-CA bundle: file path OR clientcavalue (exactly one) when clientauth is set
+  #   clientcafile: ""      # Client-CA bundle (e.g. /etc/tls/partner-ca.pem): file path OR clientcavalue (exactly one); leave both empty while clientauth is ""
   #   clientcavalue: ""
   # server.forwardedclientcert.* parses ALB verify-mode X-Amzn-Mtls-Clientcert-* headers
   # into a typed identity (ADR-043); see wiki/forwarded_client_cert.md for the trust model.

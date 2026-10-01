@@ -49,9 +49,16 @@ way to demand or verify a client certificate: the framework owns the listener's 
    client's certificate in a header is a legitimate and stronger posture, provided the proxy sets
    the forwarded identity from the end-client certificate it verified and overwrites or strips any
    caller-supplied copy: the mTLS leaf proves which proxy made the hop, not the header's content.
-   The mTLS leaf identifies the hop; the forwarded certificate identifies the end client; both are
-   identification. Under that posture the leaf-validation hook sees the proxy's certificate, not the
-   end client's, and a SAN or OU allowlist written for partners would reject the proxy.
+   It proves the hop only for a connection that presented a verified chain: under `verify` a
+   certless caller completes the handshake without reaching the hook and, if the application is
+   directly reachable, can forge the forwarded headers. The composed posture therefore requires
+   `require-verify` or proxy-only ingress (closed security groups, a single ingress path — ADR-043's
+   trust model); under `verify` without it, the forwarded identity is not trusted. Since decision 7
+   refuses `require-verify` beside the probe listener, a deployment running it relies on
+   proxy-only ingress. The mTLS leaf identifies the hop; the forwarded certificate identifies the
+   end client; both are identification. Under that posture the leaf-validation hook sees the
+   proxy's certificate, not the end client's, and a SAN or OU allowlist written for partners would
+   reject the proxy.
 7. **The probe listener refuses only `require-verify`.** The internal probe listener's
    application-listener check (ADR-120) dials with no client certificate. Under `require-verify`
    every such handshake fails and `/ready` would stay 503 forever, so `require-verify` beside
