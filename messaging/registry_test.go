@@ -3028,16 +3028,18 @@ func (m *reconnectingMockClient) channelGeneration() (generation uint64, ready b
 }
 
 // awaitGenerationReads waits until the registry has read client's channel
-// generation at least n times. A pass that meets the generation guard reads once,
-// a refused pass never, a completed replay more than once (one cut short by the
-// halt or its own ctx reads once). Before the first StopConsumers only
-// DeclareInfrastructure's seed and the startup observer's first pass read it —
-// the first subscribe calls ConsumeFromQueue directly and only a
-// re-subscribe runs redeclareTopology — so >= 2 means that pass met the guard and
-// returned; a new read before the stop would satisfy the wait early and reopen
-// the race. Unordered, the halt can land first and the refused pass take
-// redeclareMu ahead of StartConsumers' re-arm, owing a repair that clears the
-// ledger, so the re-armed observer replays the generation the startup declared.
+// generation at least n times. A pass that meets the generation guard reads
+// once, a refused pass never, and a replaying pass once per replay plus a
+// closing guard-met read, unless the halt or its own ctx ends the loop first
+// (then once per replay, whether or not the last one completed). Before the
+// first StopConsumers only DeclareInfrastructure's seed and the startup
+// observer's first pass read it — the first subscribe calls ConsumeFromQueue
+// directly and only a re-subscribe runs redeclareTopology — so >= 2 means that
+// pass met the guard and returned; a new read before the stop would satisfy the
+// wait early and reopen the race. Unordered, the halt can land first and the
+// refused pass take redeclareMu ahead of StartConsumers' re-arm, owing a repair
+// that clears the ledger, so the re-armed observer replays the generation the
+// startup declared.
 func awaitGenerationReads(t *testing.T, client *reconnectingMockClient, n int) {
 	t.Helper()
 	require.Eventually(t, func() bool {
