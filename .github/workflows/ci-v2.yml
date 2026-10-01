@@ -194,7 +194,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-      fail-fast: false
     runs-on: ${{ matrix.os }}
 
     # An alias copies this list exactly (GitHub has no `<<:` merge keys), so a
@@ -319,7 +318,7 @@ jobs:
           retention-days: 1
 
   # framework-test's Windows leg, split out so framework-merge-coverage does not
-  # wait on a leg that uploads no coverage. Same gate, same steps; ci-ok needs it.
+  # wait on a leg that uploads no coverage.
   framework-test-windows:
     permissions:
       contents: read
@@ -329,7 +328,6 @@ jobs:
     strategy:
       matrix:
         os: [windows-latest]
-      fail-fast: false
     runs-on: ${{ matrix.os }}
 
     steps: *framework-test-steps
@@ -768,7 +766,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-      fail-fast: false
     runs-on: ${{ matrix.os }}
     defaults: &migrate-tool-defaults
       run:
@@ -840,7 +837,6 @@ jobs:
     strategy:
       matrix:
         os: [windows-latest]
-      fail-fast: false
     runs-on: ${{ matrix.os }}
     defaults: *migrate-tool-defaults
 
@@ -1120,21 +1116,17 @@ jobs:
         with:
           persist-credentials: false
 
-      # ci-ok enforces only the jobs it needs, so a job missing from that list
-      # goes unenforced. The docs filter lists this file, so this runs on every
-      # edit of it. Schedule-only jobs belong in the grep -vxE exclusion.
+      # The docs filter lists this file, so this runs on every edit of it.
+      # Schedule-only jobs belong in the grep -vxE exclusion.
       - name: Assert every job except ci-ok and vuln-weekly is a ci-ok need
         run: |
           set -euo pipefail
           export LC_ALL=C
           wf=.github/workflows/ci-v2.yml
-          # Match the key alone: a job key may carry an anchor or a comment.
-          jobs=$(awk '/^jobs:/{j=1;next} j && /^  [A-Za-z0-9_-]+:/{sub(/^  /,"");sub(/:.*/,"");print}' "$wf" \
-            | grep -vxE 'ci-ok|vuln-weekly' | sort)
+          jobs=$(yq '.jobs | keys | .[]' "$wf" \
+            | { grep -vxE 'ci-ok|vuln-weekly' || [ $? -eq 1 ]; } | sort)
           [ -n "$jobs" ] || { echo "::error::could not read the job ids"; exit 1; }
-          needs=$(awk '/^  ci-ok:/{c=1;next} c && /^  [A-Za-z0-9_-]+:/{c=0} c && /^    needs:/{n=1;next}
-                       n && /^[[:space:]]*(#|$)/{next}
-                       n && /^      - /{sub(/^      - /,"");sub(/[[:space:]]*(#.*)?$/,"");print;next} n{n=0}' "$wf" | sort)
+          needs=$(yq '.jobs["ci-ok"].needs[]' "$wf" | sort)
           [ -n "$needs" ] || { echo "::error::could not read ci-ok needs"; exit 1; }
           missing=$(comm -23 <(printf '%s\n' "$jobs") <(printf '%s\n' "$needs"))
           [ -z "$missing" ] || { echo "::error::jobs missing from ci-ok needs: $missing"; exit 1; }
@@ -1470,6 +1462,9 @@ jobs:
           set -euo pipefail
           echo "Aggregated job results:"
           printf '%s\n' "$NEEDS_JSON"
+          # lint-docs runs the needs guard, which cannot catch its own removal.
+          printf '%s' "$NEEDS_JSON" | jq -e 'has("lint-docs")' >/dev/null \
+            || { echo "::error::lint-docs (it runs the ci-ok needs guard) is missing from ci-ok needs"; exit 1; }
           # Fail only on 'failure'/'cancelled'. 'success' and 'skipped' pass —
           # path-filtered jobs legitimately skip on doc-only PRs.
           failed="$(printf '%s' "$NEEDS_JSON" \
