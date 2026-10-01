@@ -47,6 +47,9 @@ type jwksKey struct {
 	E      string   `json:"e"`
 }
 
+// errJWKSNotJSON reports a key set document that does not decode as JSON.
+var errJWKSNotJSON = errors.New("auth: jwks document is not valid json")
+
 // parseJWKS decodes the document and keeps the RSA signing keys. Anything else —
 // a non-RSA kty, an encryption-only key, a key whose "key_ops" withholds
 // "verify", a key with no kid, an undecodable or
@@ -59,7 +62,7 @@ type jwksKey struct {
 func parseJWKS(body []byte) (keys map[string]*rsa.PublicKey, dropped []string, err error) {
 	var doc jwksDocument
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return nil, nil, errors.New("auth: jwks document is not valid json")
+		return nil, nil, errJWKSNotJSON
 	}
 
 	keys = make(map[string]*rsa.PublicKey, len(doc.Keys))
