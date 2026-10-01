@@ -154,7 +154,7 @@ instead of meeting a nil at the first delivery:
 
 ```go
 if deps.Inbox == nil {
-    return errors.New("orders: register inbox.NewModule() before this module")
+    return errors.New("orders: set inbox.enabled=true and register inbox.NewModule() before this module")
 }
 m.inbox = deps.Inbox
 ```
