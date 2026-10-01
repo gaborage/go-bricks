@@ -182,6 +182,15 @@ type InboxProcessor interface {
 	// redelivery of an already-processed key short-circuits (fn is not run) and
 	// returns nil. The tenant is resolved from ctx. Take key from
 	// messaging.Metadata.DedupKey, or build one with messaging.WireDedupKey.
+	//
+	// Deduplication is per service, not per consumer: two consumers in one
+	// service that receive the same event id (fan-out to two queues) collide on
+	// the (tenant, key) row, so only the first runs fn and the other is skipped
+	// and acknowledged (#1362). For a wire key, compose a per-consumer id with
+	// messaging.WireDedupKey("<consumer>_" + id), still within [A-Za-z0-9_-] and
+	// at most 128 bytes. A sealed key has no safe workaround: rebuilding it as a
+	// wire key (for example from its jti) reopens the shared-ledger suppression
+	// that ADR-097 section 4 closes.
 	ProcessOnce(ctx context.Context, key messaging.DedupKey, fn func(ctx context.Context, tx dbtypes.Tx) error) error
 }
 
