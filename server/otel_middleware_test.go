@@ -671,7 +671,7 @@ func TestOTelMiddlewareMetricAttributesProxyScheme(t *testing.T) {
 		want       string
 	}{
 		{name: "private_peer_is_trusted", remoteAddr: "10.0.0.1:1234", want: schemeHTTPS},
-		// httptest's default peer: public, so a client cannot flip the label.
+		// A public peer (httptest's default address), so a client cannot flip the label.
 		{name: "public_peer_is_ignored", remoteAddr: "192.0.2.1:1234", want: schemeHTTP},
 	}
 

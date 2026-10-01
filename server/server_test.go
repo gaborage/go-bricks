@@ -1267,6 +1267,15 @@ func extractClientIP(srv *Server, remoteAddr, headerName, headerValue string) st
 	return srv.echo.IPExtractor(req)
 }
 
+// extractScheme runs the installed scheme extractor against a synthetic request carrying
+// X-Forwarded-Proto: https from remoteAddr (set explicitly, as in extractClientIP).
+func extractScheme(srv *Server, remoteAddr string) string {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
+	return srv.echo.SchemeExtractor(req)
+}
+
 // TestServerIPExtractorIgnoresForgedXFFFromUntrustedPeer pins the finding this
 // change exists to close: a caller talking straight to the service cannot move
 // its rate-limit bucket by writing X-Forwarded-For.
@@ -1376,11 +1385,8 @@ func TestServerSchemeExtractorTrustsForwardedProtoLikeTheIPWalk(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newIPExtractorServer(tt.trustedProxies...)
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
-			req.RemoteAddr = tt.remoteAddr
-			req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
 
-			assert.Equal(t, tt.want, srv.echo.SchemeExtractor(req))
+			assert.Equal(t, tt.want, extractScheme(srv, tt.remoteAddr))
 		})
 	}
 }
