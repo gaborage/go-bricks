@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.70.0](https://github.com/gaborage/go-bricks/compare/v0.69.0...v0.70.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** instrument HTTP with echo-otel/v5 ([#1923](https://github.com/gaborage/go-bricks/issues/1923))
+* **app:** mark per-tenant messaging with no tenant broker unavailable ([#1876](https://github.com/gaborage/go-bricks/issues/1876))
+* **messaging:** stop consumers within the caller's context ([#1896](https://github.com/gaborage/go-bricks/issues/1896))
+* **messaging:** return the jti Publisher.Seal signs ([#1907](https://github.com/gaborage/go-bricks/issues/1907))
+* **outbox:** decide the shared ledger's broker check from the plan ([#1875](https://github.com/gaborage/go-bricks/issues/1875))
+* **httpclient:** refuse a credentialed https-to-http redirect client-wide ([#1889](https://github.com/gaborage/go-bricks/issues/1889))
+* **httpclient:** make a JOSE-rejected 2xx terminal and keep its type ([#1888](https://github.com/gaborage/go-bricks/issues/1888))
+* **outbox:** decide the per-tenant ledger's broker check from the plan ([#1871](https://github.com/gaborage/go-bricks/issues/1871))
+* **app:** decide resource availability from what the control-plane key holds ([#1864](https://github.com/gaborage/go-bricks/issues/1864))
+* **app:** require source.type to agree with the resource source ([#1859](https://github.com/gaborage/go-bricks/issues/1859))
+
+### Added
+
+* **auth:** let NewVerifier start without its issuer key set ([#1890](https://github.com/gaborage/go-bricks/issues/1890)) ([0db7d96](https://github.com/gaborage/go-bricks/commit/0db7d96cae5a0909e77f7b634f59df6bd739bf03))
+* **auth:** record verification metrics on resolver-backed verifiers ([#1886](https://github.com/gaborage/go-bricks/issues/1886)) ([d96f02c](https://github.com/gaborage/go-bricks/commit/d96f02c76d7031f69ea50bea7dcd4a691fe00adc))
+* **database:** let a caller declare a driver error as expected ([#1906](https://github.com/gaborage/go-bricks/issues/1906)) ([39453a7](https://github.com/gaborage/go-bricks/commit/39453a7b56931dc4b8ae9b335b7b336d83854631))
+* **jose:** verify a sealed body without decrypting it ([#1893](https://github.com/gaborage/go-bricks/issues/1893)) ([b2fc442](https://github.com/gaborage/go-bricks/commit/b2fc4428e4fce3b0a69298715513a721f5a0a735))
+* **messaging:** republish stored sealed bytes through a verified door ([#1908](https://github.com/gaborage/go-bricks/issues/1908)) ([ea56f26](https://github.com/gaborage/go-bricks/commit/ea56f260683551f3d859c185dabed461db0e2e27))
+* **server:** run a leaf-validation hook on app-terminated mTLS ([#1891](https://github.com/gaborage/go-bricks/issues/1891)) ([b4c86bc](https://github.com/gaborage/go-bricks/commit/b4c86bc53823b04f57d7adde7990a159e2050864))
+* **server:** verify client certificates on the app-terminated listener ([#1885](https://github.com/gaborage/go-bricks/issues/1885)) ([4a03e08](https://github.com/gaborage/go-bricks/commit/4a03e0822f3c605730a5b59db9b061e8927ca132))
+
+
+### Fixed
+
+* **app:** decide resource availability from what the control-plane key holds ([#1864](https://github.com/gaborage/go-bricks/issues/1864)) ([8a6eb47](https://github.com/gaborage/go-bricks/commit/8a6eb477538d80ddf9efd78db2f77cf72de67516))
+* **app:** mark per-tenant messaging with no tenant broker unavailable ([#1876](https://github.com/gaborage/go-bricks/issues/1876)) ([a225b45](https://github.com/gaborage/go-bricks/commit/a225b45885a6086683a6be3283e6deea7c8ce930))
+* **app:** require source.type to agree with the resource source ([#1859](https://github.com/gaborage/go-bricks/issues/1859)) ([e33090c](https://github.com/gaborage/go-bricks/commit/e33090c356100bcb4807c3688a7b9c910f1f503e))
+* **httpclient:** make a JOSE-rejected 2xx terminal and keep its type ([#1888](https://github.com/gaborage/go-bricks/issues/1888)) ([ae89b84](https://github.com/gaborage/go-bricks/commit/ae89b8447aaf89ce1d3a47ce99320c9d351c8a23))
+* **httpclient:** refuse a credentialed https-to-http redirect client-wide ([#1889](https://github.com/gaborage/go-bricks/issues/1889)) ([4baa4f2](https://github.com/gaborage/go-bricks/commit/4baa4f2f5b93b399e083941f6ecdac0e41eba53e))
+* **messaging:** keep the reconnect goroutine quiet after Close ([#1912](https://github.com/gaborage/go-bricks/issues/1912)) ([c6c2ff7](https://github.com/gaborage/go-bricks/commit/c6c2ff7211b25ccd612b197ba0ee1c433d3eeebb))
+* **messaging:** return the jti Publisher.Seal signs ([#1907](https://github.com/gaborage/go-bricks/issues/1907)) ([56794b4](https://github.com/gaborage/go-bricks/commit/56794b49f06584a2211e9cf166833ab4870ce36b))
+* **messaging:** stop consumers within the caller's context ([#1896](https://github.com/gaborage/go-bricks/issues/1896)) ([558b921](https://github.com/gaborage/go-bricks/commit/558b9215c1afb36999c79c67569ef28a847c3d03))
+* **outbox:** decide the per-tenant ledger's broker check from the plan ([#1871](https://github.com/gaborage/go-bricks/issues/1871)) ([266bd37](https://github.com/gaborage/go-bricks/commit/266bd3746d929dbd8c0d8656679deaf167786dd7))
+* **outbox:** decide the shared ledger's broker check from the plan ([#1875](https://github.com/gaborage/go-bricks/issues/1875)) ([467549e](https://github.com/gaborage/go-bricks/commit/467549e58e1d86228c49edec9184c890d7662062))
+* **outbox:** declare the leader lock and inbox duplicates expected ([#1910](https://github.com/gaborage/go-bricks/issues/1910)) ([209eef5](https://github.com/gaborage/go-bricks/commit/209eef5560e51ef4dca30815a340b8bad146e22f))
+* **server:** instrument HTTP with echo-otel/v5 ([#1923](https://github.com/gaborage/go-bricks/issues/1923)) ([4f3c26a](https://github.com/gaborage/go-bricks/commit/4f3c26a818501985590268077c478d5ccd8d2cac))
+* **server:** trust X-Forwarded-Proto only from server.trustedproxies ([#1922](https://github.com/gaborage/go-bricks/issues/1922)) ([cf586e2](https://github.com/gaborage/go-bricks/commit/cf586e2db6c00e70ea3e5bcd9710d8e42527a16a))
+
+
+### Changed
+
+* **app:** decide each resource kind's tenancy and presence once ([#1860](https://github.com/gaborage/go-bricks/issues/1860)) ([08ac8df](https://github.com/gaborage/go-bricks/commit/08ac8df2d1c765cefe4d9e7733f5eb96e24d5056))
+* **app:** read database and cache decisions from the resource plan ([#1862](https://github.com/gaborage/go-bricks/issues/1862)) ([e4faefd](https://github.com/gaborage/go-bricks/commit/e4faefdbbbfb9e6b46e665ac7415d33daedd413f))
+* **app:** read messaging, streams and sealing decisions from the resource plan ([#1863](https://github.com/gaborage/go-bricks/issues/1863)) ([a44c1a3](https://github.com/gaborage/go-bricks/commit/a44c1a3126a181af292c9037fa05b239cec0592f))
+* **auth:** keep the jwks fetch failure's status and cause ([#1887](https://github.com/gaborage/go-bricks/issues/1887)) ([bea57bd](https://github.com/gaborage/go-bricks/commit/bea57bd862c374305b5a837f98ae81e55e637e4e))
+* **messaging:** join a registry's consumer supervisors on stop ([#1894](https://github.com/gaborage/go-bricks/issues/1894)) ([411d027](https://github.com/gaborage/go-bricks/commit/411d027544934b10f6ddc5b340adfb2cae8c76f6))
+* **messaging:** join the manager's consumers before closing clients ([#1895](https://github.com/gaborage/go-bricks/issues/1895)) ([4a5b5f3](https://github.com/gaborage/go-bricks/commit/4a5b5f3fa520c2b9936db63376fd189fbc57467b))
+
 ## [0.69.0](https://github.com/gaborage/go-bricks/compare/v0.68.0...v0.69.0) (2026-09-29)
 
 
