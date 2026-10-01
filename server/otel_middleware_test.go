@@ -772,7 +772,7 @@ func TestOTelMiddlewareNeverRecordsAPanicValue(t *testing.T) {
 
 		spans := exporter.GetSpans()
 		require.Len(t, spans, 1)
-		assertSpanCarriesPanicTypeOnly(t, spans[0], secret)
+		assertSpanCarriesPanicTypeOnly(t, &spans[0], secret)
 	})
 
 	t.Run("handler", func(t *testing.T) {
@@ -786,24 +786,24 @@ func TestOTelMiddlewareNeverRecordsAPanicValue(t *testing.T) {
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
 		spans := exporter.GetSpans()
 		require.Len(t, spans, 1)
-		assertSpanCarriesPanicTypeOnly(t, spans[0], secret)
+		assertSpanCarriesPanicTypeOnly(t, &spans[0], secret)
 	})
 }
 
 // assertSpanCarriesPanicTypeOnly asserts the span recorded the panic as an error naming its
 // type, and that the value appears nowhere on it: status, attributes or events.
-func assertSpanCarriesPanicTypeOnly(t *testing.T, span tracetest.SpanStub, secret string) {
+func assertSpanCarriesPanicTypeOnly(t *testing.T, span *tracetest.SpanStub, secret string) {
 	t.Helper()
 
 	assert.Equal(t, codes.Error, span.Status.Code)
 	assert.Contains(t, span.Status.Description, "string", "the panic's type must be recorded")
 	assert.NotContains(t, span.Status.Description, secret)
 	for _, kv := range span.Attributes {
-		assert.NotContains(t, kv.Value.Emit(), secret, "attribute %s", kv.Key)
+		assert.NotContains(t, kv.Value.String(), secret, "attribute %s", kv.Key)
 	}
 	for _, ev := range span.Events {
 		for _, kv := range ev.Attributes {
-			assert.NotContains(t, kv.Value.Emit(), secret, "event %s attribute %s", ev.Name, kv.Key)
+			assert.NotContains(t, kv.Value.String(), secret, "event %s attribute %s", ev.Name, kv.Key)
 		}
 	}
 }
