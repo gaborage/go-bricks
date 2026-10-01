@@ -190,7 +190,7 @@ jobs:
     # merged SonarCloud report complete. See the `code` filter rationale.
     if: needs.changes.outputs.code == 'true'
     # The Windows leg is framework-test-windows below. This one-entry matrix
-    # keeps every matrix.os guard in the steps below resolving.
+    # keeps the check name framework-test (ubuntu-latest).
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -216,7 +216,6 @@ jobs:
         run: go mod download
 
       - name: Run tests (Unix)
-        if: matrix.os != 'windows-latest'
         run: |
           set -euo pipefail
           # Test all packages - tools/* are separate modules, excluded automatically
@@ -243,7 +242,6 @@ jobs:
           mv coverage.out.dedup coverage.out
 
       - name: Enforce ADR-026 allocation guards (no -race)
-        if: matrix.os == 'ubuntu-latest'
         run: |
           set -euo pipefail
           # The race detector inflates testing.AllocsPerRun counts, so these guards skip
@@ -255,7 +253,6 @@ jobs:
           make test-alloc
 
       - name: Upload unit test coverage artifact (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-unit
@@ -286,8 +283,9 @@ jobs:
 
       # framework-build's Windows leg, overlapping the tests. It gates in its
       # body, not with if: (a wait on a skipped background step is
-      # undocumented). Wait steps take no timeout, so timeout-minutes bounds a
-      # hung build.
+      # undocumented), and always builds on a cache miss so the entry setup-go
+      # saves holds the plain build output. Wait steps take no timeout, so
+      # timeout-minutes bounds a hung build.
       - name: Build (Windows)
         id: winbuild
         background: true
@@ -295,8 +293,9 @@ jobs:
         shell: pwsh
         env:
           FW: ${{ needs.changes.outputs.framework }}
+          HIT: ${{ steps.setupgo.outputs.cache-hit }}
         run: |
-          if ($env:FW -ne 'true') { exit 0 }
+          if ($env:FW -ne 'true' -and $env:HIT -eq 'true') { exit 0 }
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
           if (-not $packages) {
             Write-Host "No packages found to build"
@@ -309,8 +308,9 @@ jobs:
         shell: pwsh
         env:
           # On a cache miss setup-go saves the default GOCACHE after the job, so
-          # the race build goes elsewhere and the saved entry keeps the plain
-          # build output. On a hit, the empty value falls back to the warm default.
+          # the race build goes elsewhere and the saved entry keeps winbuild's
+          # plain build output. On a hit, the empty value falls back to the
+          # warm default.
           GOCACHE: ${{ steps.setupgo.outputs.cache-hit != 'true' && format('{0}\go-build-race', runner.temp) || '' }}
         run: |
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
@@ -742,8 +742,8 @@ jobs:
       contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
-    # The Windows build runs in framework-test-windows. Keep this one-entry
-    # matrix: without it the verify-mod guard below is false and skips silently.
+    # The Windows build runs in framework-test-windows. This one-entry matrix
+    # keeps the check name framework-build (ubuntu-latest).
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -763,7 +763,6 @@ jobs:
         run: go mod download
 
       - name: Build (Unix)
-        if: matrix.os != 'windows-latest'
         run: |
           set -euo pipefail
           packages=$(go list ./... | grep -vE '/tools(/|$)')
@@ -775,7 +774,6 @@ jobs:
           fi
 
       - name: Verify go mod (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
         run: make verify-mod
 
   # ============================================================================
