@@ -1,10 +1,10 @@
 # ADR-130: App-Terminated mTLS Verifies Client Certificates Against a Configured CA Bundle
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-09-29
 **Issue:** #767
 **Breaking:** none — additive `server.tls` keys; the zero value leaves verification off
-**Extends:** [ADR-042](adr_042_server_tls.md) (the deferred client-verification split)
+**Amends:** [ADR-042](adr_042_server_tls.md) (the deferred client-verification split)
 
 ## Context
 
@@ -46,11 +46,19 @@ way to demand or verify a client certificate: the framework owns the listener's 
    certificate at all: an empty `VerifiedChains` means the caller is unidentified, not verified.
 6. **Independent of `server.forwardedclientcert`.** The two compose and neither changes the other.
    A proxy (Envoy, nginx) that authenticates to the application over mTLS while forwarding the end
-   client's certificate in a header is a legitimate and stronger posture: the mTLS leaf proves the
-   hop came from the trusted proxy, which is what makes the forwarded header trustworthy. The mTLS
-   leaf identifies the hop; the forwarded certificate identifies the end client; both are
-   identification. Under that posture the leaf-validation hook sees the proxy's certificate, not the
-   end client's, and a SAN or OU allowlist written for partners would reject the proxy.
+   client's certificate in a header is a legitimate and stronger posture, provided the proxy sets
+   the forwarded identity from the end-client certificate it verified and overwrites or strips any
+   caller-supplied copy: the mTLS leaf proves which proxy made the hop, not the header's content.
+   It proves the hop only for a connection that presented a verified chain: under `verify` a
+   certless caller completes the handshake without reaching the hook and, if the application is
+   directly reachable, can forge the forwarded headers. The composed posture therefore requires
+   `require-verify` or proxy-only ingress (closed security groups, a single ingress path — ADR-043's
+   trust model); under `verify` without it, the forwarded identity is not trusted. Since decision 7
+   refuses `require-verify` beside the probe listener, a deployment running it relies on
+   proxy-only ingress. The mTLS leaf identifies the hop; the forwarded certificate identifies the
+   end client; both are identification. Under that posture the leaf-validation hook sees the
+   proxy's certificate, not the end client's, and a SAN or OU allowlist written for partners would
+   reject the proxy.
 7. **The probe listener refuses only `require-verify`.** The internal probe listener's
    application-listener check (ADR-120) dials with no client certificate. Under `require-verify`
    every such handshake fails and `/ready` would stay 503 forever, so `require-verify` beside
@@ -72,8 +80,6 @@ way to demand or verify a client certificate: the framework owns the listener's 
    `clientauth` is `""` would guard nothing, so `Start` fails naming `verify` and `require-verify`.
    A hook with `server.tls.enabled` false is a staged flip: `Start` serves plaintext and WARNs
    naming `server.tls.enabled`.
-
-**To follow (not in this change):** the ADR-042 amendment and the wiki updates.
 
 ## Consequences
 
