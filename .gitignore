@@ -58,6 +58,7 @@
 !RELEASING.md
 !/scripts/
 !/scripts/*.sh
+!/scripts/*.awk
 !.github/allowed_signers
 !release-please-config.json
 !.release-please-manifest.json
