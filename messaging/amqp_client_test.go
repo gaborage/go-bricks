@@ -417,6 +417,22 @@ func newClientWithFakeChannel(t *testing.T, ch amqpChannel) *AMQPClientImpl {
 	return c
 }
 
+// newClientAwaitingConfirm is newClientWithFakeChannel for a test whose success rides
+// on one ACK. The helper's 15ms confirm wait loses to a scheduler stall: the attempt
+// times out, the retry takes a tag nothing acks, and with no attempt ceiling and no
+// deadline the loop spun until the package timeout (ci-v2 run 35490776633). A 5s wait
+// widens that window 333x and the returned 5s ctx bounds the failure path, so a stall
+// that still outlasts it fails at about 5s instead of hanging. Timeout-path tests keep
+// the 15ms wait.
+func newClientAwaitingConfirm(t *testing.T, ch *fakeChannel) (*AMQPClientImpl, context.Context) {
+	t.Helper()
+	c := newClientWithFakeChannel(t, ch)
+	c.connectionTimeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return c, ctx
+}
+
 // stubConn implements amqpConnection for connect() tests
 type stubConn struct{}
 
@@ -929,12 +945,7 @@ func TestPreparePublishingRegeneratesAMalformedHeaderTraceParent(t *testing.T) {
 
 func TestPublishBytesAckSuccess(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
-	// See TestPublishBasicMethodDelegation.
-	c.connectionTimeout = 5 * time.Second
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	c, ctx := newClientAwaitingConfirm(t, ch)
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -1854,12 +1865,7 @@ func TestPublishBytesMultipleRetriesBeforeSuccess(t *testing.T) {
 
 func TestPublishBytesCustomHeaders(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
-	// See TestPublishBasicMethodDelegation.
-	c.connectionTimeout = 5 * time.Second
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	c, ctx := newClientAwaitingConfirm(t, ch)
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -1918,12 +1924,7 @@ func TestPublishBytesCustomHeaders(t *testing.T) {
 
 func TestPublishBytesContextTrackingOnSuccess(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
-	// See TestPublishBasicMethodDelegation.
-	c.connectionTimeout = 5 * time.Second
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	c, ctx := newClientAwaitingConfirm(t, ch)
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},
@@ -2433,16 +2434,7 @@ func TestPublishBytesDeadlineAfterNackWrapsNackCause(t *testing.T) {
 
 func TestPublishBasicMethodDelegation(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
-	// The helper's 15ms confirm wait loses to a scheduler stall: the attempt times
-	// out, the retry takes a tag nothing acks, and with no attempt ceiling and no
-	// deadline the loop spun until the package timeout (ci-v2 run 35490776633).
-	// 5s widens that window; the ctx bounds the failure path should a stall still
-	// outlast it. See the note in TestPublishBytesUnboundedWhenMaxAttemptsZero.
-	c.connectionTimeout = 5 * time.Second
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	c, ctx := newClientAwaitingConfirm(t, ch)
 
 	sendConfirmsAfterEachAttempt(t, c, ch,
 		amqp.Confirmation{Ack: true, DeliveryTag: 1},

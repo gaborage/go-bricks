@@ -116,6 +116,18 @@ func sendAsync(url string) <-chan error {
 	return done
 }
 
+// awaitArrival waits for the request behind held to reach the held handler, failing the
+// test if it finishes first: /ready answers 503 without dispatching when its
+// application-listener check fails, and the client's Timeout bounds every other miss.
+func awaitArrival(t *testing.T, arrived <-chan struct{}, held <-chan error) {
+	t.Helper()
+	select {
+	case <-arrived:
+	case err := <-held:
+		t.Fatalf("the request finished without reaching the held handler: %v", err)
+	}
+}
+
 // actionLogValues returns key's value from every access-log (action) entry, in order.
 func actionLogValues(log *testLogger, key string) []string {
 	var values []string
@@ -563,7 +575,7 @@ func TestServerProbeStopOverrunClosesAndWarns(t *testing.T) {
 	errCh := startServer(srv)
 	waitForServerReady(t, srv)
 	held := sendAsync(probeURL(srv, testReadyRoute))
-	<-arrived
+	awaitArrival(t, arrived, held)
 
 	require.NoError(t, srv.Shutdown(context.Background()), "a probe overrunning its budget alone is not a Shutdown error")
 	entry := findLogEntry(log.logEntries(), probeStopOverrunMsg)
@@ -664,13 +676,7 @@ func TestServerProbeStopIsDetachedFromShutdownContext(t *testing.T) {
 	waitForServerReady(t, srv)
 	probeAddr := srv.ProbeBoundAddr().String()
 	held := sendAsync(probeURL(srv, testReadyRoute))
-	select {
-	case <-arrived:
-	case err := <-held:
-		t.Fatalf("/ready answered before the held handler: %v", err)
-	case <-time.After(10 * time.Second):
-		t.Fatal("/ready never reached the held handler")
-	}
+	awaitArrival(t, arrived, held)
 	// The probe's application-listener check answered on its own connection, which the
 	// application listener untracks only after the check has its answer. Wait for it, so the
 	// application drain has nothing to wait on and the canceled ctx reaches only the probe stop.

@@ -124,11 +124,7 @@ func TestPublishBytesAcceptsTheBoundaryAndEmptyDestinations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := &fakeChannel{}
-			c := newClientWithFakeChannel(t, ch)
-			// See TestPublishBasicMethodDelegation.
-			c.connectionTimeout = 5 * time.Second
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			c, ctx := newClientAwaitingConfirm(t, ch)
 			sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
 
 			err := c.publishBytes(ctx, tt.options, []byte(testMessageBody))
@@ -463,11 +459,7 @@ func TestPublishBytesAcceptsMessagePropsAtTheBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := &fakeChannel{}
-			c := newClientWithFakeChannel(t, ch)
-			// See TestPublishBasicMethodDelegation.
-			c.connectionTimeout = 5 * time.Second
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+			c, ctx := newClientAwaitingConfirm(t, ch)
 			sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
 
 			err := c.publishBytes(ctx, publishOptions{
