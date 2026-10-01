@@ -116,6 +116,18 @@ func sendAsync(url string) <-chan error {
 	return done
 }
 
+// awaitArrival waits for the request behind held to reach the held handler, failing the
+// test if it finishes first: /ready answers 503 without dispatching when its
+// application-listener check fails, and the client's Timeout bounds every other miss.
+func awaitArrival(t *testing.T, arrived <-chan struct{}, held <-chan error) {
+	t.Helper()
+	select {
+	case <-arrived:
+	case err := <-held:
+		t.Fatalf("the request finished without reaching the held handler: %v", err)
+	}
+}
+
 // actionLogValues returns key's value from every access-log (action) entry, in order.
 func actionLogValues(log *testLogger, key string) []string {
 	var values []string
@@ -153,6 +165,25 @@ func requireStartRefusedBeforeBind(t *testing.T, srv *Server, fatalMsg string) e
 	assert.Nil(t, srv.ProbeBoundAddr())
 	requireProbeErrorsClosed(t, srv)
 	return err
+}
+
+// trackAppConns counts the application listener's open connections. It sets ConnState in
+// the readiness commit, which runs before echo calls Serve, so the write races nothing;
+// net/http untracks a closing connection before it runs the hook.
+func trackAppConns(srv *Server) *atomic.Int64 {
+	var open atomic.Int64
+	srv.testHookReadyCommit = func() {
+		srv.httpServer.Load().ConnState = func(_ net.Conn, state http.ConnState) {
+			switch state {
+			case http.StateNew:
+				open.Add(1)
+			case http.StateClosed, http.StateHijacked:
+				open.Add(-1)
+			default: // StateActive and StateIdle leave the count alone
+			}
+		}
+	}
+	return &open
 }
 
 // occupyPort holds a loopback port for the rest of the test.
@@ -544,7 +575,7 @@ func TestServerProbeStopOverrunClosesAndWarns(t *testing.T) {
 	errCh := startServer(srv)
 	waitForServerReady(t, srv)
 	held := sendAsync(probeURL(srv, testReadyRoute))
-	<-arrived
+	awaitArrival(t, arrived, held)
 
 	require.NoError(t, srv.Shutdown(context.Background()), "a probe overrunning its budget alone is not a Shutdown error")
 	entry := findLogEntry(log.logEntries(), probeStopOverrunMsg)
@@ -640,11 +671,16 @@ func TestServerProbeStopIsDetachedFromShutdownContext(t *testing.T) {
 	assert.Equal(t, time.Second, srv.probeStopBudget)
 	ready, arrived, release := heldHandler(t)
 	srv.RegisterReadyHandler(ready)
+	appConns := trackAppConns(srv)
 	errCh := startServer(srv)
 	waitForServerReady(t, srv)
 	probeAddr := srv.ProbeBoundAddr().String()
 	held := sendAsync(probeURL(srv, testReadyRoute))
-	<-arrived
+	awaitArrival(t, arrived, held)
+	// The probe's application-listener check answered on its own connection, which the
+	// application listener untracks only after the check has its answer. Wait for it, so the
+	// application drain has nothing to wait on and the canceled ctx reaches only the probe stop.
+	require.Eventually(t, func() bool { return appConns.Load() == 0 }, 2*time.Second, time.Millisecond)
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -2994,6 +2994,9 @@ type reconnectingMockClient struct {
 	// every declare unparked.
 	parkOn   string
 	parkGate *testutil.BlockedCreate
+	// generationReads counts channelGeneration calls, so a test can wait for a
+	// pass to have read the generation instead of guessing when it ran.
+	generationReads int
 }
 
 var (
@@ -3020,7 +3023,30 @@ func (m *reconnectingMockClient) locked(fn func()) {
 func (m *reconnectingMockClient) channelGeneration() (generation uint64, ready bool) {
 	m.callMu.Lock()
 	defer m.callMu.Unlock()
+	m.generationReads++
 	return m.generation, !m.notReady
+}
+
+// awaitGenerationReads waits until the registry has read client's channel
+// generation at least n times. A pass that meets the generation guard reads
+// once, a refused pass never, and a replaying pass once per replay plus a
+// closing guard-met read, unless the halt or its own ctx ends the loop first
+// (then once per replay, whether or not the last one completed). Before the
+// first StopConsumers only DeclareInfrastructure's seed and the startup
+// observer's first pass read it — the first subscribe calls ConsumeFromQueue
+// directly and only a re-subscribe runs redeclareTopology — so >= 2 means that
+// pass met the guard and returned; a new read before the stop would satisfy the
+// wait early and reopen the race. Unordered, the halt can land first and the
+// refused pass take redeclareMu ahead of StartConsumers' re-arm, owing a repair
+// that clears the ledger, so the re-armed observer replays the generation the
+// startup declared.
+func awaitGenerationReads(t *testing.T, client *reconnectingMockClient, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var reads int
+		client.locked(func() { reads = client.generationReads })
+		return reads >= n
+	}, 5*time.Second, time.Millisecond, "the channel generation was not read %d times", n)
 }
 
 func (m *reconnectingMockClient) channelReadyNotify() (ready <-chan struct{}, open bool) {
@@ -5064,7 +5090,8 @@ func TestRegistryRedeclaresThroughAnUncomparableClientWrapper(t *testing.T) {
 // TestRegistryRepairsTopologyAfterAStopStartCycle pins that StopConsumers halts
 // repair for the stop and not for the registry's life: StartConsumers re-arms it,
 // so a restarted consumer's re-subscribe still re-declares, the way it did before
-// the pass gained a halt gate.
+// the pass gained a halt gate. Waiting for the restarted observer's first pass
+// also pins that the re-arm respawns one.
 func TestRegistryRepairsTopologyAfterAStopStartCycle(t *testing.T) {
 	client := newReconnectingMockClient()
 	handler := &countingTestHandler{}
@@ -5073,13 +5100,16 @@ func TestRegistryRepairsTopologyAfterAStopStartCycle(t *testing.T) {
 	registry := startRedeclareRegistry(ctx, t, client, &stubLogger{}, handler)
 	defer registry.StopConsumers(context.Background())
 	awaitSubscription(t, client, 0)
+	awaitGenerationReads(t, client, 2) // seed + the startup observer's pass
 
 	registry.StopConsumers(context.Background())
 	require.NoError(t, registry.StartConsumers(ctx))
 	restarted := awaitSubscription(t, client, 1)
+	awaitGenerationReads(t, client, 3) // + the restarted observer's first pass
 
-	// Rotate through locked() alone: the stop ended the observer for good, so the
-	// re-subscribe below is the only driver left to prove.
+	// Rotate through locked() alone: the restarted observer has run its first pass
+	// and sleeps on a broadcast this never closes, so the re-subscribe below is the
+	// only driver left to prove.
 	client.locked(func() { client.generation++ })
 	close(restarted)
 
@@ -5207,6 +5237,7 @@ func TestRegistryRestartsItsObserverAfterAStopStartCycle(t *testing.T) {
 	client := newReconnectingMockClient()
 	registry := newPublisherOnlyRegistry(t, client)
 	key := "exchange:" + testExchangeName
+	awaitGenerationReads(t, client, 2) // seed + the startup observer's pass
 
 	registry.StopConsumers(context.Background())
 	awaitObserverExit(t, registry.redeclareObserverDone)

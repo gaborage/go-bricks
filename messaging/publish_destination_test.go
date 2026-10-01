@@ -124,10 +124,10 @@ func TestPublishBytesAcceptsTheBoundaryAndEmptyDestinations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := &fakeChannel{}
-			c := newClientWithFakeChannel(t, ch)
+			c, ctx := newClientAwaitingConfirm(t, ch)
 			sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
 
-			err := c.publishBytes(context.Background(), tt.options, []byte(testMessageBody))
+			err := c.publishBytes(ctx, tt.options, []byte(testMessageBody))
 
 			require.NoError(t, err)
 			assert.Equal(t, uint64(1), atomic.LoadUint64(&ch.publishAttempts), "the publish reached the channel")
@@ -459,10 +459,10 @@ func TestPublishBytesAcceptsMessagePropsAtTheBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ch := &fakeChannel{}
-			c := newClientWithFakeChannel(t, ch)
+			c, ctx := newClientAwaitingConfirm(t, ch)
 			sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
 
-			err := c.publishBytes(context.Background(), publishOptions{
+			err := c.publishBytes(ctx, publishOptions{
 				Exchange:   "ex",
 				RoutingKey: "rk",
 				props:      tt.props,
