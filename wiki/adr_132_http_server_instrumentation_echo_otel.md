@@ -14,6 +14,9 @@ framework's code change is the import path. Its behavior differs in ways a consu
   `github.com/labstack/echo-opentelemetry`.
 - `Values.MetricAttributes()` no longer includes `server.address`/`server.port`. Both are Opt-In
   for HTTP server metrics, and from `Request.Host` the client chooses them.
+- `http.request.method_original` leaves metrics too (spans keep it), spans stop carrying
+  `http.request.body.size`/`http.response.body.size` (the body-size histograms keep recording
+  them), and HTTP/2 and HTTP/3 report `network.protocol.version` as `2`/`3` instead of `2.0`/`3.0`.
 - It records `error.type` natively on spans and metrics, omits `http.response.status_code` when
   no status was sent, and takes `http.route` from the matched Echo route. It also moves to semconv
   v1.40.
@@ -46,7 +49,9 @@ it reaches the span as its type. A panic in any middleware between the instrumen
 
 - Breaking for telemetry consumers (`[C70.17]`). Queries, dashboards or alerts that filter on
   the instrumentation scope `github.com/labstack/echo-opentelemetry`, or that group HTTP server
-  metrics by `server.address`/`server.port`, must be repointed. The series identity of
+  metrics by `server.address`/`server.port`, must be repointed, as must those reading
+  `http.request.method_original` from metrics, body sizes from spans, or a
+  `network.protocol.version` of `2.0`/`3.0`. The series identity of
   `http.server.request.duration` changes, so its history is discontinuous at the upgrade.
 - Spans of 5xx responses gain `error.type`, and a request aborted before any status was sent has
   no `http.response.status_code`.
