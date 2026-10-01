@@ -282,7 +282,7 @@ mutate-baseline: ## Full-repo mutation baseline, one engine process per package 
 		alt=; for sub in $$dirs; do \
 			case "$$sub" in "$$dir") ;; "$$pre"*) alt="$$alt$${alt:+|}$$(printf '%s\n' "$${sub#"$$pre"}" | sed 's/[][\\.^$$*+?(){}|]/\\&/g')";; esac; \
 		done; \
-		snap=; if [ -n "$$prune" ]; then snap=$$(mktemp) && find "$$gc" -type f | LC_ALL=C sort > "$$snap" && [ -s "$$snap" ] \
+		snap=; if [ -n "$$prune" ]; then snap=$$(mktemp) && find "$$gc" -type f > "$$snap" && LC_ALL=C sort -o "$$snap" "$$snap" && [ -s "$$snap" ] \
 			|| { echo "WARN: GOCACHE snapshot failed for ./$$dir, prune skipped"; rm -f "$$snap"; snap=; }; fi; \
 		$(GREMLINS_CMD) unleash --workers $(MUTATE_BASELINE_WORKERS) --timeout-coefficient "$$coeff" --output "$$out" $${alt:+--exclude-files "^($$alt)/"} "./$$dir" \
 			|| echo "WARN: gremlins exited non-zero for ./$$dir (advisory)"; \
