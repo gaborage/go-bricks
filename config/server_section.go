@@ -127,7 +127,20 @@ func validateServerProbes(cfg *ServerConfig) error {
 		return NewInvalidFieldError(fieldServerProbesPort, fmt.Sprintf(errInvalidField, cfg.Probes.Port),
 			[]string{"0 (disabled)", portRange})
 	}
+	if cfg.Probes.Port > 0 && cfg.TLS.Enabled && cfg.TLS.ClientAuth == tlsClientAuthRequireVerify {
+		return ProbesRequireVerifyError()
+	}
 	return cfg.CheckProbeCollision()
+}
+
+// ProbesRequireVerifyError is the refusal of server.probes.port beside
+// server.tls.clientauth require-verify: the probe listener's application-listener check
+// presents no client certificate, so /ready could never pass (ADR-130). Config
+// validation and the server's Start-time re-check both return it.
+func ProbesRequireVerifyError() *ConfigError {
+	refusal := NewValidationError(fieldServerProbesPort, errProbesRequireVerify)
+	refusal.Action = actionProbesRequireVerify
+	return refusal
 }
 
 // Rejection reasons from ParseTrustedProxyCIDR. Unexported: only this package
@@ -241,28 +254,53 @@ func validateServerTLS(cfg *ServerTLSConfig) error {
 		return nil
 	}
 
-	if err := validateServerTLSMaterial(fieldServerTLSCertFile, fieldServerTLSCertValue, cfg.CertFile, cfg.CertValue); err != nil {
+	if err := validateServerTLSMaterial(fieldServerTLSCertFile, fieldServerTLSCertValue, cfg.CertFile, cfg.CertValue, serverTLSEnabledCondition); err != nil {
 		return err
 	}
 
-	if err := validateServerTLSMaterial(fieldServerTLSKeyFile, fieldServerTLSKeyValue, cfg.KeyFile, cfg.KeyValue); err != nil {
+	if err := validateServerTLSMaterial(fieldServerTLSKeyFile, fieldServerTLSKeyValue, cfg.KeyFile, cfg.KeyValue, serverTLSEnabledCondition); err != nil {
 		return err
 	}
 
 	switch cfg.MinVersion {
 	case "", tlsVersion12, tlsVersion13:
-		return nil
 	default:
 		return NewInvalidFieldError(fieldServerTLSMinVersion, fmt.Sprintf(errInvalidField, cfg.MinVersion), []string{tlsVersion12, tlsVersion13})
 	}
+
+	return validateServerTLSClientAuth(cfg)
+}
+
+// validateServerTLSClientAuth checks the client-verification keys of an
+// enabled listener: the policy is off or one of the two verifying values
+// (the stdlib's unverified request/require modes are refused), a verifying
+// policy needs exactly one client-CA source, and a client CA without a
+// verifying policy is refused rather than loaded and ignored.
+func validateServerTLSClientAuth(cfg *ServerTLSConfig) error {
+	if cfg.ClientAuth == "" {
+		if cfg.ClientCAFile != "" || cfg.ClientCAValue != "" {
+			return NewValidationError(fieldServerTLSClientCAFile,
+				fieldServerTLSClientCAFile+"/"+fieldServerTLSClientCAValue+" set without "+fieldServerTLSClientAuth+": set "+
+					fieldServerTLSClientAuth+" to "+tlsClientAuthVerify+" or "+tlsClientAuthRequireVerify+", or remove the client CA")
+		}
+		return nil
+	}
+
+	if cfg.ClientAuth != tlsClientAuthVerify && cfg.ClientAuth != tlsClientAuthRequireVerify {
+		return NewInvalidFieldError(fieldServerTLSClientAuth, fmt.Sprintf(errInvalidField, cfg.ClientAuth),
+			[]string{tlsClientAuthVerify, tlsClientAuthRequireVerify})
+	}
+
+	return validateServerTLSMaterial(fieldServerTLSClientCAFile, fieldServerTLSClientCAValue, cfg.ClientCAFile, cfg.ClientCAValue, serverTLSClientAuthCondition)
 }
 
 // validateServerTLSMaterial enforces exactly one of a file/value pair is set
-// for a single PEM piece (cert or key).
-func validateServerTLSMaterial(fileField, valueField, file, value string) error {
+// for a single PEM piece (cert, key or client CA); requiredWhen names the
+// condition that makes the piece mandatory.
+func validateServerTLSMaterial(fileField, valueField, file, value, requiredWhen string) error {
 	switch {
 	case file == "" && value == "":
-		return NewValidationError(fileField, "exactly one of "+fileField+" or "+valueField+" is required when server.tls.enabled is true")
+		return NewValidationError(fileField, "exactly one of "+fileField+" or "+valueField+" is required when "+requiredWhen)
 	case file != "" && value != "":
 		return NewValidationError(fileField, fileField+" and "+valueField+" are mutually exclusive (exactly one)")
 	default:

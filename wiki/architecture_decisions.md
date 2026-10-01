@@ -2127,6 +2127,28 @@ exported `httpclient.ErrRedirectDowngrade`; ten redirects stay the cap. A caller
 
 ---
 
+### [ADR-130: App-Terminated mTLS Verifies Client Certificates Against a Configured CA Bundle](adr_130_server_mtls_client_verification.md)
+
+**Date:** 2026-09-29 | **Status:** Proposed | **Breaking:** none
+
+Extends ADR-042's deferred client-verification split. `server.tls.clientauth` takes `""` (off),
+`verify` (`VerifyClientCertIfGiven`) or `require-verify` (`RequireAndVerifyClientCert`); Go's
+unverifying `request`/`require` are refused naming the valid values. On an enabled listener a
+verifying policy needs exactly one of `server.tls.clientcafile`/`clientcavalue`, a client CA
+without a policy is refused, and an empty, unreadable or corrupt bundle fails `Start`; staged keys
+under a disabled listener WARN, as ADR-042's material does. The `MinVersion` floor is unchanged.
+Only a presented, verified client certificate identifies the caller (`verify` admits a client
+with none, so handlers read `VerifiedChains`); the deployment still authorizes. It composes with
+`server.forwardedclientcert`: the mTLS leaf identifies the hop, the forwarded certificate the end
+client. `require-verify` (not `verify`) is refused beside the probe listener, whose self-check
+presents no client certificate. Decided, to follow: the leaf-validation hook with its resumption
+guard.
+
+**Key Benefits:** app-terminated partner mTLS without an LB, fail-fast on every half-configured
+shape.
+
+---
+
 ### [ADR-131: A Verified Door Republishes Stored Sealed Bytes, and `Seal` Returns Its `jti`](adr_131_sealed_bytes_publish_door.md)
 
 **Date:** 2026-09-30 | **Status:** Accepted | **Breaking:** `Publisher[T].Seal`, `jose/sealed.Seal`, `jose/sealed.SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`

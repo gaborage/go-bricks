@@ -326,8 +326,8 @@ type TLSConfig struct {
 // ServerTLSConfig enables HTTPS on the HTTP server listener. Each PEM piece
 // comes from a file path (*File) or a base64-encoded PEM string (*Value) —
 // exactly one source per piece. Zero value = TLS disabled (plaintext
-// listener, today's behavior). Client-certificate verification is not part
-// of this struct yet (deferred; see ADR-042).
+// listener, today's behavior). ClientAuth turns on client-certificate
+// verification against the ClientCA* bundle (ADR-130).
 type ServerTLSConfig struct {
 	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
 
@@ -338,6 +338,15 @@ type ServerTLSConfig struct {
 
 	// MinVersion: "" or "1.2" (default floor) | "1.3".
 	MinVersion string `koanf:"minversion" json:"minversion" yaml:"minversion" toml:"minversion" mapstructure:"minversion"`
+
+	// ClientAuth: "" (no client certs) | "verify" (verify a cert if the
+	// client sends one; certless clients still accepted) | "require-verify"
+	// (full mTLS: certificate required AND verified against ClientCA*). The
+	// stdlib's unverified modes (request/require) are deliberately not
+	// exposed.
+	ClientAuth    string `koanf:"clientauth" json:"clientauth" yaml:"clientauth" toml:"clientauth" mapstructure:"clientauth"`
+	ClientCAFile  string `koanf:"clientcafile" json:"clientcafile" yaml:"clientcafile" toml:"clientcafile" mapstructure:"clientcafile"`
+	ClientCAValue string `koanf:"clientcavalue" json:"clientcavalue" yaml:"clientcavalue" toml:"clientcavalue" mapstructure:"clientcavalue"`
 }
 
 // ForwardedClientCertConfig consumes the client-certificate identity an AWS

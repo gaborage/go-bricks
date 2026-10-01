@@ -235,13 +235,20 @@ const (
 	tenantsFieldPrefix       = "multitenant.tenants.%s"
 	defaultHost              = "localhost"
 
-	fieldServerTLSCertFile   = "server.tls.certfile"
-	fieldServerTLSCertValue  = "server.tls.certvalue"
-	fieldServerTLSKeyFile    = "server.tls.keyfile"
-	fieldServerTLSKeyValue   = "server.tls.keyvalue"
-	fieldServerTLSMinVersion = "server.tls.minversion"
-	tlsVersion12             = "1.2"
-	tlsVersion13             = "1.3"
+	fieldServerTLSCertFile       = "server.tls.certfile"
+	fieldServerTLSCertValue      = "server.tls.certvalue"
+	fieldServerTLSKeyFile        = "server.tls.keyfile"
+	fieldServerTLSKeyValue       = "server.tls.keyvalue"
+	fieldServerTLSMinVersion     = "server.tls.minversion"
+	fieldServerTLSClientAuth     = "server.tls.clientauth"
+	fieldServerTLSClientCAFile   = "server.tls.clientcafile"
+	fieldServerTLSClientCAValue  = "server.tls.clientcavalue"
+	serverTLSEnabledCondition    = "server.tls.enabled is true"
+	serverTLSClientAuthCondition = "server.tls.clientauth is set"
+	tlsVersion12                 = "1.2"
+	tlsVersion13                 = "1.3"
+	tlsClientAuthVerify          = "verify"
+	tlsClientAuthRequireVerify   = "require-verify"
 
 	fieldServerForwardedClientCertRequire = "server.forwardedclientcert.require"
 
@@ -249,6 +256,11 @@ const (
 
 	fieldServerProbesPort = "server.probes.port"
 	fieldServerProbesHost = "server.probes.host"
+
+	// The probe listener's application-listener check presents no client
+	// certificate, so under require-verify it could never pass (ADR-130).
+	errProbesRequireVerify    = "cannot be set while server.tls.clientauth is require-verify: the probe listener's application-listener check presents no client certificate, so /ready would never pass"
+	actionProbesRequireVerify = "set server.probes.port to 0, or set server.tls.clientauth to verify"
 
 	// actionListSpecificProxyRanges is the remedy for a default route on ANY of the three
 	// trusted-proxy keys. Shared so the three refusals cannot drift apart in wording.

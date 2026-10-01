@@ -87,6 +87,14 @@ func TestValidateServerSuccess(t *testing.T) {
 				},
 			},
 		},
+		{name: "tls_mtls_valid", cfg: mtlsServerConfig(tlsClientAuthRequireVerify, "", "aGVsbG8=")},
+		{name: "tls_verify_with_client_ca_file", cfg: mtlsServerConfig(tlsClientAuthVerify, testClientCAFile, "")},
+		{name: "tls_disabled_ignores_staged_clientauth", cfg: func() ServerConfig { c := mtlsServerConfig("request", "", ""); c.TLS.Enabled = false; return c }()},
+		{name: "tls_mtls_beside_forwardedcert", cfg: func() ServerConfig {
+			c := mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, "")
+			c.ForwardedClientCert = ForwardedClientCertConfig{Enabled: true, Require: true}
+			return c
+		}()},
 		{
 			name: "forwardedcert_enabled_valid",
 			cfg: ServerConfig{
@@ -329,6 +337,11 @@ func TestValidateServerFailures(t *testing.T) {
 			},
 			expectedError: "server.tls.minversion",
 		},
+		{name: "tls_bad_clientauth", cfg: mtlsServerConfig("mtls", testClientCAFile, ""), expectedError: "server.tls.clientauth"},
+		{name: "tls_verify_without_client_ca", cfg: mtlsServerConfig(tlsClientAuthVerify, "", ""), expectedError: "server.tls.clientcafile"},
+		{name: "tls_client_ca_without_verify", cfg: mtlsServerConfig("", testClientCAFile, ""), expectedError: "server.tls.clientcafile"},
+		{name: "tls_client_ca_value_without_verify", cfg: mtlsServerConfig("", "", "aGVsbG8="), expectedError: "server.tls.clientcafile"},
+		{name: "tls_client_ca_file_and_value_both_set", cfg: mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, "aGVsbG8="), expectedError: "server.tls.clientcafile"},
 		{
 			name: "forwardedcert_require_without_enabled",
 			cfg: ServerConfig{
@@ -353,6 +366,23 @@ func TestValidateServerFailures(t *testing.T) {
 
 // trustedProxyServerConfig returns a ServerConfig that satisfies every other
 // checkServer check, so any error can only come from TrustedProxies.
+const testClientCAFile = "/etc/tls/client-ca.pem"
+
+// mtlsServerConfig is a valid server config with TLS enabled and the given
+// client-auth policy and client-CA sources.
+func mtlsServerConfig(clientAuth, caFile, caValue string) ServerConfig {
+	cfg := createValidServerConfig()
+	cfg.TLS = ServerTLSConfig{
+		Enabled:       true,
+		CertFile:      "/etc/tls/cert.pem",
+		KeyFile:       "/etc/tls/key.pem",
+		ClientAuth:    clientAuth,
+		ClientCAFile:  caFile,
+		ClientCAValue: caValue,
+	}
+	return cfg
+}
+
 func trustedProxyServerConfig(entries ...string) ServerConfig {
 	cfg := createValidServerConfig()
 	cfg.TrustedProxies = entries
@@ -600,4 +630,62 @@ func TestLoadServerProbesCollisionFailsLoad(t *testing.T) {
 	var cfgErr *ConfigError
 	require.ErrorAs(t, err, &cfgErr)
 	assert.Equal(t, "server.probes.port", cfgErr.Field)
+}
+
+// TestValidateServerTLSClientAuthNamesValidValues pins that a refused policy,
+// including the stdlib's unverified request/require, names both valid values.
+func TestValidateServerTLSClientAuthNamesValidValues(t *testing.T) {
+	for name, refused := range map[string]string{"request": "request", "require": "require", "capitalized_verify": "Verify"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := mtlsServerConfig(refused, testClientCAFile, "")
+			err := validateServerTLS(&cfg.TLS)
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, fieldServerTLSClientAuth, cfgErr.Field)
+			assert.Contains(t, err.Error(), tlsClientAuthVerify)
+			assert.Contains(t, err.Error(), tlsClientAuthRequireVerify)
+		})
+	}
+
+	t.Run("required_when_names_the_policy", func(t *testing.T) {
+		cfg := mtlsServerConfig(tlsClientAuthVerify, "", "")
+		err := validateServerTLS(&cfg.TLS)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "required when server.tls.clientauth is set")
+	})
+}
+
+// TestServerProbesRefuseRequireVerify pins that the probe listener's certless
+// application-listener check rules out require-verify, naming both keys, while verify
+// and a staged policy on a disabled listener stay allowed.
+func TestServerProbesRefuseRequireVerify(t *testing.T) {
+	withProbes := func(cfg ServerConfig) ServerConfig {
+		cfg.Probes = ProbesConfig{Port: 9090}
+		return cfg
+	}
+
+	t.Run("require_verify_refused", func(t *testing.T) {
+		cfg := withProbes(mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, ""))
+		err := checkServer(&cfg)
+		var cfgErr *ConfigError
+		require.ErrorAs(t, err, &cfgErr)
+		assert.Equal(t, fieldServerProbesPort, cfgErr.Field)
+		assert.Contains(t, err.Error(), fieldServerTLSClientAuth)
+	})
+
+	t.Run("verify_allowed", func(t *testing.T) {
+		cfg := withProbes(mtlsServerConfig(tlsClientAuthVerify, testClientCAFile, ""))
+		assert.NoError(t, checkServer(&cfg))
+	})
+
+	t.Run("staged_require_verify_allowed", func(t *testing.T) {
+		cfg := withProbes(mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, ""))
+		cfg.TLS.Enabled = false
+		assert.NoError(t, checkServer(&cfg))
+	})
+
+	t.Run("require_verify_without_probes_allowed", func(t *testing.T) {
+		cfg := mtlsServerConfig(tlsClientAuthRequireVerify, testClientCAFile, "")
+		assert.NoError(t, checkServer(&cfg))
+	})
 }

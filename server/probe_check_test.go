@@ -457,9 +457,7 @@ func TestServerStartRefusesATLSLeafThePinCannotVerify(t *testing.T) {
 		name string
 		edit func(*x509.Certificate)
 	}{
-		{name: "client_auth_only", edit: func(leaf *x509.Certificate) {
-			leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-		}},
+		{name: "client_auth_only", edit: clientAuthLeaf},
 		{name: "not_yet_valid", edit: func(leaf *x509.Certificate) {
 			leaf.NotBefore = time.Now().Add(time.Hour)
 			leaf.NotAfter = time.Now().Add(2 * time.Hour)
@@ -481,6 +479,29 @@ func TestServerStartRefusesATLSLeafThePinCannotVerify(t *testing.T) {
 			assert.Contains(t, cfgErr.Error(), "server.tls")
 		})
 	}
+}
+
+// TestServerStartRefusesRequireVerifyBesideProbeListener pins the Start-time mirror of
+// the config refusal: the application-listener check presents no client certificate, so
+// under require-verify it could never pass and Start fails before either bind, naming
+// server.probes.port and server.tls.clientauth.
+func TestServerStartRefusesRequireVerifyBesideProbeListener(t *testing.T) {
+	_, issueLeaf := newTestCAWithSANs(t, "test-ca")
+	certPEM, keyPEM := issueLeaf("leaf", nil, []net.IP{net.ParseIP("127.0.0.1")})
+	clientCAPEM, _ := newTestCA(t, "client-ca")
+	cfg := newProbeTestConfig("")
+	cfg.Server.TLS = enabledServerTLS(certPEM, keyPEM)
+	cfg.Server.TLS.ClientAuth = clientAuthRequireVerify
+	cfg.Server.TLS.ClientCAValue = base64.StdEncoding.EncodeToString(clientCAPEM)
+	cfg.Server.Probes.Host = "127.0.0.1"
+	cfg.Server.Probes.Port = testutil.ReserveFreePort(t)
+	srv := New(cfg, &testLogger{})
+
+	err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite require-verify beside the probe listener")
+	var cfgErr *config.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "server.probes.port", cfgErr.Field)
+	assert.Contains(t, cfgErr.Error(), "server.tls.clientauth")
 }
 
 // TestPinnedLeafTLSConfigLeafSources pins where the pin's leaf comes from: the loaded
