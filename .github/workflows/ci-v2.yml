@@ -173,6 +173,8 @@ jobs:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
               - 'Makefile'
+              # lint-docs runs the ci-ok needs-completeness guard, so this entry
+              # is what runs that guard on every edit of this workflow.
               - '.github/workflows/ci-v2.yml'
 
   # ============================================================================
@@ -187,13 +189,17 @@ jobs:
     # ANY non-doc change — including tools/migration-only bumps — keeping the
     # merged SonarCloud report complete. See the `code` filter rationale.
     if: needs.changes.outputs.code == 'true'
+    # The Windows leg is framework-test-windows below. This one-entry matrix
+    # keeps every matrix.os guard in the shared steps resolving.
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
 
-    steps:
+    # An alias copies this list exactly (GitHub has no `<<:` merge keys), so a
+    # step for one leg only stays in this list behind a matrix.os guard.
+    steps: &framework-test-steps
       - uses: actions/checkout@v7
 
       - name: Set up Go
@@ -311,6 +317,22 @@ jobs:
           name: coverage-unit
           path: coverage.out
           retention-days: 1
+
+  # framework-test's Windows leg, split out so framework-merge-coverage does not
+  # wait on a leg that uploads no coverage. Same gate, same steps; ci-ok needs it.
+  framework-test-windows:
+    permissions:
+      contents: read
+    name: framework-test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      matrix:
+        os: [windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps: *framework-test-steps
 
   framework-integration-test:
     permissions:
@@ -485,6 +507,9 @@ jobs:
   framework-merge-coverage:
     permissions:
       contents: read
+    # framework-test-windows and migrate-tool-test-windows are deliberately
+    # absent: they upload no coverage, so the merge does not wait on them.
+    # ci-ok needs them directly, and that is what enforces them.
     needs: [changes, framework-test, framework-integration-test, migrate-tool-test]
     if: |
       always() &&
@@ -738,16 +763,18 @@ jobs:
     # jobs (build, which also runs its lint and vuln steps, and security) stay
     # scoped to `migrate_tool` below.
     if: needs.changes.outputs.code == 'true'
+    # The Windows leg is migrate-tool-test-windows below. This one-entry matrix
+    # keeps every matrix.os guard in the shared steps resolving.
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
-    defaults:
+    defaults: &migrate-tool-defaults
       run:
         working-directory: tools/migration
 
-    steps:
+    steps: &migrate-tool-test-steps
       - uses: actions/checkout@v7
 
       - name: Set up Go
@@ -800,6 +827,24 @@ jobs:
           path: tools/migration/coverage.out
           retention-days: 1
           if-no-files-found: ignore
+
+  # migrate-tool-test's Windows leg, split out like framework-test-windows. The
+  # shared defaults matter: without the working directory, go list resolves the
+  # framework module and the job goes green testing the wrong code.
+  migrate-tool-test-windows:
+    permissions:
+      contents: read
+    name: migrate-tool-test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      matrix:
+        os: [windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    defaults: *migrate-tool-defaults
+
+    steps: *migrate-tool-test-steps
 
   migrate-tool-build:
     permissions:
@@ -1074,6 +1119,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # ci-ok enforces only the jobs it needs, so a job missing from that list
+      # goes unenforced. The docs filter lists this file, so this runs on every
+      # edit of it. Schedule-only jobs belong in the grep -vxE exclusion.
+      - name: Assert every job except ci-ok and vuln-weekly is a ci-ok need
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          wf=.github/workflows/ci-v2.yml
+          # Match the key alone: a job key may carry an anchor or a comment.
+          jobs=$(awk '/^jobs:/{j=1;next} j && /^  [A-Za-z0-9_-]+:/{sub(/^  /,"");sub(/:.*/,"");print}' "$wf" \
+            | grep -vxE 'ci-ok|vuln-weekly' | sort)
+          [ -n "$jobs" ] || { echo "::error::could not read the job ids"; exit 1; }
+          needs=$(awk '/^  ci-ok:/{c=1;next} c && /^  [A-Za-z0-9_-]+:/{c=0} c && /^    needs:/{n=1;next}
+                       n && /^[[:space:]]*(#|$)/{next}
+                       n && /^      - /{sub(/^      - /,"");sub(/[[:space:]]*(#.*)?$/,"");print;next} n{n=0}' "$wf" | sort)
+          [ -n "$needs" ] || { echo "::error::could not read ci-ok needs"; exit 1; }
+          missing=$(comm -23 <(printf '%s\n' "$jobs") <(printf '%s\n' "$needs"))
+          [ -z "$missing" ] || { echo "::error::jobs missing from ci-ok needs: $missing"; exit 1; }
 
       - uses: actions/setup-node@v7
         with:
@@ -1366,7 +1430,9 @@ jobs:
   # here too.) Never add a job here whose `needs:` reference a job that is not —
   # that job's failure would reach this gate only as a tolerated 'skipped'.
   # vuln-weekly is schedule-only and intentionally absent.
-  # When you add a new PR job, add it to `needs:` here or it stays unenforced.
+  # When you add a new PR job, add it to `needs:` here or it stays unenforced;
+  # lint-docs fails the PR when one is missing (a new schedule-only job goes in
+  # that guard's exclusion instead).
   # A cancelled need must FAIL this gate — never gate it on !cancelled(): a
   # skipped ci-ok counts as passing, and the red ci-ok of a run cancelled by the
   # workflow-level group is what holds a twin's shared commit closed until the
@@ -1380,10 +1446,12 @@ jobs:
     needs:
       - changes
       - framework-test
+      - framework-test-windows
       - framework-integration-test
       - framework-merge-coverage
       - framework-build
       - migrate-tool-test
+      - migrate-tool-test-windows
       - migrate-tool-build
       - security-migrate-tool
       - lint-framework
