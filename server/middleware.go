@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	echootel "github.com/labstack/echo-opentelemetry"
+	echootel "github.com/labstack/echo-otel/v5"
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
 	"go.opentelemetry.io/otel"
@@ -59,37 +59,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	skipProbe := newProbeSkipper(healthPath, readyPath)
 
 	if observabilityEnabled {
-		e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
-			ServerName:     cfg.App.Name,
-			TracerProvider: otel.GetTracerProvider(),
-			Skipper:        middleware.Skipper(skipProbe),
-			MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
-				// echo-opentelemetry treats a non-empty MetricAttributes return as a
-				// REPLACEMENT for its default attribute set: Metrics.Record falls back to
-				// v.MetricAttributes() only when the returned slice is empty. Seeding from
-				// the defaults preserves the standard semconv metric attributes
-				// (http.request.method, http.response.status_code, http.route,
-				// server.address, server.port, url.scheme, network.protocol.*) that would
-				// otherwise be dropped, while still letting us append custom attributes.
-				attrs := v.MetricAttributes()
-
-				// Override url.scheme with a proxy-aware value. The library derives
-				// url.scheme from r.TLS alone; c.Scheme() also honors X-Forwarded-Proto,
-				// but only from a peer server.trustedproxies (or echo's private-range
-				// default) trusts. Appended after the defaults so our value wins
-				// attribute.Set's last-value-wins de-duplication (a duplicate url.scheme
-				// key is harmless).
-				attrs = append(attrs, attribute.String("url.scheme", c.Scheme()))
-
-				// Add error.type for 4xx/5xx responses (status code as string per HTTP semconv).
-				if v.HTTPResponseStatusCode >= 400 {
-					attrs = append(attrs, attribute.String("error.type", strconv.Itoa(v.HTTPResponseStatusCode)))
-				}
-
-				return attrs
-			},
-			SpanStartAttributes: overrideSpanURLPath,
-		}))
+		useOTelMiddleware(e, cfg, skipProbe)
 	}
 
 	// Enrich the request context in a single Request.WithContext clone: trace ID +
@@ -153,9 +123,56 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	}
 }
 
+// useOTelMiddleware registers the HTTP server instrumentation and, immediately inside it, a
+// panic-value sanitizer. echo-otel/v5 recovers a panic from the chain below it, records
+// "panic: <value>" as the span status description, and re-panics. Recover and its own
+// sanitizer sit further in, so a panic in a middleware between the two (request enrich,
+// CORS, IP pre-guard, tenant resolution, forwarded client cert, access log) would reach
+// the span by value. The sanitizer here re-panics such a panic as its type alone first
+// (ADR-081, ADR-132); a handler panic is already turned into an error by Recover.
+func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper) {
+	e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
+		ServerName:     cfg.App.Name,
+		TracerProvider: otel.GetTracerProvider(),
+		Skipper:        middleware.Skipper(skipProbe),
+		MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
+			// echo-otel treats a non-empty MetricAttributes return as a
+			// REPLACEMENT for its default attribute set: Metrics.Record falls back to
+			// v.MetricAttributes() only when the returned slice is empty. Seeding from
+			// the defaults preserves the standard semconv metric attributes
+			// (http.request.method, http.response.status_code, http.route, url.scheme,
+			// network.protocol.*, error.type) that would otherwise be dropped, while
+			// still letting us append custom attributes. server.address/server.port are
+			// not among them: echo-otel/v5 leaves those Opt-In attributes off metrics,
+			// and service.name already carries cfg.App.Name on every series (ADR-132).
+			attrs := v.MetricAttributes()
+
+			// Override url.scheme with a proxy-aware value. The library derives
+			// url.scheme from r.TLS alone; c.Scheme() also honors X-Forwarded-Proto,
+			// but only from a peer server.trustedproxies (or echo's private-range
+			// default) trusts. Appended after the defaults so our value wins
+			// attribute.Set's last-value-wins de-duplication (a duplicate url.scheme
+			// key is harmless).
+			attrs = append(attrs, attribute.String("url.scheme", c.Scheme()))
+
+			// Add error.type for 4xx/5xx responses (status code as string per HTTP semconv).
+			// echo-otel/v5 sets error.type itself only for a 5xx (a plain error's Go type
+			// name otherwise); appended after the defaults, the status code wins on every
+			// 4xx/5xx series, as before.
+			if v.HTTPResponseStatusCode >= 400 {
+				attrs = append(attrs, attribute.String("error.type", strconv.Itoa(v.HTTPResponseStatusCode)))
+			}
+
+			return attrs
+		},
+		SpanStartAttributes: overrideSpanURLPath,
+	}))
+	e.Use(sanitizePanicValue())
+}
+
 // overrideSpanURLPath rewrites the incoming-request span's url.path to the path the ROUTER
 // keyed on — the same value the access log records (routerPath, probe_skip.go). The library
-// fills url.path from r.URL.Path (echo-opentelemetry extrator.go), the DECODED spelling, so a
+// fills url.path from r.URL.Path (echo-otel extractor.go), the DECODED spelling, so a
 // percent-encoded request would otherwise pair a path it never reached with the http.route on
 // that very span.
 //

@@ -5961,7 +5961,7 @@ config.Load()
             → SetupMiddlewares()
                 → echootel.NewMiddlewareWithConfig(echootel.Config{ServerName: cfg.App.Name, TracerProvider: otel.GetTracerProvider(), ...})
                     // ↑ Captures the global provider — creates spans for ALL incoming HTTP requests
-                    // (package: github.com/labstack/echo-opentelemetry)
+                    // (package: github.com/labstack/echo-otel/v5, ADR-132)
 ```
 
 **Local verification:**
