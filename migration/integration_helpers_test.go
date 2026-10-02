@@ -77,8 +77,7 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	t.Cleanup(cancel)
 
-	cfg := containers.DefaultPostgreSQLConfig()
-	pg := containers.MustStartPostgreSQLContainer(ctx, t, cfg).WithCleanup(t)
+	pg := pgPool.Take(ctx, t)
 
 	host, err := pg.Host(ctx)
 	require.NoError(t, err, "pg container host")
@@ -108,9 +107,9 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 		migrationsDir: migrationsDir,
 		host:          host,
 		port:          port,
-		adminUser:     cfg.Username,
-		adminPassword: cfg.Password,
-		defaultDB:     cfg.Database,
+		adminUser:     pgCfg.Username,
+		adminPassword: pgCfg.Password,
+		defaultDB:     pgCfg.Database,
 		logger:        logger.New("disabled", true),
 	}
 }

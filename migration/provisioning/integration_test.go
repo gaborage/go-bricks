@@ -18,7 +18,6 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/migration"
 	testconsts "github.com/gaborage/go-bricks/testing"
-	"github.com/gaborage/go-bricks/testing/containers"
 )
 
 // testCtx returns a context bound to the test's deadline (if any) so DB
@@ -50,23 +49,22 @@ func newPGEnv(t *testing.T) *pgEnv {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	t.Cleanup(cancel)
 
-	cfg := containers.DefaultPostgreSQLConfig()
-	pg := containers.MustStartPostgreSQLContainer(ctx, t, cfg).WithCleanup(t)
+	pg := pgPool.Take(ctx, t)
 	host, err := pg.Host(ctx)
 	require.NoError(t, err)
 	port, err := pg.MappedPort(ctx)
 	require.NoError(t, err)
 
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-		cfg.Username, cfg.Password, host, port, cfg.Database)
+		pgCfg.Username, pgCfg.Password, host, port, pgCfg.Database)
 	db, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.PingContext(ctx))
 
 	return &pgEnv{
-		host: host, port: port, defaultDB: cfg.Database,
-		adminUser: cfg.Username, adminPwd: cfg.Password,
+		host: host, port: port, defaultDB: pgCfg.Database,
+		adminUser: pgCfg.Username, adminPwd: pgCfg.Password,
 		adminDB: db,
 		logger:  logger.New("disabled", true),
 	}

@@ -64,13 +64,20 @@ func (s *Shared[T]) Get(t *testing.T) T {
 		s.started = s.dockerOK && s.err == nil
 	})
 
-	if !s.dockerOK {
+	requireStarted(t, s.name, s.dockerOK, s.err)
+	return s.c
+}
+
+// requireStarted skips t when Docker was unavailable for a T-free start and fails
+// it when the start itself failed. name appears in the failure ("PostgreSQL").
+func requireStarted(t *testing.T, name string, dockerAvailable bool, err error) {
+	t.Helper()
+	if !dockerAvailable {
 		t.Skip(DockerUnavailableSkipMessage)
 	}
-	if s.err != nil {
-		t.Fatalf("Failed to start %s container: %v", s.name, s.err)
+	if err != nil {
+		t.Fatalf("Failed to start %s container: %v", name, err)
 	}
-	return s.c
 }
 
 // Close terminates the container if Get ever started one. Call it from TestMain

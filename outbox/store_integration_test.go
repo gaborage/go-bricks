@@ -17,7 +17,6 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/testing/containers"
 )
 
 // These tests prove against a REAL database what the unit suite can only assert against a
@@ -40,11 +39,11 @@ func itPoolConfig() config.PoolConfig {
 	}
 }
 
-// newPostgresIT starts a PostgreSQL container and returns a live connection plus a store.
-// MustStartPostgreSQLContainer skips the test when Docker is unavailable.
+// newPostgresIT takes a fresh PostgreSQL container and returns a live connection plus a store.
+// The pool skips the test when Docker is unavailable.
 func newPostgresIT(ctx context.Context, t *testing.T) (conn dbtypes.Interface, store Store, dsn string) {
 	t.Helper()
-	c := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	c := pgPool.Take(ctx, t)
 	dsn = c.ConnectionString()
 
 	conn, err := database.NewConnection(&config.DatabaseConfig{
