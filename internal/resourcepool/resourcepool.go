@@ -43,11 +43,6 @@ type Closer[V any] func(v V) error
 // last lease is released. See ADR-032.
 type ReleaseFunc func()
 
-// maxAcquireAttempts bounds GetOrCreate's acquire loop. Every waiter of a create holds a seed
-// lease reserved at install, so only Close can refuse a claim, and the next attempt then returns
-// ErrPoolClosed: the loop never reaches this bound.
-const maxAcquireAttempts = 4
-
 // PoolStats is a point-in-time snapshot of the pool's counters. Consumers adapt
 // it into their own stat shape (cache's typed ManagerStats, database/messaging's
 // map[string]any).
@@ -178,24 +173,19 @@ func New[V any](maxSize int, idleTTL time.Duration, closer Closer[V]) *Pool[V] {
 // only the panic value's type (ADR-081), leaving the pool usable.
 func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(context.Context) (V, error)) (V, ReleaseFunc, error) {
 	var zero V
-	for attempt := 0; attempt < maxAcquireAttempts; attempt++ {
-		e, c, err := p.leaseOrJoin(ctx, key, create)
-		if err != nil {
+	e, c, err := p.leaseOrJoin(ctx, key, create)
+	if err != nil {
+		return zero, nil, err
+	}
+	if c != nil {
+		if e, err = p.await(ctx, c); err != nil {
 			return zero, nil, err
 		}
-		if c != nil {
-			if e, err = p.await(ctx, c); err != nil {
-				return zero, nil, err
-			}
-			if !p.claimSeed(e) {
-				// Only Close refuses a reserved seed, so the next attempt returns ErrPoolClosed.
-				continue
-			}
+		if !p.claimSeed(e) {
+			return zero, nil, ErrPoolClosed
 		}
-		return e.value, p.makeRelease(e), nil
 	}
-
-	return zero, nil, fmt.Errorf("resourcepool: failed to acquire %q after %d attempts (pool churn)", key, maxAcquireAttempts)
+	return e.value, p.makeRelease(e), nil
 }
 
 // pendingCreate is one in-flight create for a key, shared by every GetOrCreate caller that
