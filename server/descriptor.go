@@ -176,11 +176,6 @@ func WithRawResponse() RouteOption {
 	}
 }
 
-// AddRoute is an alias for Register for consistency with test expectations
-func (r *RouteRegistry) AddRoute(descriptor *RouteDescriptor) {
-	r.Register(descriptor)
-}
-
 // RoutesByMethod filters routes by HTTP method
 func (r *RouteRegistry) RoutesByMethod(method string) []RouteDescriptor {
 	r.mu.RLock()
@@ -193,11 +188,6 @@ func (r *RouteRegistry) RoutesByMethod(method string) []RouteDescriptor {
 		}
 	}
 	return result
-}
-
-// RoutesByModule filters routes by module name (alias for ByModule)
-func (r *RouteRegistry) RoutesByModule(moduleName string) []RouteDescriptor {
-	return r.ByModule(moduleName)
 }
 
 // cloneDescriptor deep-copies slice fields and both JOSE policies so a registry

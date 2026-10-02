@@ -80,8 +80,8 @@ func TestRouteRegistryOperations(t *testing.T) {
 		Path:   "/users",
 	}
 
-	registry.AddRoute(&route1)
-	registry.AddRoute(&route2)
+	registry.Register(&route1)
+	registry.Register(&route2)
 
 	routes := registry.Routes()
 	assert.Len(t, routes, 2)
@@ -97,9 +97,9 @@ func TestRouteRegistryOperations(t *testing.T) {
 		Path:       "/products",
 		ModuleName: "products",
 	}
-	registry.AddRoute(&route3)
+	registry.Register(&route3)
 
-	moduleRoutes := registry.RoutesByModule("products")
+	moduleRoutes := registry.ByModule("products")
 	assert.Len(t, moduleRoutes, 1)
 	assert.Equal(t, "products", moduleRoutes[0].ModuleName)
 

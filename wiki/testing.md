@@ -364,8 +364,8 @@ A store port is judged by the SQL it emits, not by the unit tests that pin subst
 ## Server / HandlerContext Testing
 
 Unit-test a `Handler` or `MiddlewareFunc` without standing up a router by building a
-`HandlerContext` directly. Use `server.NewHandlerContextForTest` when no routing state is
-needed, or `server.NewHandlerContextForTestWithOptions` to seed it. The synthetic context is
+`HandlerContext` directly with `server.NewHandlerContextForTest`, passing construction
+options only when routing state is needed. The synthetic context is
 never routed, so routing-derived state is empty by default — seed only what the code under
 test reads:
 
@@ -395,7 +395,7 @@ func RouteTemplateRecorder(sink *string) server.MiddlewareFunc {
 
 func TestRouteTemplateRecorder(t *testing.T) {
     req := httptest.NewRequest(http.MethodGet, "/api/orders/42", http.NoBody)
-    c := server.NewHandlerContextForTestWithOptions(httptest.NewRecorder(), req, cfg,
+    c := server.NewHandlerContextForTest(httptest.NewRecorder(), req, cfg,
         server.WithRouteTemplate("/api/orders/:id"),
     )
 
