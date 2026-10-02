@@ -509,6 +509,25 @@ func TestBackoffForDoublesFromTheDrainInterval(t *testing.T) {
 	}
 }
 
+// TestBackoffForSaturatesAWrappingShiftAtTheCap pins the cap for an interval
+// whose overflowing shift wraps to a small positive value instead of going
+// non-positive: 2^40+1ns shifted 36 wraps to 2^36ns (~1m8s), not the cap.
+func TestBackoffForSaturatesAWrappingShiftAtTheCap(t *testing.T) {
+	drain := &HoldDrain{cfg: config.InboxHoldConfig{DrainInterval: 1099511627777, MaxBackoff: 168 * time.Hour}}
+
+	for _, tc := range []struct {
+		name     string
+		attempts int
+	}{
+		{"shift_36_wraps_positive", 37},
+		{"shift_40_wraps_positive", 41},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, 168*time.Hour, drain.backoffFor(tc.attempts))
+		})
+	}
+}
+
 // TestDrainDefersOnTheNextAttemptNumber pins that a deferred tenant is backed off
 // by the attempt it is ABOUT to make, not the one it already made: a tenant with
 // two attempts behind it waits the third attempt's interval.
