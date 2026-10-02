@@ -309,10 +309,9 @@ jobs:
         name: Put Go caches on the work disk
         if: runner.os == 'Windows'
         shell: pwsh
-        working-directory: ${{ github.workspace }}
         run: |
           $d = Split-Path -Qualifier $env:GITHUB_WORKSPACE
-          if ($d -and $d -ne 'C:') { "GOCACHE=$d\go-build" >> $env:GITHUB_ENV; "GOMODCACHE=$d\go-mod" >> $env:GITHUB_ENV }
+          if ($d -ne 'C:') { "GOCACHE=$d\go-build" >> $env:GITHUB_ENV; "GOMODCACHE=$d\go-mod" >> $env:GITHUB_ENV }
 
       - *fw-setup-go
 
