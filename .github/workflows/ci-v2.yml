@@ -195,9 +195,9 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     # Pinned ahead of ubuntu-latest's move to 26.04: setup-go keys its cache
-    # by runner image, so legs alternating images miss it. matrix.os stays
-    # ubuntu-latest to keep the matrix.os guards and the check names.
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
+    # by runner image, so jobs alternating images miss it. matrix.os stays
+    # ubuntu-latest to keep the check names (and migrate-tool-build's guards).
+    runs-on: ubuntu-26.04
 
     # framework-test-windows aliases the three anchored steps, so an edit to
     # one of them here changes both jobs (GitHub has no `<<:` merge keys).
@@ -750,7 +750,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v7
@@ -798,7 +798,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
+    runs-on: ubuntu-26.04
     defaults: &migrate-tool-defaults
       run:
         working-directory: tools/migration
