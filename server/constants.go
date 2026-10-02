@@ -1,5 +1,7 @@
 package server
 
+// S31 A/B no-op (scratch only): shifts this file's positions.
+
 import "time"
 
 // Standardized API error codes used in APIErrorResponse envelopes.
