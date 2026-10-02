@@ -18,8 +18,8 @@ inputs:
   family:
     description: >-
       Cache family; it also picks the dependency files the key hashes:
-      fw-build and fw-light go.sum and go.mod; fw-integ and mt-test the
-      framework and tools/migration go.sum and go.mod plus go.work and
+      fw-build, fw-light and fw-test go.sum and go.mod; fw-integ and mt-test
+      the framework and tools/migration go.sum and go.mod plus go.work and
       go.work.sum; mt-build tools/migration/go.sum and go.mod.
     required: true
   writer:
@@ -52,7 +52,7 @@ runs:
         # whose files are all missing ('' is falsy) ends on '' for the guard.
         HASH: >-
           ${{
-          (inputs.family == 'fw-build' || inputs.family == 'fw-light') && hashFiles('go.sum', 'go.mod')
+          (inputs.family == 'fw-build' || inputs.family == 'fw-light' || inputs.family == 'fw-test') && hashFiles('go.sum', 'go.mod')
           || (inputs.family == 'fw-integ' || inputs.family == 'mt-test') && hashFiles('go.sum', 'go.mod', 'tools/migration/go.sum', 'tools/migration/go.mod', 'go.work', 'go.work.sum')
           || inputs.family == 'mt-build' && hashFiles('tools/migration/go.sum', 'tools/migration/go.mod')
           || ''

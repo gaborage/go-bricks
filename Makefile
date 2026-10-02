@@ -135,7 +135,7 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 # skipped rather than passed to golangci-lint, is in wiki/linting.md (#1757).
 # An already-installed binary at the pinned version is preferred over `go run`:
 # CI's lint jobs have one on PATH from golangci-lint-action, and building it from
-# source there costs minutes that setup-go's go.sum-keyed cache never warms. The
+# source there costs minutes that CI's Go build cache never warms. The
 # comparison strips a leading `v` from both sides — `golangci-lint version` prints
 # `has version 2.13.2`, unprefixed, so matching the pin literally never fires and
 # the fast path is silently dead.
