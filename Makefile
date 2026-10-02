@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec install-gosec verify-mod mutate mutate-baseline release release-cli
 # verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
 # -j check` that would race lint/test reading the same module files. Force
 # check's prerequisites to run serially regardless of -j.
@@ -127,7 +127,7 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 	@if [ "$(LINT_CLEAN)" = "1" ]; then \
 		GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) cache clean; \
 	fi
-	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m
+	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=10m
 	@$(MAKE) --no-print-directory lint-race
 
 # The race side of the race/!race pair, which .golangci.yml cannot declare without
@@ -153,7 +153,7 @@ lint-race: ## Lint the race side of the race/!race pair (own target so CI calls 
 		gcl="go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)"; src="go run (pinned source)"; \
 	fi; \
 	echo "lint-race: via $$src, (integration,race) over $$pkgs"; \
-	GOWORK=off $$gcl run --timeout=5m --build-tags=integration,race $$pkgs
+	GOWORK=off $$gcl run --timeout=10m --build-tags=integration,race $$pkgs
 
 # No globs on the command line: .markdownlint-cli2.jsonc owns both `globs` and
 # `ignores`, so the file set has one definition that this target, CI, and an
@@ -239,6 +239,9 @@ sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
 		$(GOSEC_BIN) -exclude=G103,G104 -tags integration,race $$pkgs; \
 	fi
 	GOOS=windows $(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
+
+# CI retries this before `make sec`, which then finds the binary in place.
+install-gosec: $(GOSEC_BIN) ## Install the pinned gosec binary (no-op when present)
 
 $(GOSEC_BIN):
 	GOBIN=$(GOSEC_DIR) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)

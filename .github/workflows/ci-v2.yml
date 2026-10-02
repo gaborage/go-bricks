@@ -17,6 +17,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Each job's timeout-minutes is at least 2.5x its longest run, failures
+# included, so it cancels only a hang, which would otherwise hold a runner for
+# GitHub's 360-minute default. A timed-out need fails ci-ok.
 jobs:
   # ============================================================================
   # Job 1: Detect which components changed
@@ -26,6 +29,7 @@ jobs:
       contents: read
     if: github.event_name != 'schedule'
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     outputs:
       # yamllint: valid GitHub Actions context expression
       framework: ${{ steps.filter.outputs.framework }}
@@ -202,9 +206,11 @@ jobs:
     # runner image, so jobs alternating images miss it. matrix.os stays
     # ubuntu-latest to keep the check names (and migrate-tool-build's guards).
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
 
     # framework-test-windows aliases the three anchored steps, so an edit to
     # one of them here changes both jobs (GitHub has no `<<:` merge keys).
+    # Every other job's Download dependencies aliases *go-mod-download or its run text.
     steps:
       - &fw-checkout
         uses: actions/checkout@v7
@@ -222,9 +228,18 @@ jobs:
           family: fw-test
           writer: 'true'
 
-      - &fw-download
+      # Only the proxy fetch is retried: a go.sum mismatch fails every attempt
+      # alike. bash, not the Windows default, so the Windows aliases run it too.
+      - &go-mod-download
         name: Download dependencies
-        run: go mod download
+        shell: bash
+        run: &go-mod-download-retry |
+          for delay in 15 30; do
+            go mod download && exit 0
+            echo "::warning title=network retry::go mod download failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
+          go mod download
 
       # Compile only, with the test step's build flags, so the save stores no
       # test result or vet verdict (the writer rule in .github/actions/go-cache).
@@ -298,6 +313,7 @@ jobs:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
 
     steps:
       - *fw-checkout
@@ -323,7 +339,7 @@ jobs:
           family: fw-build
           writer: 'true'
 
-      - *fw-download
+      - *go-mod-download
 
       # framework-build's Windows leg, overlapping the tests. It gates in its
       # body, not with if: (a wait on a skipped background step is
@@ -451,6 +467,7 @@ jobs:
     # Gates on `code` so integration coverage is part of every merged report.
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 45
     env:
       # Provides the real Flyway binary the integration test runs against; the
       # migration/testdata/flyway files are captured JSON-output samples used by
@@ -478,8 +495,8 @@ jobs:
       # Pulls overlap the setup steps below; the wait step before the tests
       # joins them. Fail-closed (#993) now rests on that wait failing when this
       # step fails, so never add continue-on-error here. Wait steps have no
-      # timeout and this job sets none, so timeout-minutes bounds a hung pull
-      # (observed pulls finish in under 30s).
+      # timeout, so timeout-minutes bounds a hung pull (observed pulls finish
+      # in under 30s).
       - name: Pre-pull container images
         id: prepull
         background: true
@@ -521,8 +538,7 @@ jobs:
           family: fw-integ
           writer: 'true'
 
-      - name: Download dependencies
-        run: go mod download
+      - *go-mod-download
 
       # Compile only, so the save stores no test result or vet verdict (the
       # writer rule in .github/actions/go-cache).
@@ -555,7 +571,7 @@ jobs:
           # mid-11.x (last one is 11.8.2). The SHA256 check below keeps this host
           # integrity-pinned.
           url="https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
-          curl -fsSL "$url" -o /tmp/flyway.tar.gz
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "$url" -o /tmp/flyway.tar.gz
           actual="$(sha256sum /tmp/flyway.tar.gz | awk '{print $1}')"
           if [ "$actual" != "$FLYWAY_SHA256" ]; then
             echo "Flyway tarball checksum mismatch:"
@@ -643,6 +659,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ubuntu-26.04
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v7
@@ -663,8 +680,7 @@ jobs:
           family: fw-build
           writer: 'true'
 
-      - name: Download dependencies
-        run: go mod download
+      - *go-mod-download
 
       - name: Build (Unix)
         id: build
@@ -899,6 +915,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     defaults: &migrate-tool-defaults
       run:
         working-directory: tools/migration
@@ -921,8 +938,7 @@ jobs:
           family: mt-test
           writer: 'true'
 
-      - name: Download dependencies
-        run: go mod download
+      - *go-mod-download
 
       # Compile only, so the save stores no test result or vet verdict (the
       # writer rule in .github/actions/go-cache). Each mirrors its test step's
@@ -1003,6 +1019,7 @@ jobs:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     defaults: *migrate-tool-defaults
 
     steps: *migrate-tool-test-steps
@@ -1017,6 +1034,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
       fail-fast: false
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 15 || 25 }}
     defaults:
       run:
         working-directory: tools/migration
@@ -1054,7 +1072,8 @@ jobs:
         # Same reasoning as lint-framework's GOWORK env, adapted.
         env:
           GOWORK: "off"
-        run: go mod download
+        shell: bash
+        run: *go-mod-download-retry
 
       - name: Build and validate CLI (Unix)
         if: matrix.os != 'windows-latest'
@@ -1102,7 +1121,7 @@ jobs:
         with:
           version: v2.14.0
           working-directory: tools/migration
-          args: --timeout=5m
+          args: --timeout=10m
           skip-save-cache: ${{ github.event_name != 'push' }}
 
       # Reuses the binary the linux pass put on PATH, and its lint cache on disk.
@@ -1114,7 +1133,7 @@ jobs:
         with:
           install-mode: none
           working-directory: tools/migration
-          args: --timeout=5m
+          args: --timeout=10m
           skip-cache: true
 
       # The race side of the race/!race pair (#1757; rationale in wiki/linting.md).
@@ -1138,6 +1157,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.migrate_tool == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: tools/migration
@@ -1156,7 +1176,7 @@ jobs:
         with:
           family: mt-build
 
-      # security-framework aliases the four anchored gosec steps; each job's
+      # security-framework aliases the anchored gosec steps; each job's
       # working directory picks the Makefile. The key hashes the binary rule's
       # recipe, which carries the pinned version, so a bump or an edited rule
       # never reuses a binary; exact key only.
@@ -1195,6 +1215,18 @@ jobs:
           GOSEC_PATH: ${{ steps.gosec-key.outputs.bin }}
         run: rm -f "$GOSEC_PATH"
 
+      # Only the fetch retries; make sec runs once. A restored binary leaves
+      # install-gosec nothing to do.
+      - &gosec-install
+        name: Install gosec
+        run: |
+          for delay in 15 30; do
+            make install-gosec && exit 0
+            echo "::warning title=network retry::gosec install failed; retrying in ${delay}s"
+            sleep "$delay"
+          done
+          make install-gosec
+
       - name: Run gosec (migrate tool)
         run: make sec
 
@@ -1217,6 +1249,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v7
@@ -1255,7 +1288,7 @@ jobs:
           GOWORK: "off"
         with:
           version: v2.14.0
-          args: --timeout=5m
+          args: --timeout=10m
           skip-save-cache: ${{ github.event_name != 'push' }}
 
       # Reuses the binary the linux pass put on PATH, and its lint cache on disk.
@@ -1266,7 +1299,7 @@ jobs:
           GOOS: windows
         with:
           install-mode: none
-          args: --timeout=5m
+          args: --timeout=10m
           skip-cache: true
 
       # internal/racedetect/race.go is read by this pass and no other (#1757).
@@ -1293,6 +1326,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v7
@@ -1314,6 +1348,8 @@ jobs:
 
       - *gosec-drop-partial
 
+      - *gosec-install
+
       - name: Run gosec (framework)
         run: make sec
 
@@ -1324,6 +1360,7 @@ jobs:
       contents: read
     if: github.event_name == 'schedule'
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1357,6 +1394,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
@@ -1411,6 +1449,7 @@ jobs:
       contents: read
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v7
@@ -1440,6 +1479,7 @@ jobs:
       (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
       (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     # No concurrency group here: a cancelled scan fails ci-ok, so nothing may
     # cancel one. The workflow-level group already leaves one live run per PR,
     # and scans of overlapping main pushes may run side by side (the scan only
@@ -1457,24 +1497,75 @@ jobs:
       # days, so re-running this job alone finds them. They unpack under
       # runner.temp and only the three profiles are copied into the checkout:
       # this job holds SONAR_TOKEN, so no other file an artifact carries may
-      # land in the tree the merge and the scan run from.
+      # land in the tree the merge and the scan run from. Each download retries
+      # once for a transient artifact-service error.
       - name: Download unit test coverage
+        id: dl_unit
+        continue-on-error: true
         uses: actions/download-artifact@v8
-        with:
+        with: &dl-unit
           name: coverage-unit
           path: ${{ runner.temp }}/cov/unit
 
-      - name: Download integration test coverage
+      - name: Download unit test coverage (retry)
+        id: dl_unit_retry
+        if: steps.dl_unit.outcome == 'failure'
         uses: actions/download-artifact@v8
-        with:
+        with: *dl-unit
+
+      - name: Download integration test coverage
+        id: dl_integration
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with: &dl-integration
           name: coverage-integration
           path: ${{ runner.temp }}/cov/integration
 
-      - name: Download migrate tool coverage
+      - name: Download integration test coverage (retry)
+        id: dl_integration_retry
+        if: steps.dl_integration.outcome == 'failure'
         uses: actions/download-artifact@v8
-        with:
+        with: *dl-integration
+
+      - name: Download migrate tool coverage
+        id: dl_migrate
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with: &dl-migrate
           name: migrate-tool-coverage-report
           path: ${{ runner.temp }}/cov/migrate
+
+      - name: Download migrate tool coverage (retry)
+        id: dl_migrate_retry
+        if: steps.dl_migrate.outcome == 'failure'
+        uses: actions/download-artifact@v8
+        with: *dl-migrate
+
+      # A failed retry fails the job itself; without this, a renamed id skips the
+      # retry and leaves a failed download green.
+      - name: Assert every coverage download passed
+        env:
+          UNIT: ${{ steps.dl_unit.outcome }}
+          UNIT_RETRY: ${{ steps.dl_unit_retry.outcome }}
+          INTEGRATION: ${{ steps.dl_integration.outcome }}
+          INTEGRATION_RETRY: ${{ steps.dl_integration_retry.outcome }}
+          MIGRATE: ${{ steps.dl_migrate.outcome }}
+          MIGRATE_RETRY: ${{ steps.dl_migrate_retry.outcome }}
+        run: |
+          set -euo pipefail
+          # $1 names the download, $2 and $3 are its two attempts' outcomes.
+          passed() {
+            [ "$2" = success ] && return 0
+            if [ "$3" = success ]; then
+              echo "::warning title=network retry::$1 download failed once; the retry passed"
+              return 0
+            fi
+            echo "::error::$1 download: no attempt passed (first: ${2:-none}, retry: ${3:-none})"
+            return 1
+          }
+          passed coverage-unit "$UNIT" "$UNIT_RETRY"
+          passed coverage-integration "$INTEGRATION" "$INTEGRATION_RETRY"
+          passed migrate-tool-coverage-report "$MIGRATE" "$MIGRATE_RETRY"
 
       - name: Stage coverage profiles
         run: |
@@ -1482,6 +1573,9 @@ jobs:
           cp "$RUNNER_TEMP/cov/unit/coverage.out" coverage.out
           cp "$RUNNER_TEMP/cov/integration/coverage-integration.out" coverage-integration.out
           cp "$RUNNER_TEMP/cov/migrate/coverage.out" tools/migration/coverage.out
+          for f in coverage.out coverage-integration.out tools/migration/coverage.out; do
+            test -s "$f" || { echo "::error::downloaded coverage profile $f is empty"; exit 1; }
+          done
 
       - name: Merge coverage files
         run: |
@@ -1623,10 +1717,34 @@ jobs:
           echo ""
           echo "✓ Coverage merge complete - ready for SonarCloud"
 
+      # One retry for a SonarCloud 5xx or a scanner-download error. The scan only
+      # uploads (no quality-gate wait), so a retry cannot change a verdict.
       - name: Scan
+        id: scan
+        continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9  # v8.3.0
-        env:
+        env: &sonar-env
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Scan (retry)
+        id: scan_retry
+        if: steps.scan.outcome == 'failure'
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9  # v8.3.0
+        env: *sonar-env
+
+      # As with the downloads: without this, a renamed id leaves a failed scan green.
+      - name: Assert a scan attempt passed
+        env:
+          SCAN: ${{ steps.scan.outcome }}
+          SCAN_RETRY: ${{ steps.scan_retry.outcome }}
+        run: |
+          [ "$SCAN" = success ] && exit 0
+          if [ "$SCAN_RETRY" = success ]; then
+            echo "::warning title=network retry::the SonarCloud scan failed once; the retry passed"
+            exit 0
+          fi
+          echo "::error::no SonarCloud scan attempt passed (first: ${SCAN:-none}, retry: ${SCAN_RETRY:-none})"
+          exit 1
 
   # ============================================================================
   # CI gate (fan-in aggregator — the single required status check on main)
@@ -1675,6 +1793,7 @@ jobs:
       - llms-version
       - sonarcloud
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     steps:
       - name: Verify all required jobs passed
         env:
