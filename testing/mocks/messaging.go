@@ -13,17 +13,17 @@ import (
 //
 // Example usage:
 //
-//	mockClient := mocks.NewMockMessagingClient()
-//	mockClient.On("Publish", mock.Anything, "user.created", mock.Anything).Return(nil)
-//	mockClient.On("IsReady").Return(true)
+//	client := mocks.NewMockAMQPClient()
+//	client.ExpectIsReady(true)
+//	client.ExpectConsumeFromQueueAny(nil)
 //
-//	// Simulate incoming messages
-//	mockClient.SimulateMessage("test.queue", []byte(`{"event": "test"}`))
+//	// Simulate an incoming message and read it back
+//	deliveries, _ := client.ConsumeFromQueue(ctx, messaging.ConsumeOptions{Queue: "test.queue"})
+//	client.SimulateMessage("test.queue", []byte(`{"event": "test"}`))
 type MockMessagingClient struct {
 	mock.Mock
 
-	// Message simulation
-	// read back via (*MockAMQPClient).ConsumeFromQueue
+	// Message simulation, read back via (*MockAMQPClient).ConsumeFromQueue
 	messageChannels map[string]chan amqp.Delivery
 	mu              sync.RWMutex
 	isReady         bool

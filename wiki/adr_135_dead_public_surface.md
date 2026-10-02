@@ -72,18 +72,17 @@ constants in `testing` stay.
 
 ## Consequences
 
-- **Breaking, compile-caught but for two cases.** Every affected site fails to build except a
-  type assertion to `*mocks.MockMessagingClient` and a testify expectation keyed `"Consume"`
-  (`[C71.4]`). `go vet ./...` also names the
-  sites in `_test.go` files, where the trace helpers, mocks and test constants mostly live. A file
-  that already imports `go.opentelemetry.io/otel/trace` must alias one of the two `trace` packages.
+- **Breaking, compile-caught but for two cases.** Every affected site fails to build except the
+  two cases below. `go vet ./...` also names the sites in `_test.go` files, where the trace
+  helpers, mocks and test constants mostly live. A file that already imports
+  `go.opentelemetry.io/otel/trace` must alias one of the two `trace` packages.
 - `trace` is the only package exporting `WithTraceID` and `EnsureTraceID`, so the `[C60.8]` grep
   sees a planted id again unless the consumer imports `trace` under an alias that does not end
   in `trace`.
 - `server` no longer imports `httpclient`, in production or in its tests.
 - A variable typed `*mocks.MockMessagingClient` that holds one of the three fixtures changes type.
-  A type assertion to `*mocks.MockMessagingClient` on one still compiles and fails at run time
-  (`[C71.16]`).
+  Two cases still compile and fail at run time (`[C71.16]`): a type assertion or type switch to
+  `*mocks.MockMessagingClient` and a testify expectation keyed `"Consume"`.
 - The framework's runtime behavior does not change. Each removal is a second spelling or an unused
   name.
 

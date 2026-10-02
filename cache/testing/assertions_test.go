@@ -124,6 +124,7 @@ func TestAssertOperationCountAtLeast(t *testing.T) {
 		mock.Get(ctx, "key")
 	}
 
+	AssertOperationCountAtLeast(t, mock, OpGet, 5)
 	AssertOperationCountAtLeast(t, mock, OpGet, 10)
 }
 

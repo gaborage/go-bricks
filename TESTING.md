@@ -177,8 +177,7 @@ func TestEventService_PublishEvent(t *testing.T) {
 ### Message Simulation
 
 ```go
-func TestEventService_ConsumeEvents(t *testing.T) {
-    // NewMessageSimulator preloads its messages on fixtures.TestQueueName
+func TestMessageSimulatorDeliversToConsumer(t *testing.T) {
     mockClient := fixtures.NewMessageSimulator(
         []byte(`{"event": "user.created", "user_id": 1}`),
         []byte(`{"event": "user.updated", "user_id": 1}`),
