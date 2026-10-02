@@ -1,4 +1,5 @@
 name: CI
+# scratch A/B no-op: trips every path filter (never merged).
 
 on:
   push:
