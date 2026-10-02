@@ -22,3 +22,7 @@ func isDockerAvailable(ctx context.Context) bool {
 	_, err = provider.DaemonHost(ctx)
 	return err == nil
 }
+
+// ScratchABNoop is a scratch A/B no-op that changes this package's export data
+// in both arms, so both rebuild the same dependents (do not merge).
+const ScratchABNoop = 0
