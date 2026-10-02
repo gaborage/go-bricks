@@ -368,10 +368,10 @@ jobs:
         shell: pwsh
         env:
           # A saving run saves the job's GOCACHE after the wait below, so its
-          # race build goes elsewhere and the entry keeps winbuild's plain build
-          # output, with no test result or vet verdict. Otherwise env.GOCACHE
-          # keeps the job's cache: the work disk, or '' (Go's default) when the
-          # work-disk step set none. A bare '' would put it back on C:.
+          # tests go elsewhere and the entry keeps only build output, with no
+          # test result or vet verdict. Otherwise env.GOCACHE keeps the job's
+          # cache: the work disk, or '' (Go's default) when the work-disk step
+          # set none. A bare '' would put it back on C:.
           GOCACHE: ${{ steps.gocache.outputs.save == 'true' && format('{0}\go-build-race', runner.temp) || env.GOCACHE }}
         run: |
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
@@ -452,6 +452,18 @@ jobs:
       # and reject if:.
       - name: Wait for Windows build
         wait: winbuild
+
+      # Compile only, with the test step's build flags, so readers' tests
+      # start warm and the save stores no test result or vet verdict (the
+      # writer rule in .github/actions/go-cache). After the tests, not beside
+      # them: two cold race builds at once slowed both.
+      - name: Warm the build cache (compile only)
+        if: steps.gocache.outputs.save == 'true'
+        shell: pwsh
+        run: |
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
+          go test -c -vet=off -race -o NUL $packages
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
