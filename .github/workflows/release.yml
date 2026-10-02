@@ -181,3 +181,29 @@ jobs:
           else
             gh issue create --title "$title" --body "$msg" || echo "issue create failed (non-fatal)"
           fi
+
+  # Must follow publish: release-please opens nothing while the merged Release PR is labeled pending.
+  refresh-release-please:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write   # re-run or dispatch release-please
+    steps:
+      - name: Re-run release-please on the release commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Keep every gh call guarded: a failed refresh must warn, never turn a published release red.
+          # Re-run only main's newest run, so an older commit's copy of the workflow never replays.
+          run_id="$(gh run list --workflow release-please.yml --branch main --event push --limit 1 \
+            --json databaseId,headSha,conclusion \
+            --jq '.[0] | select(.headSha == env.GITHUB_SHA and .conclusion == "failure") | .databaseId')" || run_id=""
+          if [ -n "$run_id" ] && gh run rerun "$run_id" --failed; then
+            echo "Re-ran release-please run $run_id"
+          elif gh workflow run release-please.yml --ref main; then
+            echo "Dispatched release-please on main"
+          else
+            echo "::warning::Could not refresh release-please; run it by hand (Actions → release-please → Run workflow)."
+          fi

@@ -95,10 +95,10 @@ git -c gpg.ssh.allowedSignersFile=.github/allowed_signers tag -v vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-`release.yml` re-verifies the tagged commit, publishes the GitHub Release, and clears
-the `autorelease: pending` label; the next push to `main` (or a manual `release-please`
-run via *Actions → release-please → Run workflow*) then opens the Release PR for
-everything merged since.
+`release.yml` re-verifies the tagged commit, publishes the GitHub Release, clears
+the `autorelease: pending` label, and then refreshes `release-please`, which opens the
+Release PR for everything merged since. If that job warns instead, run `release-please` by
+hand via *Actions → release-please → Run workflow*.
 
 ## 3. What `release.yml` does (on tag push)
 
@@ -106,7 +106,9 @@ Re-verifies the **tagged commit** independently — **framework**: build + `go t
 `go mod tidy` + `make vuln`/`make sec`; **CLI**: build + `validate-cli` + `make vuln`/`make sec`
 — asserts the tag is annotated + SSH-signature-valid against `.github/allowed_signers` on `main`,
 publishes the GitHub Release using the `CHANGELOG.md` section as the body, then clears the merged
-Release PR's `autorelease: pending` label. CI never signs.
+Release PR's `autorelease: pending` label. A last job then re-runs the release commit's
+`release-please` run (red by construction, since the tag follows the merge) or dispatches a fresh
+one; if neither works it only warns, and the release stays green. CI never signs.
 
 ## 4. If the release fails
 
