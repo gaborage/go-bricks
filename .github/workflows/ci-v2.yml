@@ -1046,26 +1046,36 @@ jobs:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
       # All three coverage jobs gate on `code`, so on any non-doc change they
-      # all ran and uploaded their artifacts. Download them unconditionally —
-      # a missing artifact is a real failure and the merge guard below catches it.
-      # The producers keep them 7 days, so re-running this job alone finds them.
+      # all ran and uploaded their artifacts. Download them unconditionally — a
+      # missing artifact fails its download step. The producers keep them 7
+      # days, so re-running this job alone finds them. They unpack under
+      # runner.temp and only the three profiles are copied into the checkout:
+      # this job holds SONAR_TOKEN, so no other file an artifact carries may
+      # land in the tree the merge and the scan run from.
       - name: Download unit test coverage
         uses: actions/download-artifact@v8
         with:
           name: coverage-unit
-          path: .
+          path: ${{ runner.temp }}/cov/unit
 
       - name: Download integration test coverage
         uses: actions/download-artifact@v8
         with:
           name: coverage-integration
-          path: .
+          path: ${{ runner.temp }}/cov/integration
 
       - name: Download migrate tool coverage
         uses: actions/download-artifact@v8
         with:
           name: migrate-tool-coverage-report
-          path: tools/migration
+          path: ${{ runner.temp }}/cov/migrate
+
+      - name: Stage coverage profiles
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/cov/unit/coverage.out" coverage.out
+          cp "$RUNNER_TEMP/cov/integration/coverage-integration.out" coverage-integration.out
+          cp "$RUNNER_TEMP/cov/migrate/coverage.out" tools/migration/coverage.out
 
       - name: Merge coverage files
         run: |
@@ -1206,11 +1216,6 @@ jobs:
 
           echo ""
           echo "✓ Coverage merge complete - ready for SonarCloud"
-
-      # coverage.out is the scan's only coverage input; keep the merge inputs
-      # out of the scanned tree.
-      - name: Remove per-producer coverage profiles
-        run: rm -f coverage-integration.out tools/migration/coverage.out
 
       - name: Scan
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9  # v8.3.0
