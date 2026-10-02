@@ -11547,19 +11547,22 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   dot-imports it.
 - scope: `NewTrackedDB(db *sql.DB, log, vendor, cfg)` returned a `*TrackedDB` that tracked
   `QueryContext`/`QueryRowContext`/`ExecContext`/`PrepareContext` and embedded the `*sql.DB`, so
-  every promoted `*sql.DB` method (`BeginTx`, `PingContext`, `Stats`, `Close`, the pool setters)
-  was reachable through it too. The framework never called it: `database.NewConnection` tracks
-  through `tracking.Connection`. The raw-`*sql.DB` wrapper is gone, and no framework type tracks
-  a bare `*sql.DB` any more.
+  the exported `DB` field and every other `*sql.DB` method (`Begin`/`BeginTx`, `Ping`/`PingContext`,
+  the context-less `Query`/`QueryRow`/`Exec`/`Prepare`, `Conn`, `Driver`, `Stats`, `Close`, the
+  pool setters) were reachable through it untracked. The framework never called it:
+  `database.NewConnection` tracks through `tracking.Connection`. The raw-`*sql.DB` wrapper is gone,
+  and no framework type tracks a bare `*sql.DB` any more.
 - gate: match = any hit kept above. no-match = otherwise.
 - apply: use `database.NewConnection`, which returns an already-tracked `types.Interface`; do not
   wrap it again with `NewTrackedConnection` (every operation would be tracked twice). If the
   `*sql.DB` must stay yours, implement `types.Interface` over it and wrap that with
   `database.NewTrackedConnection(conn, log, cfg)`. Method map: `QueryContext`/`QueryRowContext`/
-  `ExecContext`/`PrepareContext` → `Query`/`QueryRow`/`Exec`/`Prepare` (context first);
-  `BeginTx` → `BeginTx` returning `types.Tx`; `PingContext` → `Health`; `Stats()` →
-  `Stats()` returning `map[string]any`. Pool sizing moves to the `database.pool.*` config keys,
-  which the vendor constructors apply.
+  `ExecContext`/`PrepareContext` and the context-less `Query`/`QueryRow`/`Exec`/`Prepare` →
+  `Query`/`QueryRow`/`Exec`/`Prepare` (context first); `Begin`/`BeginTx` → `Begin(ctx)`/`BeginTx`
+  returning `types.Tx`; `Ping`/`PingContext` → `Health(ctx)`; `Stats()` → `Stats()` returning
+  `(map[string]any, error)`; `Close` unchanged. `Conn`, `Driver` and the `DB` field have no
+  counterpart on `types.Interface`. Pool sizing moves to the `database.pool.*` config keys, which
+  the vendor constructors apply.
 - verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`
 - ref: [ADR-134](adr_134_database_dead_tracking_surface.md) · `database/tracking.go`,
   `database/internal/tracking/connection.go`
