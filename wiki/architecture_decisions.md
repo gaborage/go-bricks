@@ -2229,8 +2229,9 @@ Names that only forward to another exported name, or that nothing references, fa
 test and are deleted with no `Deprecated:` window. `httpclient`'s trace constants and forwarders
 become `trace.*` (`TraceIDFromContext`, `TraceParentFromContext` and `TraceStateFromContext` become
 `trace.IDFromContext`, `ParentFromContext` and `StateFromContext`), so ADR-070's detection grep,
-which could not match `httpclient.WithTraceID(`, sees every call site again; `httpclient.IsJOSEError` becomes
-`jose.IsError`. `messaging.Client` keeps `Close` and `IsReady` and drops only `Consume`; three
+which could not match `httpclient.WithTraceID(`, sees every call site again unless `trace` is imported
+under an alias that does not end in `trace`; `httpclient.IsJOSEError` becomes `jose.IsError`.
+`messaging.Client` keeps `Close` and `IsReady` and drops only `Consume`; three
 `testing/fixtures` constructors return `*mocks.MockAMQPClient`, with the new
 `ExpectConsumeFromQueueAny`. A consumer inlines the literal of any removed `testing` constant, and
 the deprecated cache assertion becomes `AssertOperationCountAtLeast`. See [migrations.md](migrations.md) `[C71.13]`,

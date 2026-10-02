@@ -76,7 +76,8 @@ constants in `testing` stay.
   sites in `_test.go` files, where the trace helpers, mocks and test constants mostly live. A file
   that already imports `go.opentelemetry.io/otel/trace` must alias one of the two `trace` packages.
 - `trace` is the only package exporting `WithTraceID` and `EnsureTraceID`, so the `[C60.8]` grep
-  sees a planted id again unless the consumer aliased `trace` itself.
+  sees a planted id again unless the consumer imports `trace` under an alias that does not end
+  in `trace`.
 - `server` no longer imports `httpclient`, in production or in its tests.
 - A variable typed `*mocks.MockMessagingClient` that holds one of the three fixtures changes type.
 - No runtime behavior changes. Each removal is a second spelling or an unused name.
