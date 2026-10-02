@@ -198,8 +198,8 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-    # Pinned ahead of ubuntu-latest's move to 26.04: setup-go keys its cache
-    # by runner image, so jobs alternating images miss it. matrix.os stays
+    # Pinned ahead of ubuntu-latest's move to 26.04: the Go cache keys by
+    # runner image, so jobs alternating images miss it. matrix.os stays
     # ubuntu-latest to keep the check names (and migrate-tool-build's guards).
     runs-on: ubuntu-26.04
 
@@ -211,12 +211,16 @@ jobs:
 
       - &fw-setup-go
         name: Set up Go
-        id: setupgo
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-light
 
       - &fw-download
         name: Download dependencies
@@ -275,7 +279,7 @@ jobs:
     name: framework-test
     needs: changes
     # The tests gate on `code`, the build on `framework` (which alone lists all
-    # of scripts/**) or a cache miss, so the job runs on either filter.
+    # of scripts/**) or a saving run, so the job runs on either filter.
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.framework == 'true'
     strategy:
       matrix:
@@ -287,13 +291,21 @@ jobs:
 
       - *fw-setup-go
 
+      # This job writes fw-build's Windows entry.
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-build
+          writer: 'true'
+
       - *fw-download
 
       # framework-build's Windows leg, overlapping the tests. It gates in its
       # body, not with if: (a wait on a skipped background step is
-      # undocumented), and always builds on a cache miss so the entry setup-go
-      # saves holds the plain build output. Wait steps take no timeout, so
-      # timeout-minutes bounds a hung build.
+      # undocumented), and always builds on a saving run (push with an
+      # exact-key miss) so the saved entry holds the plain build output. Wait
+      # steps take no timeout, so timeout-minutes bounds a hung build.
       - name: Build (Windows)
         id: winbuild
         background: true
@@ -301,9 +313,10 @@ jobs:
         shell: pwsh
         env:
           FW: ${{ needs.changes.outputs.framework }}
-          HIT: ${{ steps.setupgo.outputs.cache-hit }}
+          EVENT: ${{ github.event_name }}
+          HIT: ${{ steps.gocache.outputs.exact-hit }}
         run: |
-          if ($env:FW -ne 'true' -and $env:HIT -eq 'true') { exit 0 }
+          if ($env:FW -ne 'true' -and -not ($env:EVENT -eq 'push' -and $env:HIT -ne 'true')) { exit 0 }
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
           if (-not $packages) {
             Write-Host "No packages found to build"
@@ -315,11 +328,12 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         shell: pwsh
         env:
-          # On a cache miss setup-go saves the default GOCACHE after the job, so
-          # the race build goes elsewhere and the saved entry keeps winbuild's
-          # plain build output. On a hit, the empty value falls back to the
-          # warm default.
-          GOCACHE: ${{ steps.setupgo.outputs.cache-hit != 'true' && format('{0}\go-build-race', runner.temp) || '' }}
+          # A saving run (push with an exact-key miss) saves the default
+          # GOCACHE after the wait below, so its race build goes elsewhere and
+          # the entry keeps winbuild's plain build output, with no test result
+          # or vet verdict. Otherwise the empty value falls back to the warm
+          # default.
+          GOCACHE: ${{ github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true' && format('{0}\go-build-race', runner.temp) || '' }}
         run: |
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
           if (-not $packages) {
@@ -380,6 +394,17 @@ jobs:
       # and reject if:.
       - name: Wait for Windows build
         wait: winbuild
+
+      - name: Expire test results before the Go cache save
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go clean -testcache
+
+      - name: Save Go cache
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
 
   framework-integration-test:
     permissions:
@@ -588,8 +613,14 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-build
+          writer: 'true'
 
       - name: Download dependencies
         run: go mod download
@@ -604,6 +635,18 @@ jobs:
             echo "No packages found to build"
             exit 1
           fi
+
+      # Save first: no step after this point reaches the saved entry.
+      - name: Expire test results before the Go cache save
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go clean -testcache
+
+      - name: Save Go cache
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
 
       - name: Verify go mod (Ubuntu only)
         run: make verify-mod
@@ -758,8 +801,16 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: tools/migration/go.mod
-          cache: true
-          cache-dependency-path: tools/migration/go.sum
+          cache: false
+
+      # The Windows leg writes mt-build's Windows entry; CodeQL's migrate-tool leg
+      # writes the Linux one this leg reads.
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: mt-build
+          writer: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
       - name: Download dependencies
         # Every step below runs in tools/migration, which the go command resolves
@@ -791,6 +842,17 @@ jobs:
           ./go-bricks-migrate.exe version
           ./go-bricks-migrate.exe --help
           Write-Host "CLI validation passed"
+
+      - name: Expire test results before the Go cache save
+        if: success() && runner.os == 'Windows' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go clean -testcache
+
+      - name: Save Go cache
+        if: success() && runner.os == 'Windows' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
 
       # The steps below run on the Linux leg only, keyed on runner.os rather
       # than the matrix label so pinning that label cannot silently skip them.
@@ -860,8 +922,13 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: tools/migration/go.mod
-          cache: true
-          cache-dependency-path: tools/migration/go.sum
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: mt-build
 
       - name: Run gosec (migrate tool)
         run: make sec
@@ -884,8 +951,14 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-light
+          writer: 'true'
 
       # Two platform-scoped passes, distinctly named so a failure says which GOOS
       # produced it. golangci-lint analyzes exactly one GOOS — the runner's
@@ -931,6 +1004,19 @@ jobs:
       - name: Build-tag allowlist guard
         run: make check-tags
 
+      # golangci-lint runs its analyzers in process and this job runs no
+      # go test or go vet, so the entry holds build output and modules only.
+      - name: Expire test results before the Go cache save
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go clean -testcache
+
+      - name: Save Go cache
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
+
   security-framework:
     permissions:
       contents: read
@@ -945,8 +1031,13 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-light
 
       - name: Run gosec (framework)
         run: make sec
@@ -965,8 +1056,12 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-light
       - name: Run govulncheck (framework)
         run: make vuln
 
@@ -983,10 +1078,12 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
-            tools/migration/go.sum
+          cache: false
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-light
       - name: Run govulncheck (both modules)
         run: |
           set +e
@@ -1317,8 +1414,13 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-light
 
       - name: Install apidiff
         # Pinned for reproducibility (x/exp ships only pseudo-versions). The

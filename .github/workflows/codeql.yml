@@ -50,12 +50,15 @@ jobs:
           - module: framework
             directory: .
             go-version-file: go.mod
-            cache-dependency-path: go.sum
+            cache-family: fw-build
+            cache-writer: 'false'
             category: /language:go/module:framework
           - module: migrate-tool
             directory: tools/migration
             go-version-file: tools/migration/go.mod
-            cache-dependency-path: tools/migration/go.sum
+            # This leg writes mt-build's Linux entry.
+            cache-family: mt-build
+            cache-writer: 'true'
             category: /language:go/module:migrate-tool
 
     steps:
@@ -69,8 +72,14 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.go-version-file }}
-          cache: true
-          cache-dependency-path: ${{ matrix.cache-dependency-path }}
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: ${{ matrix.cache-family }}
+          writer: ${{ matrix.cache-writer }}
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -88,6 +97,19 @@ jobs:
         env:
           GOWORK: 'off'
         run: go build ./...
+
+      # The save follows the build, before the analysis; this job runs no go
+      # test or go vet.
+      - name: Expire test results before the Go cache save
+        if: success() && matrix.cache-writer == 'true' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go clean -testcache
+
+      - name: Save Go cache
+        if: success() && matrix.cache-writer == 'true' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
