@@ -116,6 +116,8 @@ jobs:
               - 'Makefile'
               - '.golangci.yml'
               - '.github/workflows/ci-v2.yml'
+              # The go-cache composite every Go job calls.
+              - '.github/actions/**'
               # scripts/ holds the build-tag guard and the race package query the
               # lint and security jobs run (#1757). Without this entry, editing
               # them alone would skip the very jobs that execute them.
@@ -128,6 +130,7 @@ jobs:
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
               - '.github/workflows/ci-v2.yml'
+              - '.github/actions/**'
               # This module's lint-race and sec run ../../scripts/check-build-tags.sh,
               # so the same entry the framework filter carries is needed here too.
               - 'scripts/**'
@@ -145,6 +148,7 @@ jobs:
               - '.golangci.yml'
               - 'sonar-project.properties'
               - '.github/workflows/ci-v2.yml'
+              - '.github/actions/**'
               # The coverage producers and SonarCloud's merge run it, so an awk-only
               # change must reach the coverage and Sonar jobs that gate on `code`.
               - 'scripts/cover-dedup.awk'
@@ -446,22 +450,41 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache: true
-          # No other job hashes this file pair, so this job's heavy build cache
-          # has a key of its own: the light jobs share this job's 26.04 image,
-          # but their go.sum-only saves cannot replace it.
-          cache-dependency-path: |
-            go.sum
-            go.mod
+          cache: false
+
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: fw-integ
+          writer: 'true'
 
       - name: Download dependencies
         run: go mod download
 
-      - name: Cache Flyway CLI
+      # A saved entry holds build outputs and modules only: this compiles the
+      # test binaries with the test step's build flags but runs no test and no
+      # vet, so the save below stores no test result or vet verdict.
+      - name: Warm the build cache (compile only)
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go test -c -vet=off -race -tags=integration -covermode=atomic -coverpkg=./... -o /dev/null ./migration ./...
+
+      - name: Expire test results before the Go cache save
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go clean -testcache
+
+      - name: Save Go cache
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
+
+      - name: Restore Flyway CLI
         id: cache-flyway
         # The SHA256 is part of the cache key so a version/digest bump
         # invalidates the cached tarball automatically.
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/flyway-${{ env.FLYWAY_VERSION }}
           key: flyway-${{ env.FLYWAY_VERSION }}-${{ env.FLYWAY_SHA256 }}
@@ -485,6 +508,14 @@ jobs:
             exit 1
           fi
           tar -xzf /tmp/flyway.tar.gz -C /tmp
+
+      # Only push runs save, so pull requests never store a copy of their own.
+      - name: Save Flyway CLI
+        if: github.event_name == 'push' && steps.cache-flyway.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/flyway-${{ env.FLYWAY_VERSION }}
+          key: ${{ steps.cache-flyway.outputs.cache-primary-key }}
 
       - name: Wire Flyway onto PATH
         run: |
@@ -542,11 +573,6 @@ jobs:
           path: coverage-integration.out
           retention-days: 7
           overwrite: true
-
-      # setup-go saves the cache after this, so a later run restoring it never
-      # replays this run's test results.
-      - name: Expire test results before the cache save
-        run: go clean -testcache
 
   framework-build:
     permissions:
@@ -618,11 +644,47 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: tools/migration/go.mod
-          cache: true
-          cache-dependency-path: tools/migration/go.sum
+          cache: false
+
+      # Each leg writes its own OS's entry: the key carries runner.os.
+      - name: Restore Go cache
+        id: gocache
+        uses: ./.github/actions/go-cache
+        with:
+          family: mt-test
+          writer: 'true'
 
       - name: Download dependencies
         run: go mod download
+
+      # A saved entry holds build outputs and modules only: these compile the
+      # test binaries with the test steps' build flags but run no test and no
+      # vet, so the save below stores no test result or vet verdict. Each
+      # mirrors its test step's guard and shell.
+      - name: Warm the build cache (Unix, compile only)
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true' && matrix.os != 'windows-latest'
+        run: |
+          set -euo pipefail
+          go test -c -vet=off -race -o /dev/null ./cmd/... ./internal/...
+          go test -c -vet=off -race -cover -covermode=atomic -o /dev/null ./cmd/... ./internal/...
+
+      - name: Warm the build cache (Windows, compile only)
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true' && matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          go test -c -vet=off -race -o NUL ./cmd/... ./internal/...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Expire test results before the Go cache save
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        run: go clean -testcache
+
+      - name: Save Go cache
+        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
 
       - name: Run tests (Unix)
         if: matrix.os != 'windows-latest'
@@ -763,6 +825,7 @@ jobs:
           version: v2.14.0
           working-directory: tools/migration
           args: --timeout=5m
+          skip-save-cache: ${{ github.event_name != 'push' }}
 
       - name: golangci-lint (migrate tool, windows)
         if: ${{ !cancelled() && runner.os == 'Linux' }}
@@ -773,6 +836,7 @@ jobs:
           version: v2.14.0
           working-directory: tools/migration
           args: --timeout=5m
+          skip-save-cache: ${{ github.event_name != 'push' }}
 
       # The race side of the race/!race pair (#1757; rationale in wiki/linting.md).
       # Delegated to the make target so local and CI run one definition; this module
@@ -856,6 +920,7 @@ jobs:
         with:
           version: v2.14.0
           args: --timeout=5m
+          skip-save-cache: ${{ github.event_name != 'push' }}
 
       - name: golangci-lint (framework, windows)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
@@ -865,6 +930,7 @@ jobs:
         with:
           version: v2.14.0
           args: --timeout=5m
+          skip-save-cache: ${{ github.event_name != 'push' }}
 
       # internal/racedetect/race.go is read by this pass and no other (#1757).
       - name: golangci-lint race pass (framework)

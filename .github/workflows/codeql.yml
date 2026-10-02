@@ -10,6 +10,7 @@ on:
       - 'go.work'
       - 'go.work.sum'
       - '.github/workflows/codeql.yml'
+      - '.github/actions/**'
   pull_request:
     paths:
       - '**/*.go'
@@ -18,6 +19,7 @@ on:
       - 'go.work'
       - 'go.work.sum'
       - '.github/workflows/codeql.yml'
+      - '.github/actions/**'
   schedule:
     - cron: '26 23 * * 3'   # Wednesdays 23:26 UTC — weekly re-scan of main
 
