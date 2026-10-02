@@ -2,7 +2,7 @@
 // waits and retries. It computes a raw delay only: jitter, zero-value defaults,
 // and per-site reset stay at the caller.
 //
-// Audit of the three adopters (gaborage/go-bricks#1249):
+// Audit of the adopters (gaborage/go-bricks#1249, plus the inbox hold drain):
 //
 //	Site                         Jitter                         Reset                         base <= 0
 //	messaging computeBackoff     math/rand/v2 full jitter       reconnect resets on success;  package default
@@ -10,6 +10,7 @@
 //	httpclient backoffDelay      crypto/rand full jitter        per-operation                 package default
 //	                             (RNG-failure fallback stays)
 //	delivery backoffFor          none                           per-operation                 0
+//	inbox HoldDrain.backoffFor   none                           persisted per-tenant attempts rejected by config
 //
 // The outbox relay idle path (ADR-088) is a later consumer: it waits a fixed
 // poll interval today, not this series. The helper is (base, cap, shift) so

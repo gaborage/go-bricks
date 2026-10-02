@@ -15,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/backoff"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/scheduler"
 )
@@ -266,9 +267,9 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 	tenant *HoldTenant, row *HoldRow, replayErr error,
 ) error {
 	attempt := tenant.Attempts + 1
-	backoff := d.backoffFor(attempt)
+	wait := d.backoffFor(attempt)
 
-	deferred, err := pass.store.Defer(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner, backoff, replayErr.Error())
+	deferred, err := pass.store.Defer(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner, wait, replayErr.Error())
 	if err != nil {
 		return err
 	}
@@ -290,7 +291,7 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 		Str("stream", row.Stream).
 		Int64("offset", row.Offset).
 		Int("attempts", attempt).
-		Dur("next_attempt_in", backoff).
+		Dur("next_attempt_in", wait).
 		Str("error_type", fmt.Sprintf("%T", replayErr)).
 		Msg("Hold replay failed; tenant deferred")
 	return nil
@@ -371,20 +372,7 @@ func (d *HoldDrain) setSnapshot(consumer string, stats *HoldStats) {
 // backoffFor is the wait before a deferred tenant's next attempt: the drain
 // interval doubled per attempt, capped. Saturating, like the lane's own series.
 func (d *HoldDrain) backoffFor(attempts int) time.Duration {
-	// The doubling is a shift, and the count is clamped rather than compared:
-	// attempts is a persisted counter with no ceiling, and a shift past 62
-	// overflows an int64 duration. min/max bound it without a comparison whose
-	// boundary the cap below would swallow — at the cap, doubling once more and
-	// clamping give the same answer, so such a boundary is untestable by
-	// construction.
-	shift := min(max(attempts-1, 0), 62)
-	wait := d.cfg.DrainInterval << shift
-	if wait <= 0 {
-		// The shift carried every bit out of the duration: the cap is the answer,
-		// and without this a wrapped value would clamp to itself.
-		return d.cfg.MaxBackoff
-	}
-	return min(wait, d.cfg.MaxBackoff)
+	return backoff.Saturating(d.cfg.DrainInterval, d.cfg.MaxBackoff, max(attempts-1, 0))
 }
 
 // heldMessageOf renders a ledger row as the lane's held message.
