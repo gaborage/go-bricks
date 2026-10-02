@@ -45,7 +45,8 @@ What a consumer does instead:
 
 - **Timeout provider:** set `server.timeout.shutdown` (env `SERVER_TIMEOUT_SHUTDOWN`) to size
   the graceful-shutdown window.
-- **`WaitForSignal`:** receive on the channel passed to `Notify`.
+- **`WaitForSignal`:** a caller receives on the channel it created and passed to `Notify`; an
+  implementer deletes the method, which the framework never called.
 - **`Prober`:** nothing. Nothing accepted one, so a `var _ app.Prober = …` assertion is deleted.
 - **`RegisterStreamRuntime` / `StreamRuntime`:** blank-import `messaging/streams`; it registers
   itself from `init`.
