@@ -17,7 +17,4 @@ const (
 
 	// UPDATE queries
 	TestQueryUpdateUsers = "UPDATE users SET name = 'test'"
-
-	// DELETE queries
-	TestQueryDeleteUsers = "DELETE FROM users WHERE id = 1"
 )

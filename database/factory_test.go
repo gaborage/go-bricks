@@ -13,7 +13,6 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/internal/database"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -271,7 +270,7 @@ func (c *simpleConnection) Exec(ctx context.Context, query string, args ...any) 
 	return c.db.ExecContext(ctx, query, args...)
 }
 
-func (c *simpleConnection) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (c *simpleConnection) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := c.db.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -279,7 +278,7 @@ func (c *simpleConnection) Prepare(ctx context.Context, query string) (database.
 	return &simpleStatement{stmt: stmt}, nil
 }
 
-func (c *simpleConnection) Begin(ctx context.Context) (database.Tx, error) {
+func (c *simpleConnection) Begin(ctx context.Context) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -287,7 +286,7 @@ func (c *simpleConnection) Begin(ctx context.Context) (database.Tx, error) {
 	return &simpleTransaction{tx: tx}, nil
 }
 
-func (c *simpleConnection) BeginTx(ctx context.Context, opts *sql.TxOptions) (database.Tx, error) {
+func (c *simpleConnection) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.Tx, error) {
 	tx, err := c.db.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -366,7 +365,7 @@ func (t *simpleTransaction) Exec(ctx context.Context, query string, args ...any)
 	return t.tx.ExecContext(ctx, query, args...)
 }
 
-func (t *simpleTransaction) Prepare(ctx context.Context, query string) (database.Statement, error) {
+func (t *simpleTransaction) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	stmt, err := t.tx.PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
