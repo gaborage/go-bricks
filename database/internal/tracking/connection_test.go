@@ -9,6 +9,7 @@ import (
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/wrapper"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -170,168 +171,6 @@ func (s *stubConnection) CreateMigrationTable(context.Context) error {
 	return s.createMigrationErr
 }
 
-func TestNewDBQueryContextTracksOperations(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf(createMockErrorMsg, err)
-	}
-	defer db.Close()
-
-	mock.ExpectQuery(selectOne).WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"col"}).AddRow(1))
-
-	cfg := &config.DatabaseConfig{}
-	cfg.Query.Log.Parameters = true
-	cfg.Query.Log.MaxLength = 100
-
-	recLogger := newRecordingLogger()
-	tracked := NewDB(db, recLogger, "postgresql", cfg)
-	ctx := logger.WithRequestCounters(context.Background())
-
-	rows, err := tracked.QueryContext(ctx, selectOne, 1)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if rows == nil {
-		t.Fatalf("expected rows result")
-	}
-	defer rows.Close()
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf(unmetExpectationsErrMsg, err)
-	}
-
-	events := recLogger.events()
-	if len(events) != 1 {
-		t.Fatalf("expected single event, got %d", len(events))
-	}
-	event := events[0]
-	if event.Level != levelDebug {
-		t.Fatalf(unexpectedDebugLevelErrMsg, event.Level)
-	}
-	if event.Fields["query"] != selectOne {
-		t.Fatalf(unexpectedQueryFieldErrMsg, event.Fields["query"])
-	}
-	argsField, ok := event.Fields["args"].([]any)
-	if !ok || len(argsField) != 1 || argsField[0] != "1" {
-		t.Fatalf("expected logged args, got %v", event.Fields["args"])
-	}
-}
-
-func TestDBQueryRowContextTracksOperations(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf(createMockErrorMsg, err)
-	}
-	defer db.Close()
-
-	mock.ExpectQuery(selectOne).WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"col"}).AddRow(42))
-
-	cfg := &config.DatabaseConfig{}
-	cfg.Query.Log.Parameters = true
-	cfg.Query.Log.MaxLength = 100
-
-	recLogger := newRecordingLogger()
-	tracked := NewDB(db, recLogger, "postgresql", cfg)
-	ctx := logger.WithRequestCounters(context.Background())
-
-	row := tracked.QueryRowContext(ctx, selectOne, 1)
-	if row == nil {
-		t.Fatalf("expected row result")
-	}
-
-	// Scan the row to trigger the rowtracker callback
-	var result int
-	err = row.Scan(&result)
-	if err != nil {
-		t.Fatalf("expected no error on scan, got %v", err)
-	}
-	if result != 42 {
-		t.Fatalf("expected result 42, got %d", result)
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf(unmetExpectationsErrMsg, err)
-	}
-
-	events := recLogger.events()
-	if len(events) != 1 {
-		t.Fatalf("expected single event, got %d", len(events))
-	}
-	event := events[0]
-	if event.Level != levelDebug {
-		t.Fatalf(unexpectedDebugLevelErrMsg, event.Level)
-	}
-	if event.Fields["query"] != selectOne {
-		t.Fatalf(unexpectedQueryFieldErrMsg, event.Fields["query"])
-	}
-}
-
-func TestDBExecContextLogsErrors(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf(createMockErrorMsg, err)
-	}
-	defer db.Close()
-
-	execErr := errors.New("fail")
-	mock.ExpectExec("UPDATE").WillReturnError(execErr)
-
-	recLogger := newRecordingLogger()
-	tracked := NewDB(db, recLogger, "postgresql", &config.DatabaseConfig{})
-	ctx := logger.WithRequestCounters(context.Background())
-
-	_, err = tracked.ExecContext(ctx, "UPDATE", 1)
-	if !errors.Is(err, execErr) {
-		t.Fatalf("expected exec error, got %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf(unmetExpectationsErrMsg, err)
-	}
-	events := recLogger.events()
-	if len(events) != 1 || events[0].Level != levelError {
-		t.Fatalf("expected error log, got %+v", events)
-	}
-}
-
-func TestDBPrepareContextWrapsStatement(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf(createMockErrorMsg, err)
-	}
-	defer db.Close()
-
-	mock.ExpectPrepare(simpleSelect).WillReturnError(nil)
-
-	recLogger := newRecordingLogger()
-	tracked := NewDB(db, recLogger, "postgresql", &config.DatabaseConfig{})
-
-	stmt, err := tracked.PrepareContext(context.Background(), simpleSelect)
-	if err != nil {
-		t.Fatalf("expected prepare to succeed, got %v", err)
-	}
-	if _, ok := stmt.(*Statement); !ok {
-		t.Fatalf("expected *Statement, got %T", stmt)
-	}
-}
-
-func TestDBPrepareContextPropagatesError(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf(createMockErrorMsg, err)
-	}
-	defer db.Close()
-
-	mock.ExpectPrepare(simpleSelect).WillReturnError(errors.New("prepare fail"))
-
-	recLogger := newRecordingLogger()
-	tracked := NewDB(db, recLogger, "postgresql", &config.DatabaseConfig{})
-
-	_, err = tracked.PrepareContext(context.Background(), simpleSelect)
-	if err == nil {
-		t.Fatalf("expected prepare error")
-	}
-}
-
 func TestNewConnectionDelegatesAndLogs(t *testing.T) {
 	underlying := &stubConnection{databaseTypeValue: "postgresql"}
 	recLogger := newRecordingLogger()
@@ -362,12 +201,8 @@ func TestConnectionQueryRowTracksOperations(t *testing.T) {
 	// Set up mock to return a row that can be scanned
 	mock.ExpectQuery(selectOne).WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(99))
 
-	// Create a tracked DB connection using the sqlmock DB
 	recLogger := newRecordingLogger()
-	trackedDB := NewDB(db, recLogger, "postgresql", &config.DatabaseConfig{})
-
-	// Wrap it in a Connection to test Connection.QueryRow
-	underlying := &mockConnectionFromDB{trackedDB: trackedDB}
+	underlying := &sqlmockConnection{Connection: &wrapper.Connection{DB: db, Logger: recLogger, Name: "PostgreSQL"}}
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
 	ctx := logger.WithRequestCounters(context.Background())
@@ -390,13 +225,11 @@ func TestConnectionQueryRowTracksOperations(t *testing.T) {
 		t.Fatalf(unmetExpectationsErrMsg, err)
 	}
 
-	// We expect 2 events: one from the underlying trackedDB, one from the Connection wrapper
 	events := recLogger.events()
-	if len(events) < 1 {
-		t.Fatalf("expected at least one event, got %d", len(events))
+	if len(events) != 1 {
+		t.Fatalf("expected one event from the Connection.QueryRow wrapper, got %d", len(events))
 	}
-	// The last event should be from the Connection.QueryRow wrapper
-	event := events[len(events)-1]
+	event := events[0]
 	if event.Level != levelDebug {
 		t.Fatalf(unexpectedDebugLevelErrMsg, event.Level)
 	}
@@ -405,64 +238,23 @@ func TestConnectionQueryRowTracksOperations(t *testing.T) {
 	}
 }
 
-// mockConnectionFromDB wraps a *DB to implement types.Interface for testing Connection.QueryRow
-var _ types.Interface = (*mockConnectionFromDB)(nil)
-
-type mockConnectionFromDB struct {
-	trackedDB *DB
+// sqlmockConnection backs a types.Interface with a sqlmock *sql.DB through the
+// vendor-agnostic wrapper, so Connection can be tested against real database/sql rows.
+type sqlmockConnection struct {
+	*wrapper.Connection
 }
 
-func (m *mockConnectionFromDB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return m.trackedDB.QueryContext(ctx, query, args...)
+var _ types.Interface = (*sqlmockConnection)(nil)
+
+func (m *sqlmockConnection) DatabaseType() string { return "postgresql" }
+
+func (m *sqlmockConnection) MigrationTable() string { return "flyway_schema_history" }
+
+func (m *sqlmockConnection) Session(context.Context) (types.Session, error) {
+	return nil, errors.New("sqlmockConnection does not open sessions")
 }
 
-func (m *mockConnectionFromDB) QueryRow(ctx context.Context, query string, args ...any) types.Row {
-	return m.trackedDB.QueryRowContext(ctx, query, args...)
-}
-
-func (m *mockConnectionFromDB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return m.trackedDB.ExecContext(ctx, query, args...)
-}
-
-func (m *mockConnectionFromDB) Prepare(ctx context.Context, query string) (types.Statement, error) {
-	return m.trackedDB.PrepareContext(ctx, query)
-}
-
-func (m *mockConnectionFromDB) Begin(_ context.Context) (types.Tx, error) {
-	return &stubTx{}, nil
-}
-
-func (m *mockConnectionFromDB) BeginTx(_ context.Context, _ *sql.TxOptions) (types.Tx, error) {
-	return &stubTx{}, nil
-}
-
-func (m *mockConnectionFromDB) Health(ctx context.Context) error {
-	return m.trackedDB.PingContext(ctx)
-}
-
-func (m *mockConnectionFromDB) Stats() (map[string]any, error) {
-	return map[string]any{}, nil
-}
-
-func (m *mockConnectionFromDB) Close() error {
-	return m.trackedDB.Close()
-}
-
-func (m *mockConnectionFromDB) DatabaseType() string {
-	return "postgresql"
-}
-
-func (m *mockConnectionFromDB) MigrationTable() string {
-	return "flyway_schema_history"
-}
-
-func (m *mockConnectionFromDB) Session(context.Context) (types.Session, error) {
-	return nil, errors.New("mockConnectionFromDB does not open sessions")
-}
-
-func (m *mockConnectionFromDB) CreateMigrationTable(context.Context) error {
-	return nil
-}
+func (m *sqlmockConnection) CreateMigrationTable(context.Context) error { return nil }
 
 func TestConnectionExecErrorIsLogged(t *testing.T) {
 	underlying := &stubConnection{databaseTypeValue: "postgresql", execErr: errors.New("boom")}
