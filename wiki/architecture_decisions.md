@@ -2234,8 +2234,7 @@ under an alias that does not end in `trace`; `httpclient.IsJOSEError` becomes `j
 `messaging.Client` keeps `Close` and `IsReady` and drops only `Consume`; three
 `testing/fixtures` constructors return `*mocks.MockAMQPClient`, with the new
 `ExpectConsumeFromQueueAny`. A consumer inlines the literal of any removed `testing` constant, and
-the deprecated cache assertion becomes `AssertOperationCountAtLeast`. See [migrations.md](migrations.md) `[C71.13]`,
-`[C71.14]`.
+the deprecated cache assertion becomes `AssertOperationCountAtLeast`. See [migrations.md](migrations.md) `[C71.13]`–`[C71.17]`.
 
 **Key Benefits:** one spelling per name, so a consumer's grep for a call site finds all of them.
 

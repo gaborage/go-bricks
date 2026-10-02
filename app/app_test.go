@@ -1075,12 +1075,6 @@ func (c *consumerOutageClient) ConsumeFromQueue(context.Context, messaging.Consu
 	return nil, errConsumerOutage
 }
 
-func (c *consumerOutageClient) Consume(context.Context, string) (<-chan amqp.Delivery, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.deliveries, nil
-}
-
 func (c *consumerOutageClient) Close() error { return nil }
 
 func (c *consumerOutageClient) IsReady() bool {

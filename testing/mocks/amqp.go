@@ -138,6 +138,11 @@ func (m *MockAMQPClient) ExpectConsumeFromQueue(options messaging.ConsumeOptions
 	return m.On("ConsumeFromQueue", mock.Anything, options).Return(nil, err)
 }
 
+// ExpectConsumeFromQueueAny sets up a consume from queue expectation for any parameters
+func (m *MockAMQPClient) ExpectConsumeFromQueueAny(err error) *mock.Call {
+	return m.On("ConsumeFromQueue", mock.Anything, mock.Anything).Return(nil, err)
+}
+
 // declOrAny returns the testify matcher for a declaration parameter: a nil
 // declaration falls back to mock.Anything (match any declaration), otherwise
 // the declaration is matched by value via testify's reflect.DeepEqual — an

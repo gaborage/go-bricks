@@ -41,12 +41,6 @@ func (s *stubAMQPClient) publishBytes(_ context.Context, _ publishOptions, _ []b
 	return nil
 }
 
-func (s *stubAMQPClient) Consume(_ context.Context, _ string) (<-chan amqp.Delivery, error) {
-	ch := make(chan amqp.Delivery)
-	close(ch)
-	return ch, nil
-}
-
 func (s *stubAMQPClient) ConsumeFromQueue(ctx context.Context, _ ConsumeOptions) (<-chan amqp.Delivery, error) {
 	s.closedMu.Lock()
 	s.consumers++

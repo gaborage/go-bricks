@@ -805,7 +805,7 @@ func TestDispatchConfirmsRecordsAReturnBeforeRoutingItsAck(t *testing.T) {
 // TestPublishNotReadyReturnsErrNotConnected guards the W3-D breaking change:
 // pre-fix Publish silently returned nil when the client wasn't ready, dropping
 // the message without any error to the caller. Post-fix it returns errNotConnected
-// so callers can retry, log, or escalate — same contract as Subscribe/Consume.
+// so callers can retry, log, or escalate — same contract as ConsumeFromQueue.
 func TestPublishNotReadyReturnsErrNotConnected(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 	err := c.publishBytes(context.Background(), publishOptions{RoutingKey: "q"}, []byte("x"))
@@ -1002,14 +1002,6 @@ func TestConsumeFromQueueSuccess(t *testing.T) {
 	out, err := c.ConsumeFromQueue(context.Background(), ConsumeOptions{Queue: "q"})
 	if err != nil || out == nil {
 		t.Fatalf("unexpected consume err=%v ch=%v", err, out)
-	}
-}
-
-func TestConsumeNotReady(t *testing.T) {
-	c := &AMQPClientImpl{m: &sync.RWMutex{}}
-	ch, err := c.Consume(context.Background(), "q")
-	if err == nil || ch != nil {
-		t.Fatalf("expected errNotConnected, got ch=%v err=%v", ch, err)
 	}
 }
 

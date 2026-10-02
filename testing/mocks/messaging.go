@@ -1,7 +1,6 @@
 package mocks
 
 import (
-	"context"
 	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -9,50 +8,35 @@ import (
 )
 
 // MockMessagingClient provides a testify-based mock implementation of the messaging.Client interface.
-// It includes message simulation capabilities for testing message flows.
+// Its SimulateMessage* helpers feed the channels returned by (*MockAMQPClient).ConsumeFromQueue,
+// which embeds this type.
 //
 // Example usage:
 //
-//	mockClient := mocks.NewMockMessagingClient()
-//	mockClient.On("Publish", mock.Anything, "user.created", mock.Anything).Return(nil)
-//	mockClient.On("IsReady").Return(true)
+//	client := mocks.NewMockAMQPClient()
+//	client.ExpectIsReady(true)
+//	client.ExpectConsumeFromQueueAny(nil)
 //
-//	// Simulate incoming messages
-//	mockClient.SimulateMessage("test.queue", []byte(`{"event": "test"}`))
+//	// Simulate an incoming message and read it back
+//	deliveries, _ := client.ConsumeFromQueue(ctx, messaging.ConsumeOptions{Queue: "test.queue"})
+//	client.SimulateMessage("test.queue", []byte(`{"event": "test"}`))
 type MockMessagingClient struct {
 	mock.Mock
 
-	// Message simulation
+	// Message simulation, read back via (*MockAMQPClient).ConsumeFromQueue
 	messageChannels map[string]chan amqp.Delivery
 	mu              sync.RWMutex
 	isReady         bool
 	closed          bool
 }
 
-// NewMockMessagingClient creates a new mock messaging client with message simulation capabilities
+// NewMockMessagingClient creates a new mock messaging client
 func NewMockMessagingClient() *MockMessagingClient {
 	return &MockMessagingClient{
 		messageChannels: make(map[string]chan amqp.Delivery),
 		isReady:         true,
 		closed:          false,
 	}
-}
-
-// Consume implements messaging.Client
-func (m *MockMessagingClient) Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error) {
-	arguments := m.MethodCalled("Consume", ctx, destination)
-
-	m.mu.Lock()
-	if _, exists := m.messageChannels[destination]; !exists {
-		m.messageChannels[destination] = make(chan amqp.Delivery, 100)
-	}
-	ch := m.messageChannels[destination]
-	m.mu.Unlock()
-
-	if err := arguments.Error(1); err != nil {
-		return nil, err
-	}
-	return ch, nil
 }
 
 // Close implements messaging.Client
@@ -146,16 +130,6 @@ func (m *MockMessagingClient) SetReady(ready bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.isReady = ready
-}
-
-// ExpectConsume sets up a consume expectation
-func (m *MockMessagingClient) ExpectConsume(destination string, err error) *mock.Call {
-	return m.On("Consume", mock.Anything, destination).Return(nil, err)
-}
-
-// ExpectConsumeAny sets up a consume expectation for any destination
-func (m *MockMessagingClient) ExpectConsumeAny(err error) *mock.Call {
-	return m.On("Consume", mock.Anything, mock.Anything).Return(nil, err)
 }
 
 // ExpectIsReady sets up an IsReady expectation

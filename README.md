@@ -663,7 +663,7 @@ func TestMyService(t *testing.T) {
 }
 ```
 
-**Features:** Fluent configuration API, operation tracking, 17 assertion helpers, TTL expiration testing, multi-tenant support.
+**Features:** Fluent configuration API, operation tracking, 16 assertion helpers, TTL expiration testing, multi-tenant support.
 
 **See also:** [database/testing](https://pkg.go.dev/github.com/gaborage/go-bricks/database/testing) for similar patterns.
 

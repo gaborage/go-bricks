@@ -76,10 +76,6 @@ func (m *simpleMockAMQPClient) publishBytes(_ context.Context, _ publishOptions,
 	return nil
 }
 
-func (m *simpleMockAMQPClient) Consume(_ context.Context, _ string) (<-chan amqp.Delivery, error) {
-	return m.deliveryChan, m.consumeErr
-}
-
 func (m *simpleMockAMQPClient) ConsumeFromQueue(_ context.Context, _ ConsumeOptions) (<-chan amqp.Delivery, error) {
 	return m.deliveryChan, m.consumeErr
 }

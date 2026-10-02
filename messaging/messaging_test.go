@@ -16,19 +16,6 @@ type MockClient struct {
 	closed  bool
 }
 
-func (m *MockClient) Consume(_ context.Context, _ string) (<-chan amqp.Delivery, error) {
-	if !m.isReady {
-		return nil, errNotConnected
-	}
-	if m.closed {
-		return nil, errAlreadyClosed
-	}
-
-	ch := make(chan amqp.Delivery)
-	close(ch) // Close immediately for testing
-	return ch, nil
-}
-
 func (m *MockClient) Close() error {
 	if m.closed {
 		return errAlreadyClosed
@@ -167,54 +154,6 @@ func TestConsumeOptions(t *testing.T) {
 	assert.False(t, options.Exclusive)
 	assert.False(t, options.NoLocal)
 	assert.True(t, options.NoWait)
-}
-
-func TestMockClientConsume(t *testing.T) {
-	tests := []struct {
-		name        string
-		isReady     bool
-		closed      bool
-		expectError bool
-	}{
-		{
-			name:        "successful_consume",
-			isReady:     true,
-			closed:      false,
-			expectError: false,
-		},
-		{
-			name:        "not_ready",
-			isReady:     false,
-			closed:      false,
-			expectError: true,
-		},
-		{
-			name:        "client_closed",
-			isReady:     true,
-			closed:      true,
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client := &MockClient{
-				isReady: tt.isReady,
-				closed:  tt.closed,
-			}
-
-			ctx := context.Background()
-			ch, err := client.Consume(ctx, "test-destination")
-
-			if tt.expectError {
-				require.Error(t, err)
-				assert.Nil(t, ch)
-			} else {
-				require.NoError(t, err)
-				assert.NotNil(t, ch)
-			}
-		})
-	}
 }
 
 func TestMockClientClose(t *testing.T) {

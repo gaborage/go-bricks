@@ -329,10 +329,6 @@ func (f *fakeAMQP) publishBytes(ctx context.Context, opts publishdoor.Options, d
 	return err
 }
 
-func (f *fakeAMQP) Consume(_ context.Context, _ string) (<-chan amqp.Delivery, error) {
-	return nil, nil
-}
-
 func (f *fakeAMQP) ConsumeFromQueue(_ context.Context, _ messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
 	return nil, nil
 }
