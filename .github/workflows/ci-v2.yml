@@ -36,7 +36,7 @@ jobs:
       # NOT inferred from framework/migrate_tool: those two omit non-Go scan
       # inputs (e.g. sonar-project.properties), so deriving `code` from them
       # would skip the scan on a Sonar-config-only change. The coverage run
-      # (framework-test, framework-integration-test, migrate-tool-test, merge,
+      # (framework-test, framework-integration-test, migrate-tool-test,
       # SonarCloud) gates on this; doc-only PRs match nothing and skip it.
       # yamllint: valid GitHub Actions context expression
       code: ${{ steps.filter.outputs.code }}
@@ -134,8 +134,8 @@ jobs:
               - 'tools/migration/**/testdata/**'
             code:
               - '**/*.go'
-              # Assembly is compiled code, so the test, coverage, merge and Sonar
-              # jobs that gate on `code` must see an .s-only change (#1757).
+              # Assembly is compiled code, so the test, coverage and Sonar jobs
+              # that gate on `code` must see an .s-only change (#1757).
               - '**/*.s'
               - 'go.mod'
               - 'go.sum'
@@ -145,8 +145,8 @@ jobs:
               - '.golangci.yml'
               - 'sonar-project.properties'
               - '.github/workflows/ci-v2.yml'
-              # The coverage producers and the merge run it, so an awk-only change
-              # must reach the coverage, merge and Sonar jobs that gate on `code`.
+              # The coverage producers and SonarCloud's merge run it, so an awk-only
+              # change must reach the coverage and Sonar jobs that gate on `code`.
               - 'scripts/cover-dedup.awk'
               - 'tools/migration/go.mod'
               - 'tools/migration/go.sum'
@@ -260,10 +260,11 @@ jobs:
         with:
           name: coverage-unit
           path: coverage.out
-          retention-days: 1
+          retention-days: 7
+          overwrite: true
 
-  # framework-test's Windows leg, split out so framework-merge-coverage does not
-  # wait on a leg that uploads no coverage.
+  # framework-test's Windows leg, split out so sonarcloud does not wait on a
+  # leg that uploads no coverage.
   framework-test-windows:
     permissions:
       contents: read
@@ -539,206 +540,13 @@ jobs:
         with:
           name: coverage-integration
           path: coverage-integration.out
-          retention-days: 1
+          retention-days: 7
+          overwrite: true
 
       # setup-go saves the cache after this, so a later run restoring it never
       # replays this run's test results.
       - name: Expire test results before the cache save
         run: go clean -testcache
-
-  framework-merge-coverage:
-    permissions:
-      contents: read
-    # framework-test-windows and migrate-tool-test-windows are deliberately
-    # absent: they upload no coverage, so the merge does not wait on them.
-    # ci-ok needs them directly, and that is what enforces them.
-    needs: [changes, framework-test, framework-integration-test, migrate-tool-test]
-    if: |
-      always() &&
-      needs.changes.result == 'success' &&
-      needs.changes.outputs.code == 'true' &&
-      (needs.framework-test.result == 'success' || needs.framework-test.result == 'skipped') &&
-      (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
-      (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
-    runs-on: ubuntu-26.04
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-          cache-dependency-path: go.sum
-
-      # All three coverage jobs gate on `code`, so on any non-doc change they
-      # all ran and uploaded their artifacts. Download them unconditionally —
-      # a missing artifact is a real failure and the merge guard below catches it.
-      - name: Download unit test coverage
-        uses: actions/download-artifact@v8
-        with:
-          name: coverage-unit
-          path: .
-
-      - name: Download integration test coverage
-        uses: actions/download-artifact@v8
-        with:
-          name: coverage-integration
-          path: .
-
-      - name: Download migrate tool coverage
-        uses: actions/download-artifact@v8
-        with:
-          name: migrate-tool-coverage-report
-          path: tools/migration
-
-      - name: Merge coverage files
-        run: |
-          set -euo pipefail
-
-          echo "=== Coverage Merge Process ==="
-          echo "Checking for available coverage files..."
-
-          # Check which coverage files exist
-          has_framework_unit=false
-          has_framework_integration=false
-          has_migrate_tool=false
-
-          if [ -f coverage.out ]; then
-            echo "✓ Framework unit tests coverage found"
-            has_framework_unit=true
-          fi
-
-          if [ -f coverage-integration.out ]; then
-            echo "✓ Framework integration tests coverage found"
-            has_framework_integration=true
-          fi
-
-          if [ -f tools/migration/coverage.out ]; then
-            echo "✓ Migrate tool coverage found"
-            has_migrate_tool=true
-          fi
-
-          # Defense-in-depth: the report uploaded to SonarCloud must be COMPLETE.
-          # This job only runs on non-doc (`code`) changes, where framework-test,
-          # framework-integration-test, and migrate-tool-test all run and upload
-          # their coverage. If any part is missing here, a partial report would
-          # mis-score the absent module as 0% covered — the failure mode that
-          # collapsed framework coverage from ~90% to ~4% on tools-only pushes.
-          # Fail loudly rather than upload an incomplete report.
-          missing=""
-          [ "$has_framework_unit" = true ]        || missing="$missing framework-unit(coverage.out)"
-          [ "$has_framework_integration" = true ] || missing="$missing framework-integration(coverage-integration.out)"
-          [ "$has_migrate_tool" = true ]          || missing="$missing migrate-tool(tools/migration/coverage.out)"
-          if [ -n "$missing" ]; then
-            echo "❌ ERROR: coverage report is incomplete — missing:$missing"
-            echo "    Refusing to upload a partial coverage report to SonarCloud."
-            echo "    Each coverage producer must have run and uploaded its artifact."
-            exit 1
-          fi
-
-          echo ""
-          echo "=== Coverage File Validation ==="
-
-          # Validate framework unit coverage
-          if [ "$has_framework_unit" = true ]; then
-            unit_lines=$(wc -l < coverage.out)
-            echo "Framework unit coverage: $unit_lines lines"
-
-            # The producer deduped it, so each line past the mode line is a distinct
-            # block of the -coverpkg=./... set (~18.7k today) however few tests ran;
-            # under 10k means that set collapsed or the profile is near-empty.
-            if [ "$unit_lines" -lt 10000 ]; then
-              echo "⚠️  WARNING: Framework unit coverage is unusually small ($unit_lines lines)"
-              echo "    Expected: >10,000 lines for full framework coverage"
-            fi
-
-            # Check first non-mode line to verify it's framework code (not tool code)
-            first_package=$(sed -n '2p' coverage.out | cut -d':' -f1)
-            if echo "$first_package" | grep -q "tools/"; then
-              echo "❌ ERROR: Framework coverage file contains tool packages!"
-              echo "    First package: $first_package"
-              echo "    This indicates artifact download overwrote framework coverage"
-              exit 1
-            else
-              echo "✓ Framework coverage verified (starts with: $first_package)"
-            fi
-          fi
-
-          # Validate integration coverage (deduped by its producer too: ~19.1k
-          # distinct blocks today; under 1000 means the -coverpkg=./... set
-          # collapsed or the profile is near-empty, not that tests went missing)
-          if [ "$has_framework_integration" = true ]; then
-            integration_lines=$(wc -l < coverage-integration.out)
-            echo "Integration coverage: $integration_lines lines"
-
-            if [ "$integration_lines" -lt 1000 ]; then
-              echo "⚠️  WARNING: Integration coverage is small ($integration_lines lines)"
-            else
-              echo "✓ Integration coverage looks reasonable"
-            fi
-          fi
-
-          # Merge coverage files: concatenate, then collapse shared blocks
-          # This approach is optimal for our use case because:
-          # - Overlap is expected: every unit block reappears in the integration
-          #   profile, and cover-dedup.awk sums them (each producer already
-          #   collapsed its own per-test-binary copies); migrate tool blocks are disjoint
-          # - All files from same source code (same Go version, same build)
-          # - All use covermode=atomic consistently
-          # - Zero external dependencies (tools like gocovmerge would add unnecessary complexity)
-          echo ""
-          echo "Merging coverage files..."
-
-          # Start with framework unit coverage if available, otherwise create empty file with mode line
-          if [ "$has_framework_unit" = true ]; then
-            cat coverage.out > coverage-merged.out
-          else
-            echo "mode: atomic" > coverage-merged.out
-          fi
-
-          # Append framework integration coverage (skip mode line)
-          if [ "$has_framework_integration" = true ]; then
-            tail -n +2 coverage-integration.out >> coverage-merged.out
-          fi
-
-          # Append migrate tool coverage (skip mode line)
-          if [ "$has_migrate_tool" = true ]; then
-            tail -n +2 tools/migration/coverage.out >> coverage-merged.out
-          fi
-
-          # Two plain commands, so errexit sees awk's status. The script is checked
-          # against go test's own profile in the producers, where the raw copy exists.
-          awk -f scripts/cover-dedup.awk coverage-merged.out > coverage-merged.out.dedup
-          mv coverage-merged.out.dedup coverage-merged.out
-
-          # Show summary
-          echo ""
-          echo "=== Coverage Merge Summary ==="
-          if [ "$has_framework_unit" = true ]; then
-            wc -l coverage.out | awk '{print "Framework unit:       " $1 " lines"}'
-          fi
-          if [ "$has_framework_integration" = true ]; then
-            wc -l coverage-integration.out | awk '{print "Framework integration:" $1 " lines"}'
-          fi
-          if [ "$has_migrate_tool" = true ]; then
-            wc -l tools/migration/coverage.out | awk '{print "Migrate tool coverage:" $1 " lines"}'
-          fi
-          wc -l coverage-merged.out | awk '{print "Merged total:         " $1 " lines"}'
-
-          # Rename merged file to coverage.out for SonarCloud
-          mv coverage-merged.out coverage.out
-
-          echo ""
-          echo "✓ Coverage merge complete - ready for SonarCloud"
-
-      - name: Upload merged coverage for SonarCloud
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-report
-          path: coverage.out
-          retention-days: 1
 
   framework-build:
     permissions:
@@ -854,7 +662,8 @@ jobs:
         with:
           name: migrate-tool-coverage-report
           path: tools/migration/coverage.out
-          retention-days: 1
+          retention-days: 7
+          overwrite: true
           if-no-files-found: ignore
 
   # migrate-tool-test's Windows leg, split out like framework-test-windows. The
@@ -1213,12 +1022,17 @@ jobs:
     permissions:
       contents: read
     name: SonarCloud
-    needs: [changes, framework-merge-coverage]
+    # framework-test-windows and migrate-tool-test-windows are deliberately
+    # absent: they upload no coverage, so the scan does not wait on them.
+    # ci-ok needs them directly, and that is what enforces them.
+    needs: [changes, framework-test, framework-integration-test, migrate-tool-test]
     if: |
       always() &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.code == 'true' &&
-      needs.framework-merge-coverage.result == 'success'
+      (needs.framework-test.result == 'success' || needs.framework-test.result == 'skipped') &&
+      (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
+      (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
     runs-on: ubuntu-26.04
     # No concurrency group here: a cancelled scan fails ci-ok, so nothing may
     # cancel one. The workflow-level group already leaves one live run per PR,
@@ -1226,15 +1040,177 @@ jobs:
     # uploads; it does not wait for the quality gate).
 
     steps:
+      # Checkout first: its clean deletes anything downloaded before it.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
-      - name: Download coverage artifact
+      # All three coverage jobs gate on `code`, so on any non-doc change they
+      # all ran and uploaded their artifacts. Download them unconditionally —
+      # a missing artifact is a real failure and the merge guard below catches it.
+      # The producers keep them 7 days, so re-running this job alone finds them.
+      - name: Download unit test coverage
         uses: actions/download-artifact@v8
         with:
-          name: coverage-report
+          name: coverage-unit
           path: .
+
+      - name: Download integration test coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-integration
+          path: .
+
+      - name: Download migrate tool coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: migrate-tool-coverage-report
+          path: tools/migration
+
+      - name: Merge coverage files
+        run: |
+          set -euo pipefail
+
+          echo "=== Coverage Merge Process ==="
+          echo "Checking for available coverage files..."
+
+          # Check which coverage files exist
+          has_framework_unit=false
+          has_framework_integration=false
+          has_migrate_tool=false
+
+          if [ -f coverage.out ]; then
+            echo "✓ Framework unit tests coverage found"
+            has_framework_unit=true
+          fi
+
+          if [ -f coverage-integration.out ]; then
+            echo "✓ Framework integration tests coverage found"
+            has_framework_integration=true
+          fi
+
+          if [ -f tools/migration/coverage.out ]; then
+            echo "✓ Migrate tool coverage found"
+            has_migrate_tool=true
+          fi
+
+          # Defense-in-depth: the report uploaded to SonarCloud must be COMPLETE.
+          # This job only runs on non-doc (`code`) changes, where framework-test,
+          # framework-integration-test, and migrate-tool-test all run and upload
+          # their coverage. If any part is missing here, a partial report would
+          # mis-score the absent module as 0% covered — the failure mode that
+          # collapsed framework coverage from ~90% to ~4% on tools-only pushes.
+          # Fail loudly rather than upload an incomplete report.
+          missing=""
+          [ "$has_framework_unit" = true ]        || missing="$missing framework-unit(coverage.out)"
+          [ "$has_framework_integration" = true ] || missing="$missing framework-integration(coverage-integration.out)"
+          [ "$has_migrate_tool" = true ]          || missing="$missing migrate-tool(tools/migration/coverage.out)"
+          if [ -n "$missing" ]; then
+            echo "❌ ERROR: coverage report is incomplete — missing:$missing"
+            echo "    Refusing to upload a partial coverage report to SonarCloud."
+            echo "    Each coverage producer must have run and uploaded its artifact."
+            exit 1
+          fi
+
+          echo ""
+          echo "=== Coverage File Validation ==="
+
+          # Validate framework unit coverage
+          if [ "$has_framework_unit" = true ]; then
+            unit_lines=$(wc -l < coverage.out)
+            echo "Framework unit coverage: $unit_lines lines"
+
+            # The producer deduped it, so each line past the mode line is a distinct
+            # block of the -coverpkg=./... set (~18.7k today) however few tests ran;
+            # under 10k means that set collapsed or the profile is near-empty.
+            if [ "$unit_lines" -lt 10000 ]; then
+              echo "⚠️  WARNING: Framework unit coverage is unusually small ($unit_lines lines)"
+              echo "    Expected: >10,000 lines for full framework coverage"
+            fi
+
+            # Check first non-mode line to verify it's framework code (not tool code)
+            first_package=$(sed -n '2p' coverage.out | cut -d':' -f1)
+            if echo "$first_package" | grep -q "tools/"; then
+              echo "❌ ERROR: Framework coverage file contains tool packages!"
+              echo "    First package: $first_package"
+              echo "    This indicates artifact download overwrote framework coverage"
+              exit 1
+            else
+              echo "✓ Framework coverage verified (starts with: $first_package)"
+            fi
+          fi
+
+          # Validate integration coverage (deduped by its producer too: ~19.1k
+          # distinct blocks today; under 1000 means the -coverpkg=./... set
+          # collapsed or the profile is near-empty, not that tests went missing)
+          if [ "$has_framework_integration" = true ]; then
+            integration_lines=$(wc -l < coverage-integration.out)
+            echo "Integration coverage: $integration_lines lines"
+
+            if [ "$integration_lines" -lt 1000 ]; then
+              echo "⚠️  WARNING: Integration coverage is small ($integration_lines lines)"
+            else
+              echo "✓ Integration coverage looks reasonable"
+            fi
+          fi
+
+          # Merge coverage files: concatenate, then collapse shared blocks
+          # This approach is optimal for our use case because:
+          # - Overlap is expected: every unit block reappears in the integration
+          #   profile, and cover-dedup.awk sums them (each producer already
+          #   collapsed its own per-test-binary copies); migrate tool blocks are disjoint
+          # - All files from same source code (same Go version, same build)
+          # - All use covermode=atomic consistently
+          # - Zero external dependencies (tools like gocovmerge would add unnecessary complexity)
+          echo ""
+          echo "Merging coverage files..."
+
+          # Start with framework unit coverage if available, otherwise create empty file with mode line
+          if [ "$has_framework_unit" = true ]; then
+            cat coverage.out > coverage-merged.out
+          else
+            echo "mode: atomic" > coverage-merged.out
+          fi
+
+          # Append framework integration coverage (skip mode line)
+          if [ "$has_framework_integration" = true ]; then
+            tail -n +2 coverage-integration.out >> coverage-merged.out
+          fi
+
+          # Append migrate tool coverage (skip mode line)
+          if [ "$has_migrate_tool" = true ]; then
+            tail -n +2 tools/migration/coverage.out >> coverage-merged.out
+          fi
+
+          # Two plain commands, so errexit sees awk's status. The script is checked
+          # against go test's own profile in the producers, where the raw copy exists.
+          awk -f scripts/cover-dedup.awk coverage-merged.out > coverage-merged.out.dedup
+          mv coverage-merged.out.dedup coverage-merged.out
+
+          # Show summary
+          echo ""
+          echo "=== Coverage Merge Summary ==="
+          if [ "$has_framework_unit" = true ]; then
+            wc -l coverage.out | awk '{print "Framework unit:       " $1 " lines"}'
+          fi
+          if [ "$has_framework_integration" = true ]; then
+            wc -l coverage-integration.out | awk '{print "Framework integration:" $1 " lines"}'
+          fi
+          if [ "$has_migrate_tool" = true ]; then
+            wc -l tools/migration/coverage.out | awk '{print "Migrate tool coverage:" $1 " lines"}'
+          fi
+          wc -l coverage-merged.out | awk '{print "Merged total:         " $1 " lines"}'
+
+          # Rename merged file to coverage.out for SonarCloud
+          mv coverage-merged.out coverage.out
+
+          echo ""
+          echo "✓ Coverage merge complete - ready for SonarCloud"
+
+      # coverage.out is the scan's only coverage input; keep the merge inputs
+      # out of the scanned tree.
+      - name: Remove per-producer coverage profiles
+        run: rm -f coverage-integration.out tools/migration/coverage.out
 
       - name: Scan
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9  # v8.3.0
@@ -1443,16 +1419,16 @@ jobs:
   # leaf job and fails if any of them failed or was cancelled. 'skipped' counts
   # as success so doc-only PRs (where the Go jobs skip) and code-only PRs (where
   # lint-docs skips) both still pass — the same always()+skipped-tolerant idiom
-  # used by framework-merge-coverage and sonarcloud above. That tolerance is safe
-  # in BOTH directions because every job in this `needs:` list is gated either on
-  # `changes` outputs alone, on the event and head branch alone (llms-version,
-  # which needs no other job), or on another job that is ALSO in this list — so a
-  # failure always surfaces under its own key even when it makes a downstream job
-  # skip. (It is NOT true that a job only skips when its own filter said "not my
-  # paths": framework-merge-coverage and sonarcloud both skip when an upstream
-  # job fails. Their tolerance is safe purely because those upstreams are listed
-  # here too.) Never add a job here whose `needs:` reference a job that is not —
-  # that job's failure would reach this gate only as a tolerated 'skipped'.
+  # used by sonarcloud above. That tolerance is safe in BOTH directions because
+  # every job in this `needs:` list is gated either on `changes` outputs alone,
+  # on the event and head branch alone (llms-version, which needs no other job),
+  # or on another job that is ALSO in this list — so a failure always surfaces
+  # under its own key even when it makes a downstream job skip. (It is NOT true
+  # that a job only skips when its own filter said "not my paths": sonarcloud
+  # skips when an upstream job fails. Its tolerance is safe purely because those
+  # upstreams are listed here too.) Never add a job here whose `needs:`
+  # reference a job that is not — that job's failure would reach this gate only
+  # as a tolerated 'skipped'.
   # vuln-weekly is schedule-only and intentionally absent.
   # When you add a new PR job, add it to `needs:` here or it stays unenforced;
   # lint-docs fails the PR when one is missing (a new schedule-only job goes in
@@ -1472,7 +1448,6 @@ jobs:
       - framework-test
       - framework-test-windows
       - framework-integration-test
-      - framework-merge-coverage
       - framework-build
       - migrate-tool-test
       - migrate-tool-test-windows
