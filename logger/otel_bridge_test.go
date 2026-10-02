@@ -478,6 +478,58 @@ func TestBuildLogRecordWithoutTraceContext(t *testing.T) {
 	assert.False(t, foundTraceAttr, "no trace attributes should be added when trace context is absent")
 }
 
+// writeAndReadAttr writes line through the bridge and returns the named
+// attribute of the emitted data record.
+func writeAndReadAttr(t *testing.T, line, key string) attribute.Value {
+	t.Helper()
+	bridge, proc := newCaptureBridge(t)
+	_, err := bridge.Write([]byte(line))
+	require.NoError(t, err)
+
+	rec, ok := dataRecord(proc.snapshot())
+	require.True(t, ok, "bridge emitted no data record")
+	val, found := recordAttrValue(&rec, key)
+	require.True(t, found, "attribute %q missing from the record", key)
+	return val
+}
+
+func TestOTelBridgeNestedObjectArrivesAsMap(t *testing.T) {
+	val := writeAndReadAttr(t,
+		`{"level":"info","message":"m","request":{"route":"/users","cached":true,"auth":{"scheme":"bearer"}}}`,
+		"request")
+
+	require.Equal(t, attribute.MAP, val.Type())
+	members := map[string]attribute.Value{}
+	for _, kv := range val.AsMap() {
+		members[string(kv.Key)] = kv.Value
+	}
+	require.Len(t, members, 3)
+	assert.Equal(t, attribute.StringValue("/users"), members["route"])
+	assert.Equal(t, attribute.BoolValue(true), members["cached"])
+	require.Equal(t, attribute.MAP, members["auth"].Type())
+	assert.Equal(t, []attribute.KeyValue{attribute.String("scheme", "bearer")}, members["auth"].AsMap())
+}
+
+func TestOTelBridgeArrayArrivesAsSlice(t *testing.T) {
+	val := writeAndReadAttr(t, `{"level":"info","message":"m","tags":["alpha","beta",true]}`, "tags")
+
+	require.Equal(t, attribute.SLICE, val.Type())
+	assert.Equal(t, []attribute.Value{
+		attribute.StringValue("alpha"),
+		attribute.StringValue("beta"),
+		attribute.BoolValue(true),
+	}, val.AsSlice())
+}
+
+func TestOTelBridgeJSONNullArrivesAsEmptyString(t *testing.T) {
+	top := writeAndReadAttr(t, `{"level":"info","message":"m","parent":null}`, "parent")
+	assert.Equal(t, attribute.StringValue(""), top)
+
+	nested := writeAndReadAttr(t, `{"level":"info","message":"m","ids":[null]}`, "ids")
+	require.Equal(t, attribute.SLICE, nested.Type())
+	assert.Equal(t, []attribute.Value{attribute.StringValue("")}, nested.AsSlice())
+}
+
 // benchNoopProcessor discards every record; keeps BenchmarkOTelBridgeWrite's
 // allocation profile isolated to buildLogRecord + Emit, not processor-side
 // bookkeeping.
@@ -492,7 +544,8 @@ func (benchNoopProcessor) ForceFlush(context.Context) error                     
 // the public Write entry point, with and without trace context — the input
 // shape that determines how many attributes the log.type check has to
 // traverse before defaulting (pre-Step-1: a WalkAttributes scan; post: an
-// O(1) map lookup on entry).
+// O(1) map lookup on entry). The nested-fields case adds the MAP and SLICE
+// conversion of JSON objects and arrays.
 func BenchmarkOTelBridgeWrite(b *testing.B) {
 	cases := []struct {
 		name string
@@ -506,6 +559,11 @@ func BenchmarkOTelBridgeWrite(b *testing.B) {
 			name: "with_trace_context",
 			line: []byte(`{"level":"info","time":"2025-10-10T12:00:00.123456789Z","message":"benchmark line","user_id":"123","method":"POST",` +
 				`"trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef","trace_flags":"1"}`),
+		},
+		{
+			name: "with_nested_fields",
+			line: []byte(`{"level":"info","time":"2025-10-10T12:00:00.123456789Z","message":"benchmark line",` +
+				`"request":{"route":"/users","cached":true,"auth":{"scheme":"bearer"}},"tags":["alpha","beta"]}`),
 		},
 	}
 
