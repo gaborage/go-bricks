@@ -51,13 +51,14 @@ until all current holders have released.
   `detached` is set and the **last** `ReleaseFunc` closes it.
 - `ReleaseFunc` is a `sync.Once`-guarded closure (per-lease idempotent) that decrements `refs`
   and, if `detached && refs == 0`, closes the handle outside the lock.
-- **Seed lease.** A brand-new entry is created with `refs == 1` and `seedHeld == true`. The seed
-  keeps it alive through the window before its first caller claims it, so concurrent
-  eviction/`Remove`/idle-cleanup can only *detach* (never close) it. The first `claimOrAcquire`
-  takes the seed (that ref becomes its lease); concurrent singleflight waiters each increment
-  `refs`. Because callers operate on the shared entry *pointer* (not a map re-lookup), no caller
-  can "miss" the entry under churn — eliminating a retry-storm that a naive re-lookup design
-  exhibits when `MaxSize` < concurrent distinct keys (e.g. `Get` racing `Remove`).
+- **Seed lease** (2026-10-02: see amendment above). Concurrent callers of one key join a single
+  `pendingCreate`, and joining reserves a seed. A brand-new entry is installed with one seed per
+  waiter still joined (`refs == seeds == waiters`), so concurrent eviction/`Remove`/idle-cleanup
+  can only *detach* (never close) it until every waiter has claimed; each waiter's `claimSeed`
+  turns its seed into its lease, and a waiter whose context ends first withdraws its
+  reservation. Because callers operate on the shared entry *pointer* (not a map re-lookup), no
+  caller can "miss" the entry under churn — eliminating a retry-storm that a naive re-lookup
+  design exhibits when `MaxSize` < concurrent distinct keys (e.g. `Get` racing `Remove`).
 - Manager `Close()` (2026-08-09: see amendment above) detaches every still-mapped handle; one with
   no live borrower is closed immediately and marked `closed` under the lock, while one still
   borrowed is left detached-but-open for its final `ReleaseFunc` to close — the same protocol
