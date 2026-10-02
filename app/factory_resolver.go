@@ -51,10 +51,7 @@ func (f *FactoryResolver) DatabaseConnector() database.Connector {
 }
 
 // MessagingClientFactoryOptions bundles the per-publish tuning knobs threaded
-// into the default messaging client factory. Introduced alongside the
-// existing MessagingClientFactory (kept byte-identical for apidiff
-// compatibility) so ReadyTimeout could be added without breaking that
-// method's exported signature.
+// into the default messaging client factory.
 type MessagingClientFactoryOptions struct {
 	ConnectionTimeout  time.Duration
 	MaxPublishAttempts int
@@ -68,35 +65,18 @@ type MessagingClientFactoryOptions struct {
 	ResendDelay       time.Duration
 }
 
-// MessagingClientFactory returns the appropriate messaging client factory function.
-// The default factory creates AMQPClient instances configured with the supplied per-publish
-// connection timeout and bounded publish-retry attempts. If a custom
-// Options.MessagingClientFactory is set it owns construction and receives only (url, log) —
-// neither connectionTimeout nor maxPublishAttempts applies to it.
+// MessagingClientFactoryWithOptions returns the messaging client factory function.
+// The default factory creates AMQPClient instances configured from opts; internal
+// bootstrap wiring (CreateMessagingManager) uses it so every messaging.reconnect.*
+// client knob reaches the client.
 //
-// Deprecated: kept for backward compatibility (its signature cannot change without
-// breaking apidiff). Use MessagingClientFactoryWithOptions, which also carries
-// ReadyTimeout and the four reconnect delays (messaging.reconnect.*) — clients
-// built through this method keep the hardcoded client defaults for those.
-func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration, maxPublishAttempts int) messaging.ClientFactory {
-	return f.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
-		ConnectionTimeout:  connectionTimeout,
-		MaxPublishAttempts: maxPublishAttempts,
-	})
-}
-
-// MessagingClientFactoryWithOptions is the options-struct successor to
-// MessagingClientFactory. Internal bootstrap wiring (CreateMessagingManager)
-// uses this method so every messaging.reconnect.* client knob reaches the client.
-//
-// Same custom-factory precedence as MessagingClientFactory: if
-// Options.MessagingClientFactory is set it owns construction and receives only
-// (url, log) — NO field of opts applies to it, so none of the messaging.reconnect.*
-// config (timeouts, attempts, and the four reconnect delays) reaches it. Such a
-// factory owns construction outright: whatever timeouts, retry bound, reconnect
-// delays and app id its client ends up with are the factory's own, not the
-// framework's. In particular it never reaches WithAppName, so its clients publish
-// no app_id unless the factory sets one itself.
+// A custom Options.MessagingClientFactory takes precedence and owns construction
+// outright: it receives only (url, log) — NO field of opts applies to it, so none of
+// the messaging.reconnect.* config (timeouts, attempts, and the four reconnect delays)
+// reaches it. Whatever timeouts, retry bound, reconnect delays and app id its client
+// ends up with are the factory's own, not the framework's. In particular it never
+// reaches WithAppName, so its clients publish no app_id unless the factory sets one
+// itself.
 func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {

@@ -480,7 +480,9 @@ framework middleware-constructor class (call sites unchanged), `SkipperFunc`, an
 **Breaking:** all six echo leak classes are removed from the consumer surface; custom
 middleware moves to the flat shape and `HandlerContext.Echo` field accesses move to accessors. The
 typed handler hot path stays echo-direct via an unexported `addEcho` seam (ADR-026
-preserved); only middleware routes pay a bounded +1 baton alloc.
+preserved); only middleware routes pay a bounded +1 baton alloc. Amended by ADR-133:
+`NewHandlerContextForTest` takes `...TestContextOption`, and `NewHandlerContextForTestWithOptions`
+is removed.
 
 **Key Benefits:** No `echo.*` symbol on the consumer path, downstream services decoupled from Echo's version, security improvement (no spoofable `RealIP()` accessor), uniform flat middleware shape
 
@@ -2187,6 +2189,22 @@ instrumentation and `Recover` cannot put its value on a span (ADR-081). See
 
 ---
 
+### [ADR-133: Remove Compatibility Shims from the Public API](adr_133_remove_compatibility_shims.md)
+
+**Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** `logger.WithAMQPCounter`/`WithDBCounter`, `FactoryResolver.MessagingClientFactory`, `RouteRegistry.AddRoute`/`RoutesByModule`, `server.NewHandlerContextForTestWithOptions` and the `postgresql`/`oracle` `Statement`/`Transaction` aliases are removed
+
+Five groups of exported names were documented as compatibility layers ("Retained for backward
+compatibility", "kept byte-identical for apidiff compatibility", "for consistency with test
+expectations"), which the manifesto's Backward Compatibility principle forbids. Each one
+forwarded to a name that stays, and `MessagingClientFactory(ct, n)` forwarded less than that name does: it silently
+dropped `ReadyTimeout` and the reconnect delays. They are deleted, and
+`NewHandlerContextForTest` takes the variadic `...TestContextOption` signature, so every
+existing call compiles unchanged. See [migrations.md](migrations.md) `[C71.1]`–`[C71.5]`.
+
+**Key Benefits:** one spelling per operation; no deprecated door that does less than its successor.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2964,7 +2982,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-132) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-133) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

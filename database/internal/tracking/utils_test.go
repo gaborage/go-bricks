@@ -227,7 +227,7 @@ func TestSanitizeArgsReturnsNilForEmptySlice(t *testing.T) {
 }
 
 func TestTrackDBOperationRecordsSuccess(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{
 		slowQueryThreshold: time.Second,
@@ -312,7 +312,7 @@ func TestTrackDBOperationSlowQueryBoundary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := logger.WithDBCounter(context.Background())
+			ctx := logger.WithRequestCounters(context.Background())
 			recLogger := newRecordingLogger()
 			settings := Settings{slowQueryThreshold: threshold, maxQueryLength: 50}
 			tc := &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}
@@ -339,7 +339,7 @@ func TestTrackDBOperationSlowQueryBoundary(t *testing.T) {
 // the severity-parity path runs (a no-op at debug level, but exercised identically to
 // the WARN/ERROR branches, where escalation must be preserved).
 func TestTrackDBOperationSkipsFieldBuildWhenDebugDisabled(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLoggerWithDisabled(levelDebug)
 	settings := Settings{
 		slowQueryThreshold: time.Second,
@@ -381,7 +381,7 @@ func TestTrackDBOperationSkipsFieldBuildWhenDebugDisabled(t *testing.T) {
 // but event.Msg is still called with the slow-query message — proving severity escalation
 // is preserved (the adapter's Msg -> trackSeverity hook fires regardless of Enabled()).
 func TestTrackDBOperationDisabledWarnStillEscalates(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLoggerWithDisabled(levelWarn)
 	settings := Settings{
 		slowQueryThreshold: 5 * time.Millisecond,
@@ -425,7 +425,7 @@ func TestTrackDBOperationDisabledWarnStillEscalates(t *testing.T) {
 // still called with the error message — proving severity escalation is preserved on a
 // dropped ERROR line.
 func TestTrackDBOperationDisabledErrorStillEscalates(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLoggerWithDisabled(levelError)
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -468,7 +468,7 @@ func TestTrackDBOperationDisabledErrorStillEscalates(t *testing.T) {
 func TestTrackDBOperationDisabledDeclaredExpectedErrorDoesNotEscalate(t *testing.T) {
 	failure := errors.New("boom")
 	expected := func(err error) bool { return errors.Is(err, failure) }
-	ctx := WithExpectedError(logger.WithDBCounter(context.Background()), expected)
+	ctx := WithExpectedError(logger.WithRequestCounters(context.Background()), expected)
 	recLogger := newRecordingLoggerWithDisabled(levelError)
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -495,7 +495,7 @@ func TestTrackDBOperationDisabledDeclaredExpectedErrorDoesNotEscalate(t *testing
 // path short-circuits field construction yet still records its benign message and
 // increments the counter (trackSeverity is a no-op below WarnLevel).
 func TestTrackDBOperationDisabledDebugErrNoRows(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLoggerWithDisabled(levelDebug)
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -526,7 +526,7 @@ func TestTrackDBOperationDisabledDebugErrNoRows(t *testing.T) {
 // path short-circuits field construction yet still records its benign message and
 // increments the counter.
 func TestTrackDBOperationDisabledDebugErrTxDone(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLoggerWithDisabled(levelDebug)
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -554,7 +554,7 @@ func TestTrackDBOperationDisabledDebugErrTxDone(t *testing.T) {
 }
 
 func TestTrackDBOperationTruncatesQueryAndLogsArgs(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{
 		slowQueryThreshold: time.Second,
@@ -586,7 +586,7 @@ func TestTrackDBOperationTruncatesQueryAndLogsArgs(t *testing.T) {
 }
 
 func TestTrackDBOperationLogsSlowQuery(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{
 		slowQueryThreshold: 5 * time.Millisecond,
@@ -610,7 +610,7 @@ func TestTrackDBOperationLogsSlowQuery(t *testing.T) {
 }
 
 func TestTrackDBOperationHandlesSqlErrNoRows(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -631,7 +631,7 @@ func TestTrackDBOperationHandlesSqlErrNoRows(t *testing.T) {
 }
 
 func TestTrackDBOperationHandlesSqlErrTxDone(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -654,7 +654,7 @@ func TestTrackDBOperationHandlesSqlErrTxDone(t *testing.T) {
 }
 
 func TestTrackDBOperationLogsErrors(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -698,7 +698,7 @@ func assertNoFieldsLeak(t *testing.T, fields map[string]any, needles ...string) 
 // (which can embed offending row data, e.g. a PAN in a unique-constraint
 // violation) leaking to log backends unfiltered via the ERROR branch's event.Err.
 func TestTrackDBOperationRedactsDriverErrorMessage(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second}
 
@@ -1133,7 +1133,7 @@ func TestTrackDBOperationRedactsCredentialLiteral(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := logger.WithDBCounter(context.Background())
+			ctx := logger.WithRequestCounters(context.Background())
 			recLogger := newRecordingLogger()
 			settings := Settings{slowQueryThreshold: time.Second, maxQueryLength: DefaultMaxQueryLength}
 
@@ -1157,7 +1157,7 @@ func TestTrackDBOperationRedactsCredentialLiteral(t *testing.T) {
 // truncating first emits the literal's opening bytes, while scrubbing first
 // drops it and brings the statement back under the limit.
 func TestTrackDBOperationRedactsBeforeTruncation(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second, maxQueryLength: 40}
 

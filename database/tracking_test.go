@@ -47,7 +47,7 @@ func setupTracked(t testing.TB, withCounter bool) (sqlmock.Sqlmock, *TrackedConn
 	tracked := NewTrackedConnection(sc, log, nil).(*TrackedConnection)
 	var ctx context.Context
 	if withCounter {
-		ctx = logger.WithDBCounter(context.Background())
+		ctx = logger.WithRequestCounters(context.Background())
 	} else {
 		ctx = context.Background()
 	}
@@ -248,7 +248,7 @@ func TestTrackedConnectionUtilityAndBeginMethods(t *testing.T) {
 
 	sc := &simpleConnection{db: db}
 	log := newTestLogger()
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	tracked := NewTrackedConnection(sc, log, nil)
 
 	// Set up expectations for non-tracked methods in order they're called
@@ -302,7 +302,7 @@ func TestTrackedConnectionContextWithoutCounter(t *testing.T) {
 func TestTrackDBOperation(t *testing.T) {
 	t.Parallel()
 	log := newTestLogger()
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 
 	start := time.Now().Add(-10 * time.Millisecond) // Simulate 10ms operation
 	settings := NewTrackingSettings(nil)
@@ -319,7 +319,7 @@ func TestTrackDBOperation(t *testing.T) {
 func TestTrackDBOperationWithError(t *testing.T) {
 	t.Parallel()
 	log := newTestLogger()
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 
 	start := time.Now()
 	testErr := errors.New("database error")
@@ -534,7 +534,7 @@ func TestTrackedDBQueryContext(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "name"}).AddRow(1, "John")
 	mock.ExpectQuery(regexp.QuoteMeta(selectAllUsers)).WillReturnRows(rows)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	resultRows, err := trackedDB.QueryContext(ctx, selectAllUsers)
 
 	require.NoError(t, err)
@@ -558,7 +558,7 @@ func TestTrackedDBQueryContextError(t *testing.T) {
 	expectedErr := errors.New("query failed")
 	mock.ExpectQuery(regexp.QuoteMeta(selectAllInvalid)).WillReturnError(expectedErr)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	rows, err := trackedDB.QueryContext(ctx, selectAllInvalid)
 
 	assert.Nil(t, rows)
@@ -579,7 +579,7 @@ func TestTrackedDBQueryRowContext(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"name"}).AddRow("John")
 	mock.ExpectQuery(regexp.QuoteMeta(selectNameFromUsersOracle)).WithArgs(1).WillReturnRows(rows)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	row := trackedDB.QueryRowContext(ctx, selectNameFromUsersOracle, 1)
 
 	assert.NotNil(t, row)
@@ -606,7 +606,7 @@ func TestTrackedDBExecContext(t *testing.T) {
 		WithArgs("Alice").
 		WillReturnResult(sqlmock.NewResult(2, 1))
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	result, err := trackedDB.ExecContext(ctx, insertIntoUsersOracle, "Alice")
 
 	require.NoError(t, err)
@@ -637,7 +637,7 @@ func TestTrackedDBExecContextError(t *testing.T) {
 		WithArgs("").
 		WillReturnError(expectedErr)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	result, err := trackedDB.ExecContext(ctx, insertIntoUsersOracle, "")
 
 	assert.Nil(t, result)
@@ -672,7 +672,7 @@ func TestTrackedDBPrepareContext(t *testing.T) {
 
 	mock.ExpectPrepare(regexp.QuoteMeta("SELECT * FROM users WHERE id = ?"))
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	stmt, err := trackedDB.PrepareContext(ctx, "SELECT * FROM users WHERE id = ?")
 
 	require.NoError(t, err)
@@ -695,7 +695,7 @@ func TestTrackedDBPrepareContextError(t *testing.T) {
 	expectedErr := errors.New("prepare failed")
 	mock.ExpectPrepare(regexp.QuoteMeta("INVALID SQL")).WillReturnError(expectedErr)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	stmt, err := trackedDB.PrepareContext(ctx, "INVALID SQL")
 
 	assert.Nil(t, stmt)
@@ -720,7 +720,7 @@ func TestTrackedStmtQuery(t *testing.T) {
 	// Prepare a statement
 	mock.ExpectPrepare(regexp.QuoteMeta(selectAllUsersWithID))
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	stmt, err := trackedDB.PrepareContext(ctx, selectAllUsersWithID)
 	require.NoError(t, err)
 	require.NotNil(t, stmt)
@@ -753,7 +753,7 @@ func TestTrackedStmtQueryRow(t *testing.T) {
 	// Prepare a statement
 	mock.ExpectPrepare(regexp.QuoteMeta(selectNameFromUsersWithID))
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	stmt, err := trackedDB.PrepareContext(ctx, selectNameFromUsersWithID)
 	require.NoError(t, err)
 	require.NotNil(t, stmt)
@@ -789,7 +789,7 @@ func TestTrackedStmtExec(t *testing.T) {
 	// Prepare a statement for an UPDATE operation
 	mock.ExpectPrepare(regexp.QuoteMeta(updateUsersSetName))
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	stmt, err := trackedDB.PrepareContext(ctx, updateUsersSetName)
 	require.NoError(t, err)
 	require.NotNil(t, stmt)

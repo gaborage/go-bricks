@@ -146,7 +146,7 @@ func TestNewStatementWrapsUnderlying(t *testing.T) {
 }
 
 func TestStatementQueryDelegatesAndLogs(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	underlying := &stubStatement{}
 	settings := Settings{slowQueryThreshold: time.Second, logQueryParameters: true, maxQueryLength: 50}
 	recLogger := newRecordingLogger()
@@ -185,7 +185,7 @@ func TestStatementQueryDelegatesAndLogs(t *testing.T) {
 }
 
 func TestStatementExecPropagatesErrors(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	underlying := &stubStatement{execErr: errors.New("boom")}
 	settings := Settings{slowQueryThreshold: time.Second}
 	recLogger := newRecordingLogger()
@@ -209,7 +209,7 @@ func TestStatementExecPropagatesErrors(t *testing.T) {
 }
 
 func TestStatementQueryRowLogsWithoutError(t *testing.T) {
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	underlying := &stubStatement{}
 	settings := Settings{slowQueryThreshold: time.Second}
 	recLogger := newRecordingLogger()

@@ -147,7 +147,7 @@ func TestNewTransactionWrapsUnderlying(t *testing.T) {
 
 func TestTransactionQueryLogs(t *testing.T) {
 	t.Parallel()
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	underlying := &stubTx{}
 	recLogger := newRecordingLogger()
 	settings := Settings{slowQueryThreshold: time.Second}
@@ -178,7 +178,7 @@ func TestTransactionQueryLogs(t *testing.T) {
 
 func TestTransactionExecLogsError(t *testing.T) {
 	t.Parallel()
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	underlying := &stubTx{execErr: errors.New("fail")}
 	recLogger := newRecordingLogger()
 	tx := NewTransaction(underlying, newTxTrackingContext(recLogger, Settings{slowQueryThreshold: time.Second}))

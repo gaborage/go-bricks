@@ -5,8 +5,7 @@
 // logic) lives in one place.
 //
 // The wrapped sql.Stmt/sql.Tx values are stored unexported. Callers should
-// construct via NewStatement/NewTransaction; both vendor packages re-export
-// the wrapper types via type aliases to preserve their public API.
+// construct via NewStatement/NewTransaction.
 package wrapper
 
 import (

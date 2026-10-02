@@ -11,7 +11,7 @@ import (
 
 type testContextKey string
 
-func TestWithAMQPCounter(t *testing.T) {
+func TestWithRequestCounters(t *testing.T) {
 	existingKey := testContextKey("existing_key")
 
 	tests := []struct { // NOSONAR: Standard Go table-driven test pattern
@@ -34,60 +34,19 @@ func TestWithAMQPCounter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Nil-safe: WithAMQPCounter(nil) returns nil without panicking, and the
+			// Nil-safe: WithRequestCounters(nil) returns nil without panicking, and the
 			// accessors report 0 on a nil context.
-			ctx := WithAMQPCounter(tt.ctx)
+			ctx := WithRequestCounters(tt.ctx)
 			if tt.ctx == nil {
 				assert.Nil(t, ctx)
 				assert.Equal(t, int64(0), GetAMQPCounter(ctx))
-				return
-			}
-
-			// Verify counter is initialized to 0
-			assert.Equal(t, int64(0), GetAMQPCounter(ctx))
-			assert.Equal(t, int64(0), GetAMQPElapsed(ctx))
-
-			// Verify existing context values are preserved
-			if tt.name == "with_existing_context_values" {
-				assert.Equal(t, "existing_value", ctx.Value(existingKey))
-			}
-		})
-	}
-}
-
-func TestWithDBCounter(t *testing.T) {
-	existingKey := testContextKey("existing_key")
-
-	tests := []struct { // NOSONAR: Standard Go table-driven test pattern
-		name string
-		ctx  context.Context
-	}{
-		{
-			name: "with_background_context",
-			ctx:  context.Background(),
-		},
-		{
-			name: "with_existing_context_values",
-			ctx:  context.WithValue(context.Background(), existingKey, "existing_value"),
-		},
-		{
-			name: "with_nil_context",
-			ctx:  nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Nil-safe: WithDBCounter(nil) returns nil without panicking, and the
-			// accessors report 0 on a nil context.
-			ctx := WithDBCounter(tt.ctx)
-			if tt.ctx == nil {
-				assert.Nil(t, ctx)
 				assert.Equal(t, int64(0), GetDBCounter(ctx))
 				return
 			}
 
-			// Verify counter is initialized to 0
+			// Verify all four counters are initialized to 0
+			assert.Equal(t, int64(0), GetAMQPCounter(ctx))
+			assert.Equal(t, int64(0), GetAMQPElapsed(ctx))
 			assert.Equal(t, int64(0), GetDBCounter(ctx))
 			assert.Equal(t, int64(0), GetDBElapsed(ctx))
 
@@ -100,7 +59,7 @@ func TestWithDBCounter(t *testing.T) {
 }
 
 func TestAMQPCounterOperations(t *testing.T) {
-	ctx := WithAMQPCounter(context.Background())
+	ctx := WithRequestCounters(context.Background())
 
 	// Test initial state
 	assert.Equal(t, int64(0), GetAMQPCounter(ctx))
@@ -117,7 +76,7 @@ func TestAMQPCounterOperations(t *testing.T) {
 }
 
 func TestDBCounterOperations(t *testing.T) {
-	ctx := WithDBCounter(context.Background())
+	ctx := WithRequestCounters(context.Background())
 
 	// Test initial state
 	assert.Equal(t, int64(0), GetDBCounter(ctx))
@@ -134,7 +93,7 @@ func TestDBCounterOperations(t *testing.T) {
 }
 
 func TestAMQPElapsedOperations(t *testing.T) {
-	ctx := WithAMQPCounter(context.Background())
+	ctx := WithRequestCounters(context.Background())
 
 	// Test initial state
 	assert.Equal(t, int64(0), GetAMQPElapsed(ctx))
@@ -154,7 +113,7 @@ func TestAMQPElapsedOperations(t *testing.T) {
 }
 
 func TestDBElapsedOperations(t *testing.T) {
-	ctx := WithDBCounter(context.Background())
+	ctx := WithRequestCounters(context.Background())
 
 	// Test initial state
 	assert.Equal(t, int64(0), GetDBElapsed(ctx))
@@ -175,8 +134,7 @@ func TestDBElapsedOperations(t *testing.T) {
 
 func TestCombinedCounters(t *testing.T) {
 	// Test that both AMQP and DB counters can coexist
-	ctx := WithAMQPCounter(context.Background())
-	ctx = WithDBCounter(ctx)
+	ctx := WithRequestCounters(context.Background())
 
 	// Verify all counters are initialized
 	assert.Equal(t, int64(0), GetAMQPCounter(ctx))
@@ -226,7 +184,7 @@ func TestCountersWithoutInitialization(t *testing.T) {
 }
 
 func TestConcurrentAMQPOperations(t *testing.T) {
-	ctx := WithAMQPCounter(context.Background())
+	ctx := WithRequestCounters(context.Background())
 
 	// Number of goroutines and operations per goroutine
 	numGoroutines := 100
@@ -256,7 +214,7 @@ func TestConcurrentAMQPOperations(t *testing.T) {
 }
 
 func TestConcurrentDBOperations(t *testing.T) {
-	ctx := WithDBCounter(context.Background())
+	ctx := WithRequestCounters(context.Background())
 
 	// Number of goroutines and operations per goroutine
 	numGoroutines := 100
@@ -286,8 +244,7 @@ func TestConcurrentDBOperations(t *testing.T) {
 }
 
 func TestConcurrentMixedOperations(t *testing.T) {
-	ctx := WithAMQPCounter(context.Background())
-	ctx = WithDBCounter(ctx)
+	ctx := WithRequestCounters(context.Background())
 
 	numGoroutines := 50
 	numOperationsPerGoroutine := 25
@@ -347,8 +304,7 @@ func TestContextKeyUniqueness(t *testing.T) {
 }
 
 func TestLargeElapsedValues(t *testing.T) {
-	ctx := WithAMQPCounter(context.Background())
-	ctx = WithDBCounter(ctx)
+	ctx := WithRequestCounters(context.Background())
 
 	// Test with very large values (simulating long-running operations)
 	largeValue := int64(9223372036854775807) // Max int64 value

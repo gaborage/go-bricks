@@ -437,12 +437,6 @@ func logConnectionSuccess(log logger.Logger, cfg *config.DatabaseConfig) {
 	wrapper.AppendPoolFields(ev, cfg).Msg("Connected to Oracle database")
 }
 
-// Oracle re-exports the vendor-agnostic wrappers; see database/internal/wrapper.
-type (
-	Statement   = wrapper.Statement
-	Transaction = wrapper.Transaction
-)
-
 // Query, QueryRow, Exec, Prepare, Begin, BeginTx, Health, Stats, Close are
 // inherited from the embedded *wrapper.Connection — see database/internal/wrapper.
 

@@ -19,7 +19,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```text
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1 ─E59─ v0.59.0 ─E60─ v0.60.0 ─E61─ v0.61.0 ─E62─ v0.62.0 ─E63─ v0.63.0 ─E64─ v0.64.0 ─E65─ v0.65.0 ─E66─ v0.66.0 ─E67─ v0.67.0 ─E68─ v0.68.0 ─E69─ v0.69.0 ─E70─ v0.70.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1 ─E59─ v0.59.0 ─E60─ v0.60.0 ─E61─ v0.61.0 ─E62─ v0.62.0 ─E63─ v0.63.0 ─E64─ v0.64.0 ─E65─ v0.65.0 ─E66─ v0.66.0 ─E67─ v0.67.0 ─E68─ v0.68.0 ─E69─ v0.69.0 ─E70─ v0.70.0 ─E71─ v0.71.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -56,6 +56,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E68 | v0.67.0 → v0.68.0 | silent-behavior (C68.1 — the health/ready probe exemption is keyed on the route the ROUTER matched plus a GET/HEAD method check, where it compared the decoded `r.URL.Path` and ignored the method, so a non-GET/HEAD request on a probe path and a percent-encoded spelling of one are no longer exempt from tenant resolution, the forwarded-client-cert identity, OTel and module global middleware; `server.CreateProbeSkipper` moves to `server/probe_skip.go` and answers from `r.Pattern` with the raw path as fallback, its exported signature unmoved) | 1 | none — no signature moves; the exemption narrows under you, and it narrows fail-closed (middleware runs where it used to be skipped) | decide whether any probe or monitor of yours calls a probe path with a method other than GET or HEAD, since that request now runs the identity chain — under `multitenant` it answers 400 without a tenant header, under `forwardedclientcert.require` 401 without a client certificate — and if a custom `server.SkipperFunc` of yours exempts anything, key it on `r.Pattern` rather than `r.URL.Path` |
 | E69 | v0.68.0 → v0.69.0 | breaking (C69.3 — a service built on `server.New` without `app` that registers one method+path twice through `ModuleGroup`/`RootGroup` used to boot with the LATER handler serving; now the first handler keeps the route and `Server.Start` returns a `*server.DuplicateRouteError` matching `server.ErrDuplicateRoute` before either listener binds; the probes register first, so a module route at GET/HEAD `<base>/health` or `<base>/ready` that used to take the path over now never runs, and a `server.path.health` equal to `server.path.ready` that used to let readiness replace health now refuses `Start` with `dispatchReady` as the duplicate; templates differing only in a parameter or wildcard name (`/users/:id`, `/users/:uid`) now conflict, under `app` too, where an identical duplicate and both probe cases already failed startup) + breaking (C69.5 — a `Mandatory: true` publish the broker returns as unroutable now fails with `ErrPublishRetriesExhausted` wrapping the new `ErrPublishUnroutable` after `reconnect.maxpublishattempts`, where the client discarded the `basic.return` and reported the `basic.ack` that followed it as a success; non-mandatory publishes and the outbox relay are unchanged) + silent-behavior (C69.6 — a stream or super stream the broker lost while the service ran is reported once at ERROR per consumer or publisher on it and keeps the non-critical `streams` component unhealthy until a restart, and a lost consumer's shutdown offset flush is skipped, so the restart replays what it handled since its last commit) + breaking (C69.1 — `/ready` answers `{"status":"ready"}` on 200 and `{"status":"not ready"}` on 503 and nothing else, on the probe listener and the application listener alike: `time`, `app` (name/environment/version), every per-kind status key (`database`, `messaging`, `cache`, `streams`), every `<kind>_stats` object and ADR-048's `"<kind> unavailable"` error text all leave both bodies, where an orchestrator reading only the status code is unaffected and anything parsing the body loses every key but `status`) + compile-break (C69.2 — the exported field `HealthStatus.PublicErr` is deleted along with `publicProbeError`, so code that sets it stops compiling) + breaking (C69.4 — a typed handler whose request type, after one pointer level, is not a struct, or is `time.Time` or a type convertible to it, panics at registration naming the method, the full path and the type, where it used to boot and then fail every request to that route: most kinds panicked inside the tag binder into a 500 (a 400 when echo's JSON binder rejected the body first), and `time.Time` answered 400; `server.WrapHandler` panics the same way when the wrapper is built) + additive-optional (C69.7 — `Builder.WithBearerTokenFile` sends `Authorization: Bearer` read from a file that rotates on disk, re-read on an interval; a client that does not call it is unchanged) | 7 | C69.3 only partially — `RouteConflict` gains a `FirstPath` field, so an unkeyed `server.RouteConflict{...}` literal stops compiling; the refusal itself surfaces at `Start`; none for C69.5 — no signature moves, and a call that returned nil now returns an error; none for C69.6 — no signature moves and no configuration key changes; and C69.2 — `go build ./... && go vet ./...` names every assignment, `_test.go` files included; nothing for C69.1, whose population is body readers OUTSIDE the Go build — a `map[string]any` read of a deleted key compiles and returns `nil`, and a dashboard panel or alert rule keyed on a vanished JSON path goes quiet instead of failing; none — the request type is inferred from the handler signature, so the build passes and the panic surfaces at startup; nothing for C69.7, which only adds API | on the current version, call `srv.RouteConflicts()` after every registration: non-empty means `Start` will refuse after the bump — remove or rename the duplicate it names; where the first registrant is a probe, serve custom readiness through `Server.RegisterReadyHandler`, move the probe with `server.path.health`/`server.path.ready` (two distinct values), or move the module route; also compare each method's templates with parameter and wildcard names erased; for C69.5, grep your publisher declarations for a `Mandatory` set to anything but a literal `false`, assigned after construction included, and before the bump confirm that every binding those publishes rely on exists in every environment, since a publish that was silently dropped now fails the caller; nothing for C69.6; and for C69.1, inventory every reader of the `/ready` BODY, as opposed to its status code — smoke tests, `jq` scrapes, synthetic monitors, dashboard panels, alert rules — and repoint it at `app.readiness.status`, the `messaging.consumer.*` / `messaging.streams.*` gauges, `cache.manager.*` or `/_sys/health-debug` BEFORE the bump — `db.client.connection.*` is the DRIVER's pool and NOT a replacement for `database_stats`, whose `DbManager` resourcepool counters no instrument covers and which therefore stay on the debug view; the gauges ship in this same release, so the replacement signal exists the moment the body does not; and boot every service once before rolling the bump out: a refused route aborts startup with `server: handler registration failed for <METHOD> <path>: request type <T> must be a struct…`, and the fix is to wrap the value in a struct field; and for C69.7, nothing unless you adopt it in place of a hand-written token-file interceptor — then delete that interceptor, since interceptors run after the option and would overwrite the header |
 | E70 | v0.69.0 → v0.70.0 | breaking (C70.1 — construction fails when `source.type` is `dynamic` without an `app.Options.ResourceSource` whose `IsDynamic()` is true, or is `static` beside one whose `IsDynamic()` is true, where all three booted; a single-tenant `source.type` outside `static`/`dynamic` fails `config.Validate`, where it booted reading as static) + breaking (C70.2 — a resource source whose `IsDynamic()` is false is asked for `""` once per kind at build under `app.startup.<kind>`, and a lookup error other than not-configured fails construction) + breaking (C70.3 — beside such a store, its answer for `""`, not the root blocks, decides the absence WARN, the `DatabaseRequirer` abort, the #366 declarations gate, the fatal pre-init and `ModuleDeps.*Configured`) + breaking (C70.4 — multi-tenant `messaging.tenancy: shared` pre-initializes the control-plane broker at build, and without one reads `MessagingConfigured` false, refuses its declarations and reports `not_configured` where it reported `per_tenant`) + silent-behavior (C70.5 — a single-tenant dynamic store's messaging declarations no longer abort on an empty root broker) + silent-behavior (C70.6 — the single-tenant cache pre-warms, and a `""` known absent is no longer pre-warmed) + breaking (C70.7 — a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false: multi-tenant `messaging.tenancy: shared` without a control-plane broker, stream-only outboxes included, and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag) + silent-behavior (C70.8 — a single-tenant dynamic store with no root broker, and a caller store serving `""` beside an empty root messaging block, now pass outbox `Init`) + breaking (C70.9 — a shared-ledger outbox refuses `Init` exactly when `ModuleDeps.ControlPlaneMessagingAbsent` is true, so a caller static store not serving `""` beside a root broker now aborts it) + silent-behavior (C70.10 — a shared-ledger outbox beside a caller store serving `""` and an empty root messaging block now passes `Init`, a dynamic store is exempt by the plan instead of `source.type`, and a hand-built `ModuleDeps` no longer aborts it on root config) + breaking (C70.11 — multi-tenant `messaging.tenancy: per-tenant` on the built-in store with at least one static tenant and none setting `messaging.url` reads `MessagingConfigured` false, so a per-tenant-ledger outbox refuses `Init` and messaging declarations refuse startup, where both booted and every tenant resolve failed) + silent-behavior (C70.12 — a 2xx the JOSE transport rejects — over `MaxResponseBytes`, malformed or tampered JOSE — is no longer retried, and the over-cap error reads `ValidationError` where it read `NetworkError`) + silent-behavior (C70.13 — a followed `https`→`http` redirect that carried `Authorization`, `Cookie` or `Proxy-Authorization` now fails with `ErrRedirectDowngrade`, and the redirect-cap error reads `httpclient: stopped after 10 redirects`) + breaking (C70.14 — `StopConsumers` takes a `context.Context` on `messaging.Manager`, `messaging.Registry`, `messaging.RegistryInterface` and `mocks.MockRegistry`, and now blocks until the consumer supervisors exit or the window — `ctx`'s deadline capped at 5s — closes) + compile-break (C70.15 — `Publisher[T].Seal`, `jose/sealed.Seal`/`SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`, so every two-value assignment stops compiling) + silent-behavior (C70.16 — behind a proxy on a public or `100.64.0.0/10` address not listed in `server.trustedproxies`, `X-Forwarded-Proto` is ignored, so the HSTS header stops and the `url.scheme` metric label reads `http`) + breaking (C70.17 — the HTTP server instrumentation scope becomes `github.com/labstack/echo-otel/v5`, HTTP server metrics lose `server.address`/`server.port`/`http.request.method_original`, spans lose the body-size attributes, HTTP/2 and HTTP/3 `network.protocol.version` reads `2`/`3`, and span `error.type` is no longer set on a returned 4xx error and reads the status code for a 5xx error that carries one (it read the Go type)) | 17 | C70.14, C70.15 — `go build ./... && go vet ./...` names every call site | if any environment sets `source.type` or your code passes `app.Options.ResourceSource`, make them agree before the bump: `dynamic` exactly when the resource source's `IsDynamic()` returns true (C70.1); if the store reports `false`, make it answer `""` with a configuration or a not-configured error, within `app.startup.<kind>` (C70.2), and read what that answer now decides (C70.3); and under multi-tenant `messaging.tenancy: shared`, confirm the control-plane broker is set and reachable at startup, or that no module declares messaging (C70.4); and with an enabled per-tenant-ledger outbox, confirm that same broker, and set `MessagingConfigured: true` on any hand-built `ModuleDeps` (C70.7); and with an enabled shared-ledger outbox, confirm the store serving `""` answers it with a broker (C70.9); and under multi-tenant `messaging.tenancy: per-tenant` with no `app.Options.ResourceSource` and at least one static tenant, confirm at least one of them sets `messaging.url`, or that no module declares messaging and no per-tenant-ledger outbox is enabled (C70.11); and behind a proxy on a public or `100.64.0.0/10` address, list its CIDRs in `server.trustedproxies` (C70.16); and repoint any query, dashboard or alert that filters on the scope `github.com/labstack/echo-opentelemetry` or reads `server.address`/`http.request.method_original` from HTTP server metrics, body sizes from spans, or `network.protocol.version` `2.0`/`3.0`, or matches span `error.type` on a Go type name (C70.17) |
+| E71 | v0.70.0 → v0.71.0 | compile-break (C71.1–C71.5 — `logger.WithAMQPCounter`/`WithDBCounter`, `FactoryResolver.MessagingClientFactory`, `RouteRegistry.AddRoute`/`RoutesByModule`, `server.NewHandlerContextForTestWithOptions` and the `postgresql`/`oracle` `Statement`/`Transaction` aliases are removed; `NewHandlerContextForTest` gains `...TestContextOption`) | 5 | C71.1, C71.2, C71.3, C71.4, C71.5 — `go build ./... && go vet ./... && go vet -tags=integration ./...` names every call site | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -11422,6 +11423,92 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `http.server.request.duration` has no `server.address` label.
 - ref: [ADR-132](adr_132_http_server_instrumentation_echo_otel.md) · `server/middleware.go`
   (`useOTelMiddleware`)
+
+## E71 · v0.70.0 → v0.71.0 — five compatibility shims are removed
+
+- gist: five exported names were compatibility layers that only forwarded to a name that stays.
+  They are deleted: the counter seeders `logger.WithAMQPCounter`/`WithDBCounter` (C71.1),
+  `FactoryResolver.MessagingClientFactory(connectionTimeout, maxPublishAttempts)`, which also
+  silently dropped `ReadyTimeout` and the reconnect delays (C71.2), `RouteRegistry.AddRoute`/
+  `RoutesByModule` (C71.3), `server.NewHandlerContextForTestWithOptions`, whose variadic options
+  move onto `NewHandlerContextForTest` (C71.4), and the `postgresql`/`oracle` `Statement`/
+  `Transaction` type aliases (C71.5). Every atom is a compile break with a direct replacement.
+  ADR-133.
+
+### [C71.1] `logger.WithAMQPCounter` and `logger.WithDBCounter` are removed · compile-break · when: match
+
+- detect: `git grep -nwE 'WithAMQPCounter|WithDBCounter' -- '*.go'`
+- scope: both functions only called `logger.WithRequestCounters(ctx)`, which seeds the one shared
+  per-request counters struct (AMQP and DB counts and elapsed times). Every `Increment*`, `Get*`
+  and `Add*` counter function is unchanged.
+- gate: match = any hit. no-match = otherwise.
+- apply: `logger.WithAMQPCounter(ctx)` / `logger.WithDBCounter(ctx)` → `logger.WithRequestCounters(ctx)`.
+  The behavior is the same.
+- verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`
+- ref: [ADR-133](adr_133_remove_compatibility_shims.md) · `logger/context.go`
+
+### [C71.2] `FactoryResolver.MessagingClientFactory(connectionTimeout, maxPublishAttempts)` is removed · compile-break · when: match
+
+- detect: `git grep -nE '[.]MessagingClientFactory([^A-Za-z0-9_]|$)' -- '*.go'` (calls and
+  method values). Keep the hits whose receiver is an `*app.FactoryResolver`: the removed METHOD
+  takes `(time.Duration, int)`. A use of the `app.Options.MessagingClientFactory` FIELD (called
+  with `(url, log)`, nil-checked, or set) is unaffected.
+- scope: the method put its two arguments into `MessagingClientFactoryOptions` and called
+  `MessagingClientFactoryWithOptions`, which survives. The other option fields got no value, so
+  `ReadyTimeout`, `PublishTimeout` and the four reconnect delays kept the client's hardcoded
+  defaults.
+- gate: match = a method hit. no-match = otherwise.
+- apply: `r.MessagingClientFactory(ct, n)` → `r.MessagingClientFactoryWithOptions(app.MessagingClientFactoryOptions{ConnectionTimeout: ct, MaxPublishAttempts: n})`.
+  This builds the same client the method built. Set `ReadyTimeout`, `PublishTimeout` or the
+  reconnect delays in the same literal if you want them to reach the client.
+- verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`
+- ref: [ADR-133](adr_133_remove_compatibility_shims.md) · `app/factory_resolver.go`
+
+### [C71.3] `RouteRegistry.AddRoute` and `RouteRegistry.RoutesByModule` are removed · compile-break · when: match
+
+- detect: `git grep -nwE 'AddRoute|RoutesByModule' -- '*.go'` (calls and method values). Keep
+  the hits whose receiver is a `*server.RouteRegistry`. Echo's own `Echo.AddRoute`/
+  `Group.AddRoute` are unrelated.
+- scope: `AddRoute` was an alias of `Register`, and `RoutesByModule` an alias of `ByModule`.
+  `Register`, `Routes`, `ByModule`, `ByPath`, `RoutesByMethod`, `Clear` and `Count` are unchanged.
+- gate: match = a `RouteRegistry` hit. no-match = otherwise.
+- apply: `.AddRoute(d)` → `.Register(d)`; `.RoutesByModule(m)` → `.ByModule(m)`.
+- verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`
+- ref: [ADR-133](adr_133_remove_compatibility_shims.md) · `server/descriptor.go`
+
+### [C71.4] `server.NewHandlerContextForTestWithOptions` folds into `NewHandlerContextForTest` · compile-break · when: match
+
+- detect: `git grep -nw NewHandlerContextForTestWithOptions -- '*.go'`, and
+  `git grep -nE 'NewHandlerContextForTest([^(A-Za-z]|$)' -- '*.go'` for the constructor used
+  as a function VALUE (skip comment hits).
+- scope: `NewHandlerContextForTest` now has the signature
+  `(w http.ResponseWriter, r *http.Request, cfg *config.Config, opts ...TestContextOption) HandlerContext`.
+  Every existing call compiles unchanged. A variable or parameter typed
+  `func(http.ResponseWriter, *http.Request, *config.Config) server.HandlerContext` that holds the
+  constructor stops compiling. `TestContextOption` and `WithRouteTemplate` are unchanged.
+- gate: match = any hit of either grep. no-match = otherwise.
+- apply: `server.NewHandlerContextForTestWithOptions(w, r, cfg, opts...)` →
+  `server.NewHandlerContextForTest(w, r, cfg, opts...)`. Widen a held function type with
+  `opts ...server.TestContextOption`.
+- verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`
+- ref: [ADR-133](adr_133_remove_compatibility_shims.md) · `server/handler.go`
+
+### [C71.5] the `postgresql`/`oracle` `Statement` and `Transaction` type aliases are removed · compile-break · when: match
+
+- detect: `git grep -nE '(postgresql|oracle)[.](Statement|Transaction)([^A-Za-z0-9_]|$)' -- '*.go'`.
+  An import renamed with an alias escapes it: list the importing files with
+  `git grep -lE '"github.com/gaborage/go-bricks/database/(postgresql|oracle)"' -- '*.go'` and
+  look for `<alias>.Statement`/`<alias>.Transaction` in each.
+- scope: the four names were aliases of `database/internal/wrapper` types. `Prepare` and `Begin`
+  return `types.Statement` and `types.Tx`, and the wrapper keeps its `*sql.Stmt`/`*sql.Tx`
+  unexported, so a type assertion to the concrete alias gave the caller nothing it could use.
+- gate: match = any hit. no-match = otherwise.
+- apply: use the `database/types` interfaces: `postgresql.Statement`/`oracle.Statement` →
+  `types.Statement`, `postgresql.Transaction`/`oracle.Transaction` → `types.Tx`. Drop a type
+  assertion to the concrete alias.
+- verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`
+- ref: [ADR-133](adr_133_remove_compatibility_shims.md) · `database/postgresql/connection.go`,
+  `database/oracle/connection.go`
 
 ---
 

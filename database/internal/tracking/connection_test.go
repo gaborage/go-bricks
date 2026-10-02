@@ -185,7 +185,7 @@ func TestNewDBQueryContextTracksOperations(t *testing.T) {
 
 	recLogger := newRecordingLogger()
 	tracked := NewDB(db, recLogger, "postgresql", cfg)
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 
 	rows, err := tracked.QueryContext(ctx, selectOne, 1)
 	if err != nil {
@@ -232,7 +232,7 @@ func TestDBQueryRowContextTracksOperations(t *testing.T) {
 
 	recLogger := newRecordingLogger()
 	tracked := NewDB(db, recLogger, "postgresql", cfg)
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 
 	row := tracked.QueryRowContext(ctx, selectOne, 1)
 	if row == nil {
@@ -278,7 +278,7 @@ func TestDBExecContextLogsErrors(t *testing.T) {
 
 	recLogger := newRecordingLogger()
 	tracked := NewDB(db, recLogger, "postgresql", &config.DatabaseConfig{})
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 
 	_, err = tracked.ExecContext(ctx, "UPDATE", 1)
 	if !errors.Is(err, execErr) {
@@ -337,7 +337,7 @@ func TestNewConnectionDelegatesAndLogs(t *testing.T) {
 	recLogger := newRecordingLogger()
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	rows, err := conn.Query(ctx, simpleSelect, 1)
 	if err != nil {
 		t.Fatalf("expected query to succeed")
@@ -370,7 +370,7 @@ func TestConnectionQueryRowTracksOperations(t *testing.T) {
 	underlying := &mockConnectionFromDB{trackedDB: trackedDB}
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	row := conn.QueryRow(ctx, selectOne, 1)
 	if row == nil {
 		t.Fatalf("expected row result")
@@ -469,7 +469,7 @@ func TestConnectionExecErrorIsLogged(t *testing.T) {
 	recLogger := newRecordingLogger()
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 	_, err := conn.Exec(ctx, "UPDATE", 2)
 	if err == nil {
 		t.Fatalf("expected error to propagate")
@@ -552,7 +552,7 @@ func TestConnectionCreateMigrationTableLogs(t *testing.T) {
 	recLogger := newRecordingLogger()
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
-	err := conn.CreateMigrationTable(logger.WithDBCounter(context.Background()))
+	err := conn.CreateMigrationTable(logger.WithRequestCounters(context.Background()))
 	if err == nil {
 		t.Fatalf("expected migration error")
 	}

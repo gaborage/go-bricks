@@ -129,19 +129,10 @@ func WithRouteTemplate(template string) TestContextOption {
 // NewHandlerContextForTest builds a HandlerContext backed by a real Echo context for use
 // in external-package tests (e.g. app/, scheduler/) that exercise Handler / MiddlewareFunc
 // code but cannot name the unexported escape hatch. It keeps the echo dependency confined
-// to package server. Test-support only — not for production wiring. To seed routing state
-// the synthetic context would otherwise leave empty, use NewHandlerContextForTestWithOptions.
-func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *config.Config) HandlerContext {
-	return NewHandlerContextForTestWithOptions(w, r, cfg)
-}
-
-// NewHandlerContextForTestWithOptions is NewHandlerContextForTest plus TestContextOption
-// values (e.g. WithRouteTemplate) that seed pre-routing state the engine would otherwise
-// populate during matching. It exists as a separate constructor rather than a variadic on
-// NewHandlerContextForTest so the already-released signature stays API-compatible (adding a
-// variadic changes a function's type identity — apidiff classifies it as incompatible).
-// Test-support only — not for production wiring.
-func NewHandlerContextForTestWithOptions(w http.ResponseWriter, r *http.Request, cfg *config.Config, opts ...TestContextOption) HandlerContext {
+// to package server. Test-support only — not for production wiring. TestContextOption
+// values (e.g. WithRouteTemplate) seed routing state the synthetic context would otherwise
+// leave empty.
+func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *config.Config, opts ...TestContextOption) HandlerContext {
 	e := echo.New()
 	// Register the framework validator so contexts built here drive the typed pipeline
 	// (which calls c.Validate) exactly as a live request would.

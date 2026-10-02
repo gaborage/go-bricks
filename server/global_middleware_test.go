@@ -55,7 +55,7 @@ func TestSkipProbesBypassesProbePathsOnly(t *testing.T) {
 			mwCalls = 0
 			nextCalls := 0
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.url, http.NoBody)
-			ctx := NewHandlerContextForTestWithOptions(httptest.NewRecorder(), req, cfg, WithRouteTemplate(tc.template))
+			ctx := NewHandlerContextForTest(httptest.NewRecorder(), req, cfg, WithRouteTemplate(tc.template))
 			require.NoError(t, wrapped(ctx, func() error { nextCalls++; return nil }))
 			assert.Equal(t, 1, nextCalls, "next must always run")
 			if tc.wantMW {

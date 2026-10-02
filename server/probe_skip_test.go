@@ -162,13 +162,13 @@ func TestWithRouteTemplateStampsRequestPattern(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	skipper := CreateProbeSkipper(probeSkipHealth, probeSkipReady)
 
-	probe := NewHandlerContextForTestWithOptions(httptest.NewRecorder(),
+	probe := NewHandlerContextForTest(httptest.NewRecorder(),
 		httptest.NewRequestWithContext(context.Background(), http.MethodGet, probeSkipHealth, http.NoBody),
 		cfg, WithRouteTemplate(probeSkipHealth))
 	assert.Equal(t, probeSkipHealth, probe.RouteTemplate())
 	assert.True(t, skipper(probe.Request()), "the stamped template must reach the request-only door")
 
-	module := NewHandlerContextForTestWithOptions(httptest.NewRecorder(),
+	module := NewHandlerContextForTest(httptest.NewRecorder(),
 		httptest.NewRequestWithContext(context.Background(), http.MethodGet, probeSkipHealth, http.NoBody),
 		cfg, WithRouteTemplate(probeSkipModuleRoute))
 	assert.False(t, skipper(module.Request()),

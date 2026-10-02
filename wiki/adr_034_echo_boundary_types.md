@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-06-30
 
+> **Amended (2026-10-01, [ADR-133](adr_133_remove_compatibility_shims.md)):**
+> `server.NewHandlerContextForTest` is now `(w, r, cfg, opts ...TestContextOption) HandlerContext`.
+> The separate `NewHandlerContextForTestWithOptions` constructor is removed. The Decision text
+> below keeps the original three-argument signature.
+
 ## Context
 
 The Developer Manifesto's **Vendor Agnosticism** principle says: *"Abstract
