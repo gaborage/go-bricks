@@ -28,6 +28,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/backoff"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 const (
@@ -163,9 +164,9 @@ func NewBuilder(log logger.Logger) *Builder {
 			DefaultHeaders:       make(map[string]string),
 			LogPayloads:          false,
 			MaxPayloadLogBytes:   defaultMaxPayloadLogBytes,
-			TraceIDHeader:        HeaderXRequestID,
-			NewTraceID:           func() string { return EnsureTraceID(context.Background()) },
-			TraceIDExtractor:     TraceIDFromContext,
+			TraceIDHeader:        gobrickstrace.HeaderXRequestID,
+			NewTraceID:           func() string { return gobrickstrace.EnsureTraceID(context.Background()) },
+			TraceIDExtractor:     gobrickstrace.IDFromContext,
 			EnableW3CTrace:       true,
 		},
 		logger: log,
@@ -1205,14 +1206,14 @@ func (c *client) extractTraceID(ctx context.Context) string {
 		return c.config.NewTraceID()
 	}
 	// Fallback in unlikely case config is nil or functions are nil
-	return EnsureTraceID(ctx)
+	return gobrickstrace.EnsureTraceID(ctx)
 }
 
 func (c *client) traceHeaderName() string {
 	if c.config != nil && c.config.TraceIDHeader != "" {
 		return c.config.TraceIDHeader
 	}
-	return HeaderXRequestID
+	return gobrickstrace.HeaderXRequestID
 }
 
 // applyHeaders applies headers to the HTTP request. W3C trace-context headers
@@ -1272,7 +1273,7 @@ func (c *client) ensureTraceIDHeader(httpReq *nethttp.Request) {
 // the request.
 func (c *client) ensureTraceContextHeaders(httpReq *nethttp.Request) {
 	ctx := httpReq.Context()
-	if httpReq.Header.Get(HeaderTraceParent) != "" {
+	if httpReq.Header.Get(gobrickstrace.HeaderTraceParent) != "" {
 		// Caller-supplied or already-injected traceparent wins. Don't
 		// touch tracestate either — they're a pair.
 		return
@@ -1281,14 +1282,14 @@ func (c *client) ensureTraceContextHeaders(httpReq *nethttp.Request) {
 		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 		return
 	}
-	if tp, ok := TraceParentFromContext(ctx); ok {
-		httpReq.Header.Set(HeaderTraceParent, tp)
+	if tp, ok := gobrickstrace.ParentFromContext(ctx); ok {
+		httpReq.Header.Set(gobrickstrace.HeaderTraceParent, tp)
 	} else {
-		httpReq.Header.Set(HeaderTraceParent, GenerateTraceParent())
+		httpReq.Header.Set(gobrickstrace.HeaderTraceParent, gobrickstrace.GenerateTraceParent())
 	}
-	if httpReq.Header.Get(HeaderTraceState) == "" {
-		if ts, ok := TraceStateFromContext(ctx); ok {
-			httpReq.Header.Set(HeaderTraceState, ts)
+	if httpReq.Header.Get(gobrickstrace.HeaderTraceState) == "" {
+		if ts, ok := gobrickstrace.StateFromContext(ctx); ok {
+			httpReq.Header.Set(gobrickstrace.HeaderTraceState, ts)
 		}
 	}
 }
@@ -1598,5 +1599,3 @@ func (c *client) logResponse(resp *Response, traceID string) {
 		}
 	}
 }
-
-// generator functions (GenerateTraceParent, EnsureTraceID, TraceIDFromContext) live in httpclient/interface.go and are also used by the server package

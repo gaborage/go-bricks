@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // Test constants to avoid string duplication
@@ -24,12 +26,12 @@ func TestNewTraceIDInterceptor(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
 		require.NoError(t, err)
 
-		ctx := WithTraceID(context.Background(), "test-trace-123")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "test-trace-123")
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
 
-		assert.Equal(t, "test-trace-123", req.Header.Get(HeaderXRequestID))
+		assert.Equal(t, "test-trace-123", req.Header.Get(gobrickstrace.HeaderXRequestID))
 	})
 
 	t.Run("preserves existing trace ID header", func(t *testing.T) {
@@ -39,15 +41,15 @@ func TestNewTraceIDInterceptor(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set an existing trace ID
-		req.Header.Set(HeaderXRequestID, "existing-trace-456")
+		req.Header.Set(gobrickstrace.HeaderXRequestID, "existing-trace-456")
 
-		ctx := WithTraceID(context.Background(), "new-trace-789")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "new-trace-789")
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
 
 		// Should preserve the existing header
-		assert.Equal(t, "existing-trace-456", req.Header.Get(HeaderXRequestID))
+		assert.Equal(t, "existing-trace-456", req.Header.Get(gobrickstrace.HeaderXRequestID))
 	})
 
 	t.Run("generates trace ID when none in context", func(t *testing.T) {
@@ -60,7 +62,7 @@ func TestNewTraceIDInterceptor(t *testing.T) {
 		err = interceptor(context.Background(), req)
 		require.NoError(t, err)
 
-		traceID := req.Header.Get(HeaderXRequestID)
+		traceID := req.Header.Get(gobrickstrace.HeaderXRequestID)
 		assert.NotEmpty(t, traceID)
 		assert.NotEmpty(t, traceID)
 	})
@@ -75,13 +77,13 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
 		require.NoError(t, err)
 
-		ctx := WithTraceID(context.Background(), "custom-trace-123")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "custom-trace-123")
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
 
 		assert.Equal(t, "custom-trace-123", req.Header.Get(customHeader))
-		assert.Empty(t, req.Header.Get(HeaderXRequestID)) // Default header should not be set
+		assert.Empty(t, req.Header.Get(gobrickstrace.HeaderXRequestID)) // Default header should not be set
 	})
 
 	t.Run("falls back to default header when empty string provided", func(t *testing.T) {
@@ -90,12 +92,12 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
 		require.NoError(t, err)
 
-		ctx := WithTraceID(context.Background(), "fallback-trace-456")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "fallback-trace-456")
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
 
-		assert.Equal(t, "fallback-trace-456", req.Header.Get(HeaderXRequestID))
+		assert.Equal(t, "fallback-trace-456", req.Header.Get(gobrickstrace.HeaderXRequestID))
 	})
 
 	t.Run("preserves existing custom header", func(t *testing.T) {
@@ -108,7 +110,7 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		// Set existing value in custom header
 		req.Header.Set(customHeader, "existing-custom-789")
 
-		ctx := WithTraceID(context.Background(), "new-trace-000")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "new-trace-000")
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
@@ -136,7 +138,7 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 				require.NoError(t, err)
 
 				expectedTraceID := "trace-for-" + tc.name
-				ctx := WithTraceID(context.Background(), expectedTraceID)
+				ctx := gobrickstrace.WithTraceID(context.Background(), expectedTraceID)
 
 				err = interceptor(ctx, req)
 				require.NoError(t, err)
@@ -153,7 +155,7 @@ func TestNewTraceIDInterceptorFor(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, testExampleURL, http.NoBody)
 		require.NoError(t, err)
 
-		ctx := WithTraceID(context.Background(), testMultiTrace)
+		ctx := gobrickstrace.WithTraceID(context.Background(), testMultiTrace)
 
 		// Apply both interceptors
 		err = interceptor1(ctx, req)
@@ -196,7 +198,7 @@ func TestTraceIDInterceptorIntegration(t *testing.T) {
 		req.Header.Set(testPriorityTrace, "priority-value")
 
 		// Context has different trace ID
-		ctx := WithTraceID(context.Background(), "context-value")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "context-value")
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
@@ -212,8 +214,8 @@ func TestTraceIDInterceptorIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set up context with both trace ID and W3C traceparent
-		ctx := WithTraceID(context.Background(), "w3c-trace-123")
-		ctx = WithTraceParent(ctx, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "w3c-trace-123")
+		ctx = gobrickstrace.WithTraceParent(ctx, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)

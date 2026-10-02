@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // TestRequestEnrichInjectsTraceAndCounters verifies the combined middleware seeds
@@ -33,7 +33,7 @@ func TestRequestEnrichInjectsTraceAndCounters(t *testing.T) {
 	require.NoError(t, handler(c))
 
 	// Trace ID injected for outbound propagation.
-	traceID, ok := gobrickshttp.TraceIDFromContext(captured)
+	traceID, ok := gobrickstrace.IDFromContext(captured)
 	assert.True(t, ok, "trace ID should be present after RequestEnrich")
 	assert.NotEmpty(t, traceID)
 
@@ -51,8 +51,8 @@ func TestRequestEnrichPropagatesW3CHeaders(t *testing.T) {
 	)
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
-	req.Header.Set(gobrickshttp.HeaderTraceState, tracestate)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, traceparent)
+	req.Header.Set(gobrickstrace.HeaderTraceState, tracestate)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -63,11 +63,11 @@ func TestRequestEnrichPropagatesW3CHeaders(t *testing.T) {
 	})
 	require.NoError(t, handler(c))
 
-	gotTP, okTP := gobrickshttp.TraceParentFromContext(captured)
+	gotTP, okTP := gobrickstrace.ParentFromContext(captured)
 	assert.True(t, okTP)
 	assert.Equal(t, traceparent, gotTP)
 
-	gotTS, okTS := gobrickshttp.TraceStateFromContext(captured)
+	gotTS, okTS := gobrickstrace.StateFromContext(captured)
 	assert.True(t, okTS)
 	assert.Equal(t, tracestate, gotTS)
 }

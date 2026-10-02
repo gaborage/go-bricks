@@ -2221,6 +2221,26 @@ keep. See [migrations.md](migrations.md) `[C71.6]`–`[C71.7]`.
 
 ---
 
+### [ADR-135: Dead Public Surface Is Deleted, Not Deprecated](adr_135_dead_public_surface.md)
+
+**Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** `httpclient`'s three trace header constants, eight trace forwarders and `IsJOSEError`; 46 `testing` constants; `messaging.Client.Consume` and the mock's `Consume`/`ExpectConsume*`; `cache/testing.AssertOperationCountGreaterThan`
+
+Names that only forward to another exported name, or that nothing references, fail the deletion
+test and are deleted with no `Deprecated:` window. `httpclient`'s trace constants and forwarders
+become `trace.*` (`TraceIDFromContext`, `TraceParentFromContext` and `TraceStateFromContext` become
+`trace.IDFromContext`, `ParentFromContext` and `StateFromContext`), so ADR-070's detection grep,
+which could not match `httpclient.WithTraceID(`, sees every call site again unless `trace` is imported
+under an alias that does not end in `trace`; `httpclient.IsJOSEError` becomes `jose.IsError`.
+`messaging.Client` keeps `Close` and `IsReady` and drops only `Consume`; three
+`testing/fixtures` constructors return `*mocks.MockAMQPClient`, with the new
+`ExpectConsumeFromQueueAny`. A consumer inlines the literal of any removed `testing` constant, and
+the deprecated cache assertion becomes `AssertOperationCountAtLeast`. See [migrations.md](migrations.md) `[C71.13]`,
+`[C71.14]`.
+
+**Key Benefits:** one spelling per name, so a consumer's grep for a call site finds all of them.
+
+---
+
 ### [ADR-136: `app` Drops Its Hypothetical Public Seams](adr_136_app_hypothetical_seams.md)
 
 **Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** `TimeoutProvider`, `StandardTimeoutProvider`, `Options.TimeoutProvider`, `SignalHandler.WaitForSignal`, `Prober`, `RegisterStreamRuntime`, `StreamRuntime` and `App.MessagingDeclarations()` are removed from `app`

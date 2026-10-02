@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/internal/racedetect"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -511,16 +510,16 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 func TestEnsureTraceParentHeaderPreservesExistingResponseHeader(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, "00-11111111111111111111111111111111-2222222222222222-01")
+	req.Header.Set(gobrickstrace.HeaderTraceParent, "00-11111111111111111111111111111111-2222222222222222-01")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
 	existing := "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, existing)
+	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, existing)
 
 	ensureTraceParentHeader(c)
 
-	assert.Equal(t, existing, c.Response().Header().Get(gobrickshttp.HeaderTraceParent))
+	assert.Equal(t, existing, c.Response().Header().Get(gobrickstrace.HeaderTraceParent))
 }
 
 func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
@@ -543,14 +542,14 @@ func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
 
 	// Provide inbound traceparent header
 	traceparent := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
-	req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, traceparent)
 
 	err := h(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Response must propagate the same traceparent
-	got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+	got := rec.Result().Header.Get(gobrickstrace.HeaderTraceParent)
 	assert.Equal(t, traceparent, got)
 }
 
@@ -577,7 +576,7 @@ func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Response must contain a valid-looking traceparent
-	got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+	got := rec.Result().Header.Get(gobrickstrace.HeaderTraceParent)
 	require.NotEmpty(t, got)
 	parts := strings.Split(got, "-")
 	require.Len(t, parts, 4)
@@ -1613,7 +1612,7 @@ func TestWrapHandlerRawResponseSuccess(t *testing.T) {
 	assert.False(t, hasMeta, "raw response should not have 'meta' key")
 
 	// W3C trace propagation still works
-	got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+	got := rec.Result().Header.Get(gobrickstrace.HeaderTraceParent)
 	require.NotEmpty(t, got, "traceparent header should be set in raw mode")
 }
 
@@ -3532,12 +3531,12 @@ func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T)
 		t.Run(name+"_mints_over_an_invalid_inbound_traceparent", func(t *testing.T) {
 			e := echo.New()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
-			req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+			req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 			rec := httptest.NewRecorder()
 
 			require.NoError(t, respondWith(e.NewContext(req, rec)))
 
-			got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+			got := rec.Result().Header.Get(gobrickstrace.HeaderTraceParent)
 			assert.NotEqual(t, poisonedTraceParent, got, "the raw inbound value reached the response header")
 			assert.Equal(t, got, gobrickstrace.ValidateTraceParent(got),
 				"the minted replacement must itself be spec-exact")
@@ -3551,11 +3550,11 @@ func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T)
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
-			c.Response().Header().Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+			c.Response().Header().Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 
 			require.NoError(t, respondWith(c))
 
-			got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+			got := rec.Result().Header.Get(gobrickstrace.HeaderTraceParent)
 			assert.NotEqual(t, poisonedTraceParent, got, "an unvouched response header was left on the wire")
 			assert.Equal(t, got, gobrickstrace.ValidateTraceParent(got))
 		})
@@ -3563,12 +3562,12 @@ func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T)
 		t.Run(name+"_still_reflects_a_valid_inbound_traceparent", func(t *testing.T) {
 			e := echo.New()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
-			req.Header.Set(gobrickshttp.HeaderTraceParent, testTraceparent)
+			req.Header.Set(gobrickstrace.HeaderTraceParent, testTraceparent)
 			rec := httptest.NewRecorder()
 
 			require.NoError(t, respondWith(e.NewContext(req, rec)))
 
-			assert.Equal(t, testTraceparent, rec.Result().Header.Get(gobrickshttp.HeaderTraceParent))
+			assert.Equal(t, testTraceparent, rec.Result().Header.Get(gobrickstrace.HeaderTraceParent))
 		})
 	}
 }

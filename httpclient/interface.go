@@ -8,15 +8,6 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-const (
-	// HeaderXRequestID is the standard header name for request tracing
-	HeaderXRequestID = gobrickstrace.HeaderXRequestID
-	// HeaderTraceParent is the W3C trace context header name
-	HeaderTraceParent = gobrickstrace.HeaderTraceParent
-	// HeaderTraceState is the W3C trace context "tracestate" header name
-	HeaderTraceState = gobrickstrace.HeaderTraceState
-)
-
 // Client defines the REST client interface for making HTTP requests
 type Client interface {
 	Get(ctx context.Context, req *Request) (*Response, error)
@@ -88,50 +79,13 @@ type Config struct {
 	PeerName string
 }
 
-// Trace ID utility functions
-
-// WithTraceID adds a trace ID to the context for HTTP client propagation
-func WithTraceID(ctx context.Context, traceID string) context.Context {
-	return gobrickstrace.WithTraceID(ctx, traceID)
-}
-
-// TraceIDFromContext returns a trace ID from context if present
-func TraceIDFromContext(ctx context.Context) (string, bool) { return gobrickstrace.IDFromContext(ctx) }
-
-// EnsureTraceID returns an existing trace ID from context or generates a new one
-func EnsureTraceID(ctx context.Context) string { return gobrickstrace.EnsureTraceID(ctx) }
-
-// WithTraceParent adds a W3C traceparent value to the context
-func WithTraceParent(ctx context.Context, traceParent string) context.Context {
-	return gobrickstrace.WithTraceParent(ctx, traceParent)
-}
-
-// TraceParentFromContext returns a traceparent from context if present
-func TraceParentFromContext(ctx context.Context) (string, bool) {
-	return gobrickstrace.ParentFromContext(ctx)
-}
-
-// WithTraceState adds a W3C tracestate value to the context
-func WithTraceState(ctx context.Context, traceState string) context.Context {
-	return gobrickstrace.WithTraceState(ctx, traceState)
-}
-
-// TraceStateFromContext returns a tracestate from context if present
-func TraceStateFromContext(ctx context.Context) (string, bool) {
-	return gobrickstrace.StateFromContext(ctx)
-}
-
-// GenerateTraceParent creates a minimal W3C traceparent header value.
-// Format: version(2)-trace-id(32)-span-id(16)-flags(2), e.g., "00-<32>-<16>-01"
-func GenerateTraceParent() string { return gobrickstrace.GenerateTraceParent() }
-
 // NewTraceIDInterceptor creates a request interceptor that adds trace ID headers
 // This provides an alternative approach for users who want explicit control
 func NewTraceIDInterceptor() RequestInterceptor {
 	return func(ctx context.Context, req *nethttp.Request) error {
-		if req.Header.Get(HeaderXRequestID) == "" {
-			traceID := EnsureTraceID(ctx)
-			req.Header.Set(HeaderXRequestID, traceID)
+		if req.Header.Get(gobrickstrace.HeaderXRequestID) == "" {
+			traceID := gobrickstrace.EnsureTraceID(ctx)
+			req.Header.Set(gobrickstrace.HeaderXRequestID, traceID)
 		}
 		return nil
 	}
@@ -140,11 +94,11 @@ func NewTraceIDInterceptor() RequestInterceptor {
 // NewTraceIDInterceptorFor creates an interceptor that uses a custom header name
 func NewTraceIDInterceptorFor(header string) RequestInterceptor {
 	if header == "" {
-		header = HeaderXRequestID
+		header = gobrickstrace.HeaderXRequestID
 	}
 	return func(ctx context.Context, req *nethttp.Request) error {
 		if req.Header.Get(header) == "" {
-			req.Header.Set(header, EnsureTraceID(ctx))
+			req.Header.Set(header, gobrickstrace.EnsureTraceID(ctx))
 		}
 		return nil
 	}
