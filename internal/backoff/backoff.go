@@ -11,7 +11,7 @@
 //	                             (RNG-failure fallback stays)
 //	delivery backoffFor          none                           per-operation                 0
 //	inbox HoldDrain.backoffFor   none                           persisted per-tenant attempts config default (<0 rejected)
-//	app external-exchange wait   none                           per startup wait              min(first, wait/4)
+//	app external-exchange wait   none                           per startup wait              0 (deadline fires first)
 //
 // The outbox relay idle path (ADR-088) is a later consumer: it waits a fixed
 // poll interval today, not this series. The helper is (base, cap, shift) so
