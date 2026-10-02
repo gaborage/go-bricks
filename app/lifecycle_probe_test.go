@@ -62,7 +62,6 @@ func newQuitSignalHandler() *quitSignalHandler {
 }
 
 func (h *quitSignalHandler) Notify(c chan<- os.Signal, _ ...os.Signal) { h.registered <- c }
-func (h *quitSignalHandler) WaitForSignal(<-chan os.Signal)            {}
 
 func (h *quitSignalHandler) requestShutdown(t *testing.T) {
 	t.Helper()
@@ -120,7 +119,6 @@ func newProbeRunApp(t *testing.T, cfg *config.Config, srv ServerRunner) (*App, *
 	a.server = srv
 	sig := newQuitSignalHandler()
 	a.signalHandler = sig
-	a.timeoutProvider = &StandardTimeoutProvider{}
 	return a, sig
 }
 

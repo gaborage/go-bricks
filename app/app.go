@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"time"
 
 	"golang.org/x/sync/singleflight"
 
@@ -61,26 +60,14 @@ func (osh *OSSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
 	signal.Notify(c, sig...)
 }
 
-func (osh *OSSignalHandler) WaitForSignal(c <-chan os.Signal) {
-	<-c
-}
-
-// StandardTimeoutProvider implements TimeoutProvider using context.WithTimeout
-type StandardTimeoutProvider struct{}
-
-func (stp *StandardTimeoutProvider) WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(parent, timeout)
-}
-
 // App represents the main application instance.
 // It manages the lifecycle and coordination of all application components.
 type App struct {
-	cfg             *config.Config
-	server          ServerRunner
-	logger          logger.Logger
-	registry        *ModuleRegistry
-	signalHandler   SignalHandler
-	timeoutProvider TimeoutProvider
+	cfg           *config.Config
+	server        ServerRunner
+	logger        logger.Logger
+	registry      *ModuleRegistry
+	signalHandler SignalHandler
 
 	// postRegisterRoutes is Options.PostRegisterRoutes. probeRoutes are the descriptors this
 	// App's server registered at construction, before prepareRuntime's registry watermark.
@@ -156,20 +143,11 @@ func (a *App) buildMessagingDeclarations() error {
 	return nil
 }
 
-func resolveSignalAndTimeout(opts *Options) (SignalHandler, TimeoutProvider) {
-	signalHandler := SignalHandler(&OSSignalHandler{})
-	timeoutProvider := TimeoutProvider(&StandardTimeoutProvider{})
-
-	if opts != nil {
-		if opts.SignalHandler != nil {
-			signalHandler = opts.SignalHandler
-		}
-		if opts.TimeoutProvider != nil {
-			timeoutProvider = opts.TimeoutProvider
-		}
+func resolveSignalHandler(opts *Options) SignalHandler {
+	if opts != nil && opts.SignalHandler != nil {
+		return opts.SignalHandler
 	}
-
-	return signalHandler, timeoutProvider
+	return &OSSignalHandler{}
 }
 
 func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerRunner {
@@ -341,12 +319,6 @@ func (a *App) registerCloser(name string, closer interface{ Close() error }) {
 	}
 
 	a.closers = append(a.closers, namedCloser{name: name, closer: closer})
-}
-
-// MessagingDeclarations returns the captured messaging declarations.
-// This is used by tenant managers to replay infrastructure for each tenant.
-func (a *App) MessagingDeclarations() *messaging.Declarations {
-	return a.messagingDeclarations
 }
 
 // DBManager returns the framework-built database manager; nil only on an App the framework did not build.

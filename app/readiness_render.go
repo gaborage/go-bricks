@@ -31,8 +31,8 @@ type readinessReport []probeResult
 
 // readinessJudge is the one traversal behind both readiness views (ADR-066 rule 2,
 // ADR-067). It holds the slot list and, at judgement time, asks each slot for the probe
-// description that slot sealed after its start phase — no description is built and no
-// Prober is boxed per request.
+// description that slot sealed after its start phase — no description is built or boxed per
+// request.
 type readinessJudge struct {
 	slots []resourceSlot
 	// started records that the startSlots walk completed, so a judge asked before it can
@@ -207,7 +207,7 @@ func summarizeHealth(components map[string]componentHealth) healthSummary {
 	case summary.TotalProbes > 0 && summary.HealthyCount == summary.TotalProbes:
 		summary.OverallStatus = healthyStatus
 	default:
-		// Reachable only at zero probes now that probeDescription is the one Prober the
+		// Reachable only at zero probes now that probeDescription is the only probe the
 		// judge sees (ADR-066 as amended): every status it can report is covered above, so
 		// nothing else can land here.
 		summary.OverallStatus = unknownStatus

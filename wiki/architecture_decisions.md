@@ -1420,6 +1420,7 @@ ADR-048 sanitized error text). `Prober`/`HealthStatus` are unchanged.
 sub-strings collapse into the vocabulary, messaging/cache read `per_tenant` in multi-tenant
 deployments, a disabled kind's stats render `{"status":"disabled"}`, and `db_stats`
 becomes `database_stats`. No Go API change. See [migrations.md](migrations.md) `[C60.3]`.
+Amended by ADR-136: `Prober` is deleted; `HealthStatus` is the only exported readiness type.
 
 ---
 
@@ -2220,6 +2221,23 @@ keep. See [migrations.md](migrations.md) `[C71.6]`–`[C71.7]`.
 
 ---
 
+### [ADR-136: `app` Drops Its Hypothetical Public Seams](adr_136_app_hypothetical_seams.md)
+
+**Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** `TimeoutProvider`, `StandardTimeoutProvider`, `Options.TimeoutProvider`, `SignalHandler.WaitForSignal`, `Prober`, `RegisterStreamRuntime`, `StreamRuntime` and `App.MessagingDeclarations()` are removed from `app`
+
+Five exported seams in `app` had no variation behind them: a timeout provider whose one
+adapter was `context.WithTimeout`, an interface method nothing called, a probe interface
+nothing accepted, a stream registration door no outside code could satisfy, and a getter
+nothing read. Each is deleted. The shutdown timeout stays configurable through
+`server.timeout.shutdown`, `SignalHandler.Notify` stays the test seam, the `/ready` SECURITY
+rule moves onto `HealthStatus`, and a blank import of `messaging/streams` remains the only
+stream registration. See [migrations.md](migrations.md) `[C71.8]`–`[C71.12]`.
+
+**Key Benefits:** a smaller `app` surface with no exported name that promises a variation
+the framework never offers.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2449,6 +2467,8 @@ vendor package. A build tag and a `go.mod` sub-module were rejected at triage.
 **Key Benefits:** a service that never imports `messaging/streams` carries none of the
 stream client; a leftover URI cannot boot as a silent no-op.
 **Migration:** [migrations.md](migrations.md) `[C61.25]`.
+Amended by ADR-136: `app.RegisterStreamRuntime` and `app.StreamRuntime` are deleted; the blank
+import is the only registration.
 
 ---
 
@@ -2997,7 +3017,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-134) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-136) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

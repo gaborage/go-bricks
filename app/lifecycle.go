@@ -425,7 +425,7 @@ func (a *App) Run() error {
 	}
 
 	inner, outer := a.shutdownTimeouts()
-	ctx, cancel := a.timeoutProvider.WithTimeout(context.Background(), inner)
+	ctx, cancel := context.WithTimeout(context.Background(), inner)
 
 	a.logger.Info().Msg("Shutting down application")
 

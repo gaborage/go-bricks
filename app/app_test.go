@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -66,32 +67,12 @@ const (
 
 type MockSignalHandler struct {
 	mock.Mock
-	shouldExit chan bool
-	waiting    atomic.Bool
-	triggered  atomic.Bool
 	mu         sync.Mutex
 	signalChan chan<- os.Signal
 }
 
 func NewMockSignalHandler() *MockSignalHandler {
-	return &MockSignalHandler{
-		shouldExit: make(chan bool, 1),
-	}
-}
-
-func (m *MockSignalHandler) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.waiting.Store(false)
-	m.triggered.Store(false)
-	m.signalChan = nil
-
-	// Drain the channel if there's a value
-	select {
-	case <-m.shouldExit:
-	default:
-	}
+	return &MockSignalHandler{}
 }
 
 func (m *MockSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
@@ -107,34 +88,9 @@ func (m *MockSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
 	_ = args
 }
 
-func (m *MockSignalHandler) WaitForSignal(c <-chan os.Signal) {
-	// If no mock expectations are set, just return (no-op for tests)
-	if len(m.ExpectedCalls) == 0 {
-		return
-	}
-	m.Called(c)
-
-	// Mark that we're waiting and check if already triggered
-	m.waiting.Store(true)
-	if m.triggered.Load() {
-		// Already triggered, return immediately
-		return
-	}
-
-	// Wait for shutdown signal with timeout protection
-	select {
-	case <-m.shouldExit:
-		// Signal received
-	case <-time.After(5 * time.Second):
-		// Timeout protection - should not happen in well-behaved tests
-	}
-}
-
 func (m *MockSignalHandler) TriggerShutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.triggered.Store(true)
 
 	// Send signal to the actual signal channel if available
 	if m.signalChan != nil {
@@ -143,27 +99,6 @@ func (m *MockSignalHandler) TriggerShutdown() {
 		default:
 		}
 	}
-
-	// Also send to shouldExit for WaitForSignal compatibility
-	if m.waiting.Load() {
-		select {
-		case m.shouldExit <- true:
-		default:
-		}
-	}
-}
-
-type MockTimeoutProvider struct {
-	mock.Mock
-}
-
-func (m *MockTimeoutProvider) WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	// If no mock expectations are set, use default behavior
-	if len(m.ExpectedCalls) == 0 {
-		return context.WithTimeout(parent, timeout)
-	}
-	args := m.Called(parent, timeout)
-	return args.Get(0).(context.Context), args.Get(1).(context.CancelFunc)
 }
 
 type mockServer struct {
@@ -174,6 +109,8 @@ type mockServer struct {
 	readyHandler  server.Handler
 	// onShutdown, when set, runs at the start of Shutdown.
 	onShutdown func()
+	// shutdownBudget is the time left on Shutdown's context deadline when it was called.
+	shutdownBudget atomic.Int64
 
 	gate     chan struct{}
 	gateOnce sync.Once
@@ -199,7 +136,9 @@ func (m *mockServer) Start() error {
 }
 
 func (m *mockServer) Shutdown(ctx context.Context) error {
-	_ = ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		m.shutdownBudget.Store(int64(time.Until(deadline)))
+	}
 	if m.onShutdown != nil {
 		m.onShutdown()
 	}
@@ -473,7 +412,6 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		logger:           log,
 		registry:         NewModuleRegistry(deps),
 		signalHandler:    &OSSignalHandler{},
-		timeoutProvider:  &StandardTimeoutProvider{},
 		dbManager:        dbManager,
 		messagingManager: messagingManager,
 		resourceProvider: resourceProvider,
@@ -519,12 +457,6 @@ func (f *testAppFixture) replan() {
 func withSignalHandler(handler SignalHandler) fixtureOption {
 	return func(f *testAppFixture) {
 		f.app.signalHandler = handler
-	}
-}
-
-func withTimeoutProvider(provider TimeoutProvider) fixtureOption {
-	return func(f *testAppFixture) {
-		f.app.timeoutProvider = provider
 	}
 }
 
@@ -1484,17 +1416,11 @@ func TestConsumerGiveUpAttemptMatchesTheMessagingThreshold(t *testing.T) {
 
 func TestRunGracefulShutdown(t *testing.T) {
 	signalHandler := NewMockSignalHandler()
-	defer signalHandler.Reset() // Cleanup after test
-	timeoutProvider := &MockTimeoutProvider{}
 
-	fixture := newTestAppFixture(t, withSignalHandler(signalHandler), withTimeoutProvider(timeoutProvider))
+	// No Notify expectation: the no-expectation path stores signalChan for TriggerShutdown.
+	fixture := newTestAppFixture(t, withSignalHandler(signalHandler))
 	fixture.messaging.ExpectClose(nil)
 	fixture.db.On(methodClose).Return(nil)
-
-	// Don't set up mock expectations - use the no-expectation path that stores signalChan
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	timeoutProvider.On("WithTimeout", mock.Anything, 10*time.Second).Return(shutdownCtx, cancel)
 
 	done := make(chan error, 1)
 	go func() {
@@ -1519,26 +1445,24 @@ func TestRunGracefulShutdown(t *testing.T) {
 	}
 
 	assert.Equal(t, 1, fixture.server.shutdownCount())
-	timeoutProvider.AssertExpectations(t)
+	// Run hands Shutdown the inner window (server.timeout.shutdown, 10s here), not the
+	// outer hard stop (inner + 5s).
+	budget := time.Duration(fixture.server.shutdownBudget.Load())
+	assert.LessOrEqual(t, budget, 10*time.Second)
+	assert.Greater(t, budget, 9*time.Second)
 	fixture.messaging.AssertExpectations(t)
 	fixture.db.AssertExpectations(t)
 }
 
 func TestRunPropagatesServerError(t *testing.T) {
 	signalHandler := NewMockSignalHandler()
-	defer signalHandler.Reset() // Cleanup after test
-	timeoutProvider := &MockTimeoutProvider{}
-	fixture := newTestAppFixture(t, withSignalHandler(signalHandler), withTimeoutProvider(timeoutProvider))
+	fixture := newTestAppFixture(t, withSignalHandler(signalHandler))
 
 	fixture.messaging.ExpectClose(nil)
 	fixture.db.On(methodClose).Return(nil)
 
-	// Only expect Notify to be called - WaitForSignal won't be called if server fails to start
+	// Only Notify is expected: the server fails to start before any signal arrives.
 	signalHandler.On("Notify", mock.Anything, []os.Signal{os.Interrupt, syscall.SIGTERM}).Return()
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	timeoutProvider.On("WithTimeout", mock.Anything, 10*time.Second).Return(shutdownCtx, cancel)
 
 	startErr := errors.New("start failed")
 	fixture.server.startErr = startErr
@@ -1549,7 +1473,6 @@ func TestRunPropagatesServerError(t *testing.T) {
 	require.ErrorIs(t, err, startErr)
 
 	signalHandler.AssertExpectations(t)
-	timeoutProvider.AssertExpectations(t)
 	fixture.messaging.AssertExpectations(t)
 	fixture.db.AssertExpectations(t)
 }
@@ -1673,36 +1596,6 @@ func TestNewWithOptionsLoadError(t *testing.T) {
 	assert.NotNil(t, log) // Logger should always be available
 }
 
-func TestStandardTimeoutProviderWithTimeout(t *testing.T) {
-	provider := &StandardTimeoutProvider{}
-	ctx, cancel := provider.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-
-	deadline, ok := ctx.Deadline()
-	require.True(t, ok)
-	assert.WithinDuration(t, time.Now().Add(10*time.Millisecond), deadline, 20*time.Millisecond)
-}
-
-func TestOSSignalHandlerWaitForSignal(t *testing.T) {
-	handler := &OSSignalHandler{}
-	signals := make(chan os.Signal, 1)
-	handler.Notify(signals, os.Interrupt)
-
-	done := make(chan struct{})
-	go func() {
-		handler.WaitForSignal(signals)
-		close(done)
-	}()
-
-	signals <- os.Interrupt
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("wait for signal timed out")
-	}
-}
-
 // Test module that counts how many times DeclareMessaging is called
 type declarationCounterModule struct {
 	callCount int
@@ -1749,25 +1642,6 @@ func TestNew(t *testing.T) {
 
 		// Verify logger is functional even when app creation fails
 		log.Info().Msg("Test log from New() failure scenario")
-	})
-}
-
-func TestMessagingDeclarations(t *testing.T) {
-	t.Run("returns nil when no declarations built", func(t *testing.T) {
-		app := &App{}
-
-		result := app.MessagingDeclarations()
-		assert.Nil(t, result)
-	})
-
-	t.Run("returns declarations when available", func(t *testing.T) {
-		decls := messaging.NewDeclarations()
-		app := &App{
-			messagingDeclarations: decls,
-		}
-
-		result := app.MessagingDeclarations()
-		assert.Equal(t, decls, result)
 	})
 }
 
@@ -1950,30 +1824,13 @@ func TestNewWithConfigErrors(t *testing.T) {
 }
 
 func TestOSSignalHandler(t *testing.T) {
-	t.Run("Notify and WaitForSignal methods", func(t *testing.T) {
+	t.Run("Notify method", func(t *testing.T) {
 		handler := &OSSignalHandler{}
 
-		// Test Notify - should not panic
+		// Delivery is OS-dependent; registering must not panic, and Stop unregisters it.
 		c := make(chan os.Signal, 1)
-		handler.Notify(c, os.Interrupt)
-
-		// The actual signal handling is OS-dependent, so we just test that the methods exist
-		assert.NotNil(t, handler)
-	})
-}
-
-func TestStandardTimeoutProvider(t *testing.T) {
-	t.Run("WithTimeout creates context with timeout", func(t *testing.T) {
-		provider := &StandardTimeoutProvider{}
-		ctx := context.Background()
-
-		childCtx, cancel := provider.WithTimeout(ctx, time.Millisecond*100)
-		defer cancel()
-
-		assert.NotNil(t, childCtx)
-		deadline, ok := childCtx.Deadline()
-		assert.True(t, ok)
-		assert.True(t, deadline.After(time.Now()))
+		assert.NotPanics(t, func() { handler.Notify(c, os.Interrupt) })
+		signal.Stop(c)
 	})
 }
 
@@ -2087,36 +1944,19 @@ func TestShutdownResource(t *testing.T) {
 	})
 }
 
-func TestResolveSignalAndTimeout(t *testing.T) {
-	t.Run("uses custom handlers from options", func(t *testing.T) {
+func TestResolveSignalHandler(t *testing.T) {
+	t.Run("uses custom handler from options", func(t *testing.T) {
 		mockSignal := NewMockSignalHandler()
-		mockTimeout := &MockTimeoutProvider{}
 
-		opts := &Options{
-			SignalHandler:   mockSignal,
-			TimeoutProvider: mockTimeout,
-		}
-
-		signal, timeout := resolveSignalAndTimeout(opts)
-
-		assert.Equal(t, mockSignal, signal)
-		assert.Equal(t, mockTimeout, timeout)
+		assert.Equal(t, mockSignal, resolveSignalHandler(&Options{SignalHandler: mockSignal}))
 	})
 
-	t.Run("uses defaults when options is nil", func(t *testing.T) {
-		signal, timeout := resolveSignalAndTimeout(nil)
-
-		assert.IsType(t, &OSSignalHandler{}, signal)
-		assert.IsType(t, &StandardTimeoutProvider{}, timeout)
+	t.Run("uses default when options is nil", func(t *testing.T) {
+		assert.IsType(t, &OSSignalHandler{}, resolveSignalHandler(nil))
 	})
 
-	t.Run("uses defaults when handlers not provided", func(t *testing.T) {
-		opts := &Options{}
-
-		signal, timeout := resolveSignalAndTimeout(opts)
-
-		assert.IsType(t, &OSSignalHandler{}, signal)
-		assert.IsType(t, &StandardTimeoutProvider{}, timeout)
+	t.Run("uses default when handler not provided", func(t *testing.T) {
+		assert.IsType(t, &OSSignalHandler{}, resolveSignalHandler(&Options{}))
 	})
 }
 

@@ -6,6 +6,10 @@
 readiness), [ADR-048](adr_048_ready_sanitize_by_default.md) (sanitized `/ready` errors)
 — both preserved; this ADR changes where the readiness decision lives, not what it decides.
 
+> **Amended (2026-10-01, [ADR-136](adr_136_app_hypothetical_seams.md)):** `Prober` is deleted.
+> `HealthStatus` is the only exported readiness type, the judge walks `probeDescription` values
+> with no exported interface over them, and the SECURITY rule moves onto `HealthStatus`.
+>
 > **Amended (2026-09-29, [ADR-127](adr_127_resource_plan_rule.md)):** rule 1's `per_tenant`
 > applies to a kind whose Tenancy is per-tenant, not to every leased kind in a multi-tenant
 > deployment. Messaging under `messaging.tenancy: shared` resolves on `""`, so a not-configured

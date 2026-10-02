@@ -4,6 +4,11 @@
 - **Date**: 2026-08-31
 - **Related**: [ADR-059](adr_059_streams_consumption.md) (the lane this hook links) · [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (the manager stays concrete; the seam is a factory, not a second implementation) · [ADR-063](adr_063_streams_native_publishing.md) (publish surface, unchanged) · [ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md) (hold port, implemented through the same seam)
 
+> **Amended (2026-10-01, [ADR-136](adr_136_app_hypothetical_seams.md)):** Decision item 1's
+> `app.RegisterStreamRuntime` and the `app.StreamRuntime` alias are deleted: no code outside
+> the module can implement `streamruntime.Runtime`, so the blank import of `messaging/streams`
+> is the only registration.
+
 ## Context
 
 `app` statically imported `messaging/streams` so `prepareRuntime` could start the stream

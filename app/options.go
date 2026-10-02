@@ -12,7 +12,6 @@ import (
 // Options contains optional dependencies for creating an App instance
 type Options struct {
 	SignalHandler          SignalHandler
-	TimeoutProvider        TimeoutProvider
 	Server                 ServerRunner
 	ConfigLoader           func() (*config.Config, error)
 	DatabaseConnector      func(*config.DatabaseConfig, logger.Logger) (database.Interface, error)
