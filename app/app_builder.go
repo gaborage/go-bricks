@@ -202,7 +202,7 @@ func (b *Builder) CreateApp() *Builder {
 	}
 
 	probesStart := server.DefaultRouteRegistry.Count()
-	signalHandler, timeoutProvider, srv := b.bootstrap.coreComponents()
+	signalHandler, srv := b.bootstrap.coreComponents()
 
 	b.app = &App{
 		cfg:              b.cfg,
@@ -210,7 +210,6 @@ func (b *Builder) CreateApp() *Builder {
 		logger:           b.logger,
 		registry:         nil, // Will be set in next step
 		signalHandler:    signalHandler,
-		timeoutProvider:  timeoutProvider,
 		observability:    b.bundle.observability,
 		dbManager:        b.bundle.dbManager,
 		messagingManager: b.bundle.messagingManager,

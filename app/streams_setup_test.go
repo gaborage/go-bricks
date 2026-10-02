@@ -96,10 +96,6 @@ func TestPrepareStreamConsumersStartsCleanWhenUnlinkedAndUnconfigured(t *testing
 	assert.Nil(t, a.streamsManager)
 }
 
-func TestRegisterStreamRuntimeRejectsNil(t *testing.T) {
-	assert.Panics(t, func() { RegisterStreamRuntime(nil) })
-}
-
 func TestPrepareStreamConsumersWithoutDeclarationsIsNoop(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
 

@@ -37,10 +37,9 @@ func newAppBootstrap(cfg *config.Config, log logger.Logger, opts *Options) *appB
 }
 
 // coreComponents resolves and creates the core application components.
-// Returns the signal handler, timeout provider, and server runner instances.
-func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerRunner) {
-	signalHandler, timeoutProvider := resolveSignalAndTimeout(b.opts)
-	return signalHandler, timeoutProvider, resolveServer(b.cfg, b.log, b.opts)
+// Returns the signal handler and server runner instances.
+func (b *appBootstrap) coreComponents() (SignalHandler, ServerRunner) {
+	return resolveSignalHandler(b.opts), resolveServer(b.cfg, b.log, b.opts)
 }
 
 // newManagerConfigBuilderFromConfig copies every operator-tunable manager setting

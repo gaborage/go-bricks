@@ -46,8 +46,8 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    intentional; flag only new code.
 
 3. **S8196 interface naming.** New interfaces follow the precedent
-   (`Executor`, `Prober`, `DBConfigProvider`, …) — agentive `-er`, not
-   `Job`/`HealthProbe`/`TenantStore`. Precedent is **rename, never nolint**.
+   (`Executor`, `DBConfigProvider`, `SignalHandler`, …) — agentive `-er`, not
+   `Job`/`TenantStore`. Precedent is **rename, never nolint**.
 
 4. **Test conventions.** Test/Benchmark/Fuzz function names are camelCase
    (snake_case forbidden). Table-driven CASE names use snake_case (allowed).

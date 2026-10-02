@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"os"
-	"time"
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
@@ -15,12 +14,6 @@ import (
 // SignalHandler interface allows for injectable signal handling for testing
 type SignalHandler interface {
 	Notify(c chan<- os.Signal, sig ...os.Signal)
-	WaitForSignal(c <-chan os.Signal)
-}
-
-// TimeoutProvider interface allows for injectable timeout creation for testing
-type TimeoutProvider interface {
-	WithTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc)
 }
 
 // ServerRunner abstracts the HTTP server to allow injecting test-friendly implementations

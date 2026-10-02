@@ -144,7 +144,7 @@ func judgementAllocs(kinds int) float64 {
 // TestJudgementAllocsStableAcrossKindCount is the tripwire guard on the judgement path
 // (ADR-026's shape, ADR-066 as amended): readiness asks each slot for the description it
 // sealed, so doubling the kinds must not double what the traversal costs. A description
-// rebuilt per request — fresh closures, a Prober boxed per kind — would make the two
+// rebuilt per request — fresh closures, an interface boxed per kind — would make the two
 // counts diverge. The counts are compared to each other rather than to an absolute pin, so
 // the guard says nothing about how many allocations one judgement costs.
 //

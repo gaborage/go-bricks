@@ -12,8 +12,8 @@ import (
 
 // Readiness is one module: every kind is judged by the same machine from a probe
 // description (CONTEXT.md), so the status vocabulary, the lease→liveness order and the
-// criticality decision have one home. Prober and HealthStatus (health.go) stay the exported
-// seam; this file is what sits behind it.
+// criticality decision have one home. HealthStatus (health.go) is the verdict it produces;
+// there is no exported probe interface and no door for a foreign probe (ADR-136).
 
 var (
 	// errPublisherNotReady is the liveness error for a leased AMQP client that is not ready:
@@ -79,12 +79,8 @@ func disabledProbe(name string) probeDescription {
 	return probeDescription{name: name, disabled: true}
 }
 
-// probeDescription is the framework's one Prober implementation; nothing foreign reaches
-// the judge (ADR-066 as amended).
-var _ Prober = probeDescription{}
-
-// Run implements Prober: judge the kind, then carry its statistics under Details with
-// details.status mirroring the verdict.
+// Run judges the kind, then carries its statistics under Details with details.status
+// mirroring the verdict.
 func (d probeDescription) Run(ctx context.Context) HealthStatus {
 	status, stats, err := d.judge(ctx)
 	details := maps.Clone(stats) // never hand the caller the kind's own map

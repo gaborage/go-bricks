@@ -2,8 +2,8 @@
 
 **Decision:** Deferred (YAGNI) — `/ready` keeps walking the framework's own
 slot list and nothing else. There is no `RegisterReadiness(name, critical,
-Prober)` door, and `app.Prober` stays implemented by the framework's probe
-descriptions alone (ADR-066 as amended 2026-09-06), until a trigger below
+probe)` door and no exported probe interface (`app.Prober` was removed by
+ADR-136; a future door would define its own contract), until a trigger below
 fires.
 
 **Reason (revised 2026-09-28 for ADR-120):** ADR-066 made readiness one machine
