@@ -1362,6 +1362,48 @@ func TestPoolAbandonedCreateAfterRemoveClosesResource(t *testing.T) {
 	assert.Equal(t, 0, p.Size())
 }
 
+// TestPoolDetachedAbandonedCreateCountsCloseError pins the close accounting on installCreated's
+// closeNow branch: Remove invalidated the create and its only waiter withdrew, so the install closes
+// the value at once, and a failing close must add one to Errors while a clean close adds none. The
+// install runs on the test goroutine because the closer returns before the counter moves, so a
+// signal sent from inside the closer would race the assertion.
+func TestPoolDetachedAbandonedCreateCountsCloseError(t *testing.T) {
+	tests := []struct {
+		name       string
+		closeErr   error
+		wantErrors int
+	}{
+		{name: "close_fails", closeErr: errors.New("close failed"), wantErrors: 1},
+		{name: "close_succeeds", closeErr: nil, wantErrors: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newCloseTracker()
+			p := New(0, 0, tr.closer)
+			defer p.Close()
+
+			c := beginWithWaiters(p, keyTwo, 1) // in flight, one waiter joined
+			dead, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err := p.await(dead, c)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Zero(t, c.waiters, "the canceled waiter withdrew its reservation")
+			p.Remove(keyTwo)
+
+			p.createEntry(context.Background(), keyTwo, c, func(context.Context) (*fakeResource, error) {
+				r := newFakeResource("abandoned")
+				r.closeErr = tt.closeErr
+				return r, nil
+			})
+
+			assert.Equal(t, 1, tr.count("abandoned"), "the install closes the abandoned value exactly once")
+			assert.Equal(t, tt.wantErrors, p.Stats().Errors)
+			assert.Equal(t, 0, p.Size(), "a detached create is never cached")
+		})
+	}
+}
+
 // TestPoolInstallReservesSeedPerWaiter pins one seed per waiter: a create's entry stays open until
 // EVERY waiter has claimed, even when the first waiter claims and releases before the second claims
 // and a Remove detaches the entry. With a single seed, that first release closed the entry, the
