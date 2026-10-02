@@ -11588,7 +11588,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: `git grep -nE 'WaitForSignal' -- '*.go'`
 - gate: match = a call to `WaitForSignal`, or a `SignalHandler` of yours that implements it (it
   still compiles, but the method is never called again). no-match = otherwise.
-- apply: receive from the channel you passed to `Notify` (`<-c`, or a `select` on it).
+- apply: a caller of `WaitForSignal(c)` receives from its own `c` instead (`<-c`, or a `select`
+  on it): the bidirectional `chan os.Signal` it made and passed to `Notify`. An implementer
+  deletes its `WaitForSignal` method: the framework never called it, and inside `Notify` the
+  parameter is send-only, so there is nothing there to receive from.
 - verify: `go build ./... && go vet ./...`.
 - ref: [ADR-136](adr_136_app_hypothetical_seams.md) · `app/interfaces.go` (`SignalHandler`)
 
