@@ -2,6 +2,7 @@ package observability
 
 import (
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"maps"
 	"os"
@@ -16,8 +17,8 @@ import (
 )
 
 // semconvVersionPattern captures the version segment of a semantic-convention
-// import. Subpackages (…/v1.43.0/httpconv) carry the same segment.
-var semconvVersionPattern = regexp.MustCompile(`^go\.opentelemetry\.io/otel/semconv/(v1\.\d+\.\d+)(?:/|$)`)
+// import. Subpackages (…/httpconv) carry the same segment.
+var semconvVersionPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(semconvPathFragment) + `/(v1\.\d+\.\d+)(?:/|$)`)
 
 // TestSemconvImportsShareOneVersion keeps the framework on a single semantic
 // conventions version. No linter enforces it: the import-alias linter checks
@@ -27,7 +28,7 @@ func TestSemconvImportsShareOneVersion(t *testing.T) {
 	versions, scanned := semconvVersionsUnder(t, repoRoot(t))
 
 	require.Greater(t, scanned, minScannedGoFiles, "walker scanned too few files to have covered the module")
-	assert.Len(t, versions, 1, "semconv imports must share one version; found %s", describeSemconvVersions(versions))
+	assert.Len(t, versions, 1, "semconv imports must share one version")
 }
 
 // semconvVersionsUnder maps every semconv version segment imported under root to
@@ -36,7 +37,7 @@ func TestSemconvImportsShareOneVersion(t *testing.T) {
 func semconvVersionsUnder(t *testing.T, root string) (versions map[string]string, scanned int) {
 	t.Helper()
 	versions = map[string]string{}
-	scanned = walkModuleGoFiles(t, root, token.NewFileSet(), func(rel string, file *ast.File) {
+	scanned = walkModuleGoFiles(t, root, token.NewFileSet(), parser.ImportsOnly, func(rel string, file *ast.File) {
 		for _, imp := range file.Imports {
 			match := semconvVersionPattern.FindStringSubmatch(strings.Trim(imp.Path.Value, `"`))
 			if match == nil {
@@ -48,14 +49,6 @@ func semconvVersionsUnder(t *testing.T, root string) (versions map[string]string
 		}
 	})
 	return versions, scanned
-}
-
-func describeSemconvVersions(versions map[string]string) string {
-	parts := make([]string, 0, len(versions))
-	for _, version := range slices.Sorted(maps.Keys(versions)) {
-		parts = append(parts, version+" ("+versions[version]+")")
-	}
-	return strings.Join(parts, ", ")
 }
 
 // TestSemconvVersionsUnderJudgesPlantedTrees runs the guard's walk over planted

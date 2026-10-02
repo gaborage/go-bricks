@@ -61,7 +61,7 @@ func TestNoErrorMessageReachesSpanAttributes(t *testing.T) {
 	fset := token.NewFileSet()
 	constructors := 0
 
-	scanned := walkModuleGoFiles(t, root, fset, func(rel string, file *ast.File) {
+	scanned := walkModuleGoFiles(t, root, fset, parser.SkipObjectResolution, func(rel string, file *ast.File) {
 		findings, seen := scanAttributeCalls(file)
 		constructors += seen
 		for _, pos := range findings {
@@ -79,11 +79,11 @@ func TestNoErrorMessageReachesSpanAttributes(t *testing.T) {
 	require.NotZero(t, constructors, "predicate recognized no attribute constructor anywhere; the scan is looking for the wrong spelling")
 }
 
-// walkModuleGoFiles parses every .go file under root, whatever its build
-// constraints, skipping the directories skipDir names, and hands each file to
-// visit with its path relative to root. It returns the number of files parsed so
+// walkModuleGoFiles parses every .go file under root with mode, whatever its
+// build constraints, skipping the directories skipDir names, and hands each file
+// to visit with its path relative to root. It returns the number of files parsed so
 // the caller can assert the walk covered the module.
-func walkModuleGoFiles(t *testing.T, root string, fset *token.FileSet, visit func(rel string, file *ast.File)) int {
+func walkModuleGoFiles(t *testing.T, root string, fset *token.FileSet, mode parser.Mode, visit func(rel string, file *ast.File)) int {
 	t.Helper()
 	scanned := 0
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -104,7 +104,7 @@ func walkModuleGoFiles(t *testing.T, root string, fset *token.FileSet, visit fun
 			return nil
 		}
 
-		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		file, parseErr := parser.ParseFile(fset, path, nil, mode)
 		if parseErr != nil {
 			return parseErr
 		}
