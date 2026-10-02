@@ -92,15 +92,15 @@ vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
 
 # Three invocations, for the reason on the root Makefile's `sec` (#1757).
 sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
-	$(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
+	/usr/bin/time -v $(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
 	@pkgs="$$($(RACE_PKGS_CMD))"; \
 	if [ -z "$$pkgs" ]; then \
 		echo "sec: no race-tagged packages in tools/migration — race scan skipped"; \
 	else \
 		echo "sec: race scan (integration,race) over $$pkgs"; \
-		$(GOSEC_BIN) -tags integration,race $$pkgs; \
+		/usr/bin/time -v $(GOSEC_BIN) -tags integration,race $$pkgs; \
 	fi
-	GOOS=windows $(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
+	GOOS=windows /usr/bin/time -v $(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
 
 # CI retries this before `make sec`, which then finds the binary in place.
 install-gosec: $(GOSEC_BIN) ## Install the pinned gosec binary (no-op when present)

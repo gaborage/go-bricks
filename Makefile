@@ -230,15 +230,15 @@ sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
 	# Close errors) are excluded to match make lint's stance: the .golangci.yml
 	# common-false-positives + std-error-handling presets already treat both classes as
 	# non-issues, so gating them only here would diverge from the repo's gosec policy.
-	$(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
+	/usr/bin/time -v $(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
 	@pkgs="$$(./scripts/check-build-tags.sh --packages-for race)"; \
 	if [ -z "$$pkgs" ]; then \
 		echo "sec: no race-tagged packages — race scan skipped"; \
 	else \
 		echo "sec: race scan (integration,race) over $$pkgs"; \
-		$(GOSEC_BIN) -exclude=G103,G104 -tags integration,race $$pkgs; \
+		/usr/bin/time -v $(GOSEC_BIN) -exclude=G103,G104 -tags integration,race $$pkgs; \
 	fi
-	GOOS=windows $(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
+	GOOS=windows /usr/bin/time -v $(GOSEC_BIN) -exclude=G103,G104 -tags integration ./...
 
 # CI retries this before `make sec`, which then finds the binary in place.
 install-gosec: $(GOSEC_BIN) ## Install the pinned gosec binary (no-op when present)

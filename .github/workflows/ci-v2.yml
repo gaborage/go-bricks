@@ -1115,11 +1115,39 @@ jobs:
       # one. Cross-compiled analysis on this Linux leg is cheap enough that it
       # beats running golangci-lint natively on the windows-latest leg
       # (Windows-runner minute multiplier; see lint-framework).
+      - name: Install golangci-lint (scratch timing, migrate tool)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
+        with:
+          version: v2.14.0
+          install-only: true
+          skip-cache: true
+
+      - name: Wrap golangci-lint in /usr/bin/time (scratch timing, migrate tool)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test -x /usr/bin/time || { sudo apt-get update -qq && sudo apt-get install -y -qq time; }
+          echo "nproc=$(nproc)"; grep -m1 'model name' /proc/cpuinfo || true
+          real="$(command -v golangci-lint)"
+          echo "real golangci-lint: $real"
+          log="$RUNNER_TEMP/gcl-time.log"
+          mkdir -p "$RUNNER_TEMP/gclwrap"
+          printf '%s\n' '#!/bin/sh' \
+            "printf '=== golangci-lint %s | GOOS=%s GOWORK=%s | cwd=%s | start=%s\\n' \"\$*\" \"\${GOOS:-}\" \"\${GOWORK:-}\" \"\$PWD\" \"\$(date -u +%H:%M:%S.%N)\" >> '$log'" \
+            "exec /usr/bin/time -v -a -o '$log' '$real' \"\$@\"" > "$RUNNER_TEMP/gclwrap/golangci-lint"
+          chmod +x "$RUNNER_TEMP/gclwrap/golangci-lint"
+          cat "$RUNNER_TEMP/gclwrap/golangci-lint"
+          echo "$RUNNER_TEMP/gclwrap" >> "$GITHUB_PATH"
+
       - name: golangci-lint (migrate tool, linux)
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
           version: v2.14.0
+          install-mode: none
           working-directory: tools/migration
           args: --timeout=10m
           skip-save-cache: ${{ github.event_name != 'push' }}
@@ -1142,6 +1170,12 @@ jobs:
       - name: golangci-lint race pass (migrate tool)
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: make lint-race
+
+      - name: Print golangci-lint timings (scratch timing, migrate tool)
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        shell: bash
+        working-directory: .
+        run: cat "$RUNNER_TEMP/gcl-time.log" || true
 
       - name: Run govulncheck (migrate tool)
         if: ${{ !cancelled() && runner.os == 'Linux' }}
@@ -1227,6 +1261,11 @@ jobs:
           done
           make install-gosec
 
+      - name: Ensure GNU time (scratch timing)
+        run: |
+          test -x /usr/bin/time || { sudo apt-get update -qq && sudo apt-get install -y -qq time; }
+          echo "nproc=$(nproc)"; grep -m1 'model name' /proc/cpuinfo || true
+
       - name: Run gosec (migrate tool)
         run: make sec
 
@@ -1274,6 +1313,31 @@ jobs:
       # `//go:build !windows` siblings were covered. Cross-compiling the analysis
       # closes the same hole as a windows-latest matrix leg without paying the
       # Windows-runner minute multiplier or adding a leg to ci-ok's needs graph.
+      - name: Install golangci-lint (scratch timing, framework)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
+        with:
+          version: v2.14.0
+          install-only: true
+          skip-cache: true
+
+      - name: Wrap golangci-lint in /usr/bin/time (scratch timing, framework)
+        shell: bash
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test -x /usr/bin/time || { sudo apt-get update -qq && sudo apt-get install -y -qq time; }
+          echo "nproc=$(nproc)"; grep -m1 'model name' /proc/cpuinfo || true
+          real="$(command -v golangci-lint)"
+          echo "real golangci-lint: $real"
+          log="$RUNNER_TEMP/gcl-time.log"
+          mkdir -p "$RUNNER_TEMP/gclwrap"
+          printf '%s\n' '#!/bin/sh' \
+            "printf '=== golangci-lint %s | GOOS=%s GOWORK=%s | cwd=%s | start=%s\\n' \"\$*\" \"\${GOOS:-}\" \"\${GOWORK:-}\" \"\$PWD\" \"\$(date -u +%H:%M:%S.%N)\" >> '$log'" \
+            "exec /usr/bin/time -v -a -o '$log' '$real' \"\$@\"" > "$RUNNER_TEMP/gclwrap/golangci-lint"
+          chmod +x "$RUNNER_TEMP/gclwrap/golangci-lint"
+          cat "$RUNNER_TEMP/gclwrap/golangci-lint"
+          echo "$RUNNER_TEMP/gclwrap" >> "$GITHUB_PATH"
+
       - name: golangci-lint (framework, linux)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         env:
@@ -1288,6 +1352,7 @@ jobs:
           GOWORK: "off"
         with:
           version: v2.14.0
+          install-mode: none
           args: --timeout=10m
           skip-save-cache: ${{ github.event_name != 'push' }}
 
@@ -1305,6 +1370,12 @@ jobs:
       # internal/racedetect/race.go is read by this pass and no other (#1757).
       - name: golangci-lint race pass (framework)
         run: make lint-race
+
+      - name: Print golangci-lint timings (scratch timing, framework)
+        if: always()
+        shell: bash
+        working-directory: .
+        run: cat "$RUNNER_TEMP/gcl-time.log" || true
 
       # Keeps the tag set a closed class: fails when a //go:build tag appears that
       # no lint or security pass reads, so the next tag cannot arrive unnoticed.
@@ -1349,6 +1420,11 @@ jobs:
       - *gosec-drop-partial
 
       - *gosec-install
+
+      - name: Ensure GNU time (scratch timing)
+        run: |
+          test -x /usr/bin/time || { sudo apt-get update -qq && sudo apt-get install -y -qq time; }
+          echo "nproc=$(nproc)"; grep -m1 'model name' /proc/cpuinfo || true
 
       - name: Run gosec (framework)
         run: make sec
