@@ -900,7 +900,6 @@ jobs:
           # A failed verify-mod has already tidied these in place: test the
           # commit's own module files. On a clean tree this is a no-op.
           git checkout -- go.mod go.sum go.work.sum
-          echo "DRILL git status --porcelain: [$(git status --porcelain)]"
           # The guards skip under -race (internal/racedetect), so the race
           # suite never enforces them.
           make test-alloc
