@@ -276,7 +276,7 @@ func (p *provider) registerGlobalProviders() {
 		debugLogger.Println("Setting global meter provider")
 		otel.SetMeterProvider(p.meterProvider)
 	}
-	// Note: OTel doesn't have a global logger provider setter like traces/metrics
+	// No otel.SetLoggerProvider: records emitted through a global LoggerProvider would bypass the logger's SensitiveDataFilter; the zerolog bridge gets the provider by injection.
 
 	// Set global propagator for W3C trace context
 	debugLogger.Println("Setting W3C trace context propagator")
