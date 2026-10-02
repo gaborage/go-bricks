@@ -5,15 +5,11 @@ import (
 	"github.com/gaborage/go-bricks/database/internal/tracking"
 )
 
-// Re-export the internal tracking implementation as the public API
-type (
-	TrackedDB         = tracking.DB
-	TrackedConnection = tracking.Connection
-)
+// TrackedConnection re-exports the internal tracking implementation as the public API.
+type TrackedConnection = tracking.Connection
 
 // Re-export internal functions as public API
 var (
-	NewTrackedDB         = tracking.NewDB
 	NewTrackedConnection = tracking.NewConnection
 
 	// SetObservabilityEnabled gates DB-operation OpenTelemetry span/metric emission.

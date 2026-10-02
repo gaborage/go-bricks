@@ -9,33 +9,6 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 )
 
-// BasicStatement wraps sql.Stmt to implement types.Statement interface.
-// It provides a simple adapter between sql.Stmt and the types.Statement interface
-// without any performance tracking (tracking is handled at higher levels).
-type BasicStatement struct {
-	*sql.Stmt
-}
-
-// Query executes the prepared statement as a query
-func (s *BasicStatement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
-	return s.QueryContext(ctx, args...)
-}
-
-// QueryRow executes the prepared statement as a single row query
-func (s *BasicStatement) QueryRow(ctx context.Context, args ...any) types.Row {
-	return types.NewRowFromSQL(s.QueryRowContext(ctx, args...))
-}
-
-// Exec executes the prepared statement without returning rows
-func (s *BasicStatement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
-	return s.ExecContext(ctx, args...)
-}
-
-// Close closes the prepared statement
-func (s *BasicStatement) Close() error {
-	return s.Stmt.Close()
-}
-
 // Statement wraps types.Statement to provide performance tracking for prepared statements.
 // It intercepts all statement operations and logs performance metrics,
 // slow queries, and errors using structured logging.

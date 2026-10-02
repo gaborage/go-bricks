@@ -2207,14 +2207,14 @@ existing call compiles unchanged. See [migrations.md](migrations.md) `[C71.1]`â€
 
 ### [ADR-134: Remove the Dead Database Tracking Surface](adr_134_database_dead_tracking_surface.md)
 
-**Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** ten `database` tracking re-exports (`TrackingContext`, `TrackedStatement`/`TrackedStmt`, `TrackedTransaction`/`TrackedTx`, `TrackDBOperation`, `NewTrackingSettings`, `RegisterConnectionPoolMetrics`, `DefaultSlowQueryThreshold`, `DefaultMaxQueryLength`) are removed
+**Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** ten `database` tracking re-exports (`TrackingContext`, `TrackedStatement`/`TrackedStmt`, `TrackedTransaction`/`TrackedTx`, `TrackDBOperation`, `NewTrackingSettings`, `RegisterConnectionPoolMetrics`, `DefaultSlowQueryThreshold`, `DefaultMaxQueryLength`) and `TrackedDB`/`NewTrackedDB` are removed
 
 `database/tracking.go` re-exported the internal tracking package, and ten of those names had
-no caller outside package `database`'s own tests; they are deleted. The same ADR decides the
-removal of `TrackedDB`/`NewTrackedDB`, which exposed `tracking.DB`, a raw-`*sql.DB` wrapper
-from the framework's first commits that was never called outside its own tests.
+no caller outside package `database`'s own tests; they are deleted. `TrackedDB`/`NewTrackedDB`
+exposed `tracking.DB`, a raw-`*sql.DB` wrapper from the framework's first commits that was never
+called outside its own tests; it is deleted too.
 `NewTrackedConnection` over a `types.Interface` is the one tracking entry point consumers
-keep. See [migrations.md](migrations.md) `[C71.6]`.
+keep. See [migrations.md](migrations.md) `[C71.6]`â€“`[C71.7]`.
 
 **Key Benefits:** one public tracking wrapper instead of two; the tracking internals stop leaking through aliases.
 
