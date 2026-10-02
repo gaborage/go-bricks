@@ -410,6 +410,9 @@ observability:
     # For production, use an OTLP endpoint: "http://localhost:4318" with protocol "http",
     # or "localhost:4317" (host:port, no scheme) with protocol "grpc".
     # For DataDog, point to the DataDog Agent's OTLP endpoint.
+    # With protocol "http", a path in the URL is the export path, used exactly
+    # ("https://otlp.nr-data.net:4318/v1/traces", or a gateway's full "/otlp/v1/traces");
+    # with no path, or "/", spans go to /v1/traces.
     # Can be overridden by environment variable: OBSERVABILITY_TRACE_ENDPOINT
     # Default: "stdout"
     endpoint: "stdout"
@@ -462,6 +465,8 @@ observability:
     # endpoint specifies where to send metric data.
     # Special value "stdout" enables console logging for local development.
     # For production, use OTLP endpoint (http or grpc, depending on collector).
+    # With protocol "http", a path in the URL is the export path, used exactly;
+    # with no path, or "/", metrics go to /v1/metrics.
     # Can be overridden by environment variable: OBSERVABILITY_METRICS_ENDPOINT
     # Default: "stdout"
     endpoint: "stdout"

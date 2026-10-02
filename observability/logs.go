@@ -90,11 +90,12 @@ func (p *provider) createOTLPHTTPLogExporter(ctx context.Context) (sdklog.Export
 	debugLogger.Printf("Creating OTLP HTTP log exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Logs.Endpoint, useInsecure, p.config.Logs.Compression, len(p.config.Logs.Headers))
 
-	// Strip scheme - OTEL HTTP exporter adds it automatically based on WithInsecure()
-	endpoint := stripScheme(p.config.Logs.Endpoint)
-
+	host, urlPath := otlpHTTPTarget(p.config.Logs.Endpoint)
 	opts := []otlploghttp.Option{
-		otlploghttp.WithEndpoint(endpoint),
+		otlploghttp.WithEndpoint(host),
+	}
+	if urlPath != "" {
+		opts = append(opts, otlploghttp.WithURLPath(urlPath))
 	}
 
 	// Configure compression

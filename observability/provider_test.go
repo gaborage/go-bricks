@@ -3,7 +3,11 @@ package observability
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1270,4 +1274,162 @@ func TestTracerProviderDoesNotRecordPanicValues(t *testing.T) {
 				"span attribute %q discloses the panic value", attr.Key)
 		}
 	}
+}
+
+// otlpPathRecorder stands in for an OTLP/HTTP collector and records the path of
+// every request it answers.
+type otlpPathRecorder struct {
+	mu    sync.Mutex
+	paths []string
+}
+
+func (r *otlpPathRecorder) Paths() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.paths...)
+}
+
+func newOTLPPathServer(t *testing.T) (*httptest.Server, *otlpPathRecorder) {
+	t.Helper()
+	rec := &otlpPathRecorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		rec.mu.Lock()
+		rec.paths = append(rec.paths, r.URL.Path)
+		rec.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, rec
+}
+
+// assertOnlyPath fails unless the collector saw at least one request and every
+// request it saw targeted want.
+func assertOnlyPath(t *testing.T, rec *otlpPathRecorder, want string) {
+	t.Helper()
+	paths := rec.Paths()
+	require.NotEmpty(t, paths, "the exporter never reached the collector")
+	for _, got := range paths {
+		assert.Equal(t, want, got)
+	}
+}
+
+func TestOTLPHTTPTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		wantHost string
+		wantPath string
+	}{
+		{name: "host_only", endpoint: "http://collector:4318", wantHost: "collector:4318"},
+		{name: "root_path_is_host_only", endpoint: "https://collector:4318/", wantHost: "collector:4318"},
+		{name: "signal_path", endpoint: "https://otlp.nr-data.net:4318/v1/traces", wantHost: "otlp.nr-data.net:4318", wantPath: "/v1/traces"},
+		{name: "signal_path_default_port", endpoint: "https://otlp.nr-data.net/v1/metrics", wantHost: "otlp.nr-data.net", wantPath: "/v1/metrics"},
+		{name: "gateway_prefix_kept_exactly", endpoint: "http://gateway:4318/otlp/v1/logs", wantHost: "gateway:4318", wantPath: "/otlp/v1/logs"},
+		{name: "port_only", endpoint: "http://:4318", wantHost: ":4318"},
+		{name: "no_scheme_falls_through", endpoint: "localhost:4318", wantHost: "localhost:4318"},
+		{name: "unparseable_ip_falls_through", endpoint: "127.0.0.1:4318", wantHost: "127.0.0.1:4318"},
+		{name: "unparseable_escape_falls_through", endpoint: "https://collector:4318/%zz", wantHost: "collector:4318/%zz"},
+		{name: "empty_host_falls_through", endpoint: "http://", wantHost: ""},
+		{name: "hostless_path_falls_through", endpoint: "http:///v1/traces", wantHost: "/v1/traces"},
+		{name: "userinfo_falls_through", endpoint: "http://user@collector:4318/v1/traces", wantHost: "user@collector:4318/v1/traces"},
+		{name: "query_falls_through", endpoint: "http://collector:4318/v1/traces?tenant=a", wantHost: "collector:4318/v1/traces?tenant=a"},
+		{name: "fragment_falls_through", endpoint: "http://collector:4318/v1/traces#top", wantHost: "collector:4318/v1/traces#top"},
+		{name: "encoded_slash_falls_through", endpoint: "http://collector:4318/otlp%2Fv1/traces", wantHost: "collector:4318/otlp%2Fv1/traces"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, urlPath := otlpHTTPTarget(tt.endpoint)
+			assert.Equal(t, tt.wantHost, host)
+			assert.Equal(t, tt.wantPath, urlPath)
+		})
+	}
+}
+
+// testOTLPHTTPURLPaths runs the endpoint-path matrix against one HTTP exporter.
+// export is handed the configured endpoint and must push one item through it.
+func testOTLPHTTPURLPaths(t *testing.T, signal string, export func(t *testing.T, endpoint string)) {
+	t.Helper()
+	defaultPath := "/v1/" + signal
+	tests := []struct {
+		name     string
+		path     string
+		envPath  string
+		wantPath string
+	}{
+		{name: "host_only_uses_default", wantPath: defaultPath},
+		{name: "root_uses_default", path: "/", wantPath: defaultPath},
+		{name: "signal_path", path: defaultPath, wantPath: defaultPath},
+		{name: "gateway_prefix_used_exactly", path: "/otlp" + defaultPath, wantPath: "/otlp" + defaultPath},
+		{name: "env_path_used_without_config_path", envPath: "/env" + defaultPath, wantPath: "/env" + defaultPath},
+		{name: "config_path_beats_env_path", path: "/cfg" + defaultPath, envPath: "/env" + defaultPath, wantPath: "/cfg" + defaultPath},
+	}
+	signalEnv := "OTEL_EXPORTER_OTLP_" + strings.ToUpper(signal) + "_ENDPOINT"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, rec := newOTLPPathServer(t)
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+			t.Setenv(signalEnv, "")
+			if tt.envPath != "" {
+				t.Setenv(signalEnv, srv.URL+tt.envPath)
+			}
+
+			export(t, srv.URL+tt.path)
+			assertOnlyPath(t, rec, tt.wantPath)
+		})
+	}
+}
+
+func TestCreateOTLPHTTPExporterURLPath(t *testing.T) {
+	testOTLPHTTPURLPaths(t, "traces", func(t *testing.T, endpoint string) {
+		p := &provider{config: Config{Trace: TraceConfig{
+			Endpoint:    endpoint,
+			Insecure:    true,
+			Compression: CompressionNone,
+		}}}
+		exporter, err := p.createOTLPHTTPExporter(context.Background())
+		require.NoError(t, err)
+
+		tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+		_, span := tp.Tracer(testTracerName).Start(context.Background(), testSpanName)
+		span.End()
+		require.NoError(t, tp.Shutdown(context.Background()))
+	})
+}
+
+// TestNewProviderPathBearingHTTPEndpoints pins that the documented signal-path
+// endpoints build a provider: before, the path landed in the URL host and the
+// metrics and logs exporters failed construction.
+func TestNewProviderPathBearingHTTPEndpoints(t *testing.T) {
+	srv, _ := newOTLPPathServer(t)
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{Name: testServiceName},
+		Trace: TraceConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: srv.URL + "/v1/traces",
+			Protocol: ProtocolHTTP,
+			Insecure: true,
+		},
+		Metrics: MetricsConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: srv.URL + "/v1/metrics",
+		},
+		Logs: LogsConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: srv.URL + "/v1/logs",
+			Protocol: ProtocolHTTP,
+			Insecure: BoolPtr(true),
+		},
+	}
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	assert.NoError(t, provider.Shutdown(ctx))
 }

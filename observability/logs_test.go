@@ -680,3 +680,21 @@ func TestNewProviderWithLogsHTTPAndGRPC(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateOTLPHTTPLogExporterURLPath(t *testing.T) {
+	testOTLPHTTPURLPaths(t, "logs", func(t *testing.T, endpoint string) {
+		p := &provider{config: Config{Logs: LogsConfig{
+			Endpoint:    endpoint,
+			Compression: CompressionNone,
+			Insecure:    BoolPtr(true),
+		}}}
+		exporter, err := p.createOTLPHTTPLogExporter(context.Background())
+		require.NoError(t, err)
+
+		lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(exporter)))
+		var record log.Record
+		record.SetBody(attribute.StringValue("path probe"))
+		lp.Logger("path-test").Emit(context.Background(), record)
+		require.NoError(t, lp.Shutdown(context.Background()))
+	})
+}
