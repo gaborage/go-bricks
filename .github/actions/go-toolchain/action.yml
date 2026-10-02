@@ -1,0 +1,117 @@
+# actions/setup-go with a cached toolchain. On Linux the toolchain is restored
+# into the runner tool cache first, so setup-go's exact-version lookup logs
+# 'Found in cache', and a push that missed saves it after setup-go installs
+# it. Other runners only run setup-go: on hosted Windows it installs to D:
+# and links the C: tool cache path, so that path holds links, not the files.
+name: Set up Go
+description: >-
+  Runs actions/setup-go for go-version-file with cache false, restoring and
+  saving the toolchain it installs on Linux.
+
+inputs:
+  go-version-file:
+    description: >-
+      The go.mod setup-go reads, relative to the workspace root. As in setup-go,
+      a toolchain line wins over the go line unless GOTOOLCHAIN is 'local'. A
+      version other than x.y.z skips the restore and the save.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Later steps gate on this step's outputs, which are empty when it skips.
+    - id: env
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        GO_VERSION_FILE: ${{ inputs.go-version-file }}
+      run: |
+        set -euo pipefail
+        file="$GITHUB_WORKSPACE/$GO_VERSION_FILE"
+        v=''
+        if [ -f "$file" ]; then
+          if [ "${GOTOOLCHAIN:-}" != local ]; then
+            v="$(grep -m1 -oE '^toolchain go1\.[0-9]+(\.[0-9]+|rc[0-9]+)?' "$file" || true)"
+            v="${v#toolchain go}"
+          fi
+          if [ -z "$v" ]; then
+            v="$(grep -m1 -oE '^go [0-9]+(\.[0-9]+)*' "$file" || true)"
+            v="${v#go }"
+          fi
+        fi
+        # setup-go names the arch directory after node's os.arch().
+        case "$RUNNER_ARCH" in
+          X64) arch=x64 ;;
+          ARM64) arch=arm64 ;;
+          *) arch='' ;;
+        esac
+        if [ -z "$arch" ] || [ -z "${RUNNER_TOOL_CACHE:-}" ] \
+          || ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "go-toolchain: no x.y.z version in $GO_VERSION_FILE ('$v') for $RUNNER_ARCH; skipping the toolchain cache"
+          echo "valid=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        dir="$RUNNER_TOOL_CACHE/go/$v"
+        # A copy the runner image ships is used as is: no restore, no save.
+        present=false
+        if [ -e "$dir" ]; then
+          present=true
+        fi
+        push=false
+        if [ "$GITHUB_EVENT_NAME" = push ]; then
+          push=true
+        fi
+        {
+          echo "valid=true"
+          echo "version=$v"
+          echo "arch=$arch"
+          echo "path=$dir"
+          echo "present=$present"
+          echo "push=$push"
+          echo "key=go-toolchain-${RUNNER_OS}-${RUNNER_ARCH}-${v}"
+        } >> "$GITHUB_OUTPUT"
+
+    - id: restore
+      if: steps.env.outputs.valid == 'true' && steps.env.outputs.present != 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.env.outputs.path }}
+        key: ${{ steps.env.outputs.key }}
+
+    # A restore that fails partway warns and reports no hit, leaving a partial
+    # tree; a hit must run as go<v>. Either is removed so setup-go downloads.
+    - if: steps.env.outputs.valid == 'true'
+      shell: bash
+      env:
+        DIR: ${{ steps.env.outputs.path }}
+        ARCH_DIR: ${{ steps.env.outputs.arch }}
+        VERSION: ${{ steps.env.outputs.version }}
+        PRESENT: ${{ steps.env.outputs.present }}
+        HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        [ -e "$DIR" ] || exit 0
+        if [ "$HIT" != true ]; then
+          [ "$PRESENT" != true ] || exit 0
+          echo "::warning::go-toolchain: a failed restore left $DIR; removing it"
+        else
+          out="$(GOTOOLCHAIN=local "$DIR/$ARCH_DIR/bin/go" version 2>/dev/null || true)"
+          case "$out" in
+            "go version go$VERSION "*) exit 0 ;;
+          esac
+          echo "::warning::go-toolchain: the restored $DIR does not run as go$VERSION; removing it"
+        fi
+        rm -rf "$DIR"
+
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: ${{ inputs.go-version-file }}
+        cache: false
+
+    - if: >-
+        steps.env.outputs.push == 'true' && steps.env.outputs.present == 'false'
+        && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.env.outputs.path }}
+        key: ${{ steps.env.outputs.key }}

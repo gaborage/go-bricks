@@ -69,10 +69,9 @@ jobs:
       # Pin the toolchain to the module's go.mod so extraction uses the Go
       # version CI builds with, not the runner's preinstalled default.
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: ${{ matrix.go-version-file }}
-          cache: false
 
       - name: Restore Go cache
         id: gocache

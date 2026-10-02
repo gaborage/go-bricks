@@ -116,7 +116,7 @@ jobs:
               - 'Makefile'
               - '.golangci.yml'
               - '.github/workflows/ci-v2.yml'
-              # The go-cache composite every Go job calls.
+              # The go-cache and go-toolchain composites the Go jobs call.
               - '.github/actions/**'
               # scripts/ holds the build-tag guard and the race package query the
               # lint and security jobs run (#1757). Without this entry, editing
@@ -211,10 +211,9 @@ jobs:
 
       - &fw-setup-go
         name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: Restore Go cache
         id: gocache
@@ -480,10 +479,9 @@ jobs:
           echo "All container images cached"
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: Restore Go cache
         id: gocache
@@ -618,10 +616,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: Restore Go cache
         id: gocache
@@ -683,10 +680,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: tools/migration/go.mod
-          cache: false
 
       # Each leg writes its own OS's entry: the key carries runner.os.
       - name: Restore Go cache
@@ -802,10 +798,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: tools/migration/go.mod
-          cache: false
 
       # The Windows leg writes mt-build's Windows entry; CodeQL's migrate-tool leg
       # writes the Linux one this leg reads.
@@ -879,16 +874,17 @@ jobs:
           args: --timeout=5m
           skip-save-cache: ${{ github.event_name != 'push' }}
 
+      # Reuses the binary the linux pass put on PATH, and its lint cache on disk.
       - name: golangci-lint (migrate tool, windows)
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         env:
           GOOS: windows
         with:
-          version: v2.14.0
+          install-mode: none
           working-directory: tools/migration
           args: --timeout=5m
-          skip-save-cache: ${{ github.event_name != 'push' }}
+          skip-cache: true
 
       # The race side of the race/!race pair (#1757; rationale in wiki/linting.md).
       # Delegated to the make target so local and CI run one definition; this module
@@ -919,10 +915,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: tools/migration/go.mod
-          cache: false
 
       - name: Restore Go cache
         id: gocache
@@ -930,8 +925,56 @@ jobs:
         with:
           family: mt-build
 
+      # security-framework aliases the four anchored gosec steps; each job's
+      # working directory picks the Makefile. The key hashes the binary rule's
+      # recipe, which carries the pinned version, so a bump or an edited rule
+      # never reuses a binary; exact key only.
+      - &gosec-key
+        name: Gosec cache key
+        id: gosec-key
+        run: |
+          set -euo pipefail
+          bin="$(echo "gosec-cache-bin: ; @echo \$(GOSEC_BIN)" \
+            | make -s --no-print-directory -f Makefile -f - gosec-cache-bin)"
+          if [ -z "$bin" ]; then
+            echo "::error::gosec cache: the Makefile sets no GOSEC_BIN"
+            exit 1
+          fi
+          recipe="$(make -s -n -B "$bin" | sha256sum | cut -d' ' -f1)"
+          gover="$(go env GOVERSION)"
+          {
+            echo "bin=$bin"
+            echo "key=gosec-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS:-none}-${gover}-${recipe}"
+          } >> "$GITHUB_OUTPUT"
+
+      - &gosec-restore
+        name: Restore gosec
+        id: gosec-restore
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.gosec-key.outputs.bin }}
+          key: ${{ steps.gosec-key.outputs.key }}
+
+      # The binary's rule has no prerequisites, so make would trust a partial
+      # file a failed restore left behind.
+      - &gosec-drop-partial
+        name: Drop a partial gosec restore
+        if: steps.gosec-restore.outputs.cache-hit != 'true'
+        env:
+          GOSEC_PATH: ${{ steps.gosec-key.outputs.bin }}
+        run: rm -f "$GOSEC_PATH"
+
       - name: Run gosec (migrate tool)
         run: make sec
+
+      # After the scan, so the saved binary has run.
+      - &gosec-save
+        name: Save gosec
+        if: github.event_name == 'push' && steps.gosec-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gosec-key.outputs.bin }}
+          key: ${{ steps.gosec-key.outputs.key }}
 
   # ============================================================================
   # Shared Jobs (run for framework OR tool OR both)
@@ -948,10 +991,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: Restore Go cache
         id: gocache
@@ -985,15 +1027,16 @@ jobs:
           args: --timeout=5m
           skip-save-cache: ${{ github.event_name != 'push' }}
 
+      # Reuses the binary the linux pass put on PATH, and its lint cache on disk.
       - name: golangci-lint (framework, windows)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         env:
           GOWORK: "off"
           GOOS: windows
         with:
-          version: v2.14.0
+          install-mode: none
           args: --timeout=5m
-          skip-save-cache: ${{ github.event_name != 'push' }}
+          skip-cache: true
 
       # internal/racedetect/race.go is read by this pass and no other (#1757).
       - name: golangci-lint race pass (framework)
@@ -1024,10 +1067,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: Restore Go cache
         id: gocache
@@ -1035,8 +1077,16 @@ jobs:
         with:
           family: fw-light
 
+      - *gosec-key
+
+      - *gosec-restore
+
+      - *gosec-drop-partial
+
       - name: Run gosec (framework)
         run: make sec
+
+      - *gosec-save
 
   vuln-framework:
     permissions:
@@ -1049,10 +1099,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
       - name: Restore Go cache
         id: gocache
         uses: ./.github/actions/go-cache
@@ -1071,10 +1120,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
       - name: Restore Go cache
         id: gocache
         uses: ./.github/actions/go-cache
@@ -1407,10 +1455,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: ./.github/actions/go-toolchain
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: Restore Go cache
         id: gocache
