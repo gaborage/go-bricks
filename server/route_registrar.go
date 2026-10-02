@@ -31,10 +31,9 @@ func newTrackedRouteGroup(group *echo.Group, prefix string, cfg *config.Config, 
 	return rg
 }
 
-// addEcho implements the unexported echoAdder seam: it registers a pre-built
-// echo.HandlerFunc directly, so the framework's typed-handler hot path pays no
-// per-request adapter cost (ADR-026). A duplicate is not added; see
-// routeConflictTracker.record.
+// addEcho registers a pre-built echo.HandlerFunc directly, so the framework's
+// typed-handler hot path pays no per-request adapter cost (ADR-026). A duplicate
+// is not added; see routeConflictTracker.record.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant) {
 	relative := rg.relativePath(path)
 	if !rg.tracker.record(method, rg.fullPathFromRelative(relative), reg) {

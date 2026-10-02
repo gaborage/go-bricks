@@ -39,7 +39,6 @@ var (
 	wrapperMu             sync.RWMutex
 	traceExporterWrapper  = func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter { return exporter }
 	metricExporterWrapper = func(exporter sdkmetric.Exporter) sdkmetric.Exporter { return exporter }
-	logExporterWrapper    = func(exporter sdklog.Exporter) sdklog.Exporter { return exporter }
 )
 
 const (
@@ -57,12 +56,6 @@ func getMetricExporterWrapper() func(sdkmetric.Exporter) sdkmetric.Exporter {
 	wrapperMu.RLock()
 	defer wrapperMu.RUnlock()
 	return metricExporterWrapper
-}
-
-func getLogExporterWrapper() func(sdklog.Exporter) sdklog.Exporter {
-	wrapperMu.RLock()
-	defer wrapperMu.RUnlock()
-	return logExporterWrapper
 }
 
 // Thread-safe setters for exporter wrappers (test use only)

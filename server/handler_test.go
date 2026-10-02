@@ -2720,8 +2720,8 @@ func TestPublicMiddlewareConstructorsReturnFlatForm(t *testing.T) {
 
 // TestPublicTenantMiddlewareReturnsFlatForm covers TenantMiddleware + the flat SkipperFunc
 // (CreateProbeSkipper) separately, since it needs a resolver and a skipper argument.
-// capturingRegistrar is a RouteRegistrar that deliberately does NOT implement the
-// unexported echoAdder seam, so RegisterHandler takes its fallback branch
+// capturingRegistrar is a RouteRegistrar that is deliberately NOT a *routeGroup,
+// so RegisterHandler takes its fallback branch
 // (adapting the echo handler into a Handler via the unexported escape hatch). It records
 // the adapted Handler so a test can invoke it and verify the round-trip works.
 type capturingRegistrar struct{ handler Handler }
@@ -2738,7 +2738,7 @@ type fallbackProbeResp struct {
 }
 
 // TestRegisterHandlerFallbackForNonEchoRegistrar exercises the RegisterHandler fallback
-// for registrars that don't implement echoAdder: the adapted Handler must, when
+// for registrars that are not a *routeGroup: the adapted Handler must, when
 // invoked, round-trip through HandlerContext.echoContext() and run the full typed
 // pipeline, producing the standard data/meta envelope.
 func TestRegisterHandlerFallbackForNonEchoRegistrar(t *testing.T) {
@@ -2749,7 +2749,7 @@ func TestRegisterHandlerFallbackForNonEchoRegistrar(t *testing.T) {
 	GET(hr, cr, "/fallback-probe", func(_ struct{}, _ HandlerContext) (fallbackProbeResp, IAPIError) {
 		return fallbackProbeResp{Greeting: "hi"}, nil
 	})
-	require.NotNil(t, cr.handler, "non-echoAdder must receive the adapted Handler via the fallback branch")
+	require.NotNil(t, cr.handler, "a non-routeGroup registrar must receive the adapted Handler via the fallback branch")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/fallback-probe", http.NoBody)
@@ -2784,8 +2784,8 @@ func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
 	assert.Equal(t, "acme", rec.Body.String(), "tenant resolved by the flat TenantMiddleware must reach the handler context")
 }
 
-// newTypedPathServer wires a typed GET handler through a real routeGroup (which implements
-// the echoAdder addEcho seam) so benchmarks/alloc tests measure the ADR-026 hot path.
+// newTypedPathServer wires a typed GET handler through a real routeGroup (which registers
+// via addEcho) so benchmarks/alloc tests measure the ADR-026 hot path.
 func newTypedPathServer(tb testing.TB) (*echo.Echo, *http.Request) {
 	tb.Helper()
 	e := echo.New()

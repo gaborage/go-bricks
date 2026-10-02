@@ -12,10 +12,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// grpcInsecureCredentials holds the insecure gRPC credentials constructor used
-// when configuring the OTLP gRPC log exporter without TLS.
-var grpcInsecureCredentials = insecure.NewCredentials
-
 // logInitHook allows tests to inject failures after exporter creation but before provider setup.
 var logInitHook func() error
 
@@ -65,7 +61,7 @@ func (p *provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 			debugLogger.Printf("Failed to create stdout log exporter: %v", err)
 			return nil, err
 		}
-		return getLogExporterWrapper()(exporter), nil
+		return exporter, nil
 	}
 
 	// Create OTLP exporter based on protocol
@@ -79,13 +75,13 @@ func (p *provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 		if err != nil {
 			return nil, err
 		}
-		return getLogExporterWrapper()(exporter), nil
+		return exporter, nil
 	case ProtocolGRPC:
 		exporter, err := p.createOTLPGRPCLogExporter(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return getLogExporterWrapper()(exporter), nil
+		return exporter, nil
 	default:
 		debugLogger.Printf("Invalid log protocol: %s", protocol)
 		return nil, fmt.Errorf("log protocol '%s': %w", protocol, ErrInvalidProtocol)
@@ -159,7 +155,7 @@ func (p *provider) createOTLPGRPCLogExporter(ctx context.Context) (sdklog.Export
 
 	// Configure TLS/insecure connection
 	if useInsecure {
-		opts = append(opts, otlploggrpc.WithTLSCredentials(grpcInsecureCredentials()))
+		opts = append(opts, otlploggrpc.WithTLSCredentials(insecure.NewCredentials()))
 		debugLogger.Println("Using insecure gRPC credentials for logs (no TLS)")
 	}
 

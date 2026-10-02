@@ -142,7 +142,7 @@ func TestRouteGroupFullPathAndRelative(t *testing.T) {
 }
 
 // TestTypedHandlerThroughRouteGroupSeam registers a typed handler through a real routeGroup
-// (which implements the unexported echoAdder addEcho seam) and hits it via httptest,
+// (which registers via the unexported addEcho) and hits it via httptest,
 // proving the typed hot path produces the standard data/meta envelope through the seam.
 func TestTypedHandlerThroughRouteGroupSeam(t *testing.T) {
 	srv := newTestServer("", "", "")

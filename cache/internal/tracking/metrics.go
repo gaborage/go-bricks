@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -219,32 +220,17 @@ func classifyError(err error) string {
 
 	// Common cache error patterns
 	switch {
-	case contains(errStr, "connection"):
+	case strings.Contains(errStr, "connection"):
 		return errClassConnection
-	case contains(errStr, "timeout"):
+	case strings.Contains(errStr, "timeout"):
 		return "timeout"
-	case contains(errStr, "closed"):
+	case strings.Contains(errStr, "closed"):
 		return "closed"
-	case contains(errStr, "not found"):
+	case strings.Contains(errStr, "not found"):
 		return errClassNotFound
 	default:
 		return "error"
 	}
-}
-
-func contains(s, substr string) bool {
-	if substr == "" {
-		return true
-	}
-	if s == "" {
-		return false
-	}
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // recordHitMissCounters records cache hit or miss counters for lookup operations.

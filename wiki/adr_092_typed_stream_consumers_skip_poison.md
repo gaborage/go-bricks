@@ -10,6 +10,11 @@
   [ADR-084](adr_084_response_error_details_carry_no_request_input.md) (the same
   no-input-in-errors rule on the HTTP side)
 
+> **Amendment — 2026-10-01.** The codec seam named in §1 is gone: `payloaderr`
+> decodes with `json.Unmarshal` and renders a decode failure through
+> `saferender.JSONDecodeSummary` directly. `NewDecode`'s fail-closed empty-summary
+> substitution is unchanged.
+
 ## Context
 
 `streams.Handler` hands every consumer raw bytes. So every stream consumer that

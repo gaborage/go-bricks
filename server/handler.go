@@ -301,7 +301,7 @@ func adaptHandler(h Handler, cfg *config.Config) echo.HandlerFunc {
 // adaptMiddleware converts a flat MiddlewareFunc into an echo.MiddlewareFunc. The
 // per-request baton closure (func() error { return next(c) }) is the one allocation this
 // adapter adds; it lands only on middleware-bearing routes, never the framework's typed
-// default path (which registers echo handlers directly via the addEcho seam).
+// default path (which registers echo handlers directly via routeGroup.addEcho).
 func adaptMiddleware(m MiddlewareFunc, cfg *config.Config) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
@@ -1401,15 +1401,6 @@ type RouteRegistrar interface {
 	FullPath(path string) string
 }
 
-// echoAdder is the unexported, echo-direct registration seam. Only routeGroup
-// implements it (within package server), so the framework's typed-handler hot path can
-// register a pre-built echo.HandlerFunc with zero per-request adapter overhead (honoring
-// ADR-026), while consumers use the echo-free RouteRegistrar.Add. It is an optional
-// interface upgrade in the style of io.ReaderFrom.
-type echoAdder interface {
-	addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant)
-}
-
 // HandlerRegistry manages enhanced handlers and provides registration utilities.
 type HandlerRegistry struct {
 	binder            *RequestBinder
@@ -1498,8 +1489,8 @@ func RegisterHandler[T any, R any](
 	// handler path adds zero per-request adapter overhead (ADR-026). The fallback adapts for
 	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
 	// hatch and never executes on the framework's real registrar.
-	if er, ok := r.(echoAdder); ok {
-		er.addEcho(method, path, wrappedHandler, RouteRegistrant{
+	if rg, ok := r.(*routeGroup); ok {
+		rg.addEcho(method, path, wrappedHandler, RouteRegistrant{
 			HandlerName: descriptor.HandlerName,
 			Package:     descriptor.Package,
 		})

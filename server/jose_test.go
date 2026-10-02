@@ -385,8 +385,8 @@ type taggedResp struct {
 }
 
 // fakeRegistrar collects added routes without standing up a real Echo router.
-// It satisfies the echo-free RouteRegistrar interface only (no addEcho seam), so
-// RegisterHandler exercises its non-echoAdder fallback path through Add.
+// It satisfies the echo-free RouteRegistrar interface only (it is not a *routeGroup),
+// so RegisterHandler exercises its fallback path through Add.
 type fakeRegistrar struct{}
 
 func (fakeRegistrar) Add(_, _ string, _ Handler, _ ...MiddlewareFunc) {}
