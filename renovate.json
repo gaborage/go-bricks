@@ -25,6 +25,15 @@
       "matchDatasources": ["go"],
       "matchPackageNames": ["github.com/sijms/go-ora/v2"],
       "allowedVersions": "<3"
+    },
+    {
+      "description": "Label Flyway CLI bumps and attach the re-pin steps. The hosted Renovate app moves only FLYWAY_VERSION; Redgate publishes no .sha256 to pin against, so the ci-v2.yml SHA256 gate keeps the PR red until a maintainer verifies the tarball's signature and re-pins the checksum by hand. The label makes those PRs filterable; the note saves rediscovering the procedure. The fingerprint is the key that also signed flyway-core on Maven Central (6.0.0 through 11.8.2); if Redgate rotates it, check the new one against an independent source like that before trusting it.",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["flyway/flyway"],
+      "addLabels": ["needs-flyway-sha"],
+      "prBodyNotes": [
+        "**Flyway re-pin needed.** CI stays red until `FLYWAY_SHA256` matches the new tarball; that red is the intended alert.\n\n1. Download `https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/{{{newVersion}}}/flyway-commandline-{{{newVersion}}}-linux-x64.tar.gz` and the `.asc` next to it. Do not use the GitHub release asset: it is a different artifact.\n2. Import Redgate's Flyway key by fingerprint (`gpg --keyserver keys.openpgp.org --recv-keys F79157DB93697AA32CD4C46CC485C5A843FADB15`; it expires 2027-04-24), then run `gpg --status-fd 1 --verify flyway-commandline-{{{newVersion}}}-linux-x64.tar.gz.asc flyway-commandline-{{{newVersion}}}-linux-x64.tar.gz` (always name both files) and require a `VALIDSIG` line carrying that fingerprint.\n3. Set `FLYWAY_SHA256` next to `FLYWAY_VERSION` in `.github/workflows/ci-v2.yml` to the verified tarball's `sha256sum`.\n4. Copy the same version and checksum into the Install Flyway example in `wiki/multi_tenant_migration.md`.\n5. Touch the `migration/testdata/flyway` fixtures only if `framework-integration-test` then fails parsing the new CLI's JSON output; re-capture them from it."
+      ]
     }
   ],
   "customManagers": [
@@ -72,14 +81,14 @@
     },
     {
       "customType": "regex",
-      "description": "Track the CI-pinned Flyway CLI version. Flyway 12.x tarballs ship only from Redgate's server (Maven Central stopped at 11.8.2), but flyway/flyway still tags GitHub releases (flyway-X.Y.Z), so github-releases tracks the version number; the SHA256 gate + test fixtures make the resulting bump PR fail CI until a maintainer re-pins the checksum and fixtures — that failing PR is the intended alert.",
+      "description": "Track the CI-pinned Flyway CLI version. Flyway 12.x tarballs ship only from Redgate's server (Maven Central stopped at 11.8.2), but flyway/flyway still tags GitHub releases (flyway-X.Y.Z), so github-releases tracks the version number; the SHA256 gate makes the resulting bump PR fail CI until a maintainer re-pins the checksum (the needs-flyway-sha packageRule lists the steps) — that failing PR is the intended alert. The version capture accepts only plain X.Y.Z tags, so a malformed upstream tag never reaches the workflow or the PR note.",
       "managerFilePatterns": [
         "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+FLYWAY_VERSION: (?<currentValue>\\S+)"
       ],
-      "extractVersionTemplate": "^flyway-(?<version>.*)$"
+      "extractVersionTemplate": "^flyway-(?<version>\\d+\\.\\d+\\.\\d+)$"
     }
   ]
 }
