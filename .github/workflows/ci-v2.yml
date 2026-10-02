@@ -364,12 +364,30 @@ jobs:
             exit 1
           }
 
-          $testOutput = go test -race $packages 2>&1
+          go test -race $packages 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable firstPass
           $exitCode = $LASTEXITCODE
 
           if ($exitCode -eq 0) {
-            Write-Host $testOutput
             exit 0
+          }
+
+          function Get-FirstPassMatch($pattern) {
+            $firstPass | Select-String -CaseSensitive $pattern | ForEach-Object { $_.Matches[0].Groups[1].Value }
+          }
+          # Retry every package without an ok or ? line, not just those that
+          # printed FAIL: a first pass that dies mid-list prints neither.
+          $confirmed = Get-FirstPassMatch '^(?:ok|\?)\s+(\S+)'
+          $retry = @($packages | Where-Object { $_ -notin $confirmed })
+          $failedPkgs = Get-FirstPassMatch '^FAIL\s+(\S+)'
+          $failedTests = Get-FirstPassMatch '^--- FAIL: (\S+)'
+          $report = "first pass exited ${exitCode}; FAIL: $($failedPkgs -join ', '); tests: $($failedTests -join ', '); re-running $($retry.Count) package(s)"
+          Write-Host "::warning title=Windows test retry::$report"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Windows test retry: $report"
+
+          # Nothing is left to retry, so a pass on retry cannot clear this failure.
+          if ($retry.Count -eq 0) {
+            Write-Host "::error title=Windows test retry::go test exited $exitCode though every package printed ok or ?"
+            exit $exitCode
           }
 
           Write-Host "Initial test run failed, re-running per package to evaluate failures" -ForegroundColor Yellow
@@ -378,7 +396,7 @@ jobs:
           )
           $unexpectedFailure = $false
 
-          foreach ($pkg in $packages) {
+          foreach ($pkg in $retry) {
             Write-Host "Re-testing package: $pkg" -ForegroundColor Cyan
             $pkgOutput = go test -race $pkg 2>&1
             $pkgExitCode = $LASTEXITCODE
