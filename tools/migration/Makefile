@@ -1,4 +1,4 @@
-.PHONY: help build test lint lint-race fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec verify-mod
+.PHONY: help build test lint lint-race fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec install-gosec verify-mod
 # verify-mod mutates go.mod/go.sum via `go mod tidy` — under `make -j check`
 # that would race lint/test reading the same module files. Force check's
 # prerequisites to run serially regardless of -j.
@@ -101,6 +101,9 @@ sec: $(GOSEC_BIN) ## Run gosec security scanner (pinned; identical to CI)
 		$(GOSEC_BIN) -tags integration,race $$pkgs; \
 	fi
 	GOOS=windows $(GOSEC_BIN) -tags integration ./cmd/... ./internal/...
+
+# CI retries this before `make sec`, which then finds the binary in place.
+install-gosec: $(GOSEC_BIN) ## Install the pinned gosec binary (no-op when present)
 
 $(GOSEC_BIN):
 	GOBIN=$(GOSEC_DIR) go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
