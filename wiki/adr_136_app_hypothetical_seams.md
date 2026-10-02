@@ -13,8 +13,10 @@ either nothing calls it, nothing accepts it, or no code outside the module can s
 1. **`TimeoutProvider`, `StandardTimeoutProvider`, `Options.TimeoutProvider`.** The only
    adapter was `return context.WithTimeout(parent, timeout)`. Its godoc said the seam existed
    "for testing", but its one test double returned a real 10s context and only recorded the
-   10s, which `TestShutdownTimeouts` already pins through `shutdownTimeouts()`. The inner
-   shutdown timeout is config-driven (`server.timeout.shutdown`).
+   10s. `TestShutdownTimeouts` pins that value through `shutdownTimeouts()`; the double's one
+   extra check, that `Run` hands `Shutdown` the inner window and not the outer hard stop,
+   moves to `TestRunGracefulShutdown`, which reads the deadline the server receives. The
+   inner shutdown timeout is config-driven (`server.timeout.shutdown`).
 2. **`SignalHandler.WaitForSignal`.** `waitForShutdownOrServerError` calls only `Notify` and
    selects on the channel itself. Nothing called `WaitForSignal`.
 3. **`app.Prober`.** Its own godoc said only `probeDescription` implements it and there is no
@@ -39,6 +41,16 @@ one home. The unexported stream helpers take `streamruntime.Runtime` directly.
 `ErrStreamsNotLinked`, the `HeldMessage`/`HoldLedger`/`HoldReplayer` aliases, the
 `internal/streamruntime` seam, `DBManager()` and `CacheManager()` stay.
 
+What a consumer does instead:
+
+- **Timeout provider:** set `server.timeout.shutdown` (env `SERVER_TIMEOUT_SHUTDOWN`) to size
+  the graceful-shutdown window.
+- **`WaitForSignal`:** receive on the channel passed to `Notify`.
+- **`Prober`:** nothing. Nothing accepted one, so a `var _ app.Prober = …` assertion is deleted.
+- **`RegisterStreamRuntime` / `StreamRuntime`:** blank-import `messaging/streams`; it registers
+  itself from `init`.
+- **`MessagingDeclarations()`:** nothing. Keep declarations where the module builds them.
+
 ## Alternatives considered
 
 - **Keep each name with `Deprecated:`.** Rejected: a deprecation implies a supported
@@ -47,8 +59,9 @@ one home. The unexported stream helpers take `streamruntime.Runtime` directly.
   justified (Backward Compatibility principle), and an exported seam with no variation is a
   standing invitation to depend on nothing.
 - **Unexport `TimeoutProvider` as a func field.** Kept as the fallback if the lifecycle tests
-  could not observe shutdown without the double. They can: both observe the server's
-  `Shutdown` count and the closers' expectations, so the field was not needed.
+  could not observe shutdown without the double. They can: `TestRunGracefulShutdown` reads
+  the server's `Shutdown` count and the deadline it was handed, and
+  `TestRunPropagatesServerError` reads the closers' expectations, so the field was not needed.
 
 ## Consequences
 

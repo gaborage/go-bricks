@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -74,13 +75,6 @@ func NewMockSignalHandler() *MockSignalHandler {
 	return &MockSignalHandler{}
 }
 
-func (m *MockSignalHandler) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.signalChan = nil
-}
-
 func (m *MockSignalHandler) Notify(c chan<- os.Signal, sig ...os.Signal) {
 	// If no mock expectations are set, just return (no-op)
 	if len(m.ExpectedCalls) == 0 {
@@ -115,6 +109,8 @@ type mockServer struct {
 	readyHandler  server.Handler
 	// onShutdown, when set, runs at the start of Shutdown.
 	onShutdown func()
+	// shutdownBudget is the time left on Shutdown's context deadline when it was called.
+	shutdownBudget atomic.Int64
 
 	gate     chan struct{}
 	gateOnce sync.Once
@@ -140,7 +136,9 @@ func (m *mockServer) Start() error {
 }
 
 func (m *mockServer) Shutdown(ctx context.Context) error {
-	_ = ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		m.shutdownBudget.Store(int64(time.Until(deadline)))
+	}
 	if m.onShutdown != nil {
 		m.onShutdown()
 	}
@@ -1418,7 +1416,6 @@ func TestConsumerGiveUpAttemptMatchesTheMessagingThreshold(t *testing.T) {
 
 func TestRunGracefulShutdown(t *testing.T) {
 	signalHandler := NewMockSignalHandler()
-	defer signalHandler.Reset() // Cleanup after test
 
 	// No Notify expectation: the no-expectation path stores signalChan for TriggerShutdown.
 	fixture := newTestAppFixture(t, withSignalHandler(signalHandler))
@@ -1448,13 +1445,17 @@ func TestRunGracefulShutdown(t *testing.T) {
 	}
 
 	assert.Equal(t, 1, fixture.server.shutdownCount())
+	// Run hands Shutdown the inner window (server.timeout.shutdown, 10s here), not the
+	// outer hard stop (inner + 5s).
+	budget := time.Duration(fixture.server.shutdownBudget.Load())
+	assert.LessOrEqual(t, budget, 10*time.Second)
+	assert.Greater(t, budget, 9*time.Second)
 	fixture.messaging.AssertExpectations(t)
 	fixture.db.AssertExpectations(t)
 }
 
 func TestRunPropagatesServerError(t *testing.T) {
 	signalHandler := NewMockSignalHandler()
-	defer signalHandler.Reset() // Cleanup after test
 	fixture := newTestAppFixture(t, withSignalHandler(signalHandler))
 
 	fixture.messaging.ExpectClose(nil)
@@ -1826,12 +1827,10 @@ func TestOSSignalHandler(t *testing.T) {
 	t.Run("Notify method", func(t *testing.T) {
 		handler := &OSSignalHandler{}
 
-		// Test Notify - should not panic
+		// Delivery is OS-dependent; registering must not panic, and Stop unregisters it.
 		c := make(chan os.Signal, 1)
-		handler.Notify(c, os.Interrupt)
-
-		// The actual signal handling is OS-dependent, so we just test that Notify exists
-		assert.NotNil(t, handler)
+		assert.NotPanics(t, func() { handler.Notify(c, os.Interrupt) })
+		signal.Stop(c)
 	})
 }
 

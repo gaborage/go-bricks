@@ -1,6 +1,6 @@
 # Consumer-registered readiness contributions
 
-**Decision:** Deferred (YAGNI) — `/ready` keeps walking the framework's own
+**Decision (revised 2026-10-01 for ADR-136):** Deferred (YAGNI) — `/ready` keeps walking the framework's own
 slot list and nothing else. There is no `RegisterReadiness(name, critical,
 probe)` door and no exported probe interface (`app.Prober` was removed by
 ADR-136; a future door would define its own contract), until a trigger below
