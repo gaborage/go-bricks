@@ -344,8 +344,10 @@ jobs:
       # framework-build's Windows leg, overlapping the tests. It gates in its
       # body, not with if: (a wait on a skipped background step is
       # undocumented), and always builds on a saving run (push with an
-      # exact-key miss) so the saved entry holds the plain build output. Wait
-      # steps take no timeout, so timeout-minutes bounds a hung build.
+      # exact-key miss) so the saved entry holds the plain build output. A
+      # saving run also compiles the tests' race build, compile only (the
+      # writer rule in .github/actions/go-cache), so readers' tests start warm.
+      # Wait steps take no timeout, so timeout-minutes bounds a hung build.
       - name: Build (Windows)
         id: winbuild
         background: true
@@ -362,13 +364,17 @@ jobs:
             exit 1
           }
           go build -v $packages
+          # pwsh exits with the last native command's code, so a failed build
+          # must not hide behind a passing warm-up.
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:SAVE -eq 'true') { go test -c -vet=off -race -o NUL $packages }
 
       - name: Run tests (Windows)
         if: needs.changes.outputs.code == 'true'
         shell: pwsh
         env:
           # A saving run saves the job's GOCACHE after the wait below, so its
-          # race build goes elsewhere and the entry keeps winbuild's plain build
+          # tests go elsewhere and the entry keeps only winbuild's compile
           # output, with no test result or vet verdict. Otherwise env.GOCACHE
           # keeps the job's cache: the work disk, or '' (Go's default) when the
           # work-disk step set none. A bare '' would put it back on C:.
