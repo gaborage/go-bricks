@@ -31,10 +31,9 @@ func newTrackedRouteGroup(group *echo.Group, prefix string, cfg *config.Config, 
 	return rg
 }
 
-// addEcho implements the unexported echoAdder seam: it registers a pre-built
-// echo.HandlerFunc directly, so the framework's typed-handler hot path pays no
-// per-request adapter cost (ADR-026). A duplicate is not added; see
-// routeConflictTracker.record.
+// addEcho registers a pre-built echo.HandlerFunc directly, so the framework's
+// typed-handler hot path pays no per-request adapter cost (ADR-026). A duplicate
+// is not added; see routeConflictTracker.record.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant) {
 	relative := rg.relativePath(path)
 	if !rg.tracker.record(method, rg.fullPathFromRelative(relative), reg) {
@@ -48,8 +47,8 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg Route
 // is intentionally discarded.
 //
 // It also records a RouteDescriptor in DefaultRouteRegistry so raw routes are discoverable
-// alongside typed ones (issue #634). The framework's routeGroup implements the addEcho seam, so
-// typed handlers register through addEcho (which emits its own descriptor and never traverses
+// alongside typed ones (issue #634). Typed handlers on the framework's routeGroup register
+// through routeGroup.addEcho (which emits its own descriptor and never traverses
 // Add) — framework-registered routes are never double-counted. Only the fields derivable at this
 // seam are populated (method, full path, handler ID/name, caller package); type- and JOSE-related
 // fields stay zero-valued because raw handlers carry no request/response models. A duplicate

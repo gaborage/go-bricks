@@ -198,13 +198,6 @@ func (m *authMetrics) recordRefresh(ctx context.Context, errType string) {
 	m.refreshes.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
-// keySetObserver is what the observable gauges read: the current key count and
-// the age of the key set, in seconds. ok is false before the first successful
-// fetch, which suppresses both observations rather than reporting a zero age.
-type keySetObserver interface {
-	keySetObservation() (keys int64, ageSeconds float64, ok bool)
-}
-
 // gaugeIssuer bounds the key-set gauges' identity attribute.
 //
 // SECURITY: the issuer is per-process configuration, never caller- or
@@ -217,7 +210,7 @@ func gaugeIssuer(issuer string) string {
 	return trimmed
 }
 
-// registerKeySetGauges wires the key-count and key-set-age gauges to observer
+// registerKeySetGauges wires the key-count and key-set-age gauges to resolver
 // and returns the cleanup that unregisters them. Registration failures degrade
 // to a no-op cleanup, matching the database tracker's graceful-degradation
 // contract.
@@ -225,7 +218,7 @@ func gaugeIssuer(issuer string) string {
 // issuer identifies the observing verifier: two verifiers sharing one
 // MeterProvider register two callbacks against the SAME instruments, and the
 // OTel callback contract requires their observations to be distinct.
-func (m *authMetrics) registerKeySetGauges(observer keySetObserver, issuer string) func() {
+func (m *authMetrics) registerKeySetGauges(resolver *jwksResolver, issuer string) func() {
 	if m == nil || m.meter == nil {
 		return func() {
 			// Nothing to undo: without a metrics value or a meter, no gauge and no
@@ -261,7 +254,7 @@ func (m *authMetrics) registerKeySetGauges(observer keySetObserver, issuer strin
 	observed := metric.WithAttributes(attribute.String(attrAuthIssuer, gaugeIssuer(issuer)))
 	registration, err := m.meter.RegisterCallback(
 		func(_ context.Context, obs metric.Observer) error {
-			keys, ageSeconds, ok := observer.keySetObservation()
+			keys, ageSeconds, ok := resolver.keySetObservation()
 			if !ok {
 				return nil
 			}

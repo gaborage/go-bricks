@@ -93,7 +93,7 @@ type typedHandler[T any] struct {
 func newTypedHandler[T any](eventType string, fn func(context.Context, T, Metadata) error) *typedHandler[T] {
 	return &typedHandler[T]{
 		eventType: eventType,
-		decoder:   payloaderr.NewDecoder[T](payloaderr.JSONCodec{}),
+		decoder:   payloaderr.NewDecoder[T](),
 		fn:        fn,
 	}
 }

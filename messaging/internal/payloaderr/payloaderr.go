@@ -55,9 +55,9 @@ const UnauditedDecoderSummary = "cause withheld (unaudited decoder); use errors.
 //   - validator namespaces interpolate map keys verbatim ("Limits[4111...]"),
 //     which is why the namespace list is unexported and redacted on read.
 //
-// The decode rendering itself lives on the codec seam (Codec.Summarize), so a new
-// codec (issue #346) must supply its own audited phrasing; until it does,
-// NewDecode substitutes the fail-closed phrase and the cause is never rendered.
+// The decode rendering itself lives in saferender.JSONDecodeSummary; for a shape
+// it has not audited, NewDecode substitutes the fail-closed phrase and the cause
+// is never rendered.
 type Body struct {
 	// Stage is where the failure happened. A lane exports it to label logs and
 	// metrics; for control flow a lane maps it onto its own sentinels.
@@ -69,7 +69,7 @@ type Body struct {
 	// only safe read.
 	fields []string
 
-	// summary is the codec's payload-free rendering of a decode cause. It is what
+	// summary is the payload-free rendering of a decode cause. It is what
 	// Message() prints; the cause itself is never rendered.
 	summary string
 
@@ -77,9 +77,9 @@ type Body struct {
 }
 
 // NewDecode wraps a decode failure. The cause survives for Unwrap only;
-// Message() prints summary instead, which the codec produced.
+// Message() prints summary instead, which the caller supplies payload-free.
 //
-// SECURITY: an empty summary means the codec did not audit this error shape, so
+// SECURITY: an empty summary means this error shape was not audited, so
 // the fail-closed phrase substitutes here rather than at the call site — no
 // caller can render an unaudited cause by forgetting the fallback.
 func NewDecode(cause error, summary string) *Body {

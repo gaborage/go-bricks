@@ -723,13 +723,13 @@ func TestStreamQueueConsumeIntegration(t *testing.T) {
 
 // closeCountingConn wraps a real broker connection and counts Close calls.
 type closeCountingConn struct {
-	realConnection
+	*amqp.Connection
 	closeCalls atomic.Int32
 }
 
 func (c *closeCountingConn) Close() error {
 	c.closeCalls.Add(1)
-	return c.realConnection.Close()
+	return c.Connection.Close()
 }
 
 // TestAMQPClientDialCompletingAfterCloseIsClosedNotInstalled pins, against a
@@ -748,7 +748,7 @@ func TestAMQPClientDialCompletingAfterCloseIsClosedNotInstalled(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		dialed = &closeCountingConn{realConnection: realConnection{c: conn}}
+		dialed = &closeCountingConn{Connection: conn}
 		return dialed, nil
 	})
 	t.Cleanup(func() { setAmqpDialFunc(old) })
@@ -766,7 +766,7 @@ func TestAMQPClientDialCompletingAfterCloseIsClosedNotInstalled(t *testing.T) {
 
 	require.NotNil(t, dialed, "the gated dial must have completed")
 	assert.Equal(t, int32(1), dialed.closeCalls.Load(), "a post-Close connection must be closed exactly once")
-	assert.True(t, dialed.c.IsClosed(), "a post-Close connection must not leak")
+	assert.True(t, dialed.IsClosed(), "a post-Close connection must not leak")
 	client.m.RLock()
 	assert.Nil(t, client.connection, "a post-Close connection must not be installed")
 	client.m.RUnlock()

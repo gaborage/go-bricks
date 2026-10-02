@@ -1426,18 +1426,18 @@ func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	tracking.RecordConnectionEvent("create", nil)
 
 	c.log.Info().Msg("Connected to AMQP broker")
-	// If the underlying type is realConnection, return its concrete pointer; otherwise nil
-	if rc, ok := ac.(realConnection); ok {
-		return rc.c, nil
+	// Return the concrete connection when the dialer produced one; otherwise nil
+	if rc, ok := ac.(*amqp.Connection); ok {
+		return rc, nil
 	}
 	return nil, nil
 }
 
-// reInitConnection wraps a real connection into the adapter, falling back to the
+// reInitConnection returns the given real connection, falling back to the
 // installed one when none is given.
 func (c *AMQPClientImpl) reInitConnection(conn *amqp.Connection) amqpConnection {
 	if conn != nil {
-		return realConnection{c: conn}
+		return conn
 	}
 	return c.connection
 }

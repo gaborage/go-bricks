@@ -1630,10 +1630,10 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 	}
 }
 
-func TestConnectRealConnectionWrapping(t *testing.T) {
+func TestConnectReturnsNilForNonAMQPConnection(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
 
-	// Test with stubConnection (not realConnection)
+	// Test with stubConnection (not *amqp.Connection)
 	oldDial := getAmqpDialFunc()
 	defer setAmqpDialFunc(oldDial)
 
@@ -1646,9 +1646,9 @@ func TestConnectRealConnectionWrapping(t *testing.T) {
 		t.Fatalf("expected successful connection, got: %v", err)
 	}
 
-	// Should return nil since stubConn is not realConnection
+	// Should return nil since stubConn is not *amqp.Connection
 	if conn != nil {
-		t.Fatalf("expected nil connection for non-realConnection, got: %v", conn)
+		t.Fatalf("expected nil connection for non-*amqp.Connection, got: %v", conn)
 	}
 
 	// Verify connection was stored

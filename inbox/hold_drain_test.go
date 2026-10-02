@@ -499,12 +499,31 @@ func TestBackoffForDoublesFromTheDrainInterval(t *testing.T) {
 		// must saturate at the cap rather than wrap into a nonsense duration.
 		{"an_attempt_count_that_overflows_the_shift_is_capped", 64, time.Minute},
 		{"and_one_far_past_it", 4000, time.Minute},
-		// Guards the clamp's other end: nothing below the first attempt shifts by a
-		// negative count, which would panic.
+		// Guards the clamp: nothing below the first attempt reaches Saturating as a
+		// negative shift, which would wait nothing.
 		{"a_zero_attempt_count_waits_one_interval", 0, 5 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, drain.backoffFor(tc.attempts))
+		})
+	}
+}
+
+// TestBackoffForSaturatesAWrappingShiftAtTheCap pins the cap for an interval
+// whose overflowing shift wraps to a small positive value instead of going
+// non-positive: 2^40+1ns shifted 36 wraps to 2^36ns (~1m8s), not the cap.
+func TestBackoffForSaturatesAWrappingShiftAtTheCap(t *testing.T) {
+	drain := &HoldDrain{cfg: config.InboxHoldConfig{DrainInterval: 1<<40 + 1, MaxBackoff: 168 * time.Hour}}
+
+	for _, tc := range []struct {
+		name     string
+		attempts int
+	}{
+		{"shift_36_wraps_positive", 37},
+		{"shift_40_wraps_positive", 41},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, 168*time.Hour, drain.backoffFor(tc.attempts))
 		})
 	}
 }

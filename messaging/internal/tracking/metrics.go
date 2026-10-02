@@ -222,8 +222,7 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 
 	// Record duration histogram (in seconds)
 	if amqpOperationDuration != nil {
-		durationSeconds := durationToSeconds(duration)
-		amqpOperationDuration.Record(ctx, durationSeconds, metric.WithAttributes(commonAttrs...))
+		amqpOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(commonAttrs...))
 	}
 
 	// Record sent messages counter (only on success)
@@ -315,7 +314,7 @@ func RecordConsume(ctx context.Context, attrs ConsumeAttributes, duration time.D
 	attrSet := metric.WithAttributes(attrs.slice(err)...)
 
 	if amqpOperationDuration != nil && duration > 0 {
-		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)
+		amqpOperationDuration.Record(ctx, duration.Seconds(), attrSet)
 	}
 	if amqpMessagesConsumed != nil {
 		amqpMessagesConsumed.Add(ctx, 1, attrSet)
@@ -337,7 +336,7 @@ func RecordStreamPublish(ctx context.Context, streamName string, duration time.D
 	attrSet := metric.WithAttributes(streamPublishAttributes(streamName, err)...)
 
 	if amqpOperationDuration != nil && duration > 0 {
-		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)
+		amqpOperationDuration.Record(ctx, duration.Seconds(), attrSet)
 	}
 	if amqpMessagesSent != nil && err == nil {
 		amqpMessagesSent.Add(ctx, 1, attrSet)

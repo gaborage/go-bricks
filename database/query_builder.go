@@ -6,14 +6,13 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 )
 
-// QueryBuilder provides vendor-specific SQL query building.
-// This is a compatibility wrapper around the internal implementation.
+// QueryBuilder provides vendor-specific SQL query building over the embedded
+// internal builder.
 type QueryBuilder struct {
 	*builder.QueryBuilder
 }
 
 // NewQueryBuilder creates a new query builder for the specified database vendor.
-// This function maintains backward compatibility while using the improved internal implementation.
 func NewQueryBuilder(vendor string) *QueryBuilder {
 	return &QueryBuilder{
 		QueryBuilder: builder.NewQueryBuilder(vendor),
@@ -26,24 +25,6 @@ func (qb *QueryBuilder) Select(columns ...any) types.SelectQueryBuilder {
 	return qb.QueryBuilder.Select(columns...)
 }
 
-// Filter returns a FilterFactory for creating composable WHERE clause filters.
-// This method overrides the embedded builder to provide the correct interface.
-func (qb *QueryBuilder) Filter() types.FilterFactory {
-	return qb.QueryBuilder.Filter()
-}
-
-// Update creates an UPDATE query builder that returns the interface type.
-// This method overrides the embedded builder to provide the correct interface.
-func (qb *QueryBuilder) Update(table string) types.UpdateQueryBuilder {
-	return qb.QueryBuilder.Update(table)
-}
-
-// Delete creates a DELETE query builder that returns the interface type.
-// This method overrides the embedded builder to provide the correct interface.
-func (qb *QueryBuilder) Delete(table string) types.DeleteQueryBuilder {
-	return qb.QueryBuilder.Delete(table)
-}
-
 // Interface compliance check: ensure *QueryBuilder implements types.QueryBuilderInterface
 var _ types.QueryBuilderInterface = (*QueryBuilder)(nil)
 
@@ -51,6 +32,7 @@ var _ types.QueryBuilderInterface = (*QueryBuilder)(nil)
 // and are available through struct embedding:
 //
 // - Vendor() string
+// - Filter() types.FilterFactory
 // - JoinFilter() types.JoinFilterFactory
 // - Expr(sql string, alias ...string) (types.RawExpression, error)
 // - MustExpr(sql string, alias ...string) types.RawExpression
@@ -59,6 +41,8 @@ var _ types.QueryBuilderInterface = (*QueryBuilder)(nil)
 // - InsertWithColumns(table string, columns ...string) types.InsertQueryBuilder
 // - InsertStruct(table string, instance any) types.InsertQueryBuilder
 // - InsertFields(table string, instance any, fields ...string) types.InsertQueryBuilder
+// - Update(table string) types.UpdateQueryBuilder
+// - Delete(table string) types.DeleteQueryBuilder
 // - BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
 // - BuildRegex(column, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer
 // - BuildJSONContains(column string, value any) squirrel.Sqlizer

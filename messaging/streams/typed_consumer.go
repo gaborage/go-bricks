@@ -26,7 +26,7 @@ type typedConsumer[T any] struct {
 func newTypedConsumer[T any](name string, fn func(context.Context, T, *Message) error) *typedConsumer[T] {
 	return &typedConsumer[T]{
 		name:    name,
-		decoder: payloaderr.NewDecoder[T](payloaderr.JSONCodec{}),
+		decoder: payloaderr.NewDecoder[T](),
 		fn:      fn,
 	}
 }

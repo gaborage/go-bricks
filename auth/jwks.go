@@ -367,7 +367,10 @@ func (r *jwksResolver) usableLocked() bool {
 	return age >= 0 && age <= r.staleCeiling
 }
 
-// keySetObservation implements keySetObserver for the key-count and age gauges.
+// keySetObservation is what the key-count and age gauges read: the current key
+// count and the age of the key set, in seconds. ok is false before the first
+// successful fetch, which suppresses both observations rather than reporting a
+// zero age.
 func (r *jwksResolver) keySetObservation() (keys int64, ageSeconds float64, ok bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

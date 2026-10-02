@@ -143,7 +143,7 @@ func TestPayloadErrorMessageComposition(t *testing.T) {
 // the field-path gate comes from the destination type the body was decoded into,
 // so a test cannot pass by choosing a friendlier gate than production would.
 func renderDecodeError(cause error, dest any) string {
-	summary := payloaderr.JSONCodec{}.Summarize(cause, saferender.FieldPathIsSchema(reflect.TypeOf(dest)))
+	summary := saferender.JSONDecodeSummary(cause, saferender.FieldPathIsSchema(reflect.TypeOf(dest)))
 
 	return newPayloadError(orderEventType, payloaderr.NewDecode(cause, summary)).Error()
 }

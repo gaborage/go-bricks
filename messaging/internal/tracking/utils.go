@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // Canonical error.type attribute values for well-known context errors.
@@ -51,10 +50,4 @@ func extractErrorType(err error) string {
 	default:
 		return fmt.Sprintf("%T", err)
 	}
-}
-
-// durationToSeconds converts time.Duration to seconds (float64) per OTel requirement.
-// OpenTelemetry duration metrics must use seconds as the unit.
-func durationToSeconds(d time.Duration) float64 {
-	return float64(d.Nanoseconds()) / 1e9
 }

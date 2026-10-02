@@ -733,7 +733,7 @@ func TestNewTypedHandlerWithMetaNilHeaders(t *testing.T) {
 	assert.Nil(t, gotMeta.Headers())
 }
 
-func TestJSONCodecSummarize(t *testing.T) {
+func TestJSONDecodeSummaryKeepsPayloadOut(t *testing.T) {
 	typeErr := &json.UnmarshalTypeError{
 		Value:  "number " + numericMarker,
 		Type:   reflect.TypeOf(int64(0)),
@@ -808,7 +808,7 @@ func TestJSONCodecSummarize(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := payloaderr.JSONCodec{}.Summarize(tc.err, tc.fieldPathIsSchema)
+			got := saferender.JSONDecodeSummary(tc.err, tc.fieldPathIsSchema)
 			assert.Equal(t, tc.want, got)
 			if tc.notContains != "" {
 				assert.NotContains(t, got, tc.notContains)
