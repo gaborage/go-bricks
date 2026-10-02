@@ -127,7 +127,7 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 	@if [ "$(LINT_CLEAN)" = "1" ]; then \
 		GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) cache clean; \
 	fi
-	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m
+	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=10m
 	@$(MAKE) --no-print-directory lint-race
 
 # The race side of the race/!race pair, which .golangci.yml cannot declare without
@@ -153,7 +153,7 @@ lint-race: ## Lint the race side of the race/!race pair (own target so CI calls 
 		gcl="go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)"; src="go run (pinned source)"; \
 	fi; \
 	echo "lint-race: via $$src, (integration,race) over $$pkgs"; \
-	GOWORK=off $$gcl run --timeout=5m --build-tags=integration,race $$pkgs
+	GOWORK=off $$gcl run --timeout=10m --build-tags=integration,race $$pkgs
 
 # No globs on the command line: .markdownlint-cli2.jsonc owns both `globs` and
 # `ignores`, so the file set has one definition that this target, CI, and an

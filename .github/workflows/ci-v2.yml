@@ -17,6 +17,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Each job's timeout-minutes is at least 2.5x its longest run, failures
+# included, so it cancels only a hang, which would otherwise hold a runner for
+# GitHub's 360-minute default. A timed-out need fails ci-ok.
 jobs:
   # ============================================================================
   # Job 1: Detect which components changed
@@ -26,6 +29,7 @@ jobs:
       contents: read
     if: github.event_name != 'schedule'
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     outputs:
       # yamllint: valid GitHub Actions context expression
       framework: ${{ steps.filter.outputs.framework }}
@@ -202,6 +206,7 @@ jobs:
     # runner image, so jobs alternating images miss it. matrix.os stays
     # ubuntu-latest to keep the check names (and migrate-tool-build's guards).
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
 
     # framework-test-windows aliases the three anchored steps, so an edit to
     # one of them here changes both jobs (GitHub has no `<<:` merge keys).
@@ -308,6 +313,7 @@ jobs:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
 
     steps:
       - *fw-checkout
@@ -442,6 +448,7 @@ jobs:
     # Gates on `code` so integration coverage is part of every merged report.
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 45
     env:
       # Provides the real Flyway binary the integration test runs against; the
       # migration/testdata/flyway files are captured JSON-output samples used by
@@ -469,8 +476,8 @@ jobs:
       # Pulls overlap the setup steps below; the wait step before the tests
       # joins them. Fail-closed (#993) now rests on that wait failing when this
       # step fails, so never add continue-on-error here. Wait steps have no
-      # timeout and this job sets none, so timeout-minutes bounds a hung pull
-      # (observed pulls finish in under 30s).
+      # timeout, so timeout-minutes bounds a hung pull (observed pulls finish
+      # in under 30s).
       - name: Pre-pull container images
         id: prepull
         background: true
@@ -633,6 +640,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ubuntu-26.04
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v7
@@ -888,6 +896,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     defaults: &migrate-tool-defaults
       run:
         working-directory: tools/migration
@@ -991,6 +1000,7 @@ jobs:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     defaults: *migrate-tool-defaults
 
     steps: *migrate-tool-test-steps
@@ -1005,6 +1015,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
       fail-fast: false
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 15 || 25 }}
     defaults:
       run:
         working-directory: tools/migration
@@ -1091,7 +1102,7 @@ jobs:
         with:
           version: v2.14.0
           working-directory: tools/migration
-          args: --timeout=5m
+          args: --timeout=10m
           skip-save-cache: ${{ github.event_name != 'push' }}
 
       # Reuses the binary the linux pass put on PATH, and its lint cache on disk.
@@ -1103,7 +1114,7 @@ jobs:
         with:
           install-mode: none
           working-directory: tools/migration
-          args: --timeout=5m
+          args: --timeout=10m
           skip-cache: true
 
       # The race side of the race/!race pair (#1757; rationale in wiki/linting.md).
@@ -1127,6 +1138,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.migrate_tool == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: tools/migration
@@ -1218,6 +1230,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v7
@@ -1256,7 +1269,7 @@ jobs:
           GOWORK: "off"
         with:
           version: v2.14.0
-          args: --timeout=5m
+          args: --timeout=10m
           skip-save-cache: ${{ github.event_name != 'push' }}
 
       # Reuses the binary the linux pass put on PATH, and its lint cache on disk.
@@ -1267,7 +1280,7 @@ jobs:
           GOOS: windows
         with:
           install-mode: none
-          args: --timeout=5m
+          args: --timeout=10m
           skip-cache: true
 
       # internal/racedetect/race.go is read by this pass and no other (#1757).
@@ -1294,6 +1307,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.framework == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v7
@@ -1327,6 +1341,7 @@ jobs:
       contents: read
     if: github.event_name == 'schedule'
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1360,6 +1375,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v7
@@ -1414,6 +1430,7 @@ jobs:
       contents: read
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v7
@@ -1443,6 +1460,7 @@ jobs:
       (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
       (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
     # No concurrency group here: a cancelled scan fails ci-ok, so nothing may
     # cancel one. The workflow-level group already leaves one live run per PR,
     # and scans of overlapping main pushes may run side by side (the scan only
@@ -1756,6 +1774,7 @@ jobs:
       - llms-version
       - sonarcloud
     runs-on: ubuntu-26.04
+    timeout-minutes: 5
     steps:
       - name: Verify all required jobs passed
         env:
