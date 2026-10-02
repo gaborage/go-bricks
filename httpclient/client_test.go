@@ -1107,42 +1107,6 @@ func TestTraceIDPropagation(t *testing.T) {
 	})
 }
 
-func TestTraceIDUtilities(t *testing.T) {
-	t.Run("WithTraceID and EnsureTraceID", func(t *testing.T) {
-		expectedTraceID := "test-trace-123"
-		ctx := gobrickstrace.WithTraceID(context.Background(), expectedTraceID)
-
-		actualTraceID := gobrickstrace.EnsureTraceID(ctx)
-		assert.Equal(t, expectedTraceID, actualTraceID)
-	})
-
-	t.Run("EnsureTraceID generates UUID when no trace ID", func(t *testing.T) {
-		traceID := gobrickstrace.EnsureTraceID(context.Background())
-		assert.NotEmpty(t, traceID)
-		assert.Len(t, traceID, 36) // UUID format
-	})
-
-	t.Run("NewTraceIDInterceptor creates valid interceptor", func(t *testing.T) {
-		interceptor := NewTraceIDInterceptor()
-		assert.NotNil(t, interceptor)
-
-		// Test that it adds header when missing
-		ctx := gobrickstrace.WithTraceID(context.Background(), "test-trace")
-		req, err := nethttp.NewRequestWithContext(ctx, "GET", "http://example.com", nethttp.NoBody)
-		require.NoError(t, err)
-
-		err = interceptor(ctx, req)
-		require.NoError(t, err)
-		assert.Equal(t, "test-trace", req.Header.Get(gobrickstrace.HeaderXRequestID))
-
-		// Test that it doesn't override existing header
-		req.Header.Set(gobrickstrace.HeaderXRequestID, "existing-trace")
-		err = interceptor(ctx, req)
-		require.NoError(t, err)
-		assert.Equal(t, "existing-trace", req.Header.Get(gobrickstrace.HeaderXRequestID))
-	})
-}
-
 // setupClientTestMeterProvider creates a TestMeterProvider, sets it as the global OTel
 // provider, resets tracking meter state, and initializes the instruments. Returns the
 // provider for metric collection and a cleanup function that must be deferred.

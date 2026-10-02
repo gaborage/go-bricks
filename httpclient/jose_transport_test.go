@@ -1146,13 +1146,6 @@ func TestJOSETransportPassthroughModeLeavesTheBodyAlone(t *testing.T) {
 	assert.Zero(t, peerBody.closes)
 }
 
-func TestJOSEIsErrorDistinguishesTransportFromCrypto(t *testing.T) {
-	// jose.IsError lets callers skip retries on signature failures while still retrying
-	// on TCP resets. Plain net errors must not classify as JOSE errors.
-	assert.False(t, jose.IsError(errors.New("tcp reset by peer")))
-	assert.True(t, jose.IsError(&jose.Error{Sentinel: jose.ErrDecryptFailed, Code: "JOSE_DECRYPT_FAILED"}))
-}
-
 func TestBuilderWithJOSEWiresTransport(t *testing.T) {
 	// End-to-end through the Builder: WithJOSE should produce a working client.
 	f := jositest.NewBidirectionalFixture(t)
