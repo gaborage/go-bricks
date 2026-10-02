@@ -80,6 +80,17 @@ jobs:
           family: ${{ matrix.cache-family }}
           writer: ${{ matrix.cache-writer }}
 
+      # mt-build's readers also run GOOS=windows gosec and golangci passes,
+      # which compile every dependency for Windows unless the entry holds it.
+      # Before Initialize, so CodeQL never traces this build.
+      - name: Warm the Windows build cache
+        if: steps.gocache.outputs.save == 'true'
+        working-directory: ${{ matrix.directory }}
+        env:
+          GOWORK: 'off'
+          GOOS: windows
+        run: go build ./...
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
