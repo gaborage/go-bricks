@@ -72,8 +72,9 @@ constants in `testing` stay.
 
 ## Consequences
 
-- **Breaking, compile-caught but for one case.** Every affected site fails to build except the
-  fixture type assertion below. `go vet ./...` also names the
+- **Breaking, compile-caught but for two cases.** Every affected site fails to build except a
+  type assertion to `*mocks.MockMessagingClient` and a testify expectation keyed `"Consume"`
+  (`[C71.4]`). `go vet ./...` also names the
   sites in `_test.go` files, where the trace helpers, mocks and test constants mostly live. A file
   that already imports `go.opentelemetry.io/otel/trace` must alias one of the two `trace` packages.
 - `trace` is the only package exporting `WithTraceID` and `EnsureTraceID`, so the `[C60.8]` grep

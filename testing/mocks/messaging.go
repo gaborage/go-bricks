@@ -8,7 +8,8 @@ import (
 )
 
 // MockMessagingClient provides a testify-based mock implementation of the messaging.Client interface.
-// It includes message simulation capabilities for testing message flows.
+// Its SimulateMessage* helpers feed the channels returned by (*MockAMQPClient).ConsumeFromQueue,
+// which embeds this type.
 //
 // Example usage:
 //
@@ -22,13 +23,14 @@ type MockMessagingClient struct {
 	mock.Mock
 
 	// Message simulation
+	// read back via (*MockAMQPClient).ConsumeFromQueue
 	messageChannels map[string]chan amqp.Delivery
 	mu              sync.RWMutex
 	isReady         bool
 	closed          bool
 }
 
-// NewMockMessagingClient creates a new mock messaging client with message simulation capabilities
+// NewMockMessagingClient creates a new mock messaging client
 func NewMockMessagingClient() *MockMessagingClient {
 	return &MockMessagingClient{
 		messageChannels: make(map[string]chan amqp.Delivery),

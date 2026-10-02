@@ -10,12 +10,11 @@ import (
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 )
 
-// Client defines the interface for messaging operations.
-// It carries the lifecycle every client shares (Close, IsReady) while hiding
-// connection management, retries, and protocol-specific details; consuming
-// goes through AMQPClient.ConsumeFromQueue. It carries
-// no publish method: a module publishes through the Publisher[T] handle that
-// DeclareTypedPublisher returns, never by handing bytes to the client (ADR-096).
+// Client defines the lifecycle every messaging client shares (Close, IsReady), hiding connection
+// management, retries, and protocol-specific details. Consuming goes through
+// AMQPClient.ConsumeFromQueue. It has no publish method: a module publishes through the
+// Publisher[T] handle that DeclareTypedPublisher returns, never by handing bytes to the client
+// (ADR-096).
 type Client interface {
 	// Close gracefully shuts down the messaging client.
 	// It should clean up all connections and resources.
