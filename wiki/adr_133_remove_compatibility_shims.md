@@ -8,9 +8,9 @@
 
 The CLAUDE.md manifesto's Backward Compatibility principle says GoBricks does not keep
 compatibility layers, fallbacks or migration shims in its own API. Old paths are removed and
-the break is documented (ADR + `wiki/migrations.md`). A sweep of the exported surface on
-2026-10-01 found five places that break this rule. Each one describes itself as a
-compatibility layer in its own doc comment:
+the break is documented (ADR + `wiki/migrations.md`). This ADR removes five exported names
+that break this rule, found by a sweep of the exported surface on 2026-10-01. Each one
+describes itself as a compatibility layer in its own doc comment:
 
 1. **`logger.WithAMQPCounter` / `logger.WithDBCounter`:** "Retained for backward
    compatibility". Both bodies are `return WithRequestCounters(ctx)`. Production code seeds
@@ -69,7 +69,7 @@ a `database/types` import onto every caller. That is a cost, not a shim being re
   migrated. A deprecation notice is a compatibility layer with a reminder attached, and the
   manifesto rules out the layer itself.
 - **Keep the names until a major version.** Rejected. GoBricks is pre-1.0, and the manifesto
-  puts breaking changes in minors and documents each one in an ADR and a migrations atom. A
+  accepts a justified breaking change that is documented in an ADR and a migrations atom. A
   deferral would keep the two-spelling surface with no date to remove it.
 - **Unexport instead of delete.** Rejected. None of the five has an in-package caller that
   needs a private spelling. The surviving name already does the job.
@@ -77,7 +77,8 @@ a `database/types` import onto every caller. That is a cost, not a shim being re
 ## Consequences
 
 - Compile break for any consumer that calls a removed name. `go build ./... && go vet ./...`
-  finds every call site, `_test.go` files included. Each replacement is a one-token rename or
+  finds every call site, `_test.go` files included, and `go vet -tags=integration ./...` finds
+  the ones in integration-tagged files. Each replacement is a one-token rename or
   an options literal (atoms in E71).
 - A consumer that called `MessagingClientFactory(ct, n)` and switches to
   `MessagingClientFactoryWithOptions` with only those two fields gets exactly what it had

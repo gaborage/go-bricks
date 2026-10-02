@@ -480,7 +480,9 @@ framework middleware-constructor class (call sites unchanged), `SkipperFunc`, an
 **Breaking:** all six echo leak classes are removed from the consumer surface; custom
 middleware moves to the flat shape and `HandlerContext.Echo` field accesses move to accessors. The
 typed handler hot path stays echo-direct via an unexported `addEcho` seam (ADR-026
-preserved); only middleware routes pay a bounded +1 baton alloc.
+preserved); only middleware routes pay a bounded +1 baton alloc. Amended by ADR-133:
+`NewHandlerContextForTest` takes `...TestContextOption`, and `NewHandlerContextForTestWithOptions`
+is removed.
 
 **Key Benefits:** No `echo.*` symbol on the consumer path, downstream services decoupled from Echo's version, security improvement (no spoofable `RealIP()` accessor), uniform flat middleware shape
 
@@ -2192,13 +2194,12 @@ instrumentation and `Recover` cannot put its value on a span (ADR-081). See
 **Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** `logger.WithAMQPCounter`/`WithDBCounter`, `FactoryResolver.MessagingClientFactory`, `RouteRegistry.AddRoute`/`RoutesByModule`, `server.NewHandlerContextForTestWithOptions` and the `postgresql`/`oracle` `Statement`/`Transaction` aliases are removed
 
 Five exported names described themselves as compatibility layers ("Retained for backward
-compatibility", "kept for apidiff", "alias … for consistency with test expectations"), which
-the manifesto's Backward Compatibility principle forbids. Each one forwarded to a name that
-stays, and `MessagingClientFactory(ct, n)` forwarded less than that name does: it silently
+compatibility", "kept byte-identical for apidiff compatibility", "for consistency with test
+expectations"), which the manifesto's Backward Compatibility principle forbids. Each one
+forwarded to a name that stays, and `MessagingClientFactory(ct, n)` forwarded less than that name does: it silently
 dropped `ReadyTimeout` and the reconnect delays. They are deleted, and
 `NewHandlerContextForTest` takes the variadic `...TestContextOption` signature, so every
-existing call compiles unchanged. `database.PostgreSQL`/`database.Oracle` stay: they are
-documented consumer API, not shims. See [migrations.md](migrations.md) `[C71.1]`–`[C71.5]`.
+existing call compiles unchanged. See [migrations.md](migrations.md) `[C71.1]`–`[C71.5]`.
 
 **Key Benefits:** one spelling per operation; no deprecated door that does less than its successor.
 
