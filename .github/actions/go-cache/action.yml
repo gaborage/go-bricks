@@ -1,0 +1,94 @@
+# Restore only. A family's writer saves, on push to main, when the save output
+# is 'true'; on push a writer restores the exact key only, so a saving run
+# restored nothing and its entry is this run's own.
+#
+# The writer rule: a saved entry holds build outputs and modules only, never a
+# test result or a vet verdict. A writer therefore saves before any go test or
+# go vet in its job; or first compiles with `go test -c -vet=off <the test
+# step's build flags> -o /dev/null` (NUL on Windows), then saves, then tests;
+# or points its tests' GOCACHE elsewhere on saving runs. `go clean -testcache`
+# is no substitute: cmd/go's cached vet verdicts survive it.
+name: Go cache
+description: >-
+  Restores one cache family's Go module and build cache. The family's writer
+  saves with actions/cache/save from the paths and primary-key outputs when
+  the save output is 'true'.
+
+inputs:
+  family:
+    description: >-
+      Cache family; it also picks the dependency files the key hashes:
+      fw-build and fw-light go.sum and go.mod; fw-integ and mt-test the
+      framework and tools/migration go.sum and go.mod plus go.work and
+      go.work.sum; mt-build tools/migration/go.sum and go.mod.
+    required: true
+  writer:
+    description: >-
+      'true' only in the family's writer. On push a writer restores the exact
+      key only, so its save never re-saves an older generation.
+    required: false
+    default: 'false'
+
+outputs:
+  paths:
+    description: GOMODCACHE and GOCACHE, newline-separated.
+    value: ${{ steps.env.outputs.paths }}
+  primary-key:
+    description: The exact key the writer saves under.
+    value: ${{ steps.env.outputs.key }}
+  save:
+    description: "'true' only for a writer on push whose exact key missed."
+    value: ${{ steps.env.outputs.push-writer == 'true' && steps.restore.outputs.cache-hit != 'true' }}
+
+runs:
+  using: composite
+  steps:
+    - id: env
+      shell: bash
+      env:
+        FAMILY: ${{ inputs.family }}
+        WRITER: ${{ inputs.writer }}
+        # Each branch tests its own family, so an unknown family or a branch
+        # whose files are all missing ('' is falsy) ends on '' for the guard.
+        HASH: >-
+          ${{
+          (inputs.family == 'fw-build' || inputs.family == 'fw-light') && hashFiles('go.sum', 'go.mod')
+          || (inputs.family == 'fw-integ' || inputs.family == 'mt-test') && hashFiles('go.sum', 'go.mod', 'tools/migration/go.sum', 'tools/migration/go.mod', 'go.work', 'go.work.sum')
+          || inputs.family == 'mt-build' && hashFiles('tools/migration/go.sum', 'tools/migration/go.mod')
+          || ''
+          }}
+      run: |
+        set -euo pipefail
+        if ! [[ "$HASH" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "::error::go-cache: no dependency hash for family '$FAMILY' (unknown family or no dependency file found)"
+          exit 1
+        fi
+        gover="$(go env GOVERSION)"
+        gomodcache="$(go env GOMODCACHE)"
+        gocache="$(go env GOCACHE)"
+        if [ -z "$gover" ] || [ -z "$gomodcache" ] || [ -z "$gocache" ]; then
+          echo "::error::go-cache: go env returned an empty GOVERSION, GOMODCACHE or GOCACHE"
+          exit 1
+        fi
+        push_writer=false
+        if [ "$WRITER" = true ] && [ "$GITHUB_EVENT_NAME" = push ]; then
+          push_writer=true
+        fi
+        prefix="gocache-${FAMILY}-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS:-none}-${gover}-"
+        {
+          echo "push-writer=$push_writer"
+          echo "prefix=$prefix"
+          echo "key=${prefix}${HASH}"
+          echo "paths<<GO_CACHE_PATHS_EOF"
+          echo "$gomodcache"
+          echo "$gocache"
+          echo "GO_CACHE_PATHS_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.env.outputs.paths }}
+        key: ${{ steps.env.outputs.key }}
+        # The non-empty branch comes first: `cond && '' || x` always yields x.
+        restore-keys: ${{ steps.env.outputs.push-writer != 'true' && steps.env.outputs.prefix || '' }}
