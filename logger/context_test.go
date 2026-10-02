@@ -11,7 +11,7 @@ import (
 
 type testContextKey string
 
-func TestWithAMQPCounter(t *testing.T) {
+func TestWithRequestCounters(t *testing.T) {
 	existingKey := testContextKey("existing_key")
 
 	tests := []struct { // NOSONAR: Standard Go table-driven test pattern
@@ -40,54 +40,13 @@ func TestWithAMQPCounter(t *testing.T) {
 			if tt.ctx == nil {
 				assert.Nil(t, ctx)
 				assert.Equal(t, int64(0), GetAMQPCounter(ctx))
-				return
-			}
-
-			// Verify counter is initialized to 0
-			assert.Equal(t, int64(0), GetAMQPCounter(ctx))
-			assert.Equal(t, int64(0), GetAMQPElapsed(ctx))
-
-			// Verify existing context values are preserved
-			if tt.name == "with_existing_context_values" {
-				assert.Equal(t, "existing_value", ctx.Value(existingKey))
-			}
-		})
-	}
-}
-
-func TestWithDBCounter(t *testing.T) {
-	existingKey := testContextKey("existing_key")
-
-	tests := []struct { // NOSONAR: Standard Go table-driven test pattern
-		name string
-		ctx  context.Context
-	}{
-		{
-			name: "with_background_context",
-			ctx:  context.Background(),
-		},
-		{
-			name: "with_existing_context_values",
-			ctx:  context.WithValue(context.Background(), existingKey, "existing_value"),
-		},
-		{
-			name: "with_nil_context",
-			ctx:  nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Nil-safe: WithRequestCounters(nil) returns nil without panicking, and the
-			// accessors report 0 on a nil context.
-			ctx := WithRequestCounters(tt.ctx)
-			if tt.ctx == nil {
-				assert.Nil(t, ctx)
 				assert.Equal(t, int64(0), GetDBCounter(ctx))
 				return
 			}
 
-			// Verify counter is initialized to 0
+			// Verify all four counters are initialized to 0
+			assert.Equal(t, int64(0), GetAMQPCounter(ctx))
+			assert.Equal(t, int64(0), GetAMQPElapsed(ctx))
 			assert.Equal(t, int64(0), GetDBCounter(ctx))
 			assert.Equal(t, int64(0), GetDBElapsed(ctx))
 
@@ -176,7 +135,6 @@ func TestDBElapsedOperations(t *testing.T) {
 func TestCombinedCounters(t *testing.T) {
 	// Test that both AMQP and DB counters can coexist
 	ctx := WithRequestCounters(context.Background())
-	ctx = WithRequestCounters(ctx)
 
 	// Verify all counters are initialized
 	assert.Equal(t, int64(0), GetAMQPCounter(ctx))
@@ -287,7 +245,6 @@ func TestConcurrentDBOperations(t *testing.T) {
 
 func TestConcurrentMixedOperations(t *testing.T) {
 	ctx := WithRequestCounters(context.Background())
-	ctx = WithRequestCounters(ctx)
 
 	numGoroutines := 50
 	numOperationsPerGoroutine := 25
@@ -348,7 +305,6 @@ func TestContextKeyUniqueness(t *testing.T) {
 
 func TestLargeElapsedValues(t *testing.T) {
 	ctx := WithRequestCounters(context.Background())
-	ctx = WithRequestCounters(ctx)
 
 	// Test with very large values (simulating long-running operations)
 	largeValue := int64(9223372036854775807) // Max int64 value

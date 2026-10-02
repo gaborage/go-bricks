@@ -915,7 +915,6 @@ func TestExtractOperationalMetricsWithCounters(t *testing.T) {
 
 	// Initialize counters using logger package functions
 	ctx = logger.WithRequestCounters(ctx)
-	ctx = logger.WithRequestCounters(ctx)
 
 	// Increment counters
 	logger.IncrementAMQPCounter(ctx)
@@ -957,7 +956,7 @@ func TestExtractOperationalMetricsNoCounters(t *testing.T) {
 func TestExtractOperationalMetricsPartialCounters(t *testing.T) {
 	ctx := context.Background()
 
-	// Only initialize AMQP counter (not DB)
+	// Seed the counters; record only AMQP activity
 	ctx = logger.WithRequestCounters(ctx)
 
 	// Increment AMQP counter
@@ -969,8 +968,8 @@ func TestExtractOperationalMetricsPartialCounters(t *testing.T) {
 
 	assert.Equal(t, int64(10), metrics.AMQPPublished, "AMQP count should be set")
 	assert.Equal(t, int64(0), metrics.AMQPElapsed, "AMQP elapsed should be zero")
-	assert.Equal(t, int64(0), metrics.DBQueries, "DB queries should be zero (not initialized)")
-	assert.Equal(t, int64(0), metrics.DBElapsed, "DB elapsed should be zero (not initialized)")
+	assert.Equal(t, int64(0), metrics.DBQueries, "DB queries should be zero (no DB activity)")
+	assert.Equal(t, int64(0), metrics.DBElapsed, "DB elapsed should be zero (no DB activity)")
 }
 
 // TestExtractTenantIDPresent verifies extraction when tenant exists in context.

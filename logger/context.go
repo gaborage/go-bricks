@@ -45,8 +45,8 @@ func countersFromContext(ctx context.Context) *requestCounters {
 // WithRequestCounters attaches the shared per-request counters struct (AMQP and
 // DB operation counts and elapsed times) exactly once. It is idempotent — a second
 // call returns the context unchanged, never resetting recorded values — and
-// nil-safe (a nil context is returned as-is). This is the single seeder; a
-// context seeded once exposes all four counters.
+// nil-safe (a nil context is returned as-is). A seeded context exposes all four
+// counters.
 func WithRequestCounters(ctx context.Context) context.Context {
 	if ctx == nil || countersFromContext(ctx) != nil {
 		return ctx

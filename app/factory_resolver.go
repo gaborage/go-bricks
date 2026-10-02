@@ -70,14 +70,13 @@ type MessagingClientFactoryOptions struct {
 // bootstrap wiring (CreateMessagingManager) uses it so every messaging.reconnect.*
 // client knob reaches the client.
 //
-// A custom factory takes precedence: if
-// Options.MessagingClientFactory is set it owns construction and receives only
-// (url, log) — NO field of opts applies to it, so none of the messaging.reconnect.*
-// config (timeouts, attempts, and the four reconnect delays) reaches it. Such a
-// factory owns construction outright: whatever timeouts, retry bound, reconnect
-// delays and app id its client ends up with are the factory's own, not the
-// framework's. In particular it never reaches WithAppName, so its clients publish
-// no app_id unless the factory sets one itself.
+// A custom Options.MessagingClientFactory takes precedence and owns construction
+// outright: it receives only (url, log) — NO field of opts applies to it, so none of
+// the messaging.reconnect.* config (timeouts, attempts, and the four reconnect delays)
+// reaches it. Whatever timeouts, retry bound, reconnect delays and app id its client
+// ends up with are the factory's own, not the framework's. In particular it never
+// reaches WithAppName, so its clients publish no app_id unless the factory sets one
+// itself.
 func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {

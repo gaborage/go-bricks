@@ -2380,13 +2380,13 @@ func TestHandlerContextRouteTemplate(t *testing.T) {
 	})
 }
 
-// TestNewHandlerContextForTestWithOptionsWithRouteTemplate verifies the WithRouteTemplate
+// TestNewHandlerContextForTestWithRouteTemplate verifies the WithRouteTemplate
 // test option seeds RouteTemplate() on an otherwise-unrouted synthetic context (the gap
 // from issue #639), that it reads back through the real public getter, and that it composes
 // with SetPathParams on one context. It exercises only exported symbols — the exact surface
 // an external consumer reaches. (The zero-option / unrouted-empty case is covered by
 // TestHandlerContextRouteTemplate's empty_on_unrouted_context subtest.)
-func TestNewHandlerContextForTestWithOptionsWithRouteTemplate(t *testing.T) {
+func TestNewHandlerContextForTestWithRouteTemplate(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	t.Run("option_seeds_route_template", func(t *testing.T) {

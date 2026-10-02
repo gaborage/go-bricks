@@ -139,43 +139,28 @@ func TestFactoryResolverHasCustomFactories(t *testing.T) {
 }
 
 func TestFactoryResolverMessagingClientFactory(t *testing.T) {
-	t.Run("default factory builds an AMQP client", func(t *testing.T) {
-		resolver := NewFactoryResolver(nil)
-		factory := resolver.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
-			ConnectionTimeout:  7 * time.Second,
-			MaxPublishAttempts: 5,
-		})
-		assert.NotNil(t, factory)
+	resolver := NewFactoryResolver(nil)
 
-		// Port 1 refuses immediately, so the reconnect goroutine fails fast; Close is
-		// non-blocking and signals it to exit. No broker is required for this path.
-		client := factory("amqp://127.0.0.1:1", logger.New("error", true))
-		assert.NotNil(t, client)
-		t.Cleanup(func() { _ = client.Close() })
+	// The options carry ReadyTimeout and the reconnect delays (#662) through to the
+	// client. The app package can't read messaging's private fields, so deep
+	// verification lives in messaging's tests; here we assert construction.
+	factory := resolver.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
+		ConnectionTimeout:  7 * time.Second,
+		MaxPublishAttempts: 5,
+		ReadyTimeout:       9 * time.Second,
+		PublishTimeout:     41 * time.Second,
+		ReconnectDelay:     7 * time.Second,
+		ReconnectMaxDelay:  90 * time.Second,
+		ReinitDelay:        3 * time.Second,
+		ResendDelay:        11 * time.Second,
 	})
+	assert.NotNil(t, factory)
 
-	t.Run("WithOptions carries ReadyTimeout and PublishTimeout", func(t *testing.T) {
-		resolver := NewFactoryResolver(nil)
-
-		// The options carry ReadyTimeout and the reconnect delays (#662)
-		// through to the client. The app package can't read messaging's private fields,
-		// so deep verification lives in messaging's tests; here we assert construction.
-		newFactory := resolver.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
-			ConnectionTimeout:  7 * time.Second,
-			MaxPublishAttempts: 5,
-			ReadyTimeout:       9 * time.Second,
-			PublishTimeout:     41 * time.Second,
-			ReconnectDelay:     7 * time.Second,
-			ReconnectMaxDelay:  90 * time.Second,
-			ReinitDelay:        3 * time.Second,
-			ResendDelay:        11 * time.Second,
-		})
-		assert.NotNil(t, newFactory)
-
-		client := newFactory("amqp://127.0.0.1:1", logger.New("error", true))
-		assert.NotNil(t, client)
-		t.Cleanup(func() { _ = client.Close() })
-	})
+	// Port 1 refuses immediately, so the reconnect goroutine fails fast; Close is
+	// non-blocking and signals it to exit. No broker is required for this path.
+	client := factory("amqp://127.0.0.1:1", logger.New("error", true))
+	assert.NotNil(t, client)
+	t.Cleanup(func() { _ = client.Close() })
 }
 
 // mockCacheInstance is a minimal mock implementation of cache.Cache for testing
