@@ -19,10 +19,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/config"
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/internal/saferender"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // IAPIError defines the interface for API errors with structured information.
@@ -1376,15 +1376,15 @@ func ensureTraceParentHeader(c *echo.Context) {
 	// and with validateRequestID's two seams: an earlier middleware may have
 	// reflected the inbound value verbatim, and an unvouched value already on the
 	// response is the one this function would leave on the wire.
-	if validateTraceParent(resp.Header().Get(gobrickshttp.HeaderTraceParent)) != "" {
+	if validateTraceParent(resp.Header().Get(gobrickstrace.HeaderTraceParent)) != "" {
 		return
 	}
 	// Prefer inbound header
-	if tp := validateTraceParent(c.Request().Header.Get(gobrickshttp.HeaderTraceParent)); tp != "" {
-		resp.Header().Set(gobrickshttp.HeaderTraceParent, tp)
+	if tp := validateTraceParent(c.Request().Header.Get(gobrickstrace.HeaderTraceParent)); tp != "" {
+		resp.Header().Set(gobrickstrace.HeaderTraceParent, tp)
 		return
 	}
-	resp.Header().Set(gobrickshttp.HeaderTraceParent, gobrickshttp.GenerateTraceParent())
+	resp.Header().Set(gobrickstrace.HeaderTraceParent, gobrickstrace.GenerateTraceParent())
 }
 
 // RouteRegistrar abstracts the subset of Echo's routing features that modules need

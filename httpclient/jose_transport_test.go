@@ -21,6 +21,7 @@ import (
 	"github.com/gaborage/go-bricks/jose"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // closeTrackingBody is a bytes.Reader-backed io.ReadCloser that counts Close calls, so
@@ -412,12 +413,12 @@ func TestJOSETransportPlaintextSuccessWarnsOnce(t *testing.T) {
 
 			ctx := context.Background()
 			if tt.ctxRequestID != "" {
-				ctx = httpclient.WithTraceID(ctx, tt.ctxRequestID)
+				ctx = gobrickstrace.WithTraceID(ctx, tt.ctxRequestID)
 			}
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, bytes.NewReader([]byte(`{"x":1}`)))
 			require.NoError(t, err)
 			if tt.requestID != "" {
-				req.Header.Set(httpclient.HeaderXRequestID, tt.requestID)
+				req.Header.Set(gobrickstrace.HeaderXRequestID, tt.requestID)
 			}
 
 			resp, err := transport.RoundTrip(req)
@@ -548,7 +549,7 @@ func TestJOSETransportTamperedResponseFailsClosed(t *testing.T) {
 	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is intentionally nil on this error path; transport closes the underlying body before returning
 	require.Error(t, err)
 	assert.Nil(t, resp, "tampered response must not be returned to the caller")
-	assert.True(t, httpclient.IsJOSEError(err), "error must be identifiable as a JOSE crypto failure")
+	assert.True(t, jose.IsError(err), "error must be identifiable as a JOSE crypto failure")
 }
 
 func TestJOSETransportOutboundOnlyMode(t *testing.T) {
@@ -915,7 +916,7 @@ func TestJOSETransportRFCBodylessButNotNetHTTPBodylessStillUnwraps(t *testing.T)
 
 			resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is intentionally nil on this error path; transport closes the underlying body before returning
 			require.Error(t, err, "%s must not be skipped: net/http does not guarantee it is empty", tc.name)
-			assert.True(t, httpclient.IsJOSEError(err), "expected a JOSE error, got %v", err)
+			assert.True(t, jose.IsError(err), "expected a JOSE error, got %v", err)
 			assert.Nil(t, resp)
 		})
 	}
@@ -966,7 +967,7 @@ func TestJOSETransportEmptyJOSEBodyOnBodyBearingStatusFailsClosed(t *testing.T) 
 
 	resp, err := transport.RoundTrip(req) //nolint:bodyclose // resp is intentionally nil on this error path; transport closes the underlying body before returning
 	require.Error(t, err, "a JOSE-typed 200 carrying no body must not pass through unverified")
-	assert.True(t, httpclient.IsJOSEError(err), "expected a JOSE error, got %v", err)
+	assert.True(t, jose.IsError(err), "expected a JOSE error, got %v", err)
 	assert.Nil(t, resp)
 }
 
@@ -1145,11 +1146,11 @@ func TestJOSETransportPassthroughModeLeavesTheBodyAlone(t *testing.T) {
 	assert.Zero(t, peerBody.closes)
 }
 
-func TestIsJOSEErrorDistinguishesTransportFromCrypto(t *testing.T) {
-	// IsJOSEError lets callers skip retries on signature failures while still retrying
+func TestJOSEIsErrorDistinguishesTransportFromCrypto(t *testing.T) {
+	// jose.IsError lets callers skip retries on signature failures while still retrying
 	// on TCP resets. Plain net errors must not classify as JOSE errors.
-	assert.False(t, httpclient.IsJOSEError(errors.New("tcp reset by peer")))
-	assert.True(t, httpclient.IsJOSEError(&jose.Error{Sentinel: jose.ErrDecryptFailed, Code: "JOSE_DECRYPT_FAILED"}))
+	assert.False(t, jose.IsError(errors.New("tcp reset by peer")))
+	assert.True(t, jose.IsError(&jose.Error{Sentinel: jose.ErrDecryptFailed, Code: "JOSE_DECRYPT_FAILED"}))
 }
 
 func TestBuilderWithJOSEWiresTransport(t *testing.T) {
@@ -1329,14 +1330,14 @@ func TestBuilderWithJOSERejectedSuccessIsTerminal(t *testing.T) {
 			name: "malformed_jose_body",
 			body: []byte("not.a.real.jose.payload"),
 			check: func(t *testing.T, err error) {
-				assert.True(t, httpclient.IsJOSEError(err), "malformed body must be a JOSE error, got %v", err)
+				assert.True(t, jose.IsError(err), "malformed body must be a JOSE error, got %v", err)
 			},
 		},
 		{
 			name: "tampered_jose_body",
 			body: tamperedCompact(t, f),
 			check: func(t *testing.T, err error) {
-				assert.True(t, httpclient.IsJOSEError(err), "tampered body must be a JOSE error, got %v", err)
+				assert.True(t, jose.IsError(err), "tampered body must be a JOSE error, got %v", err)
 			},
 		},
 	}
@@ -1384,7 +1385,7 @@ func TestBuilderWithJOSERejectedFailureStatusStillRetries(t *testing.T) {
 
 	_, err = client.Post(context.Background(), &httpclient.Request{URL: server.URL, Body: []byte(`{"x":1}`)})
 	require.Error(t, err)
-	assert.True(t, httpclient.IsJOSEError(err))
+	assert.True(t, jose.IsError(err))
 	assert.True(t, httpclient.IsErrorType(err, httpclient.NetworkError))
 	assert.Equal(t, int64(3), hits.Load(), "a JOSE failure on a 5xx retries up to the budget")
 }

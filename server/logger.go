@@ -9,9 +9,9 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // LoggerConfig configures the request logging middleware with dual-mode logging support.
@@ -329,7 +329,7 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 	// needs it outright: it is a raw inbound value on its way into a log field.
 	if resp := c.Response(); resp != nil {
 		requestID = validateRequestID(resp.Header().Get(echo.HeaderXRequestID))
-		traceparent = validateTraceParent(resp.Header().Get(gobrickshttp.HeaderTraceParent))
+		traceparent = validateTraceParent(resp.Header().Get(gobrickstrace.HeaderTraceParent))
 	}
 
 	// Fallback to request headers (always available, source of truth)
@@ -337,7 +337,7 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 		requestID = validateRequestID(c.Request().Header.Get(echo.HeaderXRequestID))
 	}
 	if traceparent == "" {
-		traceparent = validateTraceParent(c.Request().Header.Get(gobrickshttp.HeaderTraceParent))
+		traceparent = validateTraceParent(c.Request().Header.Get(gobrickstrace.HeaderTraceParent))
 	}
 
 	return requestMetadata{

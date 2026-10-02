@@ -483,10 +483,10 @@ func (t *JOSETransport) refusePlaintextSuccess(req *nethttp.Request, status int)
 // both go through the one ingest bound every other door applies (ADR-070) — request_id is
 // not a default sensitive field, and the log filter validates nothing.
 func refusalRequestID(req *nethttp.Request) string {
-	if id := gobrickstrace.ValidateRequestID(req.Header.Get(HeaderXRequestID)); id != "" {
+	if id := gobrickstrace.ValidateRequestID(req.Header.Get(gobrickstrace.HeaderXRequestID)); id != "" {
 		return id
 	}
-	id, _ := TraceIDFromContext(req.Context())
+	id, _ := gobrickstrace.IDFromContext(req.Context())
 	return gobrickstrace.ValidateRequestID(id)
 }
 
@@ -518,12 +518,4 @@ func readAndCloseBody(body io.ReadCloser, maxBytes int64) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
-}
-
-// IsJOSEError reports whether err is a JOSE crypto failure — kept as a thin re-export
-// of jose.IsError for discoverability from the httpclient package, since transport
-// callers typically already import httpclient and may not realize the canonical helper
-// lives in jose.
-func IsJOSEError(err error) bool {
-	return jose.IsError(err)
 }

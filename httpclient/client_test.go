@@ -31,6 +31,7 @@ import (
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // Test constants to avoid string duplication
@@ -272,7 +273,7 @@ func TestBuilder(t *testing.T) {
 
 		// Empty string should not change the default
 		clientImpl := builtClient.(*client)
-		assert.Equal(t, HeaderXRequestID, clientImpl.config.TraceIDHeader)
+		assert.Equal(t, gobrickstrace.HeaderXRequestID, clientImpl.config.TraceIDHeader)
 	})
 
 	t.Run("with custom trace ID generator", func(t *testing.T) {
@@ -954,7 +955,7 @@ func TestTraceIDPropagation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should have automatically added X-Request-ID header
-		traceID := requestHeaders.Get(HeaderXRequestID)
+		traceID := requestHeaders.Get(gobrickstrace.HeaderXRequestID)
 		assert.NotEmpty(t, traceID)
 		assert.Len(t, traceID, 36) // UUID format
 	})
@@ -972,7 +973,7 @@ func TestTraceIDPropagation(t *testing.T) {
 		req := &Request{
 			URL: server.URL,
 			Headers: map[string]string{
-				HeaderXRequestID: expectedTraceID,
+				gobrickstrace.HeaderXRequestID: expectedTraceID,
 			},
 		}
 
@@ -980,7 +981,7 @@ func TestTraceIDPropagation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should preserve the existing trace ID
-		assert.Equal(t, expectedTraceID, requestHeaders.Get(HeaderXRequestID))
+		assert.Equal(t, expectedTraceID, requestHeaders.Get(gobrickstrace.HeaderXRequestID))
 	})
 
 	t.Run("extracts trace ID from context", func(t *testing.T) {
@@ -996,13 +997,13 @@ func TestTraceIDPropagation(t *testing.T) {
 		req := &Request{URL: server.URL}
 
 		// Add trace ID to context
-		ctx := WithTraceID(context.Background(), expectedTraceID)
+		ctx := gobrickstrace.WithTraceID(context.Background(), expectedTraceID)
 
 		_, err := client.Get(ctx, req)
 		require.NoError(t, err)
 
 		// Should use trace ID from context
-		assert.Equal(t, expectedTraceID, requestHeaders.Get(HeaderXRequestID))
+		assert.Equal(t, expectedTraceID, requestHeaders.Get(gobrickstrace.HeaderXRequestID))
 	})
 
 	t.Run("request header takes precedence over context", func(t *testing.T) {
@@ -1019,18 +1020,18 @@ func TestTraceIDPropagation(t *testing.T) {
 		req := &Request{
 			URL: server.URL,
 			Headers: map[string]string{
-				HeaderXRequestID: headerTraceID,
+				gobrickstrace.HeaderXRequestID: headerTraceID,
 			},
 		}
 
 		// Add different trace ID to context
-		ctx := WithTraceID(context.Background(), contextTraceID)
+		ctx := gobrickstrace.WithTraceID(context.Background(), contextTraceID)
 
 		_, err := client.Get(ctx, req)
 		require.NoError(t, err)
 
 		// Request header should take precedence
-		assert.Equal(t, headerTraceID, requestHeaders.Get(HeaderXRequestID))
+		assert.Equal(t, headerTraceID, requestHeaders.Get(gobrickstrace.HeaderXRequestID))
 	})
 
 	t.Run("trace ID interceptor works correctly", func(t *testing.T) {
@@ -1049,13 +1050,13 @@ func TestTraceIDPropagation(t *testing.T) {
 		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
-		ctx := WithTraceID(context.Background(), expectedTraceID)
+		ctx := gobrickstrace.WithTraceID(context.Background(), expectedTraceID)
 
 		_, err := client.Get(ctx, req)
 		require.NoError(t, err)
 
 		// Should use trace ID from interceptor
-		assert.Equal(t, expectedTraceID, requestHeaders.Get(HeaderXRequestID))
+		assert.Equal(t, expectedTraceID, requestHeaders.Get(gobrickstrace.HeaderXRequestID))
 	})
 
 	t.Run("adds W3C traceparent when enabled", func(t *testing.T) {
@@ -1072,7 +1073,7 @@ func TestTraceIDPropagation(t *testing.T) {
 		_, err := client.Get(context.Background(), req)
 		require.NoError(t, err)
 
-		tp := requestHeaders.Get(HeaderTraceParent)
+		tp := requestHeaders.Get(gobrickstrace.HeaderTraceParent)
 		assert.NotEmpty(t, tp)
 		// Basic shape: 2-32-16-2 hex groups separated by '-'
 		parts := strings.Split(tp, "-")
@@ -1095,28 +1096,28 @@ func TestTraceIDPropagation(t *testing.T) {
 		req := &Request{URL: server.URL}
 
 		ctx := context.Background()
-		ctx = WithTraceParent(ctx, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
-		ctx = WithTraceState(ctx, "vendor=k:v")
+		ctx = gobrickstrace.WithTraceParent(ctx, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+		ctx = gobrickstrace.WithTraceState(ctx, "vendor=k:v")
 
 		_, err := client.Get(ctx, req)
 		require.NoError(t, err)
 
-		assert.Equal(t, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", requestHeaders.Get(HeaderTraceParent))
-		assert.Equal(t, "vendor=k:v", requestHeaders.Get(HeaderTraceState))
+		assert.Equal(t, "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", requestHeaders.Get(gobrickstrace.HeaderTraceParent))
+		assert.Equal(t, "vendor=k:v", requestHeaders.Get(gobrickstrace.HeaderTraceState))
 	})
 }
 
 func TestTraceIDUtilities(t *testing.T) {
 	t.Run("WithTraceID and EnsureTraceID", func(t *testing.T) {
 		expectedTraceID := "test-trace-123"
-		ctx := WithTraceID(context.Background(), expectedTraceID)
+		ctx := gobrickstrace.WithTraceID(context.Background(), expectedTraceID)
 
-		actualTraceID := EnsureTraceID(ctx)
+		actualTraceID := gobrickstrace.EnsureTraceID(ctx)
 		assert.Equal(t, expectedTraceID, actualTraceID)
 	})
 
 	t.Run("EnsureTraceID generates UUID when no trace ID", func(t *testing.T) {
-		traceID := EnsureTraceID(context.Background())
+		traceID := gobrickstrace.EnsureTraceID(context.Background())
 		assert.NotEmpty(t, traceID)
 		assert.Len(t, traceID, 36) // UUID format
 	})
@@ -1126,19 +1127,19 @@ func TestTraceIDUtilities(t *testing.T) {
 		assert.NotNil(t, interceptor)
 
 		// Test that it adds header when missing
-		ctx := WithTraceID(context.Background(), "test-trace")
+		ctx := gobrickstrace.WithTraceID(context.Background(), "test-trace")
 		req, err := nethttp.NewRequestWithContext(ctx, "GET", "http://example.com", nethttp.NoBody)
 		require.NoError(t, err)
 
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
-		assert.Equal(t, "test-trace", req.Header.Get(HeaderXRequestID))
+		assert.Equal(t, "test-trace", req.Header.Get(gobrickstrace.HeaderXRequestID))
 
 		// Test that it doesn't override existing header
-		req.Header.Set(HeaderXRequestID, "existing-trace")
+		req.Header.Set(gobrickstrace.HeaderXRequestID, "existing-trace")
 		err = interceptor(ctx, req)
 		require.NoError(t, err)
-		assert.Equal(t, "existing-trace", req.Header.Get(HeaderXRequestID))
+		assert.Equal(t, "existing-trace", req.Header.Get(gobrickstrace.HeaderXRequestID))
 	})
 }
 
@@ -1827,7 +1828,7 @@ func installNoopTracer(t *testing.T) {
 // taken when no recording span exists on the request context. We install a
 // noop TracerProvider so StartHTTPClientSpan returns a non-recording span
 // whose SpanContext is invalid; ensureTraceContextHeaders's IsValid() branch
-// then fails over to GenerateTraceParent().
+// then fails over to gobrickstrace.GenerateTraceParent().
 func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
 	installNoopTracer(t)
 

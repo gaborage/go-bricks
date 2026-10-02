@@ -5,7 +5,7 @@ import (
 
 	"github.com/labstack/echo/v5"
 
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // enrichTraceContext returns the request's context with the resolved trace ID and
@@ -21,7 +21,7 @@ import (
 // one, byte-identical to the path every untraced request already takes.
 func enrichTraceContext(c *echo.Context) context.Context {
 	req := c.Request()
-	ctx := gobrickshttp.WithTraceID(req.Context(), getTraceID(c))
+	ctx := gobrickstrace.WithTraceID(req.Context(), getTraceID(c))
 	// Shadow BOTH inherited W3C keys first, unconditionally. At an ingress the
 	// request defines the trace: anything already on the context arrived from the
 	// server's base context or an earlier middleware, not from this caller, and
@@ -38,11 +38,11 @@ func enrichTraceContext(c *echo.Context) context.Context {
 	// from trace.ExtractFromHeaders, which leaves an inherited parent alone: that
 	// seam serves carriers whose surrounding context legitimately holds a caller's
 	// trace, while an HTTP request IS the trace's origin here.
-	ctx = gobrickshttp.WithTraceParent(ctx, "")
-	ctx = gobrickshttp.WithTraceState(ctx, "")
-	if tp := validateTraceParent(req.Header.Get(gobrickshttp.HeaderTraceParent)); tp != "" {
-		ctx = gobrickshttp.WithTraceParent(ctx, tp)
-		ctx = gobrickshttp.WithTraceState(ctx, validateTraceState(req.Header.Get(gobrickshttp.HeaderTraceState)))
+	ctx = gobrickstrace.WithTraceParent(ctx, "")
+	ctx = gobrickstrace.WithTraceState(ctx, "")
+	if tp := validateTraceParent(req.Header.Get(gobrickstrace.HeaderTraceParent)); tp != "" {
+		ctx = gobrickstrace.WithTraceParent(ctx, tp)
+		ctx = gobrickstrace.WithTraceState(ctx, validateTraceState(req.Header.Get(gobrickstrace.HeaderTraceState)))
 	}
 	return ctx
 }

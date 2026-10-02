@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -44,7 +43,7 @@ func TestTraceContext(t *testing.T) {
 		require.NotNil(t, capturedContext)
 
 		// Verify trace ID is present in context
-		traceID, ok := gobrickshttp.TraceIDFromContext(capturedContext)
+		traceID, ok := gobrickstrace.IDFromContext(capturedContext)
 		assert.True(t, ok, "Trace ID should be present in context")
 		assert.NotEmpty(t, traceID, "Trace ID should be injected into context")
 	})
@@ -53,7 +52,7 @@ func TestTraceContext(t *testing.T) {
 		traceparent := testTraceparent
 
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
+		req.Header.Set(gobrickstrace.HeaderTraceParent, traceparent)
 		rec := httptest.NewRecorder()
 
 		e.ServeHTTP(rec, req)
@@ -62,7 +61,7 @@ func TestTraceContext(t *testing.T) {
 		require.NotNil(t, capturedContext)
 
 		// Verify traceparent is propagated to context
-		contextTraceparent, ok := gobrickshttp.TraceParentFromContext(capturedContext)
+		contextTraceparent, ok := gobrickstrace.ParentFromContext(capturedContext)
 		assert.True(t, ok, "Traceparent should be present in context")
 		assert.Equal(t, traceparent, contextTraceparent,
 			"Traceparent should be propagated from request header to context")
@@ -73,8 +72,8 @@ func TestTraceContext(t *testing.T) {
 		tracestate := "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"
 
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
-		req.Header.Set(gobrickshttp.HeaderTraceState, tracestate)
+		req.Header.Set(gobrickstrace.HeaderTraceParent, traceparent)
+		req.Header.Set(gobrickstrace.HeaderTraceState, tracestate)
 		rec := httptest.NewRecorder()
 
 		e.ServeHTTP(rec, req)
@@ -83,8 +82,8 @@ func TestTraceContext(t *testing.T) {
 		require.NotNil(t, capturedContext)
 
 		// Verify both headers are propagated
-		contextTraceparent, okParent := gobrickshttp.TraceParentFromContext(capturedContext)
-		contextTracestate, okState := gobrickshttp.TraceStateFromContext(capturedContext)
+		contextTraceparent, okParent := gobrickstrace.ParentFromContext(capturedContext)
+		contextTracestate, okState := gobrickstrace.StateFromContext(capturedContext)
 
 		assert.True(t, okParent, "Traceparent should be present")
 		assert.True(t, okState, "Tracestate should be present")
@@ -103,13 +102,13 @@ func TestTraceContext(t *testing.T) {
 		require.NotNil(t, capturedContext)
 
 		// Should still have a trace ID generated
-		traceID, ok := gobrickshttp.TraceIDFromContext(capturedContext)
+		traceID, ok := gobrickstrace.IDFromContext(capturedContext)
 		assert.True(t, ok, "Trace ID should be generated even without headers")
 		assert.NotEmpty(t, traceID)
 
 		// But no traceparent/tracestate
-		_, okParent := gobrickshttp.TraceParentFromContext(capturedContext)
-		_, okState := gobrickshttp.TraceStateFromContext(capturedContext)
+		_, okParent := gobrickstrace.ParentFromContext(capturedContext)
+		_, okState := gobrickstrace.StateFromContext(capturedContext)
 
 		assert.False(t, okParent, "Traceparent should not be present")
 		assert.False(t, okState, "Tracestate should not be present")
@@ -130,7 +129,7 @@ func TestTraceContextWithErrorHandler(t *testing.T) {
 	traceparent := testTraceparent
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/error", http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, traceparent)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -138,12 +137,12 @@ func TestTraceContextWithErrorHandler(t *testing.T) {
 	// Even with error, context should be properly set
 	require.NotNil(t, capturedContext)
 
-	contextTraceparent, ok := gobrickshttp.TraceParentFromContext(capturedContext)
+	contextTraceparent, ok := gobrickstrace.ParentFromContext(capturedContext)
 	assert.True(t, ok, "Traceparent should be present even on error")
 	assert.Equal(t, traceparent, contextTraceparent,
 		"Trace context should be set even when handler returns error")
 
-	traceID, okID := gobrickshttp.TraceIDFromContext(capturedContext)
+	traceID, okID := gobrickstrace.IDFromContext(capturedContext)
 	assert.True(t, okID, "Trace ID should be present even on error")
 	assert.NotEmpty(t, traceID, "Trace ID should be set even when handler returns error")
 }
@@ -177,7 +176,7 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 	})
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, testTraceparent)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, testTraceparent)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -186,8 +185,8 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 	require.NotNil(t, postTraceContext)
 
 	// After trace context middleware, trace info should be available
-	postTraceID, okPostID := gobrickshttp.TraceIDFromContext(postTraceContext)
-	postTraceparent, okPostParent := gobrickshttp.TraceParentFromContext(postTraceContext)
+	postTraceID, okPostID := gobrickstrace.IDFromContext(postTraceContext)
+	postTraceparent, okPostParent := gobrickstrace.ParentFromContext(postTraceContext)
 
 	// Post-trace context should have trace info
 	assert.True(t, okPostID, "Trace ID should be available after trace context middleware")
@@ -282,10 +281,10 @@ func TestTraceContextIngressValidation(t *testing.T) {
 			capturedContext = nil
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			if tt.traceparent != "" {
-				req.Header.Set(gobrickshttp.HeaderTraceParent, tt.traceparent)
+				req.Header.Set(gobrickstrace.HeaderTraceParent, tt.traceparent)
 			}
 			if tt.tracestate != "" {
-				req.Header.Set(gobrickshttp.HeaderTraceState, tt.tracestate)
+				req.Header.Set(gobrickstrace.HeaderTraceState, tt.tracestate)
 			}
 
 			rec := httptest.NewRecorder()
@@ -298,12 +297,12 @@ func TestTraceContextIngressValidation(t *testing.T) {
 			assert.True(t, okID, "a trace ID is minted regardless of what the caller sent")
 			assert.NotEmpty(t, traceID)
 
-			// TraceParentFromContext/TraceStateFromContext report ok == (value != ""),
+			// ParentFromContext/StateFromContext report ok == (value != ""),
 			// so the value assertions carry the presence claim too.
-			contextParent, _ := gobrickshttp.TraceParentFromContext(capturedContext)
+			contextParent, _ := gobrickstrace.ParentFromContext(capturedContext)
 			assert.Equal(t, tt.wantParent, contextParent)
 
-			contextState, _ := gobrickshttp.TraceStateFromContext(capturedContext)
+			contextState, _ := gobrickstrace.StateFromContext(capturedContext)
 			assert.Equal(t, tt.wantState, contextState)
 		})
 	}
@@ -323,8 +322,8 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 	e.GET("/test", func(c *echo.Context) error {
 		ctx := c.Request().Context()
 
-		traceID, _ := gobrickshttp.TraceIDFromContext(ctx)
-		traceparent, _ := gobrickshttp.TraceParentFromContext(ctx)
+		traceID, _ := gobrickstrace.IDFromContext(ctx)
+		traceparent, _ := gobrickstrace.ParentFromContext(ctx)
 
 		result := requestResult{
 			traceID:     traceID,
@@ -347,7 +346,7 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 	for i, tp := range traceparents {
 		go func(_ int, traceparent string) {
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-			req.Header.Set(gobrickshttp.HeaderTraceParent, traceparent)
+			req.Header.Set(gobrickstrace.HeaderTraceParent, traceparent)
 			rec := httptest.NewRecorder()
 
 			e.ServeHTTP(rec, req)
@@ -420,19 +419,19 @@ func TestTraceContextShadowsAnInheritedTraceState(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			capturedContext = nil
-			inherited := gobrickshttp.WithTraceParent(gobrickshttp.WithTraceState(context.Background(), "inherited=from-another-parent"), "00-99999999999999999999999999999999-8888888888888888-01")
+			inherited := gobrickstrace.WithTraceParent(gobrickstrace.WithTraceState(context.Background(), "inherited=from-another-parent"), "00-99999999999999999999999999999999-8888888888888888-01")
 			req := httptest.NewRequestWithContext(inherited, http.MethodGet, "/test", http.NoBody)
 			if tt.traceparent != "" {
-				req.Header.Set(gobrickshttp.HeaderTraceParent, tt.traceparent)
+				req.Header.Set(gobrickstrace.HeaderTraceParent, tt.traceparent)
 			}
 
 			e.ServeHTTP(httptest.NewRecorder(), req)
 			require.NotNil(t, capturedContext)
 
-			gotState, okState := gobrickshttp.TraceStateFromContext(capturedContext)
+			gotState, okState := gobrickstrace.StateFromContext(capturedContext)
 			assert.False(t, okState, "an inherited tracestate survived: %q", gotState)
 
-			gotParent, okParent := gobrickshttp.TraceParentFromContext(capturedContext)
+			gotParent, okParent := gobrickstrace.ParentFromContext(capturedContext)
 			if tt.traceparent == testTraceparent {
 				assert.Equal(t, testTraceparent, gotParent, "this request's own valid parent must win")
 			} else {
@@ -466,7 +465,7 @@ func TestTraceContextIngressYieldsAPublishableIdentity(t *testing.T) {
 	})
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 	e.ServeHTTP(httptest.NewRecorder(), req)
 	require.NotNil(t, capturedContext)
 

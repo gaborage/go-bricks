@@ -210,7 +210,7 @@ says: a body over `MaxResponseBytes`, and an `application/jose` body `jose.Open`
 malformed or tampered. The client returns the transport's over-cap error itself — a
 `ValidationError` at top level, so `IsErrorType(err, httpclient.ValidationError)` is true and
 `NetworkError` false — while a JOSE
-failure (`httpclient.IsJOSEError`) and the plaintext refusal keep their `NetworkError` wrap.
+failure (`jose.IsError`) and the plaintext refusal keep their `NetworkError` wrap.
 The same rejection on a 4xx or 5xx is not terminal: that peer honored nothing, so it retries
 like any other transport error.
 
@@ -1009,7 +1009,7 @@ Rationale for the 4xx-as-OK convention: client spans treat 4xx as a normal flow-
 `httpclient` injects `traceparent` / `tracestate` headers per attempt with this precedence:
 
 1. **OTel propagator path** — when a recording span is active on the request context (the attempt span this package opens, *or* a surrounding span from `server/` middleware), `otel.GetTextMapPropagator().Inject(ctx, headerCarrier)` writes the *real* traceparent matching that span. The framework registers `propagation.TraceContext{}` as the default global propagator.
-2. **Legacy fallback** — when `c.config.EnableW3CTrace == true` AND no span is active on the context, the existing `TraceParentFromContext` / `GenerateTraceParent` path emits a synthetic traceparent. This preserves backward compatibility for callers wiring `httpclient` without an OTel tracer.
+2. **Legacy fallback** — when `c.config.EnableW3CTrace == true` AND no span is active on the context, the existing `trace.ParentFromContext` / `trace.GenerateTraceParent` path emits a synthetic traceparent. This preserves backward compatibility for callers wiring `httpclient` without an OTel tracer.
 3. **Disabled** — `WithW3CTrace(false)` disables W3C injection entirely.
 
 You don't need to change anything to benefit from the OTel propagator — leave `EnableW3CTrace` at its default `true` and register a tracer provider (`app.New(...)` does this automatically when `observability.enabled: true`). Downstream services receive a real traceparent that joins your trace.

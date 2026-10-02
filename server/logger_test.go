@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 const (
@@ -833,7 +833,7 @@ func TestExtractRequestMetadataWithResponse(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetPath("/api/users/:id")
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-456")
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan01)
+	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan01)
 
 	metadata := extractRequestMetadata(c)
 
@@ -894,7 +894,7 @@ func TestExtractRequestMetadataAllFields(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetPath("/api/resource")
 	c.Response().Header().Set(echo.HeaderXRequestID, "all-fields-123")
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan01)
+	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan01)
 
 	metadata := extractRequestMetadata(c)
 
@@ -1377,7 +1377,7 @@ func TestExtractRequestMetadataEmptyResponseHeaders(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, testRequestTraceSpan01)
 	rec := httptest.NewRecorder()
 
 	c := e.NewContext(req, rec)
@@ -1398,13 +1398,13 @@ func TestExtractRequestMetadataPartialResponseHeaders(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/partial", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, testRequestTraceSpan01)
 	rec := httptest.NewRecorder()
 
 	c := e.NewContext(req, rec)
 
 	// Only set traceparent in response, leave requestID empty
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan02)
+	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan02)
 
 	metadata := extractRequestMetadata(c)
 
@@ -1418,14 +1418,14 @@ func TestExtractRequestMetadataResponseHeadersPriority(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/priority", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, testRequestTraceSpan01)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, testRequestTraceSpan01)
 	rec := httptest.NewRecorder()
 
 	c := e.NewContext(req, rec)
 
 	// Set different values in response headers (middleware may transform them)
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-from-response")
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan02)
+	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan02)
 
 	metadata := extractRequestMetadata(c)
 
@@ -1460,7 +1460,7 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 	t.Run("from_the_request_header_fallback", func(t *testing.T) {
 		e := echo.New()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
-		req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+		req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 		c := e.NewContext(req, httptest.NewRecorder())
 
 		assert.Empty(t, extractRequestMetadata(c).Traceparent)
@@ -1470,7 +1470,7 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 		e := echo.New()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 		c := e.NewContext(req, httptest.NewRecorder())
-		c.Response().Header().Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+		c.Response().Header().Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 
 		assert.Empty(t, extractRequestMetadata(c).Traceparent)
 	})
@@ -1478,9 +1478,9 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 	t.Run("a_valid_response_header_still_wins_over_an_invalid_request_one", func(t *testing.T) {
 		e := echo.New()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
-		req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+		req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 		c := e.NewContext(req, httptest.NewRecorder())
-		c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan02)
+		c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan02)
 
 		assert.Equal(t, testTraceSpan02, extractRequestMetadata(c).Traceparent)
 	})

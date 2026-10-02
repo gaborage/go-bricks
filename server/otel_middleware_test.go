@@ -21,9 +21,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/config"
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // httpServerDurationMetric is the OTel semconv name for the HTTP server request
@@ -73,7 +73,7 @@ func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 
 	// RequestEnrich stays unconditional: trace ID must still be seeded with obs off.
 	require.NotNil(t, captured)
-	traceID, ok := gobrickshttp.TraceIDFromContext(captured)
+	traceID, ok := gobrickstrace.IDFromContext(captured)
 	assert.True(t, ok, "RequestEnrich must run even when observability is disabled")
 	assert.NotEmpty(t, traceID)
 }
@@ -207,7 +207,7 @@ func TestOTelMiddlewareTraceContextPropagation(t *testing.T) {
 	// Send request with existing traceparent header
 	incomingTraceparent := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, incomingTraceparent)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, incomingTraceparent)
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
@@ -478,8 +478,8 @@ func TestOTelMiddlewareIntegrationWithTraceContext(t *testing.T) {
 	incomingTracestate := "congo=t61rcWkgMzE"
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPIEndpoint, http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, incomingTraceparent)
-	req.Header.Set(gobrickshttp.HeaderTraceState, incomingTracestate)
+	req.Header.Set(gobrickstrace.HeaderTraceParent, incomingTraceparent)
+	req.Header.Set(gobrickstrace.HeaderTraceState, incomingTracestate)
 	rec := httptest.NewRecorder()
 
 	e.ServeHTTP(rec, req)
@@ -492,16 +492,16 @@ func TestOTelMiddlewareIntegrationWithTraceContext(t *testing.T) {
 	require.NotNil(t, capturedContext)
 
 	// TraceContext middleware should have preserved the trace headers
-	contextTraceparent, ok := gobrickshttp.TraceParentFromContext(capturedContext)
+	contextTraceparent, ok := gobrickstrace.ParentFromContext(capturedContext)
 	assert.True(t, ok, "TraceContext middleware should inject traceparent into context")
 	assert.Equal(t, incomingTraceparent, contextTraceparent)
 
-	contextTracestate, ok := gobrickshttp.TraceStateFromContext(capturedContext)
+	contextTracestate, ok := gobrickstrace.StateFromContext(capturedContext)
 	assert.True(t, ok, "TraceContext middleware should inject tracestate into context")
 	assert.Equal(t, incomingTracestate, contextTracestate)
 
 	// TraceID should also be available
-	traceID, ok := gobrickshttp.TraceIDFromContext(capturedContext)
+	traceID, ok := gobrickstrace.IDFromContext(capturedContext)
 	assert.True(t, ok, "TraceID should be available in context")
 	assert.NotEmpty(t, traceID)
 }
