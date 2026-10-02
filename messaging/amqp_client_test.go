@@ -1005,14 +1005,6 @@ func TestConsumeFromQueueSuccess(t *testing.T) {
 	}
 }
 
-func TestConsumeNotReady(t *testing.T) {
-	c := &AMQPClientImpl{m: &sync.RWMutex{}}
-	ch, err := c.Consume(context.Background(), "q")
-	if err == nil || ch != nil {
-		t.Fatalf("expected errNotConnected, got ch=%v err=%v", ch, err)
-	}
-}
-
 func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)

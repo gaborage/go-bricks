@@ -11,16 +11,12 @@ import (
 )
 
 // Client defines the interface for messaging operations.
-// It provides a simple API for consuming messages while hiding the complexity
-// of connection management, retries, and protocol-specific details. It carries
+// It carries the lifecycle every client shares (Close, IsReady) while hiding
+// connection management, retries, and protocol-specific details; consuming
+// goes through AMQPClient.ConsumeFromQueue. It carries
 // no publish method: a module publishes through the Publisher[T] handle that
 // DeclareTypedPublisher returns, never by handing bytes to the client (ADR-096).
 type Client interface {
-	// Consume starts consuming messages from the specified destination.
-	// Returns a channel that delivers messages and an error if consumption setup fails.
-	// Messages should be acknowledged by the consumer.
-	Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error)
-
 	// Close gracefully shuts down the messaging client.
 	// It should clean up all connections and resources.
 	Close() error

@@ -178,21 +178,21 @@ func TestEventService_PublishEvent(t *testing.T) {
 
 ```go
 func TestEventService_ConsumeEvents(t *testing.T) {
+    // NewMessageSimulator preloads its messages on fixtures.TestQueueName
     mockClient := fixtures.NewMessageSimulator(
         []byte(`{"event": "user.created", "user_id": 1}`),
         []byte(`{"event": "user.updated", "user_id": 1}`),
     )
 
-    service := NewEventService(mockClient)
+    q := fixtures.TestQueueName
+    deliveries, err := mockClient.ConsumeFromQueue(context.Background(), messaging.ConsumeOptions{Queue: q})
+    require.NoError(t, err)
 
-    // Start consuming (this would typically run in a goroutine)
-    messages, err := service.StartConsuming(context.Background(), "user.events")
-    assert.NoError(t, err)
+    // Simulate additional messages on the same queue
+    mockClient.SimulateMessage(q, []byte(`{"event": "user.deleted", "user_id": 1}`))
 
-    // Simulate additional messages
-    mockClient.SimulateMessage("user.events", []byte(`{"event": "user.deleted", "user_id": 1}`))
-
-    // Test message processing
+    first := <-deliveries
+    assert.JSONEq(t, `{"event": "user.created", "user_id": 1}`, string(first.Body))
     // ... your test logic here
 }
 ```
@@ -225,7 +225,7 @@ whole working surface with no `.Maybe()`, so testify fails every expectation you
 doesn't happen to exercise: `NewWorkingRegistry` expects all five declaration kinds
 (exchange, queue, binding, publisher, consumer), `NewHealthyDatabase` expects
 Health/DatabaseType/Stats, and `NewWorkingMessagingClient` expects
-IsReady/Publish/Consume/Close. Assert on observed state — `mockRegistry.Exchanges()`,
+IsReady/ConsumeFromQueue/Close. Assert on observed state — `mockRegistry.Exchanges()`,
 `mockRegistry.Queues()` — or build a bare `mocks.NewMockRegistry()` and set the
 expectations you actually want to verify.
 
@@ -326,7 +326,7 @@ func TestUserModule_Integration(t *testing.T) {
     // No AssertExpectations here. All three fixtures pre-register their whole
     // working surface with no .Maybe() — NewHealthyDatabase expects
     // Health/DatabaseType/Stats, NewWorkingMessagingClient expects
-    // IsReady/Publish/Consume/Close, NewWorkingRegistry expects all five
+    // IsReady/ConsumeFromQueue/Close, NewWorkingRegistry expects all five
     // declaration kinds — so asserting them fails for every call this example
     // does not make. Assert on observed state instead, as above.
 }

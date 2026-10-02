@@ -1097,18 +1097,6 @@ func (c *AMQPClientImpl) publishExhausted(ctx context.Context, options publishOp
 	return c.recordPublishFailure(ctx, options, startTime, span, err)
 }
 
-// Consume starts consuming messages from the specified destination (queue name).
-func (c *AMQPClientImpl) Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error) {
-	return c.ConsumeFromQueue(ctx, ConsumeOptions{
-		Queue:     destination,
-		Consumer:  "",
-		AutoAck:   false,
-		Exclusive: false,
-		NoLocal:   false,
-		NoWait:    false,
-	})
-}
-
 // ConsumeFromQueue consumes messages from a queue with specific options.
 func (c *AMQPClientImpl) ConsumeFromQueue(_ context.Context, options ConsumeOptions) (<-chan amqp.Delivery, error) {
 	channel, err := c.readyChannel()

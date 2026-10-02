@@ -40,11 +40,11 @@ const (
 
 // NewWorkingMessagingClient creates a mock messaging client that operates successfully.
 // This is useful for testing happy path scenarios.
-func NewWorkingMessagingClient() *mocks.MockMessagingClient {
-	mockClient := mocks.NewMockMessagingClient()
+func NewWorkingMessagingClient() *mocks.MockAMQPClient {
+	mockClient := mocks.NewMockAMQPClient()
 
 	mockClient.ExpectIsReady(true)
-	mockClient.ExpectConsumeAny(nil)
+	mockClient.ExpectConsumeFromQueueAny(nil)
 	mockClient.ExpectClose(nil)
 
 	return mockClient
@@ -53,21 +53,21 @@ func NewWorkingMessagingClient() *mocks.MockMessagingClient {
 // NewFailingMessagingClient creates a mock messaging client that fails operations after
 // a specified number of successful operations. This is useful for testing retry logic
 // and error handling.
-func NewFailingMessagingClient(failAfter int) *mocks.MockMessagingClient {
-	mockClient := mocks.NewMockMessagingClient()
+func NewFailingMessagingClient(failAfter int) *mocks.MockAMQPClient {
+	mockClient := mocks.NewMockAMQPClient()
 
 	if failAfter <= 0 {
 		// Fail immediately
 		mockClient.SetReady(false)
 		mockClient.ExpectIsReady(false)
-		mockClient.ExpectConsumeAny(amqp.ErrClosed)
+		mockClient.ExpectConsumeFromQueueAny(amqp.ErrClosed)
 	} else {
 		// Succeed initially, then fail
 		mockClient.ExpectIsReady(true)
 		for range failAfter {
-			mockClient.ExpectConsumeAny(nil).Once()
+			mockClient.ExpectConsumeFromQueueAny(nil).Once()
 		}
-		mockClient.ExpectConsumeAny(amqp.ErrClosed)
+		mockClient.ExpectConsumeFromQueueAny(amqp.ErrClosed)
 	}
 
 	return mockClient
@@ -75,7 +75,7 @@ func NewFailingMessagingClient(failAfter int) *mocks.MockMessagingClient {
 
 // NewMessageSimulator creates a mock messaging client that can simulate incoming messages.
 // This is useful for testing consumer behavior and message processing.
-func NewMessageSimulator(messages ...[]byte) *mocks.MockMessagingClient {
+func NewMessageSimulator(messages ...[]byte) *mocks.MockAMQPClient {
 	mockClient := NewWorkingMessagingClient()
 
 	// Pre-load messages for simulation

@@ -75,7 +75,7 @@ func TestAMQPClientPublishConsumeSimple(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start consumer
-	deliveries, err := client.Consume(ctx, queueName)
+	deliveries, err := client.ConsumeFromQueue(ctx, ConsumeOptions{Queue: queueName})
 	require.NoError(t, err)
 
 	// Publish message
@@ -236,7 +236,7 @@ func TestAMQPClientDeclareQueueArgsDeadLetter(t *testing.T) {
 
 	// Consume from the work queue, then nack WITHOUT requeue — the same
 	// signal the framework's registry sends on handler error/panic.
-	workDeliveries, err := client.Consume(ctx, workQueueName)
+	workDeliveries, err := client.ConsumeFromQueue(ctx, ConsumeOptions{Queue: workQueueName})
 	require.NoError(t, err)
 
 	testMsg := []byte("dead-lettered message")
@@ -251,7 +251,7 @@ func TestAMQPClientDeclareQueueArgsDeadLetter(t *testing.T) {
 	}
 
 	// The nacked-without-requeue message must be PARKED in the DLQ, not dropped.
-	dlqDeliveries, err := client.Consume(ctx, dlqName)
+	dlqDeliveries, err := client.ConsumeFromQueue(ctx, ConsumeOptions{Queue: dlqName})
 	require.NoError(t, err)
 
 	select {
@@ -309,7 +309,7 @@ func TestDeclarativeDLQParksFailedDelivery(t *testing.T) {
 	defer reg.StopConsumers(context.Background())
 
 	dlqName := workQueueName + ".dlq"
-	dlqDeliveries, err := client.Consume(ctx, dlqName)
+	dlqDeliveries, err := client.ConsumeFromQueue(ctx, ConsumeOptions{Queue: dlqName})
 	require.NoError(t, err)
 
 	testMsg := []byte("declarative dead-letter")
@@ -430,7 +430,7 @@ func TestAMQPClientpublishBytes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start consumer
-	deliveries, err := client.Consume(ctx, queueName)
+	deliveries, err := client.ConsumeFromQueue(ctx, ConsumeOptions{Queue: queueName})
 	require.NoError(t, err)
 
 	// Publish to exchange
@@ -612,7 +612,7 @@ func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
 	require.NoError(t, setup.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: ExchangeTypeDirect, AutoDelete: true}))
 	require.NoError(t, setup.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true}))
 	require.NoError(t, setup.BindQueue(t.Context(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: routingKey}))
-	deliveries, err := setup.Consume(ctx, queueName)
+	deliveries, err := setup.ConsumeFromQueue(ctx, ConsumeOptions{Queue: queueName})
 	require.NoError(t, err)
 
 	cold := NewAMQPClient(brokerURL, log)
