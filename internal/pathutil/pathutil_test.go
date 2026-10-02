@@ -76,3 +76,5 @@ func TestStripPathPrefix(t *testing.T) {
 		})
 	}
 }
+
+// scratch: A/B no-op change (do not merge).
