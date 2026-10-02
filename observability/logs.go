@@ -71,17 +71,9 @@ func (p *provider) createLogExporter(ctx context.Context) (sdklog.Exporter, erro
 
 	switch protocol {
 	case ProtocolHTTP:
-		exporter, err := p.createOTLPHTTPLogExporter(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return exporter, nil
+		return p.createOTLPHTTPLogExporter(ctx)
 	case ProtocolGRPC:
-		exporter, err := p.createOTLPGRPCLogExporter(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return exporter, nil
+		return p.createOTLPGRPCLogExporter(ctx)
 	default:
 		debugLogger.Printf("Invalid log protocol: %s", protocol)
 		return nil, fmt.Errorf("log protocol '%s': %w", protocol, ErrInvalidProtocol)

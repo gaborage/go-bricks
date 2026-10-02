@@ -222,8 +222,7 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 
 	// Record duration histogram (in seconds)
 	if amqpOperationDuration != nil {
-		durationSeconds := duration.Seconds()
-		amqpOperationDuration.Record(ctx, durationSeconds, metric.WithAttributes(commonAttrs...))
+		amqpOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(commonAttrs...))
 	}
 
 	// Record sent messages counter (only on success)

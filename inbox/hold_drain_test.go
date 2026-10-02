@@ -499,8 +499,8 @@ func TestBackoffForDoublesFromTheDrainInterval(t *testing.T) {
 		// must saturate at the cap rather than wrap into a nonsense duration.
 		{"an_attempt_count_that_overflows_the_shift_is_capped", 64, time.Minute},
 		{"and_one_far_past_it", 4000, time.Minute},
-		// Guards the clamp's other end: nothing below the first attempt shifts by a
-		// negative count, which would panic.
+		// Guards the clamp's other end: nothing below the first attempt reaches
+		// Saturating as a negative shift, which would wait nothing.
 		{"a_zero_attempt_count_waits_one_interval", 0, 5 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

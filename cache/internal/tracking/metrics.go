@@ -180,7 +180,7 @@ func RecordCacheOperation(ctx context.Context, operation string, duration time.D
 	}
 
 	if cacheOperationDuration != nil {
-		durationSec := float64(duration.Nanoseconds()) / 1e9
+		durationSec := duration.Seconds()
 		cacheOperationDuration.Record(ctx, durationSec, metric.WithAttributes(attrs...))
 	}
 

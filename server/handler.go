@@ -1485,7 +1485,7 @@ func RegisterHandler[T any, R any](
 		}
 	}
 	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, hr.log, descriptor.RawResponse, joseCfg)
-	// Hot path: register the echo handler directly through the unexported seam so the typed
+	// Hot path: register the echo handler directly through routeGroup.addEcho so the typed
 	// handler path adds zero per-request adapter overhead (ADR-026). The fallback adapts for
 	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
 	// hatch and never executes on the framework's real registrar.
