@@ -2205,6 +2205,21 @@ existing call compiles unchanged. See [migrations.md](migrations.md) `[C71.1]`�
 
 ---
 
+### [ADR-134: Remove the Dead Database Tracking Surface](adr_134_database_dead_tracking_surface.md)
+
+**Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** ten `database` tracking re-exports (`TrackingContext`, `TrackedStatement`/`TrackedStmt`, `TrackedTransaction`/`TrackedTx`, `TrackDBOperation`, `NewTrackingSettings`, `RegisterConnectionPoolMetrics`, `DefaultSlowQueryThreshold`, `DefaultMaxQueryLength`) and `TrackedDB`/`NewTrackedDB` are removed
+
+`database/tracking.go` re-exported the internal tracking package, and ten of those names had
+no caller outside package `database`'s own tests. `TrackedDB`/`NewTrackedDB` exposed
+`tracking.DB`, a raw-`*sql.DB` wrapper from the framework's first commits that
+`tracking.Connection` superseded on the live path. Both groups are deleted, in two stack
+links that share this ADR; `NewTrackedConnection` over a `types.Interface` is the one
+tracking entry point consumers keep. See [migrations.md](migrations.md) `[C71.6]`.
+
+**Key Benefits:** one public tracking wrapper instead of two; the tracking internals stop leaking through aliases.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -2982,7 +2997,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-133) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-134) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

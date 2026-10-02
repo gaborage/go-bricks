@@ -7,22 +7,14 @@ import (
 
 // Re-export the internal tracking implementation as the public API
 type (
-	TrackedDB          = tracking.DB
-	TrackedConnection  = tracking.Connection
-	TrackingContext    = tracking.Context
-	TrackedStatement   = tracking.Statement
-	TrackedStmt        = tracking.Statement
-	TrackedTransaction = tracking.Transaction
-	TrackedTx          = tracking.Transaction
+	TrackedDB         = tracking.DB
+	TrackedConnection = tracking.Connection
 )
 
 // Re-export internal functions as public API
 var (
-	NewTrackedDB                  = tracking.NewDB
-	NewTrackedConnection          = tracking.NewConnection
-	TrackDBOperation              = tracking.TrackDBOperation
-	NewTrackingSettings           = tracking.NewSettings
-	RegisterConnectionPoolMetrics = tracking.RegisterConnectionPoolMetrics
+	NewTrackedDB         = tracking.NewDB
+	NewTrackedConnection = tracking.NewConnection
 
 	// SetObservabilityEnabled gates DB-operation OpenTelemetry span/metric emission.
 	// Called once at app bootstrap from the resolved observability.enabled value so
@@ -57,10 +49,4 @@ var (
 	// expired lock_timeout is a real failure. Nested declarations compose — an error
 	// is expected when either predicate matches.
 	WithExpectedError = tracking.WithExpectedError
-)
-
-// Re-export internal constants
-const (
-	DefaultSlowQueryThreshold = tracking.DefaultSlowQueryThreshold
-	DefaultMaxQueryLength     = tracking.DefaultMaxQueryLength
 )
