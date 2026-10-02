@@ -952,8 +952,8 @@ func TestExtractOperationalMetricsNoCounters(t *testing.T) {
 	assert.Equal(t, int64(0), metrics.DBElapsed)
 }
 
-// TestExtractOperationalMetricsPartialCounters verifies mixed presence of counters.
-func TestExtractOperationalMetricsPartialCounters(t *testing.T) {
+// TestExtractOperationalMetricsPartialActivity verifies AMQP-only activity leaves the DB metrics at zero.
+func TestExtractOperationalMetricsPartialActivity(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed the counters; record only AMQP activity

@@ -138,7 +138,7 @@ func TestFactoryResolverHasCustomFactories(t *testing.T) {
 	})
 }
 
-func TestFactoryResolverMessagingClientFactory(t *testing.T) {
+func TestFactoryResolverMessagingClientFactoryWithOptions(t *testing.T) {
 	// The app package can't read messaging's private fields, so deep verification of
 	// ReadyTimeout and the reconnect delays (#662) lives in messaging's tests; here we
 	// assert construction. Port 1 refuses immediately, so the reconnect goroutine fails

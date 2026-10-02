@@ -2193,7 +2193,7 @@ instrumentation and `Recover` cannot put its value on a span (ADR-081). See
 
 **Date:** 2026-10-01 | **Status:** Accepted | **Breaking:** `logger.WithAMQPCounter`/`WithDBCounter`, `FactoryResolver.MessagingClientFactory`, `RouteRegistry.AddRoute`/`RoutesByModule`, `server.NewHandlerContextForTestWithOptions` and the `postgresql`/`oracle` `Statement`/`Transaction` aliases are removed
 
-Five exported names described themselves as compatibility layers ("Retained for backward
+Five groups of exported names were documented as compatibility layers ("Retained for backward
 compatibility", "kept byte-identical for apidiff compatibility", "for consistency with test
 expectations"), which the manifesto's Backward Compatibility principle forbids. Each one
 forwarded to a name that stays, and `MessagingClientFactory(ct, n)` forwarded less than that name does: it silently

@@ -8,9 +8,10 @@
 
 The CLAUDE.md manifesto's Backward Compatibility principle says GoBricks does not keep
 compatibility layers, fallbacks or migration shims in its own API. Old paths are removed and
-the break is documented (ADR + `wiki/migrations.md`). This ADR removes five exported names
-that break this rule, found by a sweep of the exported surface on 2026-10-01. Each one
-describes itself as a compatibility layer in its own doc comment:
+the break is documented (ADR + `wiki/migrations.md`). This ADR removes five groups of
+exported names that break this rule, found by a sweep of the exported surface on 2026-10-01.
+A doc comment describes each group as a compatibility layer: its own doc for items 1–4, and
+for item 5 the `database/internal/wrapper` package doc:
 
 1. **`logger.WithAMQPCounter` / `logger.WithDBCounter`:** "Retained for backward
    compatibility". Both bodies are `return WithRequestCounters(ctx)`. Production code seeds
@@ -27,7 +28,9 @@ describes itself as a compatibility layer in its own doc comment:
    incompatible". `NewHandlerContextForTest` was a one-line forward to it.
 5. **`postgresql.Statement` / `postgresql.Transaction` and `oracle.Statement` /
    `oracle.Transaction`:** type aliases of `database/internal/wrapper`, added by #462 so the
-   names from before the wrapper extraction would keep compiling. Nothing outside the vendor
+   names from before the wrapper extraction would keep compiling (the wrapper package doc: "both
+   vendor packages re-export the wrapper types via type aliases to preserve their public API").
+   Nothing outside the vendor
    packages names them. Consumers already get `types.Statement` / `types.Tx` from `Prepare` /
    `Begin`, and the wrapper keeps `*sql.Stmt` / `*sql.Tx` unexported, so a type assertion to
    the concrete alias gave the caller nothing.
