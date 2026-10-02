@@ -25,7 +25,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       # yamllint: valid GitHub Actions context expression
       framework: ${{ steps.filter.outputs.framework }}
@@ -194,7 +194,10 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    # Pinned ahead of ubuntu-latest's move to 26.04: setup-go keys its cache
+    # by runner image, so legs alternating images miss it. matrix.os stays
+    # ubuntu-latest to keep the matrix.os guards and the check names.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
 
     # framework-test-windows aliases the three anchored steps, so an edit to
     # one of them here changes both jobs (GitHub has no `<<:` merge keys).
@@ -444,8 +447,8 @@ jobs:
           go-version-file: go.mod
           cache: true
           # No other job hashes this file pair, so this job's heavy build cache
-          # has a key of its own: once ubuntu-latest reaches this job's 26.04
-          # image, the light jobs' go.sum-only saves can no longer replace it.
+          # has a key of its own: the light jobs share this job's 26.04 image,
+          # but their go.sum-only saves cannot replace it.
           cache-dependency-path: |
             go.sum
             go.mod
@@ -557,7 +560,7 @@ jobs:
       (needs.framework-test.result == 'success' || needs.framework-test.result == 'skipped') &&
       (needs.framework-integration-test.result == 'success' || needs.framework-integration-test.result == 'skipped') &&
       (needs.migrate-tool-test.result == 'success' || needs.migrate-tool-test.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v7
@@ -747,7 +750,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
 
     steps:
       - uses: actions/checkout@v7
@@ -795,7 +798,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
     defaults: &migrate-tool-defaults
       run:
         working-directory: tools/migration
@@ -880,7 +883,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
       fail-fast: false
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-26.04' || matrix.os }}
     defaults:
       run:
         working-directory: tools/migration
@@ -982,7 +985,7 @@ jobs:
       contents: read
     needs: changes
     if: needs.changes.outputs.migrate_tool == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: tools/migration
@@ -1009,7 +1012,7 @@ jobs:
       contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v7
@@ -1068,7 +1071,7 @@ jobs:
       contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v7
@@ -1088,7 +1091,7 @@ jobs:
       contents: read
     needs: changes
     if: needs.changes.outputs.framework == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1106,7 +1109,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1138,7 +1141,7 @@ jobs:
       contents: read
     needs: changes
     if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v7
@@ -1192,7 +1195,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please--')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v7
@@ -1216,7 +1219,7 @@ jobs:
       needs.changes.result == 'success' &&
       needs.changes.outputs.code == 'true' &&
       needs.framework-merge-coverage.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # No concurrency group here: a cancelled scan fails ci-ok, so nothing may
     # cancel one. The workflow-level group already leaves one live run per PR,
     # and scans of overlapping main pushes may run side by side (the scan only
@@ -1265,7 +1268,7 @@ jobs:
     name: API compatibility
     needs: changes
     if: needs.changes.outputs.framework == 'true' && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v7
@@ -1391,7 +1394,7 @@ jobs:
           # `comm -23` requires sorted, de-duplicated, blank-free inputs; the
           # `grep -v '^[[:space:]]*$'` drops blank lines so an empty apidiff
           # capture cannot inject a spurious empty-line "difference". Bash process
-          # substitution `<()` — the ubuntu-latest runner's default shell is bash;
+          # substitution `<()` — the Ubuntu runner's default shell is bash;
           # a process substitution's own exit status is not propagated to `comm`,
           # so `grep` returning 1 on all-blank input never fails the step.
           delta="$(comm -23 \
@@ -1482,7 +1485,7 @@ jobs:
       - llms-version
       - apidiff
       - sonarcloud
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Verify all required jobs passed
         env:

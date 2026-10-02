@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   mutation-baseline:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # A bridge under the 360-minute hosted-job cap; past it the run must get shorter.
     timeout-minutes: 350
     steps:
@@ -29,12 +29,17 @@ jobs:
           cache: false
 
       - name: Run full-repo mutation baseline
+        # 26.04's /tmp is a quota-capped tmpfs; gremlins' working copies and go
+        # build dirs follow TMPDIR to the work disk instead. Step-level because
+        # the runner context is unavailable in a job-level env.
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: make mutate-baseline || echo "::warning::gremlins exited non-zero (advisory job)"
 
       - name: Disk headroom after the baseline
         if: always()
         run: |
-          { echo '```'; df -h /; du -sh "$(go env GOCACHE)" 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; df -h / "$RUNNER_TEMP" /tmp; du -sh "$(go env GOCACHE)" 2>/dev/null || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish score summary
         if: always()
