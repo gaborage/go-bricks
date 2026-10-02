@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database/internal/tracking"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -305,11 +306,11 @@ func TestTrackDBOperation(t *testing.T) {
 	ctx := logger.WithRequestCounters(context.Background())
 
 	start := time.Now().Add(-10 * time.Millisecond) // Simulate 10ms operation
-	settings := NewTrackingSettings(nil)
+	settings := tracking.NewSettings(nil)
 
 	// Test successful operation
-	tc := &TrackingContext{Logger: log, Vendor: "postgresql", Settings: settings}
-	TrackDBOperation(ctx, tc, "SELECT * FROM test", nil, start, 0, nil)
+	tc := &tracking.Context{Logger: log, Vendor: "postgresql", Settings: settings}
+	tracking.TrackDBOperation(ctx, tc, "SELECT * FROM test", nil, start, 0, nil)
 
 	assertDBCounter(ctx, t, 1)
 	// elapsed should be >= 10ms in nanoseconds
@@ -323,11 +324,11 @@ func TestTrackDBOperationWithError(t *testing.T) {
 
 	start := time.Now()
 	testErr := errors.New("database error")
-	settings := NewTrackingSettings(nil)
+	settings := tracking.NewSettings(nil)
 
 	// This should not panic
-	tc := &TrackingContext{Logger: log, Vendor: "oracle", Settings: settings}
-	TrackDBOperation(ctx, tc, selectAllInvalid, nil, start, 0, testErr)
+	tc := &tracking.Context{Logger: log, Vendor: "oracle", Settings: settings}
+	tracking.TrackDBOperation(ctx, tc, selectAllInvalid, nil, start, 0, testErr)
 
 	// Verify counter was still incremented despite error
 	assertDBCounter(ctx, t, 1)
@@ -446,11 +447,11 @@ func TestTrackDBOperationNilLogger(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	start := time.Now().Add(-10 * time.Millisecond)
-	settings := NewTrackingSettings(nil)
+	settings := tracking.NewSettings(nil)
 
 	assert.NotPanics(t, func() {
-		tc := &TrackingContext{Logger: nil, Vendor: "postgresql", Settings: settings}
-		TrackDBOperation(ctx, tc, selectOne, nil, start, 0, nil)
+		tc := &tracking.Context{Logger: nil, Vendor: "postgresql", Settings: settings}
+		tracking.TrackDBOperation(ctx, tc, selectOne, nil, start, 0, nil)
 	})
 }
 
@@ -459,11 +460,11 @@ func TestTrackDBOperationSqlErrNoRows(t *testing.T) {
 	log := newTestLogger()
 	ctx := context.Background()
 	start := time.Now().Add(-10 * time.Millisecond)
-	settings := NewTrackingSettings(nil)
+	settings := tracking.NewSettings(nil)
 
 	assert.NotPanics(t, func() {
-		tc := &TrackingContext{Logger: log, Vendor: "postgresql", Settings: settings}
-		TrackDBOperation(ctx, tc, "SELECT * FROM users WHERE id = 999", nil, start, 0, sql.ErrNoRows)
+		tc := &tracking.Context{Logger: log, Vendor: "postgresql", Settings: settings}
+		tracking.TrackDBOperation(ctx, tc, "SELECT * FROM users WHERE id = 999", nil, start, 0, sql.ErrNoRows)
 	})
 }
 
@@ -473,13 +474,13 @@ func TestTrackDBOperationSlowQueryThreshold(t *testing.T) {
 	t.Parallel()
 	log := newTestLogger()
 	ctx := context.Background()
-	settings := NewTrackingSettings(&config.DatabaseConfig{Query: config.QueryConfig{Slow: config.SlowQueryConfig{Threshold: DefaultSlowQueryThreshold}}})
+	settings := tracking.NewSettings(&config.DatabaseConfig{Query: config.QueryConfig{Slow: config.SlowQueryConfig{Threshold: tracking.DefaultSlowQueryThreshold}}})
 
 	slowStart := time.Now().Add(-settings.SlowQueryThreshold() - 10*time.Millisecond)
 
 	assert.NotPanics(t, func() {
-		tc := &TrackingContext{Logger: log, Vendor: "postgresql", Settings: settings}
-		TrackDBOperation(ctx, tc, "SELECT * FROM huge_table", nil, slowStart, 0, nil)
+		tc := &tracking.Context{Logger: log, Vendor: "postgresql", Settings: settings}
+		tracking.TrackDBOperation(ctx, tc, "SELECT * FROM huge_table", nil, slowStart, 0, nil)
 	})
 }
 
@@ -490,11 +491,11 @@ func TestTrackDBOperationRegularError(t *testing.T) {
 	start := time.Now().Add(-10 * time.Millisecond)
 
 	regularErr := errors.New("connection timeout")
-	settings := NewTrackingSettings(nil)
+	settings := tracking.NewSettings(nil)
 
 	assert.NotPanics(t, func() {
-		tc := &TrackingContext{Logger: log, Vendor: "oracle", Settings: settings}
-		TrackDBOperation(ctx, tc, selectAllUsers, nil, start, 0, regularErr)
+		tc := &tracking.Context{Logger: log, Vendor: "oracle", Settings: settings}
+		tracking.TrackDBOperation(ctx, tc, selectAllUsers, nil, start, 0, regularErr)
 	})
 }
 
@@ -704,7 +705,7 @@ func TestTrackedDBPrepareContextError(t *testing.T) {
 }
 
 // =============================================================================
-// TrackedStmt Tests - Missing Coverage Areas
+// Tests of statements prepared through NewTrackedDB
 // =============================================================================
 
 func TestTrackedStmtQuery(t *testing.T) {
@@ -891,7 +892,7 @@ func TestTrackedConnectionClose(t *testing.T) {
 }
 
 // =============================================================================
-// TrackedStatement Tests - Missing Coverage Areas
+// Prepared-statement tests through a tracked connection
 // =============================================================================
 
 func TestTrackedStatementQueryRowMissing(t *testing.T) {
