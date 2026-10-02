@@ -914,8 +914,8 @@ func TestExtractOperationalMetricsWithCounters(t *testing.T) {
 	ctx := context.Background()
 
 	// Initialize counters using logger package functions
-	ctx = logger.WithAMQPCounter(ctx)
-	ctx = logger.WithDBCounter(ctx)
+	ctx = logger.WithRequestCounters(ctx)
+	ctx = logger.WithRequestCounters(ctx)
 
 	// Increment counters
 	logger.IncrementAMQPCounter(ctx)
@@ -958,7 +958,7 @@ func TestExtractOperationalMetricsPartialCounters(t *testing.T) {
 	ctx := context.Background()
 
 	// Only initialize AMQP counter (not DB)
-	ctx = logger.WithAMQPCounter(ctx)
+	ctx = logger.WithRequestCounters(ctx)
 
 	// Increment AMQP counter
 	for range 10 {

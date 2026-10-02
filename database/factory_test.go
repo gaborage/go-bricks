@@ -223,7 +223,7 @@ func TestFactoryIntegrationWithTracking(t *testing.T) {
 	defer db.Close()
 
 	log := newTestLogger()
-	ctx := logger.WithDBCounter(context.Background())
+	ctx := logger.WithRequestCounters(context.Background())
 
 	// Set up mock expectations
 	rows := sqlmock.NewRows([]string{"result"}).AddRow(1)

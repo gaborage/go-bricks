@@ -46,24 +46,12 @@ func countersFromContext(ctx context.Context) *requestCounters {
 // DB operation counts and elapsed times) exactly once. It is idempotent — a second
 // call returns the context unchanged, never resetting recorded values — and
 // nil-safe (a nil context is returned as-is). This is the single seeder; a
-// context seeded once exposes all four counters regardless of which name was used.
+// context seeded once exposes all four counters.
 func WithRequestCounters(ctx context.Context) context.Context {
 	if ctx == nil || countersFromContext(ctx) != nil {
 		return ctx
 	}
 	return context.WithValue(ctx, countersKey, &requestCounters{})
-}
-
-// WithAMQPCounter seeds the shared per-request counters. Retained for backward
-// compatibility; prefer WithRequestCounters (both seed the same struct).
-func WithAMQPCounter(ctx context.Context) context.Context {
-	return WithRequestCounters(ctx)
-}
-
-// WithDBCounter seeds the shared per-request counters. Retained for backward
-// compatibility; prefer WithRequestCounters (both seed the same struct).
-func WithDBCounter(ctx context.Context) context.Context {
-	return WithRequestCounters(ctx)
 }
 
 // WithSeverityHook attaches a severity hook to the context. The hook is used by the

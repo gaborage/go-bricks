@@ -63,7 +63,7 @@ func TestWithExpectedErrorIgnoresNilInputs(t *testing.T) {
 }
 
 func TestTrackDBOperationDeclaredExpectedErrorLogsDebug(t *testing.T) {
-	ctx := WithExpectedError(logger.WithDBCounter(context.Background()), isLockNotAvailable)
+	ctx := WithExpectedError(logger.WithRequestCounters(context.Background()), isLockNotAvailable)
 	lockErr := lockNotAvailableErr("could not obtain lock on row in relation \"outbox_leader\"")
 
 	event := trackWithRecorder(ctx, t, lockErr)
