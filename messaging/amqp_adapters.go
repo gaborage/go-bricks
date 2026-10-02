@@ -7,7 +7,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Internal interfaces and adapters to enable testing without a real broker
+// Internal interfaces to enable testing without a real broker
 type amqpConnection interface {
 	Channel() (*amqp.Channel, error)
 	NotifyClose(c chan *amqp.Error) chan *amqp.Error
