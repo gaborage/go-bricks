@@ -110,3 +110,7 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: ${{ matrix.category }}
+          # PR legs upload without waiting for the code-scanning backend to finish
+          # processing the SARIF (~5s each); push and schedule runs still wait, so
+          # a processing failure on main still fails the job.
+          wait-for-processing: ${{ github.event_name != 'pull_request' }}
