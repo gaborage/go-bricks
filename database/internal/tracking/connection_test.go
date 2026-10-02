@@ -202,7 +202,7 @@ func TestConnectionQueryRowTracksOperations(t *testing.T) {
 	mock.ExpectQuery(selectOne).WithArgs(1).WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(99))
 
 	recLogger := newRecordingLogger()
-	underlying := &sqlmockConnection{Connection: &wrapper.Connection{DB: db, Logger: recLogger, Name: "PostgreSQL"}}
+	underlying := &sqlmockConnection{Connection: &wrapper.Connection{DB: db}}
 	conn := NewConnection(underlying, recLogger, &config.DatabaseConfig{}).(*Connection)
 
 	ctx := logger.WithRequestCounters(context.Background())

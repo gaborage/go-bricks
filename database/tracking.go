@@ -5,10 +5,8 @@ import (
 	"github.com/gaborage/go-bricks/database/internal/tracking"
 )
 
-// Re-export the internal tracking implementation as the public API
-type (
-	TrackedConnection = tracking.Connection
-)
+// TrackedConnection re-exports the internal tracking implementation as the public API.
+type TrackedConnection = tracking.Connection
 
 // Re-export internal functions as public API
 var (

@@ -11438,8 +11438,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   types, statement and transaction aliases, the tracking dispatch, the pool-metrics register and
   two default constants) that no framework code outside package `database` used. They are
   deleted (C71.6); `NewTrackedConnection` is the tracking entry point consumers keep. ADR-134.
-- gist: `database.NewTrackedDB` wrapped a raw `*sql.DB` in a tracking type the framework's own
-  connections had stopped using; `NewTrackedConnection` over a `types.Interface` superseded it.
+- gist: `database.NewTrackedDB` wrapped a raw `*sql.DB` in a tracking type the framework never
+  called outside its own tests; framework connections are tracked through `tracking.Connection`.
   `TrackedDB`/`NewTrackedDB` and the wrapper behind them are deleted (C71.7). ADR-134.
 
 ### [C71.1] `logger.WithAMQPCounter` and `logger.WithDBCounter` are removed · compile-break · when: match
@@ -11543,16 +11543,23 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 ### [C71.7] `database.TrackedDB` and `database.NewTrackedDB` are removed, with the raw-`*sql.DB` tracking wrapper · compile-break · when: match
 
 - detect: `git grep -nwE 'TrackedDB|NewTrackedDB' -- '*.go'`. Keep the hits qualified by the
-  `database` package (or your alias for it).
-- scope: `NewTrackedDB(db *sql.DB, log, vendor, cfg)` returned a `*TrackedDB` that wrapped a raw
-  `*sql.DB` with `QueryContext`/`QueryRowContext`/`ExecContext`/`PrepareContext`. The framework's
-  own connections never used it: `database.NewConnection` tracks through
-  `NewTrackedConnection`'s wrapper. The raw-`*sql.DB` wrapper is gone, and no framework type
-  tracks a bare `*sql.DB` any more.
-- gate: match = any `database.`-qualified hit. no-match = otherwise.
-- apply: obtain a `types.Interface` (what `database.NewConnection` returns) instead of a bare
-  `*sql.DB`, and wrap it with `database.NewTrackedConnection(conn, log, cfg)`. Its methods are
-  `Query`/`QueryRow`/`Exec`/`Prepare` (no `Context` suffix; the context is the first argument).
+  `database` package or your import alias for it, and the unqualified hits in a file that
+  dot-imports it.
+- scope: `NewTrackedDB(db *sql.DB, log, vendor, cfg)` returned a `*TrackedDB` that tracked
+  `QueryContext`/`QueryRowContext`/`ExecContext`/`PrepareContext` and embedded the `*sql.DB`, so
+  every promoted `*sql.DB` method (`BeginTx`, `PingContext`, `Stats`, `Close`, the pool setters)
+  was reachable through it too. The framework never called it: `database.NewConnection` tracks
+  through `tracking.Connection`. The raw-`*sql.DB` wrapper is gone, and no framework type tracks
+  a bare `*sql.DB` any more.
+- gate: match = any hit kept above. no-match = otherwise.
+- apply: use `database.NewConnection`, which returns an already-tracked `types.Interface`; do not
+  wrap it again with `NewTrackedConnection` (every operation would be tracked twice). If the
+  `*sql.DB` must stay yours, implement `types.Interface` over it and wrap that with
+  `database.NewTrackedConnection(conn, log, cfg)`. Method map: `QueryContext`/`QueryRowContext`/
+  `ExecContext`/`PrepareContext` → `Query`/`QueryRow`/`Exec`/`Prepare` (context first);
+  `BeginTx` → `BeginTx` returning `types.Tx`; `PingContext` → `Health`; `Stats()` →
+  `Stats()` returning `map[string]any`. Pool sizing moves to the `database.pool.*` config keys,
+  which the vendor constructors apply.
 - verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`
 - ref: [ADR-134](adr_134_database_dead_tracking_surface.md) · `database/tracking.go`,
   `database/internal/tracking/connection.go`
