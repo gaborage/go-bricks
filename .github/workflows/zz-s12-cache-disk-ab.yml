@@ -1,0 +1,202 @@
+# Throwaway A/B for CI slice S12 (do not merge): does putting GOCACHE and
+# GOMODCACHE on the Windows work disk make the cache restore and the warm build
+# faster than the default C: locations?
+#
+# seed builds one realistic cache per arm and saves it; restore replays each arm
+# five times. The D: arm's GOCACHE is built fresh under the D: paths, not copied:
+# without -trimpath a module-cache package's compile action ID hashes its
+# directory, so a copied C: build cache would miss under a D: GOMODCACHE.
+name: zz-s12-cache-disk-ab
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zz-s12-cache-disk-ab-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  seed:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Environment
+        shell: pwsh
+        run: |
+          Write-Host "GITHUB_WORKSPACE=$env:GITHUB_WORKSPACE"
+          Write-Host "ImageOS=$env:ImageOS ImageVersion=$env:ImageVersion"
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String | Write-Host
+          go env GOVERSION GOCACHE GOMODCACHE GOPATH GOTMPDIR
+
+      - name: Download dependencies (C)
+        run: go mod download
+
+      - name: Build (C)
+        shell: pwsh
+        run: |
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
+          if (-not $packages) {
+            Write-Host "No packages found to build"
+            exit 1
+          }
+          go build -v $packages
+
+      - name: Record C paths and sizes
+        id: c
+        shell: pwsh
+        run: |
+          $mod = go env GOMODCACHE
+          $build = go env GOCACHE
+          foreach ($p in @($mod, $build)) {
+            $m = Get-ChildItem -LiteralPath $p -Recurse -File -Force | Measure-Object -Sum Length
+            Write-Host ("SIZE {0}: {1:N0} bytes ({2:N1} MB), {3:N0} files" -f $p, $m.Sum, ($m.Sum / 1MB), $m.Count)
+          }
+          "paths<<S12AB_EOF" >> $env:GITHUB_OUTPUT
+          $mod >> $env:GITHUB_OUTPUT
+          $build >> $env:GITHUB_OUTPUT
+          "S12AB_EOF" >> $env:GITHUB_OUTPUT
+
+      - name: Save C cache
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.c.outputs.paths }}
+          key: s12ab-c-${{ github.run_id }}
+
+      - name: Copy the module cache to the work disk
+        id: d
+        shell: pwsh
+        run: |
+          $d = Split-Path -Qualifier $env:GITHUB_WORKSPACE
+          if ($d -ne 'D:') { Write-Host "::warning::workspace drive is $d, not D:" }
+          if (-not $d -or $d -eq 'C:') {
+            Write-Host "::error::workspace drive is '$d'; the D: arm would equal the C: arm"
+            exit 1
+          }
+          robocopy (go env GOMODCACHE) "$d\go-mod" /MIR /MT:16 /R:1 /W:1 /NFL /NDL /NP
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          "gomodcache=$d\go-mod" >> $env:GITHUB_OUTPUT
+          "gocache=$d\go-build" >> $env:GITHUB_OUTPUT
+          exit 0
+
+      - name: Download dependencies (D)
+        env:
+          GOMODCACHE: ${{ steps.d.outputs.gomodcache }}
+          GOCACHE: ${{ steps.d.outputs.gocache }}
+        run: go mod download
+
+      - name: Build (D)
+        shell: pwsh
+        env:
+          GOMODCACHE: ${{ steps.d.outputs.gomodcache }}
+          GOCACHE: ${{ steps.d.outputs.gocache }}
+        run: |
+          go env GOCACHE GOMODCACHE
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
+          if (-not $packages) {
+            Write-Host "No packages found to build"
+            exit 1
+          }
+          go build -v $packages
+
+      - name: Record D sizes
+        shell: pwsh
+        env:
+          GOMODCACHE: ${{ steps.d.outputs.gomodcache }}
+          GOCACHE: ${{ steps.d.outputs.gocache }}
+        run: |
+          foreach ($p in @($env:GOMODCACHE, $env:GOCACHE)) {
+            $m = Get-ChildItem -LiteralPath $p -Recurse -File -Force | Measure-Object -Sum Length
+            Write-Host ("SIZE {0}: {1:N0} bytes ({2:N1} MB), {3:N0} files" -f $p, $m.Sum, ($m.Sum / 1MB), $m.Count)
+          }
+
+      - name: Save D cache
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ steps.d.outputs.gomodcache }}
+            ${{ steps.d.outputs.gocache }}
+          key: s12ab-d-${{ github.run_id }}
+
+  restore:
+    needs: seed
+    name: restore (${{ matrix.side }}, ${{ matrix.rep }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [c, d]
+        rep: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The plan's S12 step, verbatim.
+      - name: Put Go caches on the work disk
+        if: matrix.side == 'd'
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          $d = Split-Path -Qualifier $env:GITHUB_WORKSPACE
+          if ($d -and $d -ne 'C:') { "GOCACHE=$d\go-build" >> $env:GITHUB_ENV; "GOMODCACHE=$d\go-mod" >> $env:GITHUB_ENV }
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache paths
+        id: paths
+        shell: pwsh
+        run: |
+          Write-Host "ImageOS=$env:ImageOS ImageVersion=$env:ImageVersion"
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String | Write-Host
+          "paths<<S12AB_EOF" >> $env:GITHUB_OUTPUT
+          go env GOMODCACHE >> $env:GITHUB_OUTPUT
+          go env GOCACHE >> $env:GITHUB_OUTPUT
+          "S12AB_EOF" >> $env:GITHUB_OUTPUT
+
+      - name: Restore cache
+        id: restore
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.paths.outputs.paths }}
+          key: s12ab-${{ matrix.side }}-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Require an exact hit
+        if: steps.restore.outputs.cache-hit != 'true'
+        run: exit 1
+
+      - name: Show cache location
+        run: go env GOCACHE GOMODCACHE
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Warm build
+        shell: pwsh
+        run: |
+          $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
+          if (-not $packages) {
+            Write-Host "No packages found to build"
+            exit 1
+          }
+          $out = go build -v $packages 2>&1
+          $code = $LASTEXITCODE
+          $out | ForEach-Object { Write-Host "$_" }
+          Write-Host ("REBUILT {0}" -f @($out | Where-Object { $_ }).Count)
+          exit $code
