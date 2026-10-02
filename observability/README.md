@@ -228,6 +228,7 @@ observability:
 | `metrics.headers` | map[string]string | Fallback to `trace.headers` | Custom headers for metrics authentication |
 | `metrics.interval` | duration | `10s` | Metric export interval |
 | `metrics.export.timeout` | duration | `10s (development/stdout) / 60s (production)` | Maximum time for metric export operation |
+| `metrics.max.batch.size` | int | `0` (no cap) | Maximum metric data points per Export call; the export timeout applies per batch. Unlike `trace.max.batch.size`, `0` means no cap. Negative values fail validation |
 
 ## Advanced Usage
 

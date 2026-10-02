@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -860,4 +861,112 @@ func TestNewProviderWithMetricsAndAllOptions(t *testing.T) {
 	// Cleanup
 	err = provider.Shutdown(context.Background())
 	assert.NoError(t, err)
+}
+
+// countingMetricExporter records the data-point count of every Export call.
+type countingMetricExporter struct {
+	inMemoryMetricExporter
+	mu    sync.Mutex
+	sizes []int
+}
+
+func (e *countingMetricExporter) Export(_ context.Context, rm *metricdata.ResourceMetrics) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sizes = append(e.sizes, countDataPoints(rm))
+	return nil
+}
+
+func (e *countingMetricExporter) exportSizes() []int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]int(nil), e.sizes...)
+}
+
+func countDataPoints(rm *metricdata.ResourceMetrics) int {
+	n := 0
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch d := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				n += len(d.DataPoints)
+			case metricdata.Sum[float64]:
+				n += len(d.DataPoints)
+			case metricdata.Gauge[int64]:
+				n += len(d.DataPoints)
+			case metricdata.Gauge[float64]:
+				n += len(d.DataPoints)
+			case metricdata.Histogram[int64]:
+				n += len(d.DataPoints)
+			case metricdata.Histogram[float64]:
+				n += len(d.DataPoints)
+			case metricdata.ExponentialHistogram[int64]:
+				n += len(d.DataPoints)
+			case metricdata.ExponentialHistogram[float64]:
+				n += len(d.DataPoints)
+			case metricdata.Summary:
+				n += len(d.DataPoints)
+			}
+		}
+	}
+	return n
+}
+
+// flushExportSizes builds a provider with metrics.max.batch.size = size, records
+// five counter series, force-flushes once and returns each Export call's point count.
+func flushExportSizes(t *testing.T, size int) []int {
+	t.Helper()
+	exporter := &countingMetricExporter{}
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{Name: "test-batch-service", Version: "1.0.0"},
+		Metrics: MetricsConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: EndpointStdout,
+			Interval: time.Hour,
+			Max:      MetricsMaxConfig{Batch: MaxBatchConfig{Size: size}},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	originalWrapper := getMetricExporterWrapper()
+	setMetricExporterWrapper(func(_ sdkmetric.Exporter) sdkmetric.Exporter {
+		return exporter
+	})
+	defer setMetricExporterWrapper(originalWrapper)
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = provider.Shutdown(ctx)
+	}()
+
+	counter, err := CreateCounter(provider.MeterProvider().Meter(testMeterName), "test.batch.counter", "batch test counter")
+	require.NoError(t, err)
+	for i := range 5 {
+		counter.Add(context.Background(), 1, metric.WithAttributes(attribute.Int("series", i)))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, provider.ForceFlush(ctx))
+	return exporter.exportSizes()
+}
+
+func TestMetricsMaxBatchSizeCapsEachExport(t *testing.T) {
+	sizes := flushExportSizes(t, 2)
+
+	require.GreaterOrEqual(t, len(sizes), 2, "a capped flush must split into several Export calls")
+	for i, n := range sizes {
+		assert.LessOrEqual(t, n, 2, "Export call %d carried %d points", i, n)
+	}
+}
+
+func TestMetricsMaxBatchSizeZeroExportsOneBatch(t *testing.T) {
+	sizes := flushExportSizes(t, 0)
+
+	require.Len(t, sizes, 1, "an uncapped flush is a single Export call")
+	assert.GreaterOrEqual(t, sizes[0], 5)
 }
