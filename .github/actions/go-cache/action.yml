@@ -79,7 +79,7 @@ runs:
         trial=''
         if [ "$WRITER" = true ] && [ "$FAMILY" = fw-build ] && [ "$RUNNER_OS" = Windows ]; then
           push_writer=true
-          trial='s31trial-'
+          trial='s31trial2-'
         fi
         prefix="gocache-${FAMILY}-${trial}${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS:-none}-${gover}-"
         {
