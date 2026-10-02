@@ -110,3 +110,5 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: ${{ matrix.category }}
+          # PRs skip the SARIF-processing wait; main keeps it so a processing failure fails the job.
+          wait-for-processing: ${{ github.event_name != 'pull_request' }}
