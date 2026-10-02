@@ -1,4 +1,3 @@
-// scratch: code-only filter drill (never merged)
 module github.com/gaborage/go-bricks/tools/migration
 
 go 1.27.0

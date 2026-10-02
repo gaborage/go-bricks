@@ -787,3 +787,5 @@ Pattern rules:
 
 Property suites are ordinary `go test` tests: they run in `make test`, under
 `-race`, and count toward coverage.
+
+<!-- scratch: docs-only filter drill (never merged) -->
