@@ -635,10 +635,8 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      # !cancelled() lets each check still report when an earlier step fails.
-      # verify-mod stays last: `go mod tidy` rewrites go.mod/go.sum in place.
       - name: Build (Unix)
-        if: ${{ !cancelled() }}
+        id: build
         run: |
           set -euo pipefail
           packages=$(go list ./... | grep -vE '/tools(/|$)')
@@ -649,14 +647,15 @@ jobs:
             exit 1
           fi
 
+      # !cancelled() lets each check still report when an earlier step fails.
       - name: Run govulncheck (framework)
         if: ${{ !cancelled() }}
         run: make vuln
 
-      # Saved before the apidiff chain and verify-mod: no step after this point
-      # reaches the saved entry.
+      # Saved after vuln, whatever its verdict, so govulncheck's build output is
+      # in the entry. No step after this point reaches the saved entry.
       - name: Save Go cache
-        if: steps.gocache.outputs.save == 'true'
+        if: ${{ !cancelled() && steps.gocache.outputs.save == 'true' && steps.build.outcome == 'success' }}
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}
@@ -694,7 +693,7 @@ jobs:
 
       - name: Resolve latest release tag (baseline)
         id: baseline
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.apidiff_install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.apidiff_install.outcome == 'success' }}
         run: |
           set -euo pipefail
           git fetch --tags --force --quiet
@@ -713,10 +712,7 @@ jobs:
 
       - name: Build baseline API snapshot (at latest tag)
         id: snapshot_tag
-        if: >-
-          ${{ !cancelled() && github.event_name == 'pull_request'
-          && steps.apidiff_install.outcome == 'success'
-          && steps.baseline.outcome == 'success' && steps.baseline.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' && steps.baseline.outputs.skip != 'true' }}
         env:
           BASE_TAG: ${{ steps.baseline.outputs.base_tag }}
           # GOWORK=off restricts the diff to the ROOT module's packages and
@@ -735,10 +731,7 @@ jobs:
 
       - name: Build base-branch API snapshot (unreleased baseline)
         id: snapshot_base
-        if: >-
-          ${{ !cancelled() && github.event_name == 'pull_request'
-          && steps.apidiff_install.outcome == 'success'
-          && steps.baseline.outcome == 'success' && steps.baseline.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' && steps.baseline.outputs.skip != 'true' }}
         env:
           GOWORK: "off"
         run: |
@@ -767,21 +760,15 @@ jobs:
 
       - name: Build PR-head API snapshot
         id: snapshot_head
-        if: >-
-          ${{ !cancelled() && github.event_name == 'pull_request'
-          && steps.apidiff_install.outcome == 'success'
-          && steps.baseline.outcome == 'success' && steps.baseline.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' && steps.baseline.outputs.skip != 'true' }}
         env:
           GOWORK: "off"
         run: GOWORK=off apidiff -m -w /tmp/apidiff-head.snapshot github.com/gaborage/go-bricks
 
       - name: Diff exported API and enforce escape hatch
         if: >-
-          ${{ !cancelled() && github.event_name == 'pull_request'
-          && steps.apidiff_install.outcome == 'success'
-          && steps.baseline.outcome == 'success' && steps.baseline.outputs.skip != 'true'
-          && steps.snapshot_tag.outcome == 'success' && steps.snapshot_base.outcome == 'success'
-          && steps.snapshot_head.outcome == 'success' }}
+          ${{ !cancelled() && steps.snapshot_tag.outcome == 'success'
+          && steps.snapshot_base.outcome == 'success' && steps.snapshot_head.outcome == 'success' }}
         env:
           GOWORK: "off"
           BASE_TAG: ${{ steps.baseline.outputs.base_tag }}
@@ -856,6 +843,7 @@ jobs:
           git worktree remove --force /tmp/apidiff-base || true
           git worktree remove --force /tmp/apidiff-main || true
 
+      # verify-mod stays last: `go mod tidy` rewrites go.mod/go.sum in place.
       - name: Verify go mod (Ubuntu only)
         if: ${{ !cancelled() }}
         run: make verify-mod
