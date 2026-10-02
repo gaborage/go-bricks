@@ -11517,17 +11517,21 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 ### [C71.6] ten `database` tracking re-exports are removed · compile-break · when: match
 
 - detect: `git grep -nwE 'TrackingContext|TrackedStatement|TrackedStmt|TrackedTransaction|TrackedTx|TrackDBOperation|NewTrackingSettings|RegisterConnectionPoolMetrics|DefaultSlowQueryThreshold|DefaultMaxQueryLength' -- '*.go'`.
-  Keep the hits qualified by the `database` package (or your alias for it).
+  Keep the hits qualified by the `database` package or your import alias for it, and the
+  unqualified hits in a file that dot-imports it.
 - scope: `database/tracking.go` re-exported these internal tracking names. No framework code
   outside package `database` used them. `NewTrackedConnection`, `TrackedConnection`,
   `SetObservabilityEnabled`, `WithRepositoryMethod`, `RepositoryMethodFromContext` and
   `WithExpectedError` are unaffected.
-- gate: match = any `database.`-qualified hit. no-match = otherwise.
-- apply: to track a connection, wrap a `types.Interface` with
-  `database.NewTrackedConnection(conn, log, cfg)`; it builds the settings and calls the tracking
-  dispatch itself, so drop hand-built `TrackingContext`/`NewTrackingSettings`/`TrackDBOperation`
-  calls. Drop `RegisterConnectionPoolMetrics` calls: `database.NewConnection` registers the pool
-  metrics. Replace `DefaultSlowQueryThreshold` with `200 * time.Millisecond` and
+- gate: match = any hit kept above. no-match = otherwise.
+- apply: a connection from `database.NewConnection` is already tracked; drop hand-built
+  `TrackingContext`/`NewTrackingSettings`/`TrackDBOperation` calls around it. To track a
+  `types.Interface` you build yourself, wrap it with `database.NewTrackedConnection(conn, log,
+  cfg)`, which builds the settings and calls the tracking dispatch itself; never wrap a
+  `database.NewConnection` result again (every operation would be tracked twice). Drop
+  `RegisterConnectionPoolMetrics` calls on framework connections: the vendor constructors behind
+  `database.NewConnection` register the pool metrics. A connection you build yourself has no
+  public pool-metrics door. Replace `DefaultSlowQueryThreshold` with `200 * time.Millisecond` and
   `DefaultMaxQueryLength` with `1000`, or leave `database.query.slow.threshold` /
   `database.query.log.max` unset to get those values.
 - verify: `go build ./... && go vet ./... && go vet -tags=integration ./...`

@@ -705,7 +705,7 @@ func TestTrackedDBPrepareContextError(t *testing.T) {
 }
 
 // =============================================================================
-// TrackedStmt Tests - Missing Coverage Areas
+// Tests of statements prepared through NewTrackedDB
 // =============================================================================
 
 func TestTrackedStmtQuery(t *testing.T) {

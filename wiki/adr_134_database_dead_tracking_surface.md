@@ -9,7 +9,7 @@
 `database/tracking.go` re-exports the internal tracking package
 (`database/internal/tracking`) as public API. A sweep of the exported surface on 2026-10-01
 found that most of those re-exports have no caller outside package `database`, and that one
-of them exposes a whole wrapper the framework itself no longer uses:
+of them exposes a whole wrapper the framework never used:
 
 1. **Ten dead re-exports.** The type aliases `TrackingContext`, `TrackedStatement`,
    `TrackedStmt`, `TrackedTransaction`, `TrackedTx`, the function aliases `TrackDBOperation`,
@@ -21,11 +21,13 @@ of them exposes a whole wrapper the framework itself no longer uses:
    `tracking.RegisterConnectionPoolMetrics` directly. Only `database`'s own tests used the
    aliases.
 2. **`TrackedDB` / `NewTrackedDB` and the `*sql.DB` wrapper behind them.** `tracking.DB`
-   wraps a raw `*sql.DB`. It dates from the framework's first commits and was superseded by
+   wraps a raw `*sql.DB`. It dates from the framework's first commits and was never called
+   outside `database/tracking.go` and tests: tracking reached the live path with
    `tracking.Connection`, which wraps a `types.Interface` and is what `database.NewConnection`
-   builds (`database/factory.go`). `tracking.DB` was reachable only through `NewTrackedDB`,
-   and no document mentions it. Its prepared statements came back as
-   `tracking.BasicStatement`, which duplicates the kept `wrapper.Statement`.
+   builds (`database/factory.go`). `tracking.DB` was reachable only through `NewTrackedDB`, and
+   no document mentions it. It embedded `*sql.DB`, so the promoted methods (`BeginTx`,
+   `PingContext`, `Stats`, the pool setters) were public surface too. Its prepared statements
+   came back as `tracking.BasicStatement`, which duplicates the kept `wrapper.Statement`.
 
 The deletion test asked of each name: if it disappeared, would any behavior be lost, or would
 complexity reappear somewhere else? For the aliases, no: every one is a second name for
@@ -42,14 +44,14 @@ with its constructor and methods, and `tracking.BasicStatement` (stack link 2).
 
 | Removed | Use instead |
 | --- | --- |
-| `database.TrackingContext`, `TrackedStatement`/`TrackedStmt`, `TrackedTransaction`/`TrackedTx`, `TrackDBOperation`, `NewTrackingSettings` | wrap a `types.Interface` with `database.NewTrackedConnection`; it builds the settings and context and calls the tracking dispatch itself |
-| `database.RegisterConnectionPoolMetrics` | none needed: `database.NewConnection` registers the pool metrics for every vendor |
+| `database.TrackingContext`, `TrackedStatement`/`TrackedStmt`, `TrackedTransaction`/`TrackedTx`, `TrackDBOperation`, `NewTrackingSettings` | a connection from `database.NewConnection` is already tracked; wrap a `types.Interface` you build yourself with `database.NewTrackedConnection`, which builds the settings and context and calls the tracking dispatch itself |
+| `database.RegisterConnectionPoolMetrics` | none for framework connections: the vendor constructors behind `database.NewConnection` register the pool metrics; a connection a consumer builds itself has no public pool-metrics door |
 | `database.DefaultSlowQueryThreshold`, `DefaultMaxQueryLength` | the values (`200ms`, `1000`) inline, or leave `database.query.slow.threshold` / `database.query.log.max` unset to get them |
-| `database.TrackedDB`, `database.NewTrackedDB(*sql.DB, …)` | `database.NewTrackedConnection(conn, log, cfg)` over a `types.Interface`; the raw-`*sql.DB` wrapper is gone |
+| `database.TrackedDB`, `database.NewTrackedDB(*sql.DB, …)` | `database.NewConnection` (already tracked), or a `types.Interface` you implement over the `*sql.DB`, wrapped with `database.NewTrackedConnection`; the raw-`*sql.DB` wrapper is gone |
 
 Kept on purpose: `NewTrackedConnection` and `TrackedConnection` (the inbox and outbox tests
 drive real stores through them, and `TrackedConnection` is a consumer's only nameable handle
-on `SetServerInfo`/`Session`), `SetObservabilityEnabled`, `WithRepositoryMethod`,
+on `SetServerInfo`), `SetObservabilityEnabled`, `WithRepositoryMethod`,
 `RepositoryMethodFromContext`, `WithExpectedError`. Inside `database/internal/tracking`,
 `Connection`, `Statement`, `Transaction`, `NewSettings`, `TrackDBOperation`,
 `RegisterConnectionPoolMetrics` and the constants stay. `database`'s own tests now import the
@@ -70,11 +72,12 @@ internal package directly, which the `database/` subtree allows.
 
 - Compile break for any consumer that names a removed identifier. `go build ./... && go vet
   ./... && go vet -tags=integration ./...` finds every site.
-- A consumer that tracked a raw `*sql.DB` through `NewTrackedDB` must wrap a `types.Interface`
-  (what `database.NewConnection` returns) with `NewTrackedConnection` instead. There is no
-  framework wrapper for a bare `*sql.DB` any more.
-- Two stack links share this ADR (precedent: ADR-128 covered the three links of #1853). If
-  review changes link 2's scope, link 2 appends an amendment here.
+- A consumer that tracked a raw `*sql.DB` through `NewTrackedDB` moves to `database.NewConnection`,
+  which returns an already-tracked connection, or implements `types.Interface` over its
+  `*sql.DB` and wraps that with `NewTrackedConnection`. Wrapping a `database.NewConnection`
+  result again would track every operation twice. There is no framework wrapper for a bare
+  `*sql.DB` any more.
+- Two stack links share this ADR (precedent: ADR-128 covered the three links of #1853).
 
 ## References
 
