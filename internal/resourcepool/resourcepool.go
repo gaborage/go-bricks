@@ -19,16 +19,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 )
 
 // ErrPoolClosed is returned by GetOrCreate after Close has been called.
 // Callers can errors.Is(err, ErrPoolClosed) to distinguish "pool is gone" from
 // a per-resource creation failure. One deliberate exception: a caller already
-// mid-GetOrCreate on a fresh entry another borrower holds may still receive
-// that live handle after Close returns; it closes exactly once, at its final
-// release.
+// mid-GetOrCreate on a fresh entry Close could not close (another borrower holds
+// it, or Remove detached it during its create) may still receive that live
+// handle after Close returns; it closes exactly once, at its final release.
 var ErrPoolClosed = errors.New("resourcepool: pool closed")
 
 // Closer releases the underlying resource. It is always invoked OUTSIDE the
@@ -45,10 +43,9 @@ type Closer[V any] func(v V) error
 // last lease is released. See ADR-032.
 type ReleaseFunc func()
 
-// maxAcquireAttempts bounds the rare retry where a freshly resolved entry is
-// evicted before the caller can take a lease (only under extreme pool churn). A
-// new entry is inserted at the LRU front with a seed lease, so in practice the
-// first attempt always succeeds.
+// maxAcquireAttempts bounds GetOrCreate's acquire loop. Every waiter of a create holds a seed
+// lease reserved at install, so only Close can refuse a claim, and the next attempt then returns
+// ErrPoolClosed: the loop never reaches this bound.
 const maxAcquireAttempts = 4
 
 // PoolStats is a point-in-time snapshot of the pool's counters. Consumers adapt
@@ -73,7 +70,7 @@ type EntrySnapshot struct {
 }
 
 // entry represents a pooled resource in the LRU.
-// refs, seedHeld, detached, and closed are guarded by Pool.mu.
+// refs, seeds, detached, and closed are guarded by Pool.mu.
 type entry[V any] struct {
 	value    V
 	key      string
@@ -82,11 +79,11 @@ type entry[V any] struct {
 
 	// refs counts outstanding leases (current borrowers); an entry with refs > 0 is in use.
 	refs int
-	// seedHeld is true when one of refs is an unclaimed "seed" lease taken at creation. The
-	// seed keeps a brand-new entry alive (refs >= 1) through the window before its first
-	// GetOrCreate caller claims it, so a concurrent evict/Remove can only detach (never close)
-	// it. The first claimOrAcquire takes the seed; later callers increment refs normally.
-	seedHeld bool
+	// seeds counts the refs that are unclaimed "seed" leases, one reserved at install for each
+	// GetOrCreate caller waiting on the create. The seeds keep a brand-new entry alive through the
+	// window before those callers claim, so a concurrent evict/Remove can only detach (never
+	// close) it. Each waiter's claimSeed turns one seed into its lease.
+	seeds int
 	// detached marks an entry removed from the map+LRU whose Closer was deferred because a
 	// lease was still outstanding.
 	detached bool
@@ -94,13 +91,10 @@ type entry[V any] struct {
 	closed bool
 }
 
-// liveLeases counts leases held by actual borrowers, discounting an unclaimed seed.
+// liveLeases counts leases held by actual borrowers, discounting unclaimed seeds.
 // Must be called with Pool.mu held.
 func (e *entry[V]) liveLeases() int {
-	if e.seedHeld {
-		return e.refs - 1
-	}
-	return e.refs
+	return e.refs - e.seeds
 }
 
 // Pool is a keyed pool of leasable, refcounted, LRU-capped, idle-evicted
@@ -109,7 +103,8 @@ type Pool[V any] struct {
 	mu      sync.Mutex
 	entries map[string]*entry[V]
 	lru     *list.List
-	sf      singleflight.Group
+	// pending holds each key's in-flight create that new callers may still join (guarded by mu).
+	pending map[string]*pendingCreate[V]
 
 	maxSize int
 	idleTTL time.Duration
@@ -128,8 +123,9 @@ type Pool[V any] struct {
 	// bounds the map by concurrent creates; a per-key ledger would instead grow with every
 	// removed tenant or named connection, unbounded by maxSize.
 	generation map[string]uint64
-	// inFlight counts createEntry calls that have captured a generation but not yet finished
-	// installing. Remove uses it to count Removals for an in-flight-only invalidation.
+	// inFlight counts creates that have captured a generation but not yet finished installing,
+	// including ones Remove already invalidated. Remove uses it to count Removals for an
+	// in-flight-only invalidation.
 	inFlight map[string]int
 
 	// errors counts create failures and tracked close failures. Atomic so incErrors and
@@ -141,10 +137,10 @@ type Pool[V any] struct {
 	// joins the loop: by the time Close drains this, the cleanup goroutine has finished recording.
 	cleanupErrs []error
 
-	// closed flips to true the moment Close begins. Read on the hot path of
-	// GetOrCreate so callers immediately see ErrPoolClosed instead of receiving a
-	// handle to a resource that is about to be torn down. Atomic so the hot path
-	// does not need to take mu just to consult shutdown state.
+	// closed flips to true the moment Close begins. GetOrCreate reads it before leasing or
+	// joining a create, so callers immediately see ErrPoolClosed instead of receiving a
+	// handle to a resource that is about to be torn down. Atomic because Close sets it, and
+	// Closed and StartCleanup read it, without mu.
 	closed atomic.Bool
 
 	// Cleanup-goroutine lifecycle (guarded by cleanupMu, independent of mu).
@@ -161,6 +157,7 @@ func New[V any](maxSize int, idleTTL time.Duration, closer Closer[V]) *Pool[V] {
 	return &Pool[V]{
 		entries:    make(map[string]*entry[V]),
 		lru:        list.New(),
+		pending:    make(map[string]*pendingCreate[V]),
 		generation: make(map[string]uint64),
 		inFlight:   make(map[string]int),
 		maxSize:    maxSize,
@@ -172,167 +169,111 @@ func New[V any](maxSize int, idleTTL time.Duration, closer Closer[V]) *Pool[V] {
 // GetOrCreate returns the resource for key plus a ReleaseFunc the caller must
 // invoke when finished with it for the current unit of work (typically
 // deferred). It creates the resource via create on first use, collapsing
-// concurrent creates for the same key through singleflight. Returns
+// concurrent creates for the same key into one shared create. Returns
 // ErrPoolClosed if Close has been called — except a caller already
-// mid-GetOrCreate on a fresh entry another borrower holds, who may still
-// receive that live handle after Close returns; it closes exactly once, at
-// its final release. On error the returned ReleaseFunc is nil — check err
+// mid-GetOrCreate on a fresh entry Close could not close (see ErrPoolClosed),
+// who may still receive that live handle after Close returns; it closes
+// exactly once, at its final release. On error the returned ReleaseFunc is nil — check err
 // first. A panic inside create is recovered and returned as an error naming
 // only the panic value's type (ADR-081), leaving the pool usable.
 func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(context.Context) (V, error)) (V, ReleaseFunc, error) {
 	var zero V
 	for attempt := 0; attempt < maxAcquireAttempts; attempt++ {
-		// Re-check on every iteration (not just once up front): a concurrent Close must not be
-		// raced into recreating an entry on a shut-down pool. createEntry also re-checks under
-		// the lock to close the window fully.
-		if p.closed.Load() {
-			return zero, nil, ErrPoolClosed
-		}
-
-		// Fast path: getExisting increments the refcount atomically with the lookup, so the
-		// entry cannot be evicted-and-closed before the lease is taken.
-		if e := p.getExisting(key); e != nil {
-			return e.value, p.makeRelease(e), nil
-		}
-
-		// Slow path: collapse concurrent creates for this key into one shared entry.
-		e, err := p.acquireShared(ctx, key, create)
+		e, c, err := p.leaseOrJoin(ctx, key, create)
 		if err != nil {
 			return zero, nil, err
 		}
-
-		// e is nil only if the assertion in acquireShared failed, which its sole producer
-		// makes impossible; the short-circuit falls into the retry loop rather than adding
-		// a branch no test can enter.
-		if e != nil && p.claimOrAcquire(e) {
-			return e.value, p.makeRelease(e), nil
+		if c != nil {
+			if e, err = p.await(ctx, c); err != nil {
+				return zero, nil, err
+			}
+			if !p.claimSeed(e) {
+				// Only Close refuses a reserved seed, so the next attempt returns ErrPoolClosed.
+				continue
+			}
 		}
-		// The reused entry was closed in the window between lookup and claim (a concurrent
-		// evict/Remove of an unleased entry); loop to create a fresh one. The create path
-		// always succeeds because a new entry carries a seed lease, so this converges.
+		return e.value, p.makeRelease(e), nil
 	}
 
 	return zero, nil, fmt.Errorf("resourcepool: failed to acquire %q after %d attempts (pool churn)", key, maxAcquireAttempts)
 }
 
-// acquireShared collapses concurrent creates for key into one and returns the shared
-// entry — freshly created with a seed lease, or an existing one. The caller then takes
-// its own lease on that pointer via claimOrAcquire: the first claims the seed, the rest
-// increment, so every concurrent borrower is counted.
-//
-// DoChan (not Do) so every collapsed caller waits on ITS OWN context: Do blocks
-// uncancelably, so a caller whose budget was already spent still sat through the whole
-// dial before being handed an error that was not its own.
-func (p *Pool[V]) acquireShared(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
-	ch := p.sf.DoChan(key, func() (any, error) {
-		if e := p.peek(key); e != nil {
-			return e, nil
-		}
-		e, cerr := p.createEntry(ctx, key, create)
-		if cerr != nil {
-			// Count the failure once, HERE in the singleflight leader. Every collapsed caller
-			// receives the same error, so incrementing per caller would over-count a single
-			// create failure by the number of blocked callers.
-			p.incErrors()
-			return nil, cerr
-		}
-		return e, nil
-	})
+// pendingCreate is one in-flight create for a key, shared by every GetOrCreate caller that
+// arrives before it finishes. The pool coalesces creates itself, rather than through
+// singleflight, because the install must know how many callers wait on it: it reserves one seed
+// lease per waiter, so no waiter can find the entry closed before it claims (ADR-032). gen and
+// waiters are guarded by Pool.mu; e and err are written under Pool.mu before done closes, and
+// read after it.
+type pendingCreate[V any] struct {
+	done    chan struct{}
+	gen     uint64 // the key's generation when the create began; a Remove that moves it detaches the result
+	waiters int    // callers still waiting; the install reserves one seed lease for each
+	e       *entry[V]
+	err     error
+}
 
-	var res singleflight.Result
+// leaseOrJoin leases the cached entry for key, or joins the key's in-flight create, starting one
+// when none is running. Both happen under ONE lock acquisition: a gap between the cache miss and
+// the join would let a create install in between, and this caller would start a second create
+// for a cached key. Joining counts the caller as a waiter, which is its seed reservation.
+func (p *Pool[V]) leaseOrJoin(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], *pendingCreate[V], error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Checked under the lock, so a caller arriving after Close never joins or starts a create.
+	if p.closed.Load() {
+		return nil, nil, ErrPoolClosed
+	}
+
+	if e, ok := p.entries[key]; ok {
+		p.lru.MoveToFront(e.element)
+		e.lastUsed = time.Now()
+		e.refs++
+		return e, nil, nil
+	}
+
+	c := p.pending[key]
+	if c == nil {
+		c = p.beginCreateLocked(key)
+		go p.createEntry(ctx, key, c, create)
+	}
+	c.waiters++
+	return nil, c, nil
+}
+
+// await waits for c on the caller's OWN context, so a caller whose budget is spent stops waiting
+// without canceling the create, which still installs for everyone else. A caller that gives up
+// withdraws its reservation under the lock the install reads it under, so an abandoned caller
+// never leaves a seed that would pin the entry open; one that loses that race to the install
+// takes the result it was reserved, as if its wait had ended first.
+func (p *Pool[V]) await(ctx context.Context, c *pendingCreate[V]) (*entry[V], error) {
 	select {
-	case res = <-ch:
+	case <-c.done:
+		return c.e, c.err
 	case <-ctx.Done():
-		// This caller gives up on its own budget; the create is deliberately NOT canceled, so
-		// it still installs the resource for future callers. singleflight's result channel is
-		// buffered (capacity 1), so the abandoned send never blocks — but a fresh entry's seed
-		// lease would go unclaimed, so releaseAbandoned settles it off this goroutine.
-		go p.releaseAbandoned(ch)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	select {
+	case <-c.done:
+		return c.e, c.err
+	default:
+		c.waiters-- // not installed yet: no seed will be reserved for this caller
 		return nil, ctx.Err()
 	}
-	if res.Err != nil {
-		return nil, res.Err
-	}
-
-	// The assertion cannot fail — the DoChan closure above is the only producer — so a nil
-	// return short-circuits into the caller's retry loop instead of adding a dead branch.
-	e, _ := res.Val.(*entry[V])
-	return e, nil
 }
 
-// releaseAbandoned settles a collapsed create whose caller returned early on its own context. The
-// create ran to completion, and a freshly created entry carries an unclaimed seed lease — taking
-// and immediately releasing a lease hands that seed back. A still-valid create becomes a normal
-// unleased cached entry that eviction, idle cleanup, and Close can close; a create that Remove
-// invalidated while in flight is detached at birth, so this release is what runs its Closer. Without
-// it the seed would pin refs >= 1 forever and a later eviction would detach the resource with its
-// close deferred to a release that never comes, leaking it. Runs on its own goroutine, bounded by
-// the create's own completion.
-//
-// These goroutines are deliberately NOT joined by Close, unlike the cleanup loop. Joining them
-// would make Close wait on an in-flight CREATE, and creation currently carries no bound of its own
-// (see createEntry) — a driver dial can outlast the whole shutdown budget, trading a narrow missed
-// close for a shutdown that may never return. What remains is narrow: an entry installed here and
-// then evicted while its seed was still unclaimed is detached but not closed, so a concurrent Close
-// (which can no longer see it) may return while this goroutine's releaseEntry runs the Closer. It
-// cannot double-close or resurrect the pool — createEntry re-checks closed under mu, and Close
-// marks closed every entry it drains that has no live borrower; a borrowed one is closed exactly
-// once by its final release. Bounding creation is the prerequisite for joining these safely, so
-// both belong to the deferred create-timeout work.
-func (p *Pool[V]) releaseAbandoned(ch <-chan singleflight.Result) {
-	res := <-ch
-	if res.Err != nil {
-		return
-	}
-	// The type assertion cannot fail — GetOrCreate's DoChan closure is the only
-	// producer — and ok short-circuits rather than adding a dead branch.
-	e, ok := res.Val.(*entry[V])
-	if ok && p.claimOrAcquire(e) {
-		p.releaseEntry(e)
-	}
-}
-
-// claimOrAcquire takes one lease on e, operating on the shared pointer so it can never "miss"
-// via a map lookup. It returns false only when the entry has already been fully closed (a
-// reused entry that lost a race), signaling the caller to retry with a fresh entry.
-func (p *Pool[V]) claimOrAcquire(e *entry[V]) bool {
+// claimSeed turns one of e's reserved seed leases into the caller's lease. It returns false only
+// when the entry is already closed, which a reserved seed leaves to Close alone: every other close
+// path waits for refs, seeds included, to reach zero.
+func (p *Pool[V]) claimSeed(e *entry[V]) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if e.closed {
 		return false
 	}
-	if e.seedHeld {
-		e.seedHeld = false // claim the seed: that ref becomes this caller's lease
-	} else {
-		e.refs++
-	}
+	e.seeds--
 	return true
-}
-
-// getExisting retrieves an existing entry with a lease acquired (refcount incremented) and
-// updates LRU position, or nil if not found. The refcount increment happens under the same
-// lock as the lookup so the entry cannot be evicted-and-closed before the lease is taken.
-func (p *Pool[V]) getExisting(key string) *entry[V] {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	e, exists := p.entries[key]
-	if !exists {
-		return nil
-	}
-
-	p.lru.MoveToFront(e.element)
-	e.lastUsed = time.Now()
-	e.refs++
-
-	return e
-}
-
-// peek reports whether an entry exists for the key without taking a lease or touching LRU.
-func (p *Pool[V]) peek(key string) *entry[V] {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.entries[key]
 }
 
 // makeRelease returns an idempotent ReleaseFunc bound to a single lease on e.
@@ -363,15 +304,15 @@ func (p *Pool[V]) releaseEntry(e *entry[V]) {
 }
 
 // callCreate runs the consumer's create function and converts a panic into an error, so the
-// rest of createEntry — and singleflight above it — see one ordinary failure.
+// rest of createEntry sees one ordinary failure and hands it to every waiter.
 //
-// A panic must not escape through DoChan: x/sync re-panics on a NEW goroutine once any caller
-// used DoChan (`go panic(e)` in doCall), which no recover — including Echo's middleware.Recover
-// — can catch, so one consumer-supplied factory's panic would kill the process instead of
-// failing the callers waiting on that create. The guard wraps THIS call and nothing else: a
-// panic anywhere later in createEntry happens after the entry is installed with its seed lease,
-// and converting that one to an error would return a failure to a caller who never claims the
-// seed, leaving an entry pinned at refs >= 1 that eviction can detach but never close.
+// A panic must not escape: create runs on the pool's own goroutine (see createEntry), where no
+// recover — including Echo's middleware.Recover — can catch it, so one consumer-supplied
+// factory's panic would kill the process instead of failing the callers waiting on that create.
+// The guard wraps THIS call and nothing else: a panic anywhere later in createEntry happens after
+// the entry is installed with its waiters' seed leases, and converting that one to an error would
+// return a failure to waiters who never claim their seeds, leaving an entry pinned at refs >= 1
+// that eviction can detach but never close.
 //
 // The value is rendered by TYPE only, never by value (ADR-081). `completed` is what separates a
 // normal return from a panic rather than a non-nil recover(): under GODEBUG=panicnil=1 a
@@ -392,17 +333,10 @@ func callCreate[V any](ctx context.Context, key string, create func(context.Cont
 	return v, err
 }
 
-// createEntry creates a new resource and adds it to the pool with a single seed lease
-// (refs == 1, seedHeld). The seed keeps the entry alive through the window before the caller
-// claims it via claimOrAcquire, so a concurrent evict/Remove can only detach it. If Close ran
-// between the caller's closed check and here, the just-created resource is closed and
-// ErrPoolClosed is returned rather than resurrecting the cleared map.
-//
-// The key's generation is captured before create runs. If Remove bumps it before install, the
-// value is still returned to every waiter of this create (they hold a valid lease) but the entry
-// is marked detached and never enters the map or LRU — it closes at the final lease release,
-// including via releaseAbandoned when every waiter gave up. That is what makes credential
-// rotation safe: a dial that started under the old config cannot be cached afterwards.
+// createEntry runs c's create and finishes c: it installs the value with one seed lease per
+// waiter (see installCreated), or hands every waiter the create's error. It runs on its own
+// goroutine, which Close does not join: creation carries no bound of its own, so joining would let
+// one slow dial hold up the whole shutdown.
 //
 // create runs on a context DERIVED from the initiating caller's: values and any deadline carry
 // over, but cancellation is severed, so one collapsed caller's early cancel cannot fail the SHARED
@@ -413,7 +347,7 @@ func callCreate[V any](ctx context.Context, key string, create func(context.Cont
 // in-framework can cancel. The derived context is call-scoped — a create must not retain it.
 // Whether creation should instead carry its own bound (a per-pool CreateTimeout, leaving the
 // startup budgets a separate seam) is deliberately deferred.
-func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
+func (p *Pool[V]) createEntry(ctx context.Context, key string, c *pendingCreate[V], create func(context.Context) (V, error)) {
 	createCtx := context.WithoutCancel(ctx)
 	if deadline, ok := ctx.Deadline(); ok {
 		var cancel context.CancelFunc
@@ -421,38 +355,54 @@ func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(conte
 		defer cancel()
 	}
 
-	gen := p.beginCreate(key)
+	// callCreate converts a panic, but runtime.Goexit inside create (a test factory calling
+	// t.FailNow, say) unwinds past it. Without this, c would never finish: its waiters would block
+	// until their own contexts end, and every later caller for key would join the dead create.
+	returned := false
+	defer func() {
+		if !returned {
+			p.failCreate(key, c, fmt.Errorf("resourcepool: create for key %q exited without returning", key))
+		}
+	}()
 	value, err := callCreate(createCtx, key, create)
+	returned = true
 	if err != nil {
-		p.endCreate(key)
-		return nil, err
+		p.failCreate(key, c, err)
+		return
 	}
 
-	return p.installCreated(key, gen, value)
+	p.installCreated(key, c, value)
 }
 
-// beginCreate records that a create for key is in flight and returns the generation to compare
-// at install. Must be paired with endCreate / installCreated even when create fails, or Remove
-// would keep counting an in-flight invalidation that already finished.
-func (p *Pool[V]) beginCreate(key string) uint64 {
+// failCreate ends c with err for every waiter. The failure is counted once, here, not once per
+// waiter.
+func (p *Pool[V]) failCreate(key string, c *pendingCreate[V], err error) {
+	p.incErrors()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.endCreateLocked(key, c)
+	c.err = err
+	close(c.done)
+}
+
+// beginCreateLocked registers a new in-flight create for key, capturing the generation installCreated
+// compares. Must be called with mu held, and paired with endCreateLocked even when create fails, or
+// Remove would keep counting an in-flight invalidation that already finished.
+func (p *Pool[V]) beginCreateLocked(key string) *pendingCreate[V] {
+	c := &pendingCreate[V]{done: make(chan struct{}), gen: p.generation[key]}
+	p.pending[key] = c
 	p.inFlight[key]++
-	return p.generation[key]
+	return c
 }
 
-// endCreate drops the in-flight count for a create that failed before installCreated.
-func (p *Pool[V]) endCreate(key string) {
-	p.mu.Lock()
-	p.endCreateLocked(key)
-	p.mu.Unlock()
-}
-
-// endCreateLocked decrements inFlight[key], deleting the entry at zero and releasing the key's
-// generation with it: the last create to finish is the last one that could compare against it, so
-// keeping it would only grow the map. Must be called with mu held, and AFTER the caller has read
-// the generation it compares (see installCreated).
-func (p *Pool[V]) endCreateLocked(key string) {
+// endCreateLocked stops new callers joining c and decrements inFlight[key], deleting the entry at
+// zero and releasing the key's generation with it: the last create to finish is the last one that
+// could compare against it, so keeping it would only grow the map. Must be called with mu held,
+// and AFTER the caller has read the generation it compares (see installCreated).
+func (p *Pool[V]) endCreateLocked(key string, c *pendingCreate[V]) {
+	if p.pending[key] == c {
+		delete(p.pending, key) // Remove may already have dropped c and let a newer create start
+	}
 	n := p.inFlight[key] - 1
 	if n <= 0 {
 		delete(p.inFlight, key)
@@ -463,59 +413,62 @@ func (p *Pool[V]) endCreateLocked(key string) {
 }
 
 // installCreated places a successfully created value into the pool, or marks it detached-at-birth
-// when Remove moved the key's generation during create. The in-flight count is dropped under the
-// same lock as the generation check so Remove cannot observe a torn "still in flight / already
-// installed" state. A closed pool still closes the orphaned instance and returns ErrPoolClosed.
+// when Remove moved the key's generation during create. Either way the entry carries one seed lease
+// per waiter still on c (refs == seeds == waiters), so evict, Remove and idle cleanup can only
+// detach it, never close it, before every waiter has claimed. The in-flight count is dropped under
+// the same lock as the generation check so Remove cannot observe a torn "still in flight / already
+// installed" state. A closed pool still closes the orphaned instance and fails every waiter with
+// ErrPoolClosed.
 //
-// Forget can split singleflight so two creates capture the same generation and both try to
-// install. The occupant keeps the map slot; the extra value is closed here rather than
-// overwriting the LRU (an overwritten entry would vanish from Close's map walk and leak).
-func (p *Pool[V]) installCreated(key string, gen uint64, value V) (*entry[V], error) {
+// That is what makes credential rotation safe: a dial that started under the old config is
+// delivered to its waiters but never cached, and closes at their final release.
+func (p *Pool[V]) installCreated(key string, c *pendingCreate[V], value V) {
 	p.mu.Lock()
 	// Read the generation BEFORE endCreateLocked: this create may be the last one in flight, and
 	// ending it releases the key's entry. Reading after would see the fresh zero value and make a
 	// create Remove invalidated under generation 0 look valid again.
-	detached := p.generation[key] != gen
-	p.endCreateLocked(key)
+	detached := p.generation[key] != c.gen
+	p.endCreateLocked(key, c)
 	if p.closed.Load() {
+		c.err = ErrPoolClosed
+		close(c.done)
 		p.mu.Unlock()
 		_ = p.closer(value) // orphaned instance — close is best-effort, not counted
-		return nil, ErrPoolClosed
-	}
-
-	if !detached {
-		if existing := p.entries[key]; existing != nil {
-			p.mu.Unlock()
-			_ = p.closer(value) // duplicate create — close is best-effort, not counted
-			return existing, nil
-		}
+		return
 	}
 
 	e := &entry[V]{
 		value:    value,
 		key:      key,
 		lastUsed: time.Now(),
-		refs:     1,
-		seedHeld: true,
+		refs:     c.waiters,
+		seeds:    c.waiters,
 		detached: detached,
 	}
 	p.totalCreated++
-	if e.detached {
-		p.mu.Unlock()
-		return e, nil
+	c.e = e
+	var evicted *entry[V]
+	// Detached with every waiter gone: no release will ever come, so it closes now.
+	closeNow := detached && c.waiters == 0
+	if closeNow {
+		e.closed = true
+	} else if !detached {
+		evicted = p.evictIfNeeded()
+		e.element = p.lru.PushFront(e)
+		p.entries[key] = e
 	}
-
-	evicted := p.evictIfNeeded()
-	e.element = p.lru.PushFront(e)
-	p.entries[key] = e
+	close(c.done)
 	p.mu.Unlock()
 
+	if closeNow {
+		if err := p.closer(value); err != nil {
+			p.incErrors()
+		}
+	}
 	// Close the evicted resource outside the lock (eviction close failures are not counted).
 	if evicted != nil {
 		_ = p.closer(evicted.value)
 	}
-
-	return e, nil
 }
 
 // evictIfNeeded removes the least recently used entry if at capacity. Must be called with mu
@@ -568,8 +521,11 @@ func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 	if inFlight {
 		// Only a create that already captured a generation can be invalidated by bumping it. With
 		// none in flight, detaching the cached entry above IS the whole invalidation, and a stored
-		// generation would never be read again — it would just occupy the map forever.
+		// generation would never be read again — it would just occupy the map forever. Dropping
+		// the pending create stops a GetOrCreate that starts after this Remove from joining it and
+		// receiving a handle built from pre-removal config; the next caller starts a fresh create.
 		p.generation[key]++
+		delete(p.pending, key)
 	}
 	p.removals++
 	shouldClose = e != nil && e.refs <= 0 && !e.closed
@@ -577,12 +533,6 @@ func (p *Pool[V]) Remove(key string) (v V, shouldClose bool) {
 		e.closed = true
 	}
 	p.mu.Unlock()
-
-	// Drop the singleflight key so a GetOrCreate that starts after this Remove does not join the
-	// invalidated create and cache (or even observe as "the" pooled value) a handle built from
-	// pre-removal config. A true no-op (nothing cached, nothing in flight) returns above without
-	// Forget, so a create that has not yet captured a generation is not split into a duplicate.
-	p.sf.Forget(key)
 
 	if !shouldClose {
 		return zero, false

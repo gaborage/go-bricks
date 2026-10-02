@@ -254,9 +254,8 @@ func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declar
 		return res.Err
 	case <-ctx.Done():
 		// Nothing to settle on the way out: unlike resourcepool.GetOrCreate a collapsed caller here
-		// holds no lease and receives no handle, so there is no seed to hand back (no
-		// releaseAbandoned analog), and singleflight's result channel is buffered (capacity 1) so
-		// the abandoned send never blocks.
+		// holds no lease and receives no handle, so there is no seed reservation to withdraw, and
+		// singleflight's result channel is buffered (capacity 1) so the abandoned send never blocks.
 		return fmt.Errorf("messaging: caller context ended while consumer setup for key %q was in flight (setup is not canceled): %w", key, ctx.Err())
 	}
 }
