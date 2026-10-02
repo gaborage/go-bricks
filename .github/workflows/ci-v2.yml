@@ -462,19 +462,14 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      # A saved entry holds build outputs and modules only: this compiles the
-      # test binaries with the test step's build flags but runs no test and no
-      # vet, so the save below stores no test result or vet verdict.
+      # Compile only, so the save stores no test result or vet verdict (the
+      # writer rule in .github/actions/go-cache).
       - name: Warm the build cache (compile only)
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         run: go test -c -vet=off -race -tags=integration -covermode=atomic -coverpkg=./... -o /dev/null ./migration ./...
 
-      - name: Expire test results before the Go cache save
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
-        run: go clean -testcache
-
       - name: Save Go cache
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}
@@ -657,30 +652,25 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      # A saved entry holds build outputs and modules only: these compile the
-      # test binaries with the test steps' build flags but run no test and no
-      # vet, so the save below stores no test result or vet verdict. Each
-      # mirrors its test step's guard and shell.
+      # Compile only, so the save stores no test result or vet verdict (the
+      # writer rule in .github/actions/go-cache). Each mirrors its test step's
+      # guard and shell.
       - name: Warm the build cache (Unix, compile only)
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true' && matrix.os != 'windows-latest'
+        if: steps.gocache.outputs.save == 'true' && matrix.os != 'windows-latest'
         run: |
           set -euo pipefail
           go test -c -vet=off -race -o /dev/null ./cmd/... ./internal/...
           go test -c -vet=off -race -cover -covermode=atomic -o /dev/null ./cmd/... ./internal/...
 
       - name: Warm the build cache (Windows, compile only)
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true' && matrix.os == 'windows-latest'
+        if: steps.gocache.outputs.save == 'true' && matrix.os == 'windows-latest'
         shell: powershell
         run: |
           go test -c -vet=off -race -o NUL ./cmd/... ./internal/...
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Expire test results before the Go cache save
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
-        run: go clean -testcache
-
       - name: Save Go cache
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}
