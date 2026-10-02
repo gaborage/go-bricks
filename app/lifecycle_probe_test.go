@@ -666,10 +666,10 @@ func TestReadyAnswersStatusOnlyOnEitherListener(t *testing.T) {
 
 // TestReadyAnswersNotReadyDuringTheApplicationDrain pins the drain on the listener a
 // deployment actually polls through one: the probe listener outlives the application
-// listener's drain, the stopping latch answers ahead of App.readyCheck — which never runs
-// again — and the body is the same 503 a failing kind serves. Before ADR-120 the two
-// differed, so an unauthenticated caller could tell a pod draining on purpose from one whose
-// database was down; now it cannot, and a draining pod still leaves the rotation.
+// listener's drain, the stopping latch answers ahead of App.readyCheck — which does not
+// judge the 503 poll — and the body is the same 503 a failing kind serves. Before ADR-120
+// the two differed, so an unauthenticated caller could tell a pod draining on purpose from
+// one whose database was down; now it cannot, and a draining pod still leaves the rotation.
 func TestReadyAnswersNotReadyDuringTheApplicationDrain(t *testing.T) {
 	cfg := probeRunConfig(testutil.ReserveFreePort(t))
 
@@ -723,7 +723,7 @@ func TestReadyAnswersNotReadyDuringTheApplicationDrain(t *testing.T) {
 	// A poll that lands before Shutdown trips the latch is still judged by the App's
 	// handler, so pin the poll that answered 503 rather than an absolute count.
 	var draining string
-	var judgedBefore, judgedAfter int32
+	var judgedDuring int32
 	require.Eventually(t, func() bool {
 		before := judged.Load()
 		drainingCode, drainingBody, drainingErr := fetch(client, probeURL)
@@ -731,11 +731,11 @@ func TestReadyAnswersNotReadyDuringTheApplicationDrain(t *testing.T) {
 			return false
 		}
 		draining = drainingBody
-		judgedBefore, judgedAfter = before, judged.Load()
+		judgedDuring = judged.Load() - before
 		return drainingCode == http.StatusServiceUnavailable
 	}, probeRunDeadline, 10*time.Millisecond, "the probe listener must answer 503 while the application drains")
 	assert.JSONEq(t, notReadyBodyJSON, draining)
-	assert.Equal(t, judgedBefore, judgedAfter, "the stopping latch answers ahead of the App's handler")
+	assert.Zero(t, judgedDuring, "the stopping latch answers ahead of the App's handler")
 
 	releaseOnce()
 	slow := <-held
