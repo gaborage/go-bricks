@@ -116,7 +116,7 @@ func TestOperationCountPanicsOnUnknownOperation(t *testing.T) {
 		func() { mock.OperationCount("delete") })
 }
 
-func TestAssertOperationCountGreaterThan(t *testing.T) {
+func TestAssertOperationCountAtLeast(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockCache()
 
@@ -124,10 +124,7 @@ func TestAssertOperationCountGreaterThan(t *testing.T) {
 		mock.Get(ctx, "key")
 	}
 
-	// Should pass - old name (deprecated) still works
-	AssertOperationCountGreaterThan(t, mock, "Get", 5)
-
-	// New name - clearer semantics
+	AssertOperationCountAtLeast(t, mock, "Get", 5)
 	AssertOperationCountAtLeast(t, mock, OpGet, 10)
 }
 

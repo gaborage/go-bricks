@@ -114,12 +114,6 @@ func assertOperationCountAtLeast(t testReporter, mock *MockCache, operation stri
 	}
 }
 
-// Deprecated: Use AssertOperationCountAtLeast instead.
-// AssertOperationCountGreaterThan is kept for backward compatibility.
-func AssertOperationCountGreaterThan(t *testing.T, mock *MockCache, operation string, minimum int64) {
-	AssertOperationCountAtLeast(t, mock, operation, minimum)
-}
-
 // AssertCacheClosed asserts that the cache has been closed.
 // Only works with MockCache instances.
 //
