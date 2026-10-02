@@ -72,7 +72,8 @@ constants in `testing` stay.
 
 ## Consequences
 
-- **Breaking, compile-caught.** Every affected site fails to build. `go vet ./...` also names the
+- **Breaking, compile-caught but for one case.** Every affected site fails to build except the
+  fixture type assertion below. `go vet ./...` also names the
   sites in `_test.go` files, where the trace helpers, mocks and test constants mostly live. A file
   that already imports `go.opentelemetry.io/otel/trace` must alias one of the two `trace` packages.
 - `trace` is the only package exporting `WithTraceID` and `EnsureTraceID`, so the `[C60.8]` grep
@@ -80,7 +81,10 @@ constants in `testing` stay.
   in `trace`.
 - `server` no longer imports `httpclient`, in production or in its tests.
 - A variable typed `*mocks.MockMessagingClient` that holds one of the three fixtures changes type.
-- No runtime behavior changes. Each removal is a second spelling or an unused name.
+  A type assertion to `*mocks.MockMessagingClient` on one still compiles and fails at run time
+  (`[C71.16]`).
+- The framework's runtime behavior does not change. Each removal is a second spelling or an unused
+  name.
 
 ## References
 
@@ -90,5 +94,6 @@ constants in `testing` stay.
 - `testing/testconsts.go`; `messaging/messaging.go`, `messaging/amqp_client.go`;
   `testing/mocks/messaging.go`, `testing/mocks/amqp.go`; `testing/fixtures/messaging.go`;
   `cache/testing/assertions.go`
-- [migrations.md](migrations.md) E71: `[C71.13]` (the `trace` names), `[C71.14]` (`IsJOSEError`); the
-  `testing`, `messaging` and `cache/testing` atoms join E71 when those removals ship
+- [migrations.md](migrations.md) E71: `[C71.13]` (the `trace` names), `[C71.14]` (`IsJOSEError`),
+  `[C71.15]` (the `testing` constants), `[C71.16]` (`Consume`, its mock helpers and the fixtures),
+  `[C71.17]` (`AssertOperationCountGreaterThan`)
