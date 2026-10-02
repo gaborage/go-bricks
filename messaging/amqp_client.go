@@ -14,7 +14,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
 	rawbackoff "github.com/gaborage/go-bricks/internal/backoff"
@@ -400,7 +400,7 @@ func createPublishSpan(ctx context.Context, options publishOptions, dataLen int,
 		trace.WithTimestamp(startTime),
 	)
 
-	// Set messaging semantic attributes using semconv v1.32.0 helpers where available
+	// Set messaging semantic attributes using semconv helpers where available
 	attrs := []attribute.KeyValue{
 		attribute.String(string(semconv.MessagingSystemKey), messagingSystemRabbitMQ),
 		semconv.MessagingOperationName(operationPublish),

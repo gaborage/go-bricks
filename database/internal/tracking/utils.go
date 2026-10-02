@@ -11,7 +11,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/database/sqlredact"
@@ -311,7 +311,7 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 		trace.WithSpanKind(trace.SpanKindClient),
 	)
 
-	// Add database semantic attributes per OTel v1.32.0 spec.
+	// Add database semantic attributes per OTel semantic conventions.
 	// Truncate query for safety (span attributes should be reasonable size). query
 	// arrives already scrubbed; truncating an unscrubbed statement here could cut
 	// away the keyword the scrub anchors on and strand the credential.

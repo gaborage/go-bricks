@@ -16,7 +16,7 @@ const (
 	// Meter name for AMQP messaging metrics instrumentation
 	amqpMeterName = "go-bricks/messaging"
 
-	// Standard OTel messaging metric names (semconv v1.37.0)
+	// Standard OTel messaging metric names (semantic conventions)
 	metricOperationDuration = "messaging.client.operation.duration"
 	metricMessagesSent      = "messaging.client.sent.messages"
 	metricMessagesConsumed  = "messaging.client.consumed.messages"

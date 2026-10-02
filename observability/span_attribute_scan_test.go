@@ -59,8 +59,33 @@ var scanSkipDirs = map[string]bool{
 func TestNoErrorMessageReachesSpanAttributes(t *testing.T) {
 	root := repoRoot(t)
 	fset := token.NewFileSet()
-	scanned, constructors := 0, 0
+	constructors := 0
 
+	scanned := walkModuleGoFiles(t, root, fset, func(rel string, file *ast.File) {
+		findings, seen := scanAttributeCalls(file)
+		constructors += seen
+		for _, pos := range findings {
+			t.Errorf("%s:%d: an error's message reaches a span attribute; render a classification instead (ADR-083)",
+				rel, fset.Position(pos).Line)
+		}
+	})
+
+	t.Logf("parsed %d Go files under %s, %d attribute constructor calls seen", scanned, root, constructors)
+	require.Greater(t, scanned, minScannedGoFiles, "walker scanned too few files to have covered the module")
+	// Positive control: a predicate that stopped recognizing attribute
+	// constructors would report nothing over a tree that still parses fine, so
+	// silence alone cannot tell "the invariant holds" from "the scan is looking
+	// for a spelling nobody uses" (ADR-083 asks its checks to carry one).
+	require.NotZero(t, constructors, "predicate recognized no attribute constructor anywhere; the scan is looking for the wrong spelling")
+}
+
+// walkModuleGoFiles parses every .go file under root, whatever its build
+// constraints, skipping the directories skipDir names, and hands each file to
+// visit with its path relative to root. It returns the number of files parsed so
+// the caller can assert the walk covered the module.
+func walkModuleGoFiles(t *testing.T, root string, fset *token.FileSet, visit func(rel string, file *ast.File)) int {
+	t.Helper()
+	scanned := 0
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -84,24 +109,11 @@ func TestNoErrorMessageReachesSpanAttributes(t *testing.T) {
 			return parseErr
 		}
 		scanned++
-
-		findings, seen := scanAttributeCalls(file)
-		constructors += seen
-		for _, pos := range findings {
-			t.Errorf("%s:%d: an error's message reaches a span attribute; render a classification instead (ADR-083)",
-				rel, fset.Position(pos).Line)
-		}
+		visit(rel, file)
 		return nil
 	})
 	require.NoError(t, err)
-
-	t.Logf("parsed %d Go files under %s, %d attribute constructor calls seen", scanned, root, constructors)
-	require.Greater(t, scanned, minScannedGoFiles, "walker scanned too few files to have covered the module")
-	// Positive control: a predicate that stopped recognizing attribute
-	// constructors would report nothing over a tree that still parses fine, so
-	// silence alone cannot tell "the invariant holds" from "the scan is looking
-	// for a spelling nobody uses" (ADR-083 asks its checks to carry one).
-	require.NotZero(t, constructors, "predicate recognized no attribute constructor anywhere; the scan is looking for the wrong spelling")
+	return scanned
 }
 
 // skipDir reports whether a directory, named by its path relative to the module
@@ -271,7 +283,7 @@ func TestScanAttributeCallsJudgesArgumentShape(t *testing.T) {
 		},
 		{
 			name:         "semconv_helper_carrying_the_message_is_matched",
-			imports:      `import semconv "go.opentelemetry.io/otel/semconv/v1.32.0"`,
+			imports:      `import semconv "go.opentelemetry.io/otel/semconv/v1.43.0"`,
 			body:         `span.AddEvent("failed", trace.WithAttributes(semconv.ExceptionMessage(err.Error())))`,
 			findings:     1,
 			constructors: 1,

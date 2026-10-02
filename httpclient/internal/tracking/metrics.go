@@ -26,9 +26,10 @@ const (
 	metricResponseBodySize = "http.client.response.body.size"
 	metricRetriesTotal     = "http.client.retries.total"
 
-	// Attribute keys per OTel semantic conventions (semconv v1.37.0 equivalents).
-	// peer.service and http.request.resend_count are not in v1.37.0 constants but are
-	// defined in the OTel spec — declared here as local constants for consistency.
+	// Attribute keys per OTel semantic conventions; http.request.resend_count is
+	// semconv's HTTPRequestResendCountKey. peer.service is deprecated upstream in
+	// favor of service.peer.name and no longer has a Go semconv constant; it stays
+	// deliberately as the documented SLO dimension (wiki/httpclient.md).
 	attrPeerService     = "peer.service"
 	attrServerAddress   = "server.address"
 	attrServerPort      = "server.port"

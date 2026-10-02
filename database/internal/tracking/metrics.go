@@ -19,7 +19,7 @@ const (
 	// Meter name for database metrics instrumentation
 	dbMeterName = "go-bricks/database"
 
-	// Metric names following OpenTelemetry semantic conventions v1.32.0
+	// Metric names following OpenTelemetry semantic conventions
 	metricDBDuration = "db.client.operation.duration" // Histogram in seconds
 
 	// Connection pool metrics per OTel spec
@@ -195,7 +195,7 @@ func getDBMeter() metric.Meter {
 // Purpose: Records operation duration as an OpenTelemetry histogram alongside traces and logs
 // emitted by TrackDBOperation.
 //
-// OTel Metric (per semantic conventions v1.32.0):
+// OTel Metric (per semantic conventions):
 // - Name: db.client.operation.duration
 // - Type: Histogram
 // - Units: seconds
@@ -478,7 +478,7 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 }
 
 // RegisterConnectionPoolMetrics registers observable metrics for connection pool metrics
-// following OpenTelemetry semantic conventions v1.32.0.
+// following OpenTelemetry semantic conventions.
 //
 // This function should be called once per database connection during initialization.
 //
