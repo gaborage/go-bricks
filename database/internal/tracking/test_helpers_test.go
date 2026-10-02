@@ -1,9 +1,6 @@
 package tracking
 
-// Shared test query constants for use across all test files in the tracking package.
-// These constants eliminate duplication and provide a single source of truth for test SQL queries.
-//
-// Usage: Import these constants in *_test.go files instead of defining local duplicates.
+// Shared SQL query constants for the tracking package's tests.
 const (
 	// SELECT queries
 	TestQuerySelectUsers       = "SELECT * FROM users"
@@ -17,7 +14,4 @@ const (
 
 	// UPDATE queries
 	TestQueryUpdateUsers = "UPDATE users SET name = 'test'"
-
-	// DELETE queries
-	TestQueryDeleteUsers = "DELETE FROM users WHERE id = 1"
 )

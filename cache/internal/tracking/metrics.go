@@ -406,13 +406,6 @@ func RegisterManagerMetrics(statsProvider func() ManagerMetricsStats, poolName s
 	}
 }
 
-// IsInitialized returns true if cache metrics have been initialized.
-func IsInitialized() bool {
-	meterInitMu.Lock()
-	defer meterInitMu.Unlock()
-	return metricsInited
-}
-
 // ResetForTesting resets the metric state for testing purposes.
 func ResetForTesting() {
 	meterInitMu.Lock()

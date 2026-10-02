@@ -3,7 +3,6 @@ package lanecontract
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 )
 
 func TestSetupTelemetryInstallsProvidersAndRestoresThemOnCleanup(t *testing.T) {
@@ -32,25 +30,6 @@ func TestSetupTelemetryInstallsProvidersAndRestoresThemOnCleanup(t *testing.T) {
 	// fixture that failed to restore them would silently corrupt every later test.
 	assert.Same(t, beforeTracer, otel.GetTracerProvider(), "cleanup must restore the tracer provider")
 	assert.Same(t, beforeMeter, otel.GetMeterProvider(), "cleanup must restore the meter provider")
-}
-
-// The streams lane runs one goroutine per partition, so this is what the mutex
-// is for: without it, -race fails here.
-func TestOutcomesRecordsConcurrentDeliveriesWithoutRacing(t *testing.T) {
-	const deliveries = 50
-	outcomes := &Outcomes{}
-
-	var wg sync.WaitGroup
-	wg.Add(deliveries)
-	for range deliveries {
-		go func() {
-			defer wg.Done()
-			outcomes.Log(&delivery.Result{})
-		}()
-	}
-	wg.Wait()
-
-	assert.Len(t, outcomes.Seen(), deliveries)
 }
 
 func TestRecordingLoggerCapturesEveryFieldTypeInEmissionOrder(t *testing.T) {

@@ -242,12 +242,18 @@ func TestRegisterManagerMetrics(t *testing.T) {
 	assert.Equal(t, int64(1), foundMetrics[metricCacheManagerErrors])
 }
 
-func TestIsInitialized(t *testing.T) {
+func TestEnsureCacheMeterInitializedMarksMetricsInited(t *testing.T) {
+	inited := func() bool {
+		meterInitMu.Lock()
+		defer meterInitMu.Unlock()
+		return metricsInited
+	}
+
 	ResetForTesting()
-	assert.False(t, IsInitialized(), "should not be initialized after reset")
+	assert.False(t, inited(), "should not be initialized after reset")
 
 	ensureCacheMeterInitialized()
-	assert.True(t, IsInitialized(), "should be initialized after ensureCacheMeterInitialized")
+	assert.True(t, inited(), "should be initialized after ensureCacheMeterInitialized")
 }
 
 func TestNonGetOperationsDoNotRecordHitMiss(t *testing.T) {

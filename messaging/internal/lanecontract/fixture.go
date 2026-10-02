@@ -62,32 +62,6 @@ func SetupTelemetry(t *testing.T) (*tracetest.InMemoryExporter, *obtest.TestMete
 	return ttp.Exporter, mp
 }
 
-// Outcomes records every Result a lane's LogOutcome was handed. The mutex is
-// load-bearing, not defensive: the streams lane invokes handlers from one
-// goroutine per partition, so the unsynchronized recorder this was lifted from
-// would race there.
-type Outcomes struct {
-	mu   sync.Mutex
-	seen []*delivery.Result
-}
-
-// Log is the LogOutcome hook: hand it to delivery.Request.LogOutcome directly.
-func (o *Outcomes) Log(res *delivery.Result) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.seen = append(o.seen, res)
-}
-
-// Seen copies the recorded results, so reading them cannot race a delivery still
-// in flight on another partition.
-func (o *Outcomes) Seen() []*delivery.Result {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	out := make([]*delivery.Result, len(o.seen))
-	copy(out, o.seen)
-	return out
-}
-
 // RecordingLogger captures every emitted line with its fields in order.
 // Derived loggers share the parent's buffer and mutex, so a lane's per-message
 // logger records into the same place.
