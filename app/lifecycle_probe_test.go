@@ -720,17 +720,22 @@ func TestReadyAnswersNotReadyDuringTheApplicationDrain(t *testing.T) {
 	shutdownDone := make(chan error, 1)
 	go func() { shutdownDone <- srv.Shutdown(context.Background()) }()
 
+	// A poll that lands before Shutdown trips the latch is still judged by the App's
+	// handler, so pin the poll that answered 503 rather than an absolute count.
 	var draining string
+	var judgedBefore, judgedAfter int32
 	require.Eventually(t, func() bool {
+		before := judged.Load()
 		drainingCode, drainingBody, drainingErr := fetch(client, probeURL)
 		if drainingErr != nil {
 			return false
 		}
 		draining = drainingBody
+		judgedBefore, judgedAfter = before, judged.Load()
 		return drainingCode == http.StatusServiceUnavailable
 	}, probeRunDeadline, 10*time.Millisecond, "the probe listener must answer 503 while the application drains")
 	assert.JSONEq(t, notReadyBodyJSON, draining)
-	assert.Equal(t, int32(1), judged.Load(), "the stopping latch answers ahead of the App's handler")
+	assert.Equal(t, judgedBefore, judgedAfter, "the stopping latch answers ahead of the App's handler")
 
 	releaseOnce()
 	slow := <-held
