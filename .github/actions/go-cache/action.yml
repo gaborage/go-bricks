@@ -74,7 +74,14 @@ runs:
         if [ "$WRITER" = true ] && [ "$GITHUB_EVENT_NAME" = push ]; then
           push_writer=true
         fi
-        prefix="gocache-${FAMILY}-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS:-none}-${gover}-"
+        # S31 TRIAL ONLY (scratch/s31-arm-b, never merge): the Windows fw-build
+        # writer saves on this PR under a trial-only key, then reruns restore it.
+        trial=''
+        if [ "$WRITER" = true ] && [ "$FAMILY" = fw-build ] && [ "$RUNNER_OS" = Windows ]; then
+          push_writer=true
+          trial='s31trial-'
+        fi
+        prefix="gocache-${FAMILY}-${trial}${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS:-none}-${gover}-"
         {
           echo "push-writer=$push_writer"
           echo "prefix=$prefix"
