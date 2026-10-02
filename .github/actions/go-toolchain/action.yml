@@ -74,7 +74,8 @@ runs:
           present=true
         fi
         push=false
-        if [ "$GITHUB_EVENT_NAME" = push ]; then
+        # TRIAL ONLY: PR runs save too, so later attempts of the scratch PR hit.
+        if [ "$GITHUB_EVENT_NAME" = push ] || [ "$GITHUB_EVENT_NAME" = pull_request ]; then
           push=true
         fi
         {
