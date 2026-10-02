@@ -100,12 +100,8 @@ jobs:
 
       # The save follows the build, before the analysis; this job runs no go
       # test or go vet.
-      - name: Expire test results before the Go cache save
-        if: success() && matrix.cache-writer == 'true' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
-        run: go clean -testcache
-
       - name: Save Go cache
-        if: success() && matrix.cache-writer == 'true' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}

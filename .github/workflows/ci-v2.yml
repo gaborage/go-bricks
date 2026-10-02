@@ -220,11 +220,25 @@ jobs:
         id: gocache
         uses: ./.github/actions/go-cache
         with:
-          family: fw-light
+          family: fw-test
+          writer: 'true'
 
       - &fw-download
         name: Download dependencies
         run: go mod download
+
+      # Compile only, with the test step's build flags, so the save stores no
+      # test result or vet verdict (the writer rule in .github/actions/go-cache).
+      - name: Warm the build cache (compile only)
+        if: steps.gocache.outputs.save == 'true'
+        run: go test -c -vet=off -race -cover -covermode=atomic -coverpkg=./... -o /dev/null ./...
+
+      - name: Save Go cache
+        if: steps.gocache.outputs.save == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.gocache.outputs.paths }}
+          key: ${{ steps.gocache.outputs.primary-key }}
 
       - name: Run tests (Unix)
         run: |
@@ -313,10 +327,9 @@ jobs:
         shell: pwsh
         env:
           FW: ${{ needs.changes.outputs.framework }}
-          EVENT: ${{ github.event_name }}
-          HIT: ${{ steps.gocache.outputs.exact-hit }}
+          SAVE: ${{ steps.gocache.outputs.save }}
         run: |
-          if ($env:FW -ne 'true' -and -not ($env:EVENT -eq 'push' -and $env:HIT -ne 'true')) { exit 0 }
+          if ($env:FW -ne 'true' -and $env:SAVE -ne 'true') { exit 0 }
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
           if (-not $packages) {
             Write-Host "No packages found to build"
@@ -328,12 +341,11 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         shell: pwsh
         env:
-          # A saving run (push with an exact-key miss) saves the default
-          # GOCACHE after the wait below, so its race build goes elsewhere and
-          # the entry keeps winbuild's plain build output, with no test result
-          # or vet verdict. Otherwise the empty value falls back to the warm
-          # default.
-          GOCACHE: ${{ github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true' && format('{0}\go-build-race', runner.temp) || '' }}
+          # A saving run saves the default GOCACHE after the wait below, so its
+          # race build goes elsewhere and the entry keeps winbuild's plain build
+          # output, with no test result or vet verdict. Otherwise the empty
+          # value falls back to the warm default.
+          GOCACHE: ${{ steps.gocache.outputs.save == 'true' && format('{0}\go-build-race', runner.temp) || '' }}
         run: |
           $packages = go list ./... | Where-Object { $_ -notmatch '/tools(/|$)' }
           if (-not $packages) {
@@ -395,12 +407,8 @@ jobs:
       - name: Wait for Windows build
         wait: winbuild
 
-      - name: Expire test results before the Go cache save
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
-        run: go clean -testcache
-
       - name: Save Go cache
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}
@@ -637,12 +645,8 @@ jobs:
           fi
 
       # Save first: no step after this point reaches the saved entry.
-      - name: Expire test results before the Go cache save
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
-        run: go clean -testcache
-
       - name: Save Go cache
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}
@@ -810,7 +814,7 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           family: mt-build
-          writer: ${{ runner.os == 'Windows' && 'true' || 'false' }}
+          writer: ${{ runner.os == 'Windows' }}
 
       - name: Download dependencies
         # Every step below runs in tools/migration, which the go command resolves
@@ -843,12 +847,8 @@ jobs:
           ./go-bricks-migrate.exe --help
           Write-Host "CLI validation passed"
 
-      - name: Expire test results before the Go cache save
-        if: success() && runner.os == 'Windows' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
-        run: go clean -testcache
-
       - name: Save Go cache
-        if: success() && runner.os == 'Windows' && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}
@@ -1006,12 +1006,8 @@ jobs:
 
       # golangci-lint runs its analyzers in process and this job runs no
       # go test or go vet, so the entry holds build output and modules only.
-      - name: Expire test results before the Go cache save
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
-        run: go clean -testcache
-
       - name: Save Go cache
-        if: success() && github.event_name == 'push' && steps.gocache.outputs.exact-hit != 'true'
+        if: steps.gocache.outputs.save == 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gocache.outputs.paths }}
