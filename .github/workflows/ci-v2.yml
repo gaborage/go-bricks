@@ -1717,6 +1717,35 @@ jobs:
           echo ""
           echo "✓ Coverage merge complete - ready for SonarCloud"
 
+      # The action downloads and GPG-verifies the scanner only when tc.find
+      # misses its tool-cache dir and .complete marker, and the scanner reuses
+      # ~/.sonar/cache (JRE, engine, plugins) without re-hashing it, so a hit
+      # runs cached code with SONAR_TOKEN. Only pushes restore: a PR run searches
+      # its own cache scope first, which any job of that run can write. A push
+      # restores this week's key only, saved by a push after a verified download.
+      # The key's version is the action's scannerVersion default; a stale one
+      # costs downloads only until the week rolls.
+      - name: Sonar cache key
+        id: sonar_key
+        if: github.event_name == 'push'
+        run: echo "key=sonar-${RUNNER_OS}-${RUNNER_ARCH}-scanner-8.1.0.6389-$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Sonar scanner cache
+        id: sonar_cache
+        if: github.event_name == 'push'
+        uses: actions/cache/restore@v6
+        with:
+          path: &sonar-cache-paths |
+            ~/.sonar/cache
+            ${{ runner.tool_cache }}/sonar-scanner-cli
+          key: ${{ steps.sonar_key.outputs.key }}
+
+      # tc.find trusts any tree with its marker, so a failed restore must not
+      # leave one behind.
+      - name: Drop a partial Sonar cache restore
+        if: github.event_name == 'push' && steps.sonar_cache.outputs.cache-hit != 'true'
+        run: rm -rf ~/.sonar/cache "$RUNNER_TOOL_CACHE/sonar-scanner-cli"
+
       # One retry for a SonarCloud 5xx or a scanner-download error. The scan only
       # uploads (no quality-gate wait), so a retry cannot change a verdict.
       - name: Scan
@@ -1745,6 +1774,13 @@ jobs:
           fi
           echo "::error::no SonarCloud scan attempt passed (first: ${SCAN:-none}, retry: ${SCAN_RETRY:-none})"
           exit 1
+
+      - name: Save Sonar scanner cache
+        if: github.event_name == 'push' && steps.sonar_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: *sonar-cache-paths
+          key: ${{ steps.sonar_cache.outputs.cache-primary-key }}
 
   # ============================================================================
   # CI gate (fan-in aggregator — the single required status check on main)
