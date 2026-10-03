@@ -18,7 +18,7 @@ import (
 
 // semconvVersionPattern captures the version segment of a semantic-convention
 // import. Subpackages (…/httpconv) carry the same segment.
-var semconvVersionPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(semconvPathFragment) + `/(v1\.\d+\.\d+)(?:/|$)`)
+var semconvVersionPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(semconvPathFragment) + `/(v\d+\.\d+\.\d+)(?:/|$)`)
 
 // TestSemconvImportsShareOneVersion keeps the framework on a single semantic
 // conventions version. No linter enforces it: the import-alias linter checks
@@ -76,6 +76,14 @@ func TestSemconvVersionsUnderJudgesPlantedTrees(t *testing.T) {
 				"client.go":  "package p\n\nimport \"go.opentelemetry.io/otel/semconv/v1.43.0/httpconv\"\n",
 			},
 			versions: []string{"v1.43.0"},
+		},
+		{
+			name: "future_major_version_splits_the_version",
+			files: map[string]string{
+				"current.go": current,
+				"next.go":    "package p\n\nimport \"go.opentelemetry.io/otel/semconv/v2.0.0\"\n",
+			},
+			versions: []string{"v1.43.0", "v2.0.0"},
 		},
 		{
 			name: "non_semconv_import_is_ignored",
