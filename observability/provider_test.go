@@ -1540,7 +1540,11 @@ func shortTempDir(t *testing.T) string {
 	return dir
 }
 
-func tcpTarget(prefix string) func(*testing.T) (string, string, func(string) string) {
+// grpcTargetSetup prepares a listener for one gRPC target form and returns where
+// to listen and how to spell the target for the listener's address.
+type grpcTargetSetup func(t *testing.T) (network, address string, target func(addr string) string)
+
+func tcpTarget(prefix string) grpcTargetSetup {
 	return func(*testing.T) (string, string, func(string) string) {
 		return "tcp", "127.0.0.1:0", func(addr string) string { return prefix + addr }
 	}
@@ -1554,7 +1558,7 @@ func TestOTLPGRPCExportersTargetsStayTLS(t *testing.T) {
 		name  string
 		unix  bool
 		goos  string
-		setup func(t *testing.T) (network, address string, target func(addr string) string)
+		setup grpcTargetSetup
 	}{
 		{name: "host_port", setup: tcpTarget("")},
 		{name: "dns_scheme", setup: tcpTarget("dns:///")},
@@ -1668,7 +1672,7 @@ func newTraceHTTPExport(t *testing.T, endpoint string, insecure bool) (func(cont
 }
 
 func newTraceGRPCExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
-	p := &provider{config: Config{Trace: TraceConfig{Endpoint: endpoint, Protocol: ProtocolGRPC, Insecure: insecure, Compression: CompressionNone}}}
+	p := &provider{config: Config{Trace: TraceConfig{Endpoint: endpoint, Insecure: insecure, Compression: CompressionNone}}}
 	exporter, err := p.createOTLPGRPCExporter(context.Background())
 	if err != nil {
 		return nil, err

@@ -421,7 +421,8 @@ observability:
     # scheme says, true exports in plaintext. OTEL_EXPORTER_OTLP_* endpoint,
     # insecure and protocol variables are ignored.
     # Can be overridden by environment variable: OBSERVABILITY_TRACE_INSECURE
-    # insecure: false
+    # Default: false
+    insecure: false
 
     # sample.rate controls what fraction of traces to collect (0.0 to 1.0).
     # 1.0 = collect all traces (use in development/staging)

@@ -711,7 +711,7 @@ func newLogHTTPExport(t *testing.T, endpoint string, insecure bool) (func(contex
 }
 
 func newLogGRPCExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
-	p := &provider{config: Config{Logs: LogsConfig{Endpoint: endpoint, Protocol: ProtocolGRPC, Compression: CompressionNone, Insecure: BoolPtr(insecure)}}}
+	p := &provider{config: Config{Logs: LogsConfig{Endpoint: endpoint, Compression: CompressionNone, Insecure: BoolPtr(insecure)}}}
 	exporter, err := p.createOTLPGRPCLogExporter(context.Background())
 	if err != nil {
 		return nil, err
