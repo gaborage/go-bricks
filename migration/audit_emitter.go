@@ -210,14 +210,14 @@ func (e *auditEmitter) Emit(ctx context.Context, ev *AuditEvent) {
 		cp.AppliedByPrincipal = PrincipalUnspecified
 	}
 
-	e.emitSpan(ctx, &cp)
-	e.emitLog(&cp)
+	spanCtx := e.emitSpan(ctx, &cp)
+	e.emitLog(spanCtx, &cp)
 	e.enqueueForSink(ctx, &cp)
 }
 
-func (e *auditEmitter) emitSpan(ctx context.Context, ev *AuditEvent) {
+func (e *auditEmitter) emitSpan(ctx context.Context, ev *AuditEvent) context.Context {
 	spanName := fmt.Sprintf("migration.audit.%s", ev.Type)
-	_, span := e.tracer.Start(ctx, spanName,
+	spanCtx, span := e.tracer.Start(ctx, spanName,
 		trace.WithTimestamp(ev.StartedAt),
 		trace.WithAttributes(eventAttrs(ev)...),
 	)
@@ -225,15 +225,20 @@ func (e *auditEmitter) emitSpan(ctx context.Context, ev *AuditEvent) {
 		span.SetStatus(codes.Error, string(ev.ErrorClass))
 	}
 	span.End(trace.WithTimestamp(ev.CompletedAt))
+	return spanCtx
 }
 
-func (e *auditEmitter) emitLog(ev *AuditEvent) {
+// emitLog logs the event as an action log on the audit span, so the dual-mode
+// processor exports it at any sampling rate and it correlates with the span.
+func (e *auditEmitter) emitLog(spanCtx context.Context, ev *AuditEvent) {
+	log := e.logger.WithContext(spanCtx)
 	var entry logger.LogEvent
 	if ev.Outcome == AuditOutcomeFailed {
-		entry = e.logger.Error()
+		entry = log.Error()
 	} else {
-		entry = e.logger.Info()
+		entry = log.Info()
 	}
+	entry = entry.Str("log.type", "action")
 
 	for _, kv := range eventKVs(ev) {
 		entry = entry.Str(kv.Key, kv.Value)

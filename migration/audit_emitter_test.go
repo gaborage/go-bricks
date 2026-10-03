@@ -5,13 +5,17 @@ import (
 	"context"
 	"io"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/observability"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
@@ -210,4 +214,67 @@ func TestEmitterSinkPanicNeverDisclosesTheValue(t *testing.T) {
 		"the panic's type must be reported instead — parity with the scheduler pin")
 	assert.Contains(t, output, testTarget,
 		"the report must stay attributable")
+}
+
+// memLogExporter keeps every exported log record.
+type memLogExporter struct {
+	mu      sync.Mutex
+	records []sdklog.Record
+}
+
+func (e *memLogExporter) Export(_ context.Context, records []sdklog.Record) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range records {
+		e.records = append(e.records, records[i].Clone())
+	}
+	return nil
+}
+
+func (e *memLogExporter) Shutdown(context.Context) error   { return nil }
+func (e *memLogExporter) ForceFlush(context.Context) error { return nil }
+
+func (e *memLogExporter) Records() []sdklog.Record {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]sdklog.Record(nil), e.records...)
+}
+
+// otlpOnlyLogs hands the logger an sdklog provider with stdout disabled.
+type otlpOnlyLogs struct{ provider *sdklog.LoggerProvider }
+
+func (o otlpOnlyLogs) LoggerProvider() *sdklog.LoggerProvider { return o.provider }
+func (otlpOnlyLogs) ShouldDisableStdout() bool                { return true }
+
+// TestEmitterSuccessLogIsExportedAsActionLog pins that a successful audit event's
+// log record survives the dual-mode processor at the default sampling rate 0.0:
+// it is an action log, correlated with the audit span.
+func TestEmitterSuccessLogIsExportedAsActionLog(t *testing.T) {
+	spans := setupTestTracer(t)
+	setupTestMeter(t)
+	exporter := &memLogExporter{}
+	processor := observability.NewDualModeLogProcessor(
+		sdklog.NewSimpleProcessor(exporter), sdklog.NewSimpleProcessor(exporter), 0.0)
+	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(processor))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	emitter := newAuditEmitter(logger.New("info", false).WithOTelProvider(otlpOnlyLogs{provider: provider}), nil)
+	emitter.Emit(context.Background(), baseEvent())
+	require.NoError(t, emitter.Close(context.Background()))
+
+	emitted := spans.GetSpans()
+	require.Len(t, emitted, 1)
+	records := exporter.Records()
+	require.Len(t, records, 1, "the success audit log must be exported at sampling rate 0.0")
+
+	logType := ""
+	records[0].WalkAttributes(func(kv attribute.KeyValue) bool {
+		if kv.Key == "log.type" {
+			logType = kv.Value.AsString()
+		}
+		return true
+	})
+	assert.Equal(t, "action", logType)
+	assert.Equal(t, emitted[0].SpanContext.TraceID(), records[0].TraceID())
+	assert.Equal(t, emitted[0].SpanContext.SpanID(), records[0].SpanID())
 }
