@@ -12066,8 +12066,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   as long as the close does.
 - verify: with `database.manager.maxsize: 1`, borrow tenant `a` and release its lease (call the
   `ReleaseFunc` that `DbManager.Get` returned, or use `deps.DB` on a context with no lease scope,
-  which releases on return), then borrow tenant `b`: `a`'s `Close` has been called by the time
-  `b`'s lookup returns.
+  which releases on return), then borrow tenant `b` on a context with no deadline: `a`'s `Close`
+  has returned by the time `b`'s lookup returns. A `b` whose context ends first can return while the
+  close still runs.
 - ref: gaborage/go-bricks#1985 · #2002 · regression from #1976 ·
   `internal/resourcepool/resourcepool.go` (`installCreated`, `await`)
 
