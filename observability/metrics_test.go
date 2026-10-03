@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	testMeterName   = "test-meter"
-	testAPIEndpoint = "/api/users"
+	testMeterName          = "test-meter"
+	testAPIEndpoint        = "/api/users"
+	testCardinalityCounter = "test.cardinality.counter"
 )
 
 func TestCreateCounter(t *testing.T) {
@@ -982,18 +983,18 @@ func TestMetricsMaxBatchSizeZeroExportsOneBatch(t *testing.T) {
 func flushCounterPoints(t *testing.T, limit *int, series int) []metricdata.DataPoint[int64] {
 	t.Helper()
 	exporter := &inMemoryMetricExporter{}
-	recordSeriesAndFlush(t, exporter, MetricsConfig{CardinalityLimit: limit}, "test.cardinality.counter", series)
+	recordSeriesAndFlush(t, exporter, MetricsConfig{CardinalityLimit: limit}, testCardinalityCounter, series)
 
 	for _, rm := range exporter.GetMetrics() {
 		for _, sm := range rm.ScopeMetrics {
 			for _, m := range sm.Metrics {
-				if m.Name == "test.cardinality.counter" {
+				if m.Name == testCardinalityCounter {
 					return m.Data.(metricdata.Sum[int64]).DataPoints
 				}
 			}
 		}
 	}
-	t.Fatal("test.cardinality.counter was not exported")
+	t.Fatal(testCardinalityCounter + " was not exported")
 	return nil
 }
 

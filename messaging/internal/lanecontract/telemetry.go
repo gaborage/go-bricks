@@ -141,10 +141,10 @@ func assertConsumeRecord(t T, scenario *Scenario, observed *Observed, span *sdkt
 
 // assertNoPerMessageValue keeps a per-message value off the metric attributes.
 // The trace ID is the one every lane has to hand and the one that would do the
-// damage: the SDK's cardinality limit (2000 attribute sets unless
-// observability.metrics.cardinalitylimit sets another) is where every further set
-// is silently replaced by otel.metric.overflow=true — no error, no log,
-// aggregation destroyed.
+// damage: past the SDK's cardinality limit (2000 attribute sets unless
+// OTEL_GO_X_CARDINALITY_LIMIT or observability.metrics.cardinalitylimit sets
+// another), every further set is silently replaced by otel.metric.overflow=true —
+// no error, no log, aggregation destroyed.
 func assertNoPerMessageValue(t T, scenario *Scenario, observed *Observed, attrs attribute.Set) {
 	t.Helper()
 

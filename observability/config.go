@@ -499,8 +499,9 @@ type MetricsConfig struct {
 	Max MetricsMaxConfig `mapstructure:"max"`
 
 	// CardinalityLimit caps the attribute sets each instrument keeps per reader: a limit
-	// of L keeps L-1 sets plus one otel.metric.overflow=true series. Under cumulative
-	// temporality that is a lifetime cap; under delta it applies per cycle.
+	// of L keeps L-1 sets plus one otel.metric.overflow=true series. For synchronous
+	// instruments under cumulative temporality that is a lifetime cap; under delta it
+	// applies per cycle.
 	// nil (the default) passes no option, so OTEL_GO_X_CARDINALITY_LIMIT or the SDK
 	// default of 2000 applies — a deliberate exception to the explicit-default posture.
 	// Values of zero or less are rejected.
