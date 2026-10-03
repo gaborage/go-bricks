@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.71.1](https://github.com/gaborage/go-bricks/compare/v0.71.0...v0.71.1) (2026-10-03)
+
+
+### Fixed
+
+* **logger:** mask values logged through pointers and string slices ([25ae805](https://github.com/gaborage/go-bricks/commit/25ae805dc0648f1fa04949d831e7effd195842bf))
+
 ## [0.71.0](https://github.com/gaborage/go-bricks/compare/v0.70.0...v0.71.0) (2026-10-03)
 
 
