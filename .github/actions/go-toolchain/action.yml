@@ -1,12 +1,14 @@
-# actions/setup-go with a cached toolchain. On Linux the toolchain is restored
-# into the runner tool cache first, so setup-go's exact-version lookup logs
-# 'Found in cache', and a push that missed saves it after setup-go installs
-# it. Other runners only run setup-go: on hosted Windows it installs to D:
-# and links the C: tool cache path, so that path holds links, not the files.
+# actions/setup-go with a cached toolchain. On Linux and hosted Windows the
+# toolchain is restored where setup-go's exact-version lookup finds it, so
+# setup-go logs 'Found in cache', and a push that missed saves it after
+# setup-go installs it. On hosted Windows setup-go writes the files to the
+# same path on D: (C: is far slower to write) and links the C: tool cache path
+# to them, so the D: copy is what is cached and a restore recreates the links.
+# Other runners only run setup-go.
 name: Set up Go
 description: >-
   Runs actions/setup-go for go-version-file with cache false, restoring and
-  saving the toolchain it installs on Linux.
+  saving the toolchain it installs on Linux and hosted Windows.
 
 inputs:
   go-version-file:
@@ -21,7 +23,7 @@ runs:
   steps:
     # Later steps gate on this step's outputs, which are empty when it skips.
     - id: env
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' || runner.os == 'Windows'
       shell: bash
       env:
         GO_VERSION_FILE: ${{ inputs.go-version-file }}
@@ -52,6 +54,20 @@ runs:
           exit 0
         fi
         dir="$RUNNER_TOOL_CACHE/go/$v"
+        files="$dir"
+        link=''
+        if [ "$RUNNER_OS" = Windows ]; then
+          dir="${dir//\\//}"
+          # setup-go's own test for when it installs to D: (cacheWindowsDir).
+          if { [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] && [ "${AGENT_ISSELFHOSTED-1}" = 1 ]; } \
+            || [[ "$dir" != [Cc]:/* ]] || ! [ -d C:/ ] || ! [ -d D:/ ]; then
+            echo "go-toolchain: setup-go does not install to D: on this runner; skipping the toolchain cache"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="D:${dir:2}"
+          link="$dir/$arch"
+        fi
         # A copy the runner image ships is used as is: no restore, no save.
         present=false
         if [ -e "$dir" ]; then
@@ -65,7 +81,8 @@ runs:
           echo "valid=true"
           echo "version=$v"
           echo "arch=$arch"
-          echo "path=$dir"
+          echo "path=$files"
+          echo "link=$link"
           echo "present=$present"
           echo "push=$push"
           echo "key=go-toolchain-${RUNNER_OS}-${RUNNER_ARCH}-${v}"
@@ -80,6 +97,8 @@ runs:
 
     # A restore that fails partway warns and reports no hit, leaving a partial
     # tree; a hit must run as go<v>. Either is removed so setup-go downloads.
+    # On Windows, tc.find looks only under C: and checks only that the marker
+    # exists, so a good hit gets the junction and marker setup-go would make.
     - if: steps.env.outputs.valid == 'true'
       shell: bash
       env:
@@ -88,6 +107,7 @@ runs:
         VERSION: ${{ steps.env.outputs.version }}
         PRESENT: ${{ steps.env.outputs.present }}
         HIT: ${{ steps.restore.outputs.cache-hit }}
+        LINK: ${{ steps.env.outputs.link }}
       run: |
         set -euo pipefail
         [ -e "$DIR" ] || exit 0
@@ -95,9 +115,17 @@ runs:
           [ "$PRESENT" != true ] || exit 0
           echo "::warning::go-toolchain: a failed restore left $DIR; removing it"
         else
-          out="$(GOTOOLCHAIN=local "$DIR/$ARCH_DIR/bin/go" version 2>/dev/null || true)"
+          go="$DIR/$ARCH_DIR/bin/go"
+          [ "$RUNNER_OS" != Windows ] || go="$go.exe"
+          out="$(GOTOOLCHAIN=local "$go" version 2>/dev/null || true)"
           case "$out" in
-            "go version go$VERSION "*) exit 0 ;;
+            "go version go$VERSION "*)
+              if [ -n "$LINK" ]; then
+                mkdir -p "${LINK%/*}"
+                MSYS_NO_PATHCONV=1 cmd /c mklink /J "${LINK//\//\\}" "${DIR//\//\\}\\$ARCH_DIR"
+                : > "$LINK.complete"
+              fi
+              exit 0 ;;
           esac
           echo "::warning::go-toolchain: the restored $DIR does not run as go$VERSION; removing it"
         fi
