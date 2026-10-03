@@ -11899,9 +11899,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `OBSERVABILITY_LOGS_ENDPOINT`) on protocol `http` whose `http://`/`https://` value carries a path
   after the host, a bare trailing `/` included:
   `git grep -nE 'https?://[^/?#@"[:space:]]+/' -- '*.yaml' '*.yml'`, then keep the
-  observability endpoint hits, drop any whose path carries an escape the path does not need
-  (`%2F`, `%74`), which keeps its old behavior, and read every environment's variables the same
-  way.
+  observability endpoint hits, drop any that also carries a query, a fragment, an encoded slash
+  (`%2F`) or another escape the path does not need (`%74`), which keeps its old behavior, and
+  read every environment's variables the same way.
 - scope: the framework stripped the scheme and handed the rest, path included, to the exporter as
   its host, where the path was escaped to `%2F`. A path-bearing **trace** endpoint (a bare trailing
   `/` included) booted and then failed every export, visible only through `otel.Handle`. A
