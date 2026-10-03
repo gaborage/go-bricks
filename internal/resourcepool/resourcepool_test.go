@@ -718,6 +718,91 @@ func TestPoolCreateRacingCloseDoesNotResurrect(t *testing.T) {
 	require.ErrorIs(t, err, ErrPoolClosed, "GetOrCreate must report closed, not resurrect the map")
 }
 
+// doneClosed reports whether c.done has been closed.
+func doneClosed(c *pendingCreate[*fakeResource]) bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// TestPoolOrphanClosesBeforeWaitersRelease pins that the instance a create builds for a pool
+// closed meanwhile is closed before the create's waiters are released.
+func TestPoolOrphanClosesBeforeWaitersRelease(t *testing.T) {
+	var c *pendingCreate[*fakeResource]
+	releasedAtClose := false
+	p := New(5, 0, func(*fakeResource) error {
+		releasedAtClose = doneClosed(c)
+		return nil
+	})
+	c = beginWithWaiters(p, keyOne, 1)
+	require.NoError(t, p.Close())
+
+	p.installCreated(keyOne, c, newFakeResource(keyOne))
+	require.ErrorIs(t, c.err, ErrPoolClosed)
+	assert.False(t, releasedAtClose, "the waiters were released before the orphan was closed")
+}
+
+// TestPoolEvictedVictimClosesBeforeWaitersRelease pins that the LRU victim an install evicts is
+// closed before the create's waiters are released.
+func TestPoolEvictedVictimClosesBeforeWaitersRelease(t *testing.T) {
+	var c *pendingCreate[*fakeResource]
+	releasedAtClose := false
+	p := New(1, 0, func(r *fakeResource) error {
+		if r.id == keyOne {
+			releasedAtClose = doneClosed(c)
+		}
+		return nil
+	})
+	defer p.Close()
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	rel()
+
+	c = beginWithWaiters(p, keyTwo, 1)
+	install(t, p, keyTwo, c)
+	assert.Equal(t, 1, p.Stats().Evictions)
+	assert.False(t, releasedAtClose, "the waiters were released before the evicted victim was closed")
+}
+
+// TestPoolWaiterCanceledDuringInstallCloseTakesItsLease pins that a waiter whose context ends
+// while the install is still closing the LRU victim takes the lease reserved for it: the seed is
+// already counted, so withdrawing then would leave it unclaimed and pin the entry open.
+func TestPoolWaiterCanceledDuringInstallCloseTakesItsLease(t *testing.T) {
+	victimClosing := testutil.NewBlockedCreate(t)
+	p := New(1, 0, func(r *fakeResource) error {
+		if r.id == keyOne {
+			victimClosing.Arrive()
+		}
+		return nil
+	})
+	defer p.Close()
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	rel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan leaseResult, 1)
+	go func() {
+		v, lease, cerr := p.GetOrCreate(ctx, keyTwo, keyedCreate(keyTwo))
+		got <- leaseResult{v, lease, cerr}
+	}()
+	<-victimClosing.Started
+	cancel()
+	r := <-got
+	victimClosing.Release()
+
+	require.NoError(t, r.err, "a waiter canceled after the install reserved its seed must take its lease")
+	assert.Equal(t, keyTwo, r.v.id)
+	p.mu.Lock()
+	seeds := p.entries[keyTwo].seeds
+	p.mu.Unlock()
+	assert.Zero(t, seeds, "no reserved seed may be left unclaimed")
+	r.rel()
+}
+
 // TestPoolCreateErrorPropagatesAndCounts verifies a create failure is returned and counted.
 func TestPoolCreateErrorPropagatesAndCounts(t *testing.T) {
 	tr := newCloseTracker()

@@ -191,13 +191,14 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 // pendingCreate is one in-flight create for a key, shared by every GetOrCreate caller that
 // arrives before it finishes. The pool coalesces creates itself, rather than through
 // singleflight, because the install must know how many callers wait on it: it reserves one seed
-// lease per waiter, so no waiter can find the entry closed before it claims (ADR-032). gen and
-// waiters are guarded by Pool.mu; e and err are written under Pool.mu before done closes, and
-// read after it.
+// lease per waiter, so no waiter can find the entry closed before it claims (ADR-032). gen,
+// waiters and settled are guarded by Pool.mu; e and err are written under Pool.mu as c settles,
+// and read after done closes or under Pool.mu once settled.
 type pendingCreate[V any] struct {
 	done    chan struct{}
 	gen     uint64 // the key's generation when the create began; a Remove that moves it detaches the result
 	waiters int    // callers still waiting; the install reserves one seed lease for each
+	settled bool   // the result is final (on install, the seeds are reserved too)
 	e       *entry[V]
 	err     error
 }
@@ -234,7 +235,8 @@ func (p *Pool[V]) leaseOrJoin(ctx context.Context, key string, create func(conte
 // without canceling the create, which still installs for everyone else. A caller that gives up
 // withdraws its reservation under the lock the install reads it under, so an abandoned caller
 // never leaves a seed that would pin the entry open; one that loses that race to the install
-// takes the result it was reserved, as if its wait had ended first.
+// takes the result it was reserved, as if its wait had ended first. That race is decided by
+// settled, not done, which stays open while the install closes what it displaced.
 func (p *Pool[V]) await(ctx context.Context, c *pendingCreate[V]) (*entry[V], error) {
 	select {
 	case <-c.done:
@@ -244,13 +246,11 @@ func (p *Pool[V]) await(ctx context.Context, c *pendingCreate[V]) (*entry[V], er
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	select {
-	case <-c.done:
+	if c.settled {
 		return c.e, c.err
-	default:
-		c.waiters-- // not installed yet: no seed will be reserved for this caller
-		return nil, ctx.Err()
 	}
+	c.waiters-- // not installed yet: no seed will be reserved for this caller
+	return nil, ctx.Err()
 }
 
 // claimSeed turns one of e's reserved seed leases into the caller's lease. It returns false only
@@ -385,11 +385,13 @@ func (p *Pool[V]) beginCreateLocked(key string) *pendingCreate[V] {
 	return c
 }
 
-// endCreateLocked stops new callers joining c and decrements inFlight[key], deleting the entry at
-// zero and releasing the key's generation with it: the last create to finish is the last one that
-// could compare against it, so keeping it would only grow the map. Must be called with mu held,
-// and AFTER the caller has read the generation it compares (see installCreated).
+// endCreateLocked marks c settled, stops new callers joining it, and decrements inFlight[key],
+// deleting the entry at zero and releasing the key's generation with it: the last create to finish
+// is the last one that could compare against it, so keeping it would only grow the map. Must be
+// called with mu held, in the same critical section that sets c's result, and AFTER the caller has
+// read the generation it compares (see installCreated).
 func (p *Pool[V]) endCreateLocked(key string, c *pendingCreate[V]) {
+	c.settled = true
 	if p.pending[key] == c {
 		delete(p.pending, key) // Remove may already have dropped c and let a newer create start
 	}
@@ -412,7 +414,11 @@ func (p *Pool[V]) endCreateLocked(key string, c *pendingCreate[V]) {
 //
 // That is what makes credential rotation safe: a dial that started under the old config is
 // delivered to its waiters but never cached, and closes at their final release.
+//
+// done closes only after this install's own closes (the orphan, an unleased LRU victim) return,
+// so a waiter it wakes never finds either still open.
 func (p *Pool[V]) installCreated(key string, c *pendingCreate[V], value V) {
+	defer close(c.done)
 	p.mu.Lock()
 	// Read the generation BEFORE endCreateLocked: this create may be the last one in flight, and
 	// ending it releases the key's entry. Reading after would see the fresh zero value and make a
@@ -421,7 +427,6 @@ func (p *Pool[V]) installCreated(key string, c *pendingCreate[V], value V) {
 	p.endCreateLocked(key, c)
 	if p.closed.Load() {
 		c.err = ErrPoolClosed
-		close(c.done)
 		p.mu.Unlock()
 		_ = p.closer(value) // orphaned instance — close is best-effort, not counted
 		return
@@ -447,7 +452,6 @@ func (p *Pool[V]) installCreated(key string, c *pendingCreate[V], value V) {
 		e.element = p.lru.PushFront(e)
 		p.entries[key] = e
 	}
-	close(c.done)
 	p.mu.Unlock()
 
 	if closeNow {
