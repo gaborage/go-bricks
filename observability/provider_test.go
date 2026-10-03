@@ -1420,23 +1420,23 @@ func clearOTLPEnv(t *testing.T, signal string) {
 // newTransportProbe listens on network/address and reports, per accepted
 // connection, whether the client opened with a TLS handshake record or in
 // plaintext. It never answers, so no export through it succeeds.
-func newTransportProbe(t *testing.T, network, address string) (net.Listener, <-chan string) {
+func newTransportProbe(t *testing.T, network, address string) (ln net.Listener, opened <-chan string) {
 	t.Helper()
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), network, address)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
-	opened := make(chan string, 16)
+	kinds := make(chan string, 16)
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go reportFirstByte(conn, opened)
+			go reportFirstByte(conn, kinds)
 		}
 	}()
-	return ln, opened
+	return ln, kinds
 }
 
 // reportFirstByte reads one byte from conn and reports "tls" for a TLS
