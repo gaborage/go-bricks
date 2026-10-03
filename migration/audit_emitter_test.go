@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -216,15 +215,13 @@ func TestEmitterSinkPanicNeverDisclosesTheValue(t *testing.T) {
 		"the report must stay attributable")
 }
 
-// memLogExporter keeps every exported log record.
+// memLogExporter keeps every exported log record; SimpleProcessor exports on the
+// emitting goroutine, so no locking is needed.
 type memLogExporter struct {
-	mu      sync.Mutex
 	records []sdklog.Record
 }
 
 func (e *memLogExporter) Export(_ context.Context, records []sdklog.Record) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	for i := range records {
 		e.records = append(e.records, records[i].Clone())
 	}
@@ -233,12 +230,6 @@ func (e *memLogExporter) Export(_ context.Context, records []sdklog.Record) erro
 
 func (e *memLogExporter) Shutdown(context.Context) error   { return nil }
 func (e *memLogExporter) ForceFlush(context.Context) error { return nil }
-
-func (e *memLogExporter) Records() []sdklog.Record {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return append([]sdklog.Record(nil), e.records...)
-}
 
 // otlpOnlyLogs hands the logger an sdklog provider with stdout disabled.
 type otlpOnlyLogs struct{ provider *sdklog.LoggerProvider }
@@ -264,7 +255,7 @@ func TestEmitterSuccessLogIsExportedAsActionLog(t *testing.T) {
 
 	emitted := spans.GetSpans()
 	require.Len(t, emitted, 1)
-	records := exporter.Records()
+	records := exporter.records
 	require.Len(t, records, 1, "the success audit log must be exported at sampling rate 0.0")
 
 	logType := ""
