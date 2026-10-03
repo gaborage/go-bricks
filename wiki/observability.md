@@ -423,7 +423,7 @@ observability:
 
 **Supported vendors:** New Relic, Honeycomb, Datadog, Grafana Cloud, generic Bearer tokens.
 
-**`OTEL_EXPORTER_OTLP_*` variables:** they never choose the endpoint, its path, TLS or the trace encoding; the configured `endpoint` and `insecure` keys alone do ([ADR-137](adr_137_otlp_transport_config_authoritative.md)). Still applied: `*_HEADERS` when the config sets no headers for that signal, `*_CERTIFICATE`/`*_CLIENT_CERTIFICATE`/`*_CLIENT_KEY` on the TLS path, `*_TIMEOUT`, and gRPC compression when the config compression is not gzip. To set an endpoint or TLS from the environment, use `OBSERVABILITY_<SIGNAL>_ENDPOINT` / `OBSERVABILITY_<SIGNAL>_INSECURE`.
+**`OTEL_EXPORTER_OTLP_*` variables:** they never choose the endpoint, its path, TLS or the trace encoding; the configured `endpoint` and `insecure` keys alone do ([ADR-137](adr_137_otlp_transport_config_authoritative.md)). Still applied: `*_HEADERS` when the signal has no headers of its own or inherited (metrics and logs inherit `trace.headers`), `*_CERTIFICATE`/`*_CLIENT_CERTIFICATE`/`*_CLIENT_KEY` on the TLS path, `*_TIMEOUT`, and gRPC compression when the config compression is not gzip. To set an endpoint or TLS from the environment, use `OBSERVABILITY_<SIGNAL>_ENDPOINT` / `OBSERVABILITY_<SIGNAL>_INSECURE`.
 
 For complete configuration examples, security best practices, and vendor-specific headers, see [Headers & Authentication](observability_headers_auth.md).
 

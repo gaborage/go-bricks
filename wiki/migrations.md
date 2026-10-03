@@ -11984,7 +11984,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   every export fails at runtime. **Kept**: `*_HEADERS` when the signal has no config headers
   (metrics and logs inherit the trace headers); `*_CERTIFICATE`, `*_CLIENT_CERTIFICATE` and
   `*_CLIENT_KEY` on the TLS path; `*_TIMEOUT`; gRPC `*_COMPRESSION` when the config compression is
-  not gzip. A scheme that disagrees with `insecure` is still accepted: TLS follows `insecure`.
+  not gzip. An HTTP scheme that disagrees with `insecure` is still accepted: TLS follows
+  `insecure`.
 - class note: `breaking`, not `silent-behavior`: nothing fails to compile or start, but a
   deployment that set its endpoint, path or TLS through `OTEL_EXPORTER_OTLP_*` stops exporting
   where it used to, and nothing reports it at startup.
@@ -11998,10 +11999,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `OBSERVABILITY_<SIGNAL>_INSECURE=true` with it (unless an explicit `*_INSECURE=false` overrode
   the scheme): TLS now follows that key alone. A per-signal URL whose path was a bare `/` exported
   to the collector's root path, which config cannot express (`/` means `/v1/<signal>`); have that
-  collector serve `/v1/<signal>` or give its full path. For gRPC, keep only the URL's `host:port`
-  (`Validate` rejects a scheme). Drop `*_PROTOCOL`: it never chose the transport (that is
-  `observability.<signal>.protocol`); it only switched trace export to JSON, which no longer
-  exists.
+  collector serve `/v1/<signal>` or give its full path. For gRPC, drop an `http://`/`https://`
+  scheme and keep `host:port`; a `unix:`, `dns:///` or `passthrough:///` target moves as written.
+  Drop `*_PROTOCOL`: it never chose the transport (that is `observability.<signal>.protocol`); it
+  only switched trace export to JSON, which no longer exists.
 - verify: boot with the old variables still exported: the collector receives at the configured
   endpoint, over TLS wherever `insecure` is false.
 - ref: [ADR-137](adr_137_otlp_transport_config_authoritative.md) · `observability/provider.go`

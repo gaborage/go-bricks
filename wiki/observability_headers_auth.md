@@ -108,7 +108,7 @@ headers:
 
 ## `OTEL_EXPORTER_OTLP_HEADERS`
 
-The exporters' own `OTEL_EXPORTER_OTLP_HEADERS` (and `OTEL_EXPORTER_OTLP_<SIGNAL>_HEADERS`) still applies, but only to a signal whose config sets no `headers`; a configured `headers` map replaces it whole. Unlike the endpoint and TLS variables, which no longer apply ([ADR-137](adr_137_otlp_transport_config_authoritative.md)), it never changes where or how data is sent.
+The exporters' own `OTEL_EXPORTER_OTLP_HEADERS` (and `OTEL_EXPORTER_OTLP_<SIGNAL>_HEADERS`) still applies, but only to a signal that ends up with no `headers`: metrics and logs inherit `trace.headers` when they set none, so a configured or inherited `headers` map replaces it whole. Unlike the endpoint and TLS variables, which no longer apply ([ADR-137](adr_137_otlp_transport_config_authoritative.md)), it never changes where or how data is sent.
 
 ## Why Not Auto-Derive Header Names from Env Vars?
 

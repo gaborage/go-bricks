@@ -168,10 +168,11 @@ observability:
     enabled: true
     endpoint: otel-collector:4317
     protocol: grpc
+    insecure: true  # logs.insecure does not inherit trace.insecure
     compression: gzip
 ```
 
-`insecure` alone decides TLS on this hop: an `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_INSECURE` set in the pod for another SDK or the collector sidecar does not change the endpoint or the transport ([ADR-137](adr_137_otlp_transport_config_authoritative.md)). `logs.insecure` does not inherit the trace value, so set it to `true` for a plaintext collector.
+`insecure` alone decides TLS on this hop: an `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_INSECURE` set in the pod for another SDK or the collector sidecar does not change the endpoint or the transport ([ADR-137](adr_137_otlp_transport_config_authoritative.md)). `OTEL_EXPORTER_OTLP_HEADERS` set there still reaches a signal with no headers of its own.
 
 ## Resources
 
