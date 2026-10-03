@@ -606,7 +606,8 @@ func (c *Config) Validate() error {
 
 // validateEndpointFormat checks that the endpoint format matches the protocol.
 // gRPC endpoints must use "host:port" format without http:// or https:// scheme.
-// HTTP endpoints must include the http:// or https:// scheme.
+// HTTP endpoints must include the http:// or https:// scheme and split into a
+// host and an exact path: no userinfo, query, fragment or encoded slash.
 func validateEndpointFormat(endpoint, protocol string) error {
 	// Skip validation for stdout endpoint
 	if endpoint == EndpointStdout || endpoint == "" {
@@ -615,12 +616,19 @@ func validateEndpointFormat(endpoint, protocol string) error {
 
 	hasScheme := strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://")
 
-	if protocol == ProtocolGRPC && hasScheme {
+	// grpc:// boots but fails every RPC; dns:///, unix:, unix-abstract: and
+	// passthrough:/// are valid gRPC targets and stay accepted.
+	if protocol == ProtocolGRPC && (hasScheme || strings.HasPrefix(endpoint, "grpc://")) {
 		return ErrInvalidEndpointFormat
 	}
 
-	if protocol == ProtocolHTTP && !hasScheme {
-		return ErrInvalidEndpointFormat
+	if protocol == ProtocolHTTP {
+		if !hasScheme {
+			return ErrInvalidEndpointFormat
+		}
+		if _, ok := parseOTLPHTTPEndpoint(endpoint); !ok {
+			return ErrInvalidEndpointFormat
+		}
 	}
 
 	return nil

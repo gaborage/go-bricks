@@ -816,6 +816,22 @@ func TestValidateEndpointFormat(t *testing.T) {
 			protocol: ProtocolGRPC,
 			wantErr:  nil,
 		},
+		{name: "http_unparseable", endpoint: "https://collector:4318/%zz", protocol: ProtocolHTTP, wantErr: ErrInvalidEndpointFormat},
+		{name: "http_empty_host", endpoint: "http://", protocol: ProtocolHTTP, wantErr: ErrInvalidEndpointFormat},
+		{name: "http_hostless_path", endpoint: "http:///v1/traces", protocol: ProtocolHTTP, wantErr: ErrInvalidEndpointFormat},
+		{name: "http_userinfo", endpoint: "https://user:hunter2@collector:4318/v1/traces", protocol: ProtocolHTTP, wantErr: ErrInvalidEndpointFormat},
+		{name: "http_query", endpoint: "https://collector:4318/v1/traces?tenant=a", protocol: ProtocolHTTP, wantErr: ErrInvalidEndpointFormat},
+		{name: "http_fragment", endpoint: "https://collector:4318/v1/traces#top", protocol: ProtocolHTTP, wantErr: ErrInvalidEndpointFormat},
+		{name: "http_encoded_slash", endpoint: "https://collector:4318/otlp%2Fv1/traces", protocol: ProtocolHTTP, wantErr: ErrInvalidEndpointFormat},
+		{name: "http_root_path_valid", endpoint: "https://collector:4318/", protocol: ProtocolHTTP},
+		{name: "http_port_only_valid", endpoint: "http://:4318", protocol: ProtocolHTTP},
+		{name: "http_gateway_prefix_valid", endpoint: "https://gateway/otlp/v1/traces", protocol: ProtocolHTTP},
+		{name: "grpc_grpc_scheme", endpoint: "grpc://collector:4317", protocol: ProtocolGRPC, wantErr: ErrInvalidEndpointFormat},
+		{name: "grpc_dns_target_valid", endpoint: "dns:///collector:4317", protocol: ProtocolGRPC},
+		{name: "grpc_unix_absolute_target_valid", endpoint: "unix:///var/run/otel.sock", protocol: ProtocolGRPC},
+		{name: "grpc_unix_relative_target_valid", endpoint: "unix:otel.sock", protocol: ProtocolGRPC},
+		{name: "grpc_unix_abstract_target_valid", endpoint: "unix-abstract:otel", protocol: ProtocolGRPC},
+		{name: "grpc_passthrough_target_valid", endpoint: "passthrough:///collector:4317", protocol: ProtocolGRPC},
 	}
 
 	for _, tt := range tests {
@@ -828,6 +844,24 @@ func TestValidateEndpointFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNewProviderEndpointErrorOmitsEndpoint pins that a rejected endpoint is
+// reported by sentinel alone: the bootstrap WARN logs this error, and a userinfo
+// password must not reach it.
+func TestNewProviderEndpointErrorOmitsEndpoint(t *testing.T) {
+	_, err := NewProvider(&Config{
+		Enabled: true,
+		Service: ServiceConfig{Name: testServiceName},
+		Trace: TraceConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: "https://user:hunter2@collector:4318/v1/traces",
+			Protocol: ProtocolHTTP,
+		},
+	})
+	require.ErrorIs(t, err, ErrInvalidEndpointFormat)
+	assert.NotContains(t, err.Error(), "hunter2")
+	assert.NotContains(t, err.Error(), "collector")
 }
 
 func TestConfigValidateEndpointFormat(t *testing.T) {
