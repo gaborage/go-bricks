@@ -135,11 +135,12 @@ func (p *provider) createOTLPHTTPMetricExporter(ctx context.Context, useInsecure
 	debugLogger.Printf("Creating OTLP HTTP metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
 		p.config.Metrics.Endpoint, useInsecure, p.config.Metrics.Compression, p.config.Metrics.Temporality, len(headers))
 
-	// Strip scheme - OTEL HTTP exporter adds it automatically based on WithInsecure()
-	endpoint := stripScheme(p.config.Metrics.Endpoint)
-
+	host, urlPath := otlpHTTPTarget(p.config.Metrics.Endpoint)
 	opts := []otlpmetrichttp.Option{
-		otlpmetrichttp.WithEndpoint(endpoint),
+		otlpmetrichttp.WithEndpoint(host),
+	}
+	if urlPath != "" {
+		opts = append(opts, otlpmetrichttp.WithURLPath(urlPath))
 	}
 
 	// Configure compression

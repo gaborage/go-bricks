@@ -5579,13 +5579,15 @@ observability:
 |---|---|---|---|
 | `grpc` | `host:port` (NO scheme) | `otlp.example.com:4317` | Auto |
 | `grpc` (insecure) | `host:port` + `insecure: true` | `localhost:4317` | Off |
-| `http` | `https://host:port/{v1/traces,v1/metrics,v1/logs}` | `https://otlp.example.com:4318/v1/traces` | On |
-| `http` (insecure) | `http://host:port/<path>` | `http://localhost:4318/v1/traces` | Off |
+| `http` | `https://host:port[/path]` | `https://otlp.example.com:4318/v1/traces` | On |
+| `http` (insecure) | `http://host:port[/path]` + `insecure: true` | `http://localhost:4318/v1/traces` | Off |
+
+HTTP path rule: the path is the export path, used exactly (never joined with `/v1/<signal>`), so a gateway prefix is written in full (`/otlp/v1/traces`); no path, or `/`, sends to `/v1/traces`/`/v1/metrics`/`/v1/logs`. Userinfo, a query, a fragment or an encoded slash (`%2F`) is not split and does not export.
 
 **Common mistakes:**
 - ❌ `https://otlp.example.com:4317` + `protocol: grpc` → fails ("too many colons" / HTTP/1.1 frame mismatch)
 - ✅ `otlp.example.com:4317` + `protocol: grpc` (no scheme)
-- ❌ `otlp.example.com:4318` + `protocol: http` (missing scheme + path)
+- ❌ `otlp.example.com:4318` + `protocol: http` (missing scheme; the path is optional)
 - ✅ `https://otlp.example.com:4318/v1/traces` + `protocol: http`
 
 ### Resource Attributes & Export Behavior

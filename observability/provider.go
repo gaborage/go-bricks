@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -405,16 +406,30 @@ func stripScheme(endpoint string) string {
 	return endpoint
 }
 
+// otlpHTTPTarget splits an OTLP/HTTP endpoint into a host and an exact URL path
+// ("" for none or "/"); a form it cannot split cleanly falls through to stripScheme.
+func otlpHTTPTarget(endpoint string) (host, urlPath string) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
+		return stripScheme(endpoint), ""
+	}
+	if u.Path == "/" {
+		return u.Host, ""
+	}
+	return u.Host, u.Path
+}
+
 // createOTLPHTTPExporter creates an OTLP HTTP trace exporter.
 func (p *provider) createOTLPHTTPExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
 	debugLogger.Printf("Creating OTLP HTTP trace exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Trace.Endpoint, p.config.Trace.Insecure, p.config.Trace.Compression, len(p.config.Trace.Headers))
 
-	// Strip scheme - OTEL HTTP exporter adds it automatically based on WithInsecure()
-	endpoint := stripScheme(p.config.Trace.Endpoint)
-
+	host, urlPath := otlpHTTPTarget(p.config.Trace.Endpoint)
 	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpoint(endpoint),
+		otlptracehttp.WithEndpoint(host),
+	}
+	if urlPath != "" {
+		opts = append(opts, otlptracehttp.WithURLPath(urlPath))
 	}
 
 	// Configure compression

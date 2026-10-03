@@ -207,7 +207,7 @@ observability:
 | Field | Type | Default | Description |
 | ------- | ------ | --------- | ------------- |
 | `trace.enabled` | bool | `true` | Enable/disable tracing |
-| `trace.endpoint` | string | `"stdout"` | Endpoint for trace export (stdout, http, grpc) |
+| `trace.endpoint` | string | `"stdout"` | Endpoint for trace export: `stdout`, `http(s)://host:port[/path]` (HTTP) or `host:port` (gRPC). An HTTP path is used exactly; none, or `/`, sends to `/v1/traces` |
 | `trace.protocol` | string | `"http"` | OTLP protocol: "http" or "grpc" |
 | `trace.insecure` | bool | `false` | Use insecure connection (no TLS) |
 | `trace.headers` | map[string]string | - | Custom headers for authentication |
@@ -222,7 +222,7 @@ observability:
 | Field | Type | Default | Description |
 | ------- | ------ | --------- | ------------- |
 | `metrics.enabled` | bool | `true` | Enable/disable metrics |
-| `metrics.endpoint` | string | `"stdout"` | Endpoint for metric export (stdout, http, grpc) |
+| `metrics.endpoint` | string | `"stdout"` | Endpoint for metric export: `stdout`, `http(s)://host:port[/path]` (HTTP) or `host:port` (gRPC). An HTTP path is used exactly; none, or `/`, sends to `/v1/metrics` |
 | `metrics.protocol` | string | Fallback to `trace.protocol` or `"http"` | OTLP protocol for metrics transport |
 | `metrics.insecure` | bool | Fallback to `trace.insecure` | Use insecure connection (no TLS) |
 | `metrics.headers` | map[string]string | Fallback to `trace.headers` | Custom headers for metrics authentication |
@@ -376,7 +376,7 @@ Error: failed to initialize Trace provider: failed to create trace exporter
 
 **Solutions:**
 
-- Verify endpoint is correct (hostname:port)
+- Verify endpoint format: gRPC takes `host:port` with no scheme; HTTP takes `http(s)://host:port` plus an optional path used exactly (`/v1/traces`, or a gateway's full path such as `/otlp/v1/traces`)
 - Check protocol matches endpoint (HTTP=4318, gRPC=4317)
 - Ensure firewall allows outbound connections
 - For TLS, verify certificates or set `insecure: true` for testing

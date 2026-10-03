@@ -1032,3 +1032,21 @@ func TestMetricsCardinalityLimitKeyBeatsEnv(t *testing.T) {
 	assert.Len(t, points, 5)
 	assert.Zero(t, overflowPoints(points))
 }
+
+func TestCreateOTLPHTTPMetricExporterURLPath(t *testing.T) {
+	testOTLPHTTPURLPaths(t, "metrics", func(t *testing.T, endpoint string) {
+		p := &provider{config: Config{Metrics: MetricsConfig{
+			Endpoint:    endpoint,
+			Compression: CompressionNone,
+		}}}
+		exporter, err := p.createOTLPHTTPMetricExporter(context.Background(), true, nil)
+		require.NoError(t, err)
+
+		mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exporter)))
+		counter, err := mp.Meter(testMeterName).Int64Counter("test.path.counter")
+		require.NoError(t, err)
+		counter.Add(context.Background(), 1)
+		require.NoError(t, mp.ForceFlush(context.Background()))
+		require.NoError(t, mp.Shutdown(context.Background()))
+	})
+}

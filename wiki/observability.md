@@ -434,7 +434,9 @@ GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandw
 | Protocol | Endpoint Format | Example |
 | --- | --- | --- |
 | `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` |
-| `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` |
+| `http` | `https://host:port[/path]` | `https://otlp.nr-data.net:4318/v1/traces` |
+
+An HTTP path is the export path, used exactly: the signal suffix is never appended, so a gateway prefix is written out in full (`https://gateway:4318/otlp/v1/traces`). With no path, or `/`, the exporter sends to `/v1/traces`, `/v1/metrics` or `/v1/logs`. An HTTP endpoint carrying userinfo, a query, a fragment or an encoded slash (`%2F`) is not split into host and path; it reaches the exporter as one host string and does not export.
 
 **Common Mistakes:**
 
