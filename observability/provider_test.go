@@ -2,11 +2,14 @@ package observability
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1315,66 +1318,39 @@ func assertOnlyPath(t *testing.T, rec *otlpPathRecorder, want string) {
 	}
 }
 
-func TestOTLPHTTPTarget(t *testing.T) {
-	tests := []struct {
-		name     string
-		endpoint string
-		wantHost string
-		wantPath string
-	}{
-		{name: "host_only", endpoint: "http://collector:4318", wantHost: "collector:4318"},
-		{name: "root_path_is_host_only", endpoint: "https://collector:4318/", wantHost: "collector:4318"},
-		{name: "signal_path", endpoint: "https://otlp.nr-data.net:4318/v1/traces", wantHost: "otlp.nr-data.net:4318", wantPath: "/v1/traces"},
-		{name: "signal_path_default_port", endpoint: "https://otlp.nr-data.net/v1/metrics", wantHost: "otlp.nr-data.net", wantPath: "/v1/metrics"},
-		{name: "gateway_prefix_kept_exactly", endpoint: "http://gateway:4318/otlp/v1/logs", wantHost: "gateway:4318", wantPath: "/otlp/v1/logs"},
-		{name: "port_only", endpoint: "http://:4318", wantHost: ":4318"},
-		{name: "no_scheme_falls_through", endpoint: "localhost:4318", wantHost: "localhost:4318"},
-		{name: "unparseable_ip_falls_through", endpoint: "127.0.0.1:4318", wantHost: "127.0.0.1:4318"},
-		{name: "unparseable_escape_falls_through", endpoint: "https://collector:4318/%zz", wantHost: "collector:4318/%zz"},
-		{name: "empty_host_falls_through", endpoint: "http://", wantHost: ""},
-		{name: "hostless_path_falls_through", endpoint: "http:///v1/traces", wantHost: "/v1/traces"},
-		{name: "userinfo_falls_through", endpoint: "http://user@collector:4318/v1/traces", wantHost: "user@collector:4318/v1/traces"},
-		{name: "query_falls_through", endpoint: "http://collector:4318/v1/traces?tenant=a", wantHost: "collector:4318/v1/traces?tenant=a"},
-		{name: "fragment_falls_through", endpoint: "http://collector:4318/v1/traces#top", wantHost: "collector:4318/v1/traces#top"},
-		{name: "encoded_slash_falls_through", endpoint: "http://collector:4318/otlp%2Fv1/traces", wantHost: "collector:4318/otlp%2Fv1/traces"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			host, urlPath := otlpHTTPTarget(tt.endpoint)
-			assert.Equal(t, tt.wantHost, host)
-			assert.Equal(t, tt.wantPath, urlPath)
-		})
-	}
-}
-
-// testOTLPHTTPURLPaths runs the endpoint-path matrix against one HTTP exporter.
-// export is handed the configured endpoint and must push one item through it.
+// testOTLPHTTPURLPaths runs the endpoint-path matrix against one HTTP exporter;
+// no OTEL_* endpoint variable supplies the path. export is handed the configured
+// endpoint and must push one item through it.
 func testOTLPHTTPURLPaths(t *testing.T, signal string, export func(t *testing.T, endpoint string)) {
 	t.Helper()
 	defaultPath := "/v1/" + signal
 	tests := []struct {
-		name     string
-		path     string
-		envPath  string
-		wantPath string
+		name       string
+		path       string
+		envPath    string
+		genericEnv bool
+		wantPath   string
 	}{
 		{name: "host_only_uses_default", wantPath: defaultPath},
 		{name: "root_uses_default", path: "/", wantPath: defaultPath},
 		{name: "signal_path", path: defaultPath, wantPath: defaultPath},
 		{name: "gateway_prefix_used_exactly", path: "/otlp" + defaultPath, wantPath: "/otlp" + defaultPath},
-		{name: "env_path_used_without_config_path", envPath: "/env" + defaultPath, wantPath: "/env" + defaultPath},
-		{name: "config_path_beats_env_path", path: "/cfg" + defaultPath, envPath: "/env" + defaultPath, wantPath: "/cfg" + defaultPath},
+		{name: "signal_env_path_ignored", envPath: "/env" + defaultPath, wantPath: defaultPath},
+		{name: "generic_env_path_with_trailing_slash_ignored", envPath: "/env/", genericEnv: true, wantPath: defaultPath},
+		{name: "config_path_with_env_path_set", path: "/cfg" + defaultPath, envPath: "/env" + defaultPath, wantPath: "/cfg" + defaultPath},
 	}
-	signalEnv := "OTEL_EXPORTER_OTLP_" + strings.ToUpper(signal) + "_ENDPOINT"
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, rec := newOTLPPathServer(t)
-			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-			t.Setenv(signalEnv, "")
+			clearOTLPEnv(t, signal)
 			if tt.envPath != "" {
-				t.Setenv(signalEnv, srv.URL+tt.envPath)
+				key := otlpSignalEnv(signal, "ENDPOINT")
+				if tt.genericEnv {
+					key = "OTEL_EXPORTER_OTLP_ENDPOINT"
+				}
+				// A dead host: if the env endpoint were dialed, nothing reaches srv.
+				t.Setenv(key, "http://127.0.0.1:1"+tt.envPath)
 			}
 
 			export(t, srv.URL+tt.path)
@@ -1398,6 +1374,225 @@ func TestCreateOTLPHTTPExporterURLPath(t *testing.T) {
 		span.End()
 		require.NoError(t, tp.Shutdown(context.Background()))
 	})
+}
+
+// otlpExportFactory builds one OTLP exporter for endpoint and returns a call that
+// pushes one item through it; the exporter is shut down when the test ends.
+type otlpExportFactory func(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error)
+
+// otlpExporterCase is one of the OTLP exporter constructors.
+type otlpExporterCase struct {
+	name      string
+	signal    string
+	http      bool
+	newExport otlpExportFactory
+}
+
+func otlpExporterCases() []otlpExporterCase {
+	return []otlpExporterCase{
+		{name: "trace_http", signal: "traces", http: true, newExport: newTraceHTTPExport},
+		{name: "metric_http", signal: "metrics", http: true, newExport: newMetricHTTPExport},
+		{name: "log_http", signal: "logs", http: true, newExport: newLogHTTPExport},
+	}
+}
+
+func shutdownWithin(shutdown func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = shutdown(ctx)
+}
+
+func otlpSignalEnv(signal, suffix string) string {
+	return "OTEL_EXPORTER_OTLP_" + strings.ToUpper(signal) + "_" + suffix
+}
+
+// clearOTLPEnv blanks the OTEL_EXPORTER_OTLP_* variables these tests set, generic
+// and per-signal, so a subtest never inherits the developer's shell.
+func clearOTLPEnv(t *testing.T, signal string) {
+	t.Helper()
+	for _, suffix := range []string{"ENDPOINT", "INSECURE", "HEADERS", "CERTIFICATE", "PROTOCOL"} {
+		t.Setenv("OTEL_EXPORTER_OTLP_"+suffix, "")
+		t.Setenv(otlpSignalEnv(signal, suffix), "")
+	}
+}
+
+// transportProbe is a listener that reports, per accepted connection, whether
+// the client opened with a TLS handshake record or in plaintext. It never
+// answers, so no export through it succeeds.
+type transportProbe struct {
+	addr   string
+	opened <-chan string
+}
+
+func newTransportProbe(t *testing.T, network, address string) transportProbe {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), network, address)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	opened := make(chan string, 16)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go reportFirstByte(conn, opened)
+		}
+	}()
+	return transportProbe{addr: ln.Addr().String(), opened: opened}
+}
+
+// reportFirstByte reads one byte from conn and reports "tls" for a TLS
+// handshake record, "plaintext" otherwise, then closes conn.
+func reportFirstByte(conn net.Conn, opened chan<- string) {
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	first := make([]byte, 1)
+	if _, err := io.ReadFull(conn, first); err != nil {
+		return
+	}
+	kind := "plaintext"
+	if first[0] == 0x16 {
+		kind = "tls"
+	}
+	select {
+	case opened <- kind:
+	default:
+	}
+}
+
+// firstTransport builds the exporter, runs one export until the probe reports a
+// connection, then cancels it and returns how that connection opened.
+func firstTransport(t *testing.T, probe transportProbe, newExport otlpExportFactory, endpoint string) string {
+	t.Helper()
+	export, err := newExport(t, endpoint, false)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = export(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	select {
+	case kind := <-probe.opened:
+		return kind
+	case <-time.After(15 * time.Second):
+		t.Fatal("the exporter never connected to the probe")
+		return ""
+	}
+}
+
+// TestOTLPExportersEnvCannotDowngrade pins that no OTEL_* variable turns an
+// exporter configured with insecure:false into a plaintext one. HTTP endpoints
+// are written http:// on purpose: TLS follows insecure, not the scheme.
+func TestOTLPExportersEnvCannotDowngrade(t *testing.T) {
+	for _, exp := range otlpExporterCases() {
+		vectors := []struct {
+			name     string
+			key      string
+			endpoint bool
+		}{
+			{name: "generic_insecure", key: "OTEL_EXPORTER_OTLP_INSECURE"},
+			{name: "signal_insecure", key: otlpSignalEnv(exp.signal, "INSECURE")},
+			{name: "generic_http_endpoint", key: "OTEL_EXPORTER_OTLP_ENDPOINT", endpoint: true},
+			{name: "signal_http_endpoint", key: otlpSignalEnv(exp.signal, "ENDPOINT"), endpoint: true},
+		}
+		for _, v := range vectors {
+			t.Run(exp.name+"/"+v.name, func(t *testing.T) {
+				probe := newTransportProbe(t, "tcp", "127.0.0.1:0")
+				clearOTLPEnv(t, exp.signal)
+				value := "true"
+				if v.endpoint {
+					value = "http://" + probe.addr
+				}
+				t.Setenv(v.key, value)
+
+				endpoint := probe.addr
+				if exp.http {
+					endpoint = "http://" + endpoint
+				}
+				assert.Equal(t, "tls", firstTransport(t, probe, exp.newExport, endpoint))
+			})
+		}
+	}
+}
+
+// TestOTLPHTTPExportersKeptEnvChannels pins the env channels that still apply to
+// an HTTP exporter: *_CERTIFICATE on the TLS path and *_HEADERS when config sets
+// none, while *_PROTOCOL=http/json no longer switches the encoding.
+func TestOTLPHTTPExportersKeptEnvChannels(t *testing.T) {
+	for _, exp := range otlpExporterCases() {
+		if !exp.http {
+			continue
+		}
+		t.Run(exp.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var contentTypes, probes []string
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				mu.Lock()
+				contentTypes = append(contentTypes, r.Header.Get("Content-Type"))
+				probes = append(probes, r.Header.Get("X-Env-Probe"))
+				mu.Unlock()
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(srv.Close)
+			caPath := filepath.Join(t.TempDir(), "ca.pem")
+			require.NoError(t, os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600))
+
+			clearOTLPEnv(t, exp.signal)
+			t.Setenv("OTEL_EXPORTER_OTLP_CERTIFICATE", caPath)
+			t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-env-probe=kept")
+			t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json")
+			t.Setenv(otlpSignalEnv(exp.signal, "PROTOCOL"), "http/json")
+
+			export, err := exp.newExport(t, srv.URL, false)
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			require.NoError(t, export(ctx))
+
+			mu.Lock()
+			defer mu.Unlock()
+			require.NotEmpty(t, contentTypes, "the exporter never completed a TLS request")
+			for i := range contentTypes {
+				assert.Equal(t, "application/x-protobuf", contentTypes[i])
+				assert.Equal(t, "kept", probes[i])
+			}
+		})
+	}
+}
+
+func TestOTLPHTTPExportersRefuseUnsplittableEndpoint(t *testing.T) {
+	for _, exp := range otlpExporterCases() {
+		if !exp.http {
+			continue
+		}
+		t.Run(exp.name, func(t *testing.T) {
+			_, err := exp.newExport(t, "https://user@collector:4318/v1/traces", false)
+			assert.ErrorIs(t, err, ErrInvalidEndpointFormat)
+		})
+	}
+}
+
+func newTraceHTTPExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
+	p := &provider{config: Config{Trace: TraceConfig{Endpoint: endpoint, Insecure: insecure, Compression: CompressionNone}}}
+	exporter, err := p.createOTLPHTTPExporter(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { shutdownWithin(exporter.Shutdown) })
+	return func(ctx context.Context) error {
+		return exporter.ExportSpans(ctx, tracetest.SpanStubs{{Name: testSpanName}}.Snapshots())
+	}, nil
 }
 
 // TestNewProviderPathBearingHTTPEndpoints pins that the documented signal-path
