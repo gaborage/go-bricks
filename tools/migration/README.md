@@ -18,14 +18,14 @@ Deep dives:
 
 ## Install
 
-CLI releases are tagged `tools/migration/vX.Y.Z` (first: `v0.38.0`; latest: `v0.68.0`). Once a tag exists:
+CLI releases are tagged `tools/migration/vX.Y.Z` (first: `v0.38.0`; latest: `v0.71.0`). Once a tag exists:
 
 ```bash
 # Latest CLI release:
 go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@latest
 
 # Pin to a specific release:
-go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@v0.68.0
+go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@v0.71.0
 
 # From a clone (contributors):
 cd tools/migration && make build   # produces ./go-bricks-migrate
