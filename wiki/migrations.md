@@ -11934,7 +11934,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: an `observability.{trace,metrics,logs}.endpoint` (env `OBSERVABILITY_<SIGNAL>_ENDPOINT`)
   on protocol `http` with userinfo (`user:pass@`), a query, a fragment, an encoded slash (`%2F`)
   or another escape the path does not need, or no host (`http:///v1/traces`); or one on protocol
-  `grpc` starting with `grpc://` in any letter case.
+  `grpc` starting with `grpc://` in any letter case:
+  `git grep -nE 'https?://[^/"[:space:]]*@|https?://[^"[:space:]]*[?#]|https?://[^"[:space:]]*%|https?:///|[Gg][Rr][Pp][Cc]://' -- '*.yaml' '*.yml'`,
+  then keep the observability endpoint hits (a `%` hit is a match only when the escape is not
+  needed, such as `%2F`), and read every environment's variables the same way.
 - scope: these forms never exported. The HTTP ones reached the exporter as one host string
   ([C72.2]): a trace endpoint booted and failed every export, and a metrics or logs endpoint
   already failed construction. `grpc://host:4317` booted and failed every RPC with "too many

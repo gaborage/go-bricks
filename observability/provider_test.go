@@ -1432,3 +1432,21 @@ func TestNewProviderPathBearingHTTPEndpoints(t *testing.T) {
 	defer cancel()
 	assert.NoError(t, provider.Shutdown(ctx))
 }
+
+// TestNewProviderEndpointErrorOmitsEndpoint pins that a rejected endpoint is
+// reported by sentinel alone: the bootstrap WARN logs this error, and a userinfo
+// password must not reach it.
+func TestNewProviderEndpointErrorOmitsEndpoint(t *testing.T) {
+	_, err := NewProvider(&Config{
+		Enabled: true,
+		Service: ServiceConfig{Name: testServiceName},
+		Trace: TraceConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: "https://user:hunter2@collector:4318/v1/traces",
+			Protocol: ProtocolHTTP,
+		},
+	})
+	require.ErrorIs(t, err, ErrInvalidEndpointFormat)
+	assert.NotContains(t, err.Error(), "hunter2")
+	assert.NotContains(t, err.Error(), "collector")
+}

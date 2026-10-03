@@ -605,7 +605,8 @@ func (c *Config) Validate() error {
 }
 
 // validateEndpointFormat checks that the endpoint format matches the protocol.
-// gRPC endpoints must use "host:port" format without http:// or https:// scheme.
+// gRPC endpoints must be a target such as host:port, dns:///host:port or
+// unix:///path; an http, https or grpc URL scheme is rejected in any case.
 // HTTP endpoints must include the http:// or https:// scheme and split into a
 // host and an exact path: no userinfo, query, fragment or encoded slash.
 func validateEndpointFormat(endpoint, protocol string) error {
