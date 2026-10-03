@@ -90,12 +90,12 @@ func (p *provider) createOTLPHTTPLogExporter(ctx context.Context) (sdklog.Export
 	debugLogger.Printf("Creating OTLP HTTP log exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Logs.Endpoint, useInsecure, p.config.Logs.Compression, len(p.config.Logs.Headers))
 
-	host, urlPath := otlpHTTPTarget(p.config.Logs.Endpoint)
-	opts := []otlploghttp.Option{
-		otlploghttp.WithEndpoint(host),
+	endpointURL, err := otlpHTTPEndpointURL(p.config.Logs.Endpoint, useInsecure, "/v1/logs")
+	if err != nil {
+		return nil, err
 	}
-	if urlPath != "" {
-		opts = append(opts, otlploghttp.WithURLPath(urlPath))
+	opts := []otlploghttp.Option{
+		otlploghttp.WithEndpointURL(endpointURL),
 	}
 
 	// Configure compression
@@ -104,11 +104,6 @@ func (p *provider) createOTLPHTTPLogExporter(ctx context.Context) (sdklog.Export
 		debugLogger.Println("Enabled gzip compression for log export")
 	} else {
 		opts = append(opts, otlploghttp.WithCompression(otlploghttp.NoCompression))
-	}
-
-	// Configure TLS/insecure connection
-	if useInsecure {
-		opts = append(opts, otlploghttp.WithInsecure())
 	}
 
 	// Add custom headers (e.g., for authentication)

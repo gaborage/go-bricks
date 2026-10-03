@@ -132,7 +132,7 @@ New Relic enforces attribute limits on its ingest side, but be aware of:
 | `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` | Enabled |
 | `http` (insecure) | `http://host:port/path` + `insecure: true` | `http://localhost:4318/v1/traces` | Disabled |
 
-> GoBricks strips the URL scheme from `endpoint` before configuring the HTTP exporter and derives TLS solely from the `insecure` field — not from `http://` vs `https://`. Setting `endpoint: http://...` without `insecure: true` still attempts a TLS handshake.
+> GoBricks builds the HTTP exporter's URL from the endpoint's host and path and derives TLS solely from the `insecure` field — not from `http://` vs `https://`, and not from any `OTEL_EXPORTER_OTLP_*` variable ([ADR-137](adr_137_otlp_transport_config_authoritative.md)). Setting `endpoint: http://...` without `insecure: true` still attempts a TLS handshake.
 
 ## Common Mistakes
 

@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -398,14 +397,6 @@ func (p *provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExport
 	}
 }
 
-// stripScheme removes http:// or https:// prefix from endpoint.
-// OTEL HTTP exporters expect host:port without scheme - they add it automatically based on WithInsecure().
-func stripScheme(endpoint string) string {
-	endpoint = strings.TrimPrefix(endpoint, "https://")
-	endpoint = strings.TrimPrefix(endpoint, "http://")
-	return endpoint
-}
-
 // parseOTLPHTTPEndpoint parses an OTLP/HTTP endpoint and reports whether it splits
 // cleanly into the host and the exact path an exporter can send.
 func parseOTLPHTTPEndpoint(endpoint string) (*url.URL, bool) {
@@ -416,17 +407,23 @@ func parseOTLPHTTPEndpoint(endpoint string) (*url.URL, bool) {
 	return u, true
 }
 
-// otlpHTTPTarget splits an OTLP/HTTP endpoint into a host and an exact URL path
-// ("" for none or "/"); a form it cannot split cleanly falls through to stripScheme.
-func otlpHTTPTarget(endpoint string) (host, urlPath string) {
+// otlpHTTPEndpointURL builds the URL an OTLP/HTTP exporter is given from the
+// endpoint's parsed parts: the scheme comes from insecure and the path is always
+// explicit (defaultPath for none or "/"), so no OTEL_* variable can change either.
+func otlpHTTPEndpointURL(endpoint string, insecure bool, defaultPath string) (string, error) {
 	u, ok := parseOTLPHTTPEndpoint(endpoint)
 	if !ok {
-		return stripScheme(endpoint), ""
+		return "", ErrInvalidEndpointFormat
 	}
-	if u.Path == "/" {
-		return u.Host, ""
+	urlPath := u.Path
+	if urlPath == "" || urlPath == "/" {
+		urlPath = defaultPath
 	}
-	return u.Host, u.Path
+	scheme := "https"
+	if insecure {
+		scheme = "http"
+	}
+	return (&url.URL{Scheme: scheme, Host: u.Host, Path: urlPath}).String(), nil
 }
 
 // createOTLPHTTPExporter creates an OTLP HTTP trace exporter.
@@ -434,12 +431,13 @@ func (p *provider) createOTLPHTTPExporter(ctx context.Context) (sdktrace.SpanExp
 	debugLogger.Printf("Creating OTLP HTTP trace exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Trace.Endpoint, p.config.Trace.Insecure, p.config.Trace.Compression, len(p.config.Trace.Headers))
 
-	host, urlPath := otlpHTTPTarget(p.config.Trace.Endpoint)
-	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpoint(host),
+	endpointURL, err := otlpHTTPEndpointURL(p.config.Trace.Endpoint, p.config.Trace.Insecure, "/v1/traces")
+	if err != nil {
+		return nil, err
 	}
-	if urlPath != "" {
-		opts = append(opts, otlptracehttp.WithURLPath(urlPath))
+	opts := []otlptracehttp.Option{
+		otlptracehttp.WithEndpointURL(endpointURL),
+		otlptracehttp.WithEncoding(otlptracehttp.EncodingProtobuf),
 	}
 
 	// Configure compression
@@ -448,11 +446,6 @@ func (p *provider) createOTLPHTTPExporter(ctx context.Context) (sdktrace.SpanExp
 		debugLogger.Println("Enabled gzip compression for trace export")
 	} else {
 		opts = append(opts, otlptracehttp.WithCompression(otlptracehttp.NoCompression))
-	}
-
-	// Configure TLS/insecure connection
-	if p.config.Trace.Insecure {
-		opts = append(opts, otlptracehttp.WithInsecure())
 	}
 
 	// Add custom headers (e.g., for authentication)

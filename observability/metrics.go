@@ -135,12 +135,12 @@ func (p *provider) createOTLPHTTPMetricExporter(ctx context.Context, useInsecure
 	debugLogger.Printf("Creating OTLP HTTP metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
 		p.config.Metrics.Endpoint, useInsecure, p.config.Metrics.Compression, p.config.Metrics.Temporality, len(headers))
 
-	host, urlPath := otlpHTTPTarget(p.config.Metrics.Endpoint)
-	opts := []otlpmetrichttp.Option{
-		otlpmetrichttp.WithEndpoint(host),
+	endpointURL, err := otlpHTTPEndpointURL(p.config.Metrics.Endpoint, useInsecure, "/v1/metrics")
+	if err != nil {
+		return nil, err
 	}
-	if urlPath != "" {
-		opts = append(opts, otlpmetrichttp.WithURLPath(urlPath))
+	opts := []otlpmetrichttp.Option{
+		otlpmetrichttp.WithEndpointURL(endpointURL),
 	}
 
 	// Configure compression
@@ -157,11 +157,6 @@ func (p *provider) createOTLPHTTPMetricExporter(ctx context.Context, useInsecure
 		debugLogger.Println("Configured delta temporality for metrics (New Relic recommendation)")
 	} else {
 		debugLogger.Println("Using cumulative temporality for metrics (OTEL SDK default)")
-	}
-
-	// Configure TLS/insecure connection
-	if useInsecure {
-		opts = append(opts, otlpmetrichttp.WithInsecure())
 	}
 
 	// Add custom headers (e.g., for authentication)

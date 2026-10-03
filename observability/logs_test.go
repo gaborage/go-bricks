@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/log/logtest"
 
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -26,7 +27,7 @@ func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 		{
 			name: "http_with_gzip_compression",
 			config: LogsConfig{
-				Endpoint:    "localhost:4318",
+				Endpoint:    "http://localhost:4318",
 				Protocol:    ProtocolHTTP,
 				Compression: CompressionGzip,
 				Insecure:    BoolPtr(true),
@@ -39,7 +40,7 @@ func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 		{
 			name: "http_with_no_compression",
 			config: LogsConfig{
-				Endpoint:    "localhost:4318",
+				Endpoint:    "http://localhost:4318",
 				Protocol:    ProtocolHTTP,
 				Compression: CompressionNone,
 				Insecure:    BoolPtr(true),
@@ -52,7 +53,7 @@ func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 		{
 			name: "http_with_custom_headers",
 			config: LogsConfig{
-				Endpoint:    "localhost:4318",
+				Endpoint:    "http://localhost:4318",
 				Protocol:    ProtocolHTTP,
 				Compression: CompressionGzip,
 				Insecure:    BoolPtr(true),
@@ -69,7 +70,7 @@ func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 		{
 			name: "http_secure_connection",
 			config: LogsConfig{
-				Endpoint:    "otlp.nr-data.net:4318",
+				Endpoint:    "https://otlp.nr-data.net:4318",
 				Protocol:    ProtocolHTTP,
 				Compression: CompressionGzip,
 				Insecure:    BoolPtr(false),
@@ -85,7 +86,7 @@ func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 		{
 			name: "http_inherits_insecure_from_trace_config",
 			config: LogsConfig{
-				Endpoint:    "localhost:4318",
+				Endpoint:    "http://localhost:4318",
 				Protocol:    ProtocolHTTP,
 				Compression: CompressionGzip,
 				// Insecure not set - should inherit from trace
@@ -697,4 +698,18 @@ func TestCreateOTLPHTTPLogExporterURLPath(t *testing.T) {
 		lp.Logger("path-test").Emit(context.Background(), record)
 		require.NoError(t, lp.Shutdown(context.Background()))
 	})
+}
+
+func newLogHTTPExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
+	p := &provider{config: Config{Logs: LogsConfig{Endpoint: endpoint, Compression: CompressionNone, Insecure: BoolPtr(insecure)}}}
+	exporter, err := p.createOTLPHTTPLogExporter(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { shutdownWithin(exporter.Shutdown) })
+	return func(ctx context.Context) error { return exporter.Export(ctx, probeLogRecords()) }, nil
+}
+
+func probeLogRecords() []sdklog.Record {
+	return []sdklog.Record{logtest.RecordFactory{Body: attribute.StringValue("probe")}.NewRecord()}
 }

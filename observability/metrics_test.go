@@ -642,7 +642,7 @@ func TestCreateOTLPHTTPMetricExporterWithCompression(t *testing.T) {
 		{
 			name: "http_with_gzip_compression_and_delta_temporality",
 			config: MetricsConfig{
-				Endpoint:             "localhost:4318",
+				Endpoint:             "http://localhost:4318",
 				Protocol:             ProtocolHTTP,
 				Compression:          CompressionGzip,
 				Temporality:          TemporalityDelta,
@@ -654,7 +654,7 @@ func TestCreateOTLPHTTPMetricExporterWithCompression(t *testing.T) {
 		{
 			name: "http_with_no_compression_and_cumulative",
 			config: MetricsConfig{
-				Endpoint:             "localhost:4318",
+				Endpoint:             "http://localhost:4318",
 				Protocol:             ProtocolHTTP,
 				Compression:          CompressionNone,
 				Temporality:          TemporalityCumulative,
@@ -666,7 +666,7 @@ func TestCreateOTLPHTTPMetricExporterWithCompression(t *testing.T) {
 		{
 			name: "http_with_exponential_histogram",
 			config: MetricsConfig{
-				Endpoint:             "localhost:4318",
+				Endpoint:             "http://localhost:4318",
 				Protocol:             ProtocolHTTP,
 				Compression:          CompressionGzip,
 				Temporality:          TemporalityCumulative,
@@ -678,7 +678,7 @@ func TestCreateOTLPHTTPMetricExporterWithCompression(t *testing.T) {
 		{
 			name: "http_with_custom_headers",
 			config: MetricsConfig{
-				Endpoint:    "localhost:4318",
+				Endpoint:    "http://localhost:4318",
 				Protocol:    ProtocolHTTP,
 				Compression: CompressionGzip,
 				Insecure:    BoolPtr(true),
@@ -1049,4 +1049,27 @@ func TestCreateOTLPHTTPMetricExporterURLPath(t *testing.T) {
 		require.NoError(t, mp.ForceFlush(context.Background()))
 		require.NoError(t, mp.Shutdown(context.Background()))
 	})
+}
+
+func newMetricHTTPExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
+	p := &provider{config: Config{Metrics: MetricsConfig{Endpoint: endpoint, Compression: CompressionNone}}}
+	exporter, err := p.createOTLPHTTPMetricExporter(context.Background(), insecure, nil)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { shutdownWithin(exporter.Shutdown) })
+	return func(ctx context.Context) error { return exporter.Export(ctx, probeResourceMetrics()) }, nil
+}
+
+func probeResourceMetrics() *metricdata.ResourceMetrics {
+	return &metricdata.ResourceMetrics{ScopeMetrics: []metricdata.ScopeMetrics{{
+		Metrics: []metricdata.Metrics{{
+			Name: "test.probe.counter",
+			Data: metricdata.Sum[int64]{
+				DataPoints:  []metricdata.DataPoint[int64]{{Value: 1}},
+				Temporality: metricdata.CumulativeTemporality,
+				IsMonotonic: true,
+			},
+		}},
+	}}}
 }
