@@ -7,12 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/config"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/config"
 )
 
 const (
