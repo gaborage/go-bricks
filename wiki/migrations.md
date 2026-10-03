@@ -12064,7 +12064,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   sampled flag means neither a client-chosen `-01` nor the httpclient fallback header can force
   recording. **Unchanged**: services whose traces start locally, AMQP and streams consume spans
   (still roots), log sampling, the key's name, default and range, and `0.0` recording nothing.
-  Span volume never grows.
+  Span volume does not grow, except under a local parent another `TracerProvider` sampled.
 - gate: match = tracing is enabled at a nonzero `trace.sample.rate` and the service receives
   `traceparent` headers. no-match = otherwise.
 - apply: no code or config change is required. Expect fewer spans from this service for requests

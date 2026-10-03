@@ -83,9 +83,11 @@ sampler := sdktrace.ParentBased(ratio,
   here. With the same algorithm the decision agrees whenever this service's
   rate is at least the upstream's; a higher upstream rate, or a different
   algorithm, can drop this service's fragment of a trace kept elsewhere.
-- **Span volume never grows.** Remote-sampled and root spans are judged as
-  before, remote-unsampled ones are now dropped, and a local child follows a
-  parent that the same ratio already judged. Memory stays bounded by
+- **Span volume does not grow** for traces this provider samples. Root and
+  remote-sampled spans are judged as before, remote-unsampled ones are now
+  dropped, and a local child follows a parent the same ratio already judged.
+  The exception is a local parent sampled by another `TracerProvider` in the
+  process, whose children are now kept. Memory stays bounded by
   `trace.max.queue.size`: the batch processor is built without `WithBlocking`,
   so a full queue drops spans rather than blocking. Vendor ingest cost moves
   with that volume.
