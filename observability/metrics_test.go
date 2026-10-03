@@ -916,7 +916,7 @@ func countDataPoints(rm *metricdata.ResourceMetrics) int {
 // recordSeriesAndFlush builds a stdout provider whose metric exporter is replaced
 // by exporter, records one counter across `series` attribute sets and force-flushes
 // once. The wrapper and provider are restored and shut down at test cleanup.
-func recordSeriesAndFlush(t *testing.T, exporter sdkmetric.Exporter, metrics MetricsConfig, name string, series int) {
+func recordSeriesAndFlush(t *testing.T, exporter sdkmetric.Exporter, metrics *MetricsConfig, name string, series int) {
 	t.Helper()
 	metrics.Enabled = BoolPtr(true)
 	metrics.Endpoint = EndpointStdout
@@ -924,7 +924,7 @@ func recordSeriesAndFlush(t *testing.T, exporter sdkmetric.Exporter, metrics Met
 	cfg := &Config{
 		Enabled: true,
 		Service: ServiceConfig{Name: "test-metrics-service", Version: "1.0.0"},
-		Metrics: metrics,
+		Metrics: *metrics,
 	}
 	cfg.ApplyDefaults()
 
@@ -958,7 +958,7 @@ func recordSeriesAndFlush(t *testing.T, exporter sdkmetric.Exporter, metrics Met
 func flushExportSizes(t *testing.T, size int) []int {
 	t.Helper()
 	exporter := &countingMetricExporter{}
-	recordSeriesAndFlush(t, exporter, MetricsConfig{Max: MetricsMaxConfig{Batch: MaxBatchConfig{Size: size}}}, "test.batch.counter", 5)
+	recordSeriesAndFlush(t, exporter, &MetricsConfig{Max: MetricsMaxConfig{Batch: MaxBatchConfig{Size: size}}}, "test.batch.counter", 5)
 	return exporter.exportSizes()
 }
 
@@ -983,7 +983,7 @@ func TestMetricsMaxBatchSizeZeroExportsOneBatch(t *testing.T) {
 func flushCounterPoints(t *testing.T, limit *int, series int) []metricdata.DataPoint[int64] {
 	t.Helper()
 	exporter := &inMemoryMetricExporter{}
-	recordSeriesAndFlush(t, exporter, MetricsConfig{CardinalityLimit: limit}, testCardinalityCounter, series)
+	recordSeriesAndFlush(t, exporter, &MetricsConfig{CardinalityLimit: limit}, testCardinalityCounter, series)
 
 	for _, rm := range exporter.GetMetrics() {
 		for _, sm := range rm.ScopeMetrics {
