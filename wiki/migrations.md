@@ -11847,7 +11847,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   path pushed into the URL host, where it was escaped to `%2F`: trace endpoints booted and failed
   every export, and metrics and logs endpoints failed provider construction, which an App turned
   into a WARN and a no-op provider for all three signals. The path is now the export path, used
-  exactly; no path, or `/`, keeps `/v1/<signal>` (C72.2).
+  exactly; no path, or `/`, sends to `/v1/<signal>` (C72.2).
 
 ### [C72.1] OpenTelemetry Go moves to v1.47.0: `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read and attribute values nested deeper than 64 export empty · silent-behavior · when: match
 
@@ -11897,16 +11897,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: an `observability.trace.endpoint`, `observability.metrics.endpoint` or
   `observability.logs.endpoint` (env `OBSERVABILITY_TRACE_ENDPOINT`, `OBSERVABILITY_METRICS_ENDPOINT`,
   `OBSERVABILITY_LOGS_ENDPOINT`) on protocol `http` whose `http://`/`https://` value carries a path
-  after the host, `/` alone excluded:
-  `git grep -nE 'https?://[^/"[:space:]]+/[^"[:space:]]' -- '*.yaml' '*.yml'`, then keep the
+  after the host, a bare trailing `/` included:
+  `git grep -nE 'https?://[^/"[:space:]]+/' -- '*.yaml' '*.yml'`, then keep the
   observability endpoint hits, and read every environment's variables the same way.
 - scope: the framework stripped the scheme and handed the rest, path included, to the exporter as
-  its host, where the path was escaped to `%2F`. A path-bearing **trace** endpoint booted and then
-  failed every export, visible only through `otel.Handle`. A path-bearing **metrics** or **logs**
-  endpoint failed `NewProvider` ("invalid port", or "invalid URL escape" with no port); inside an
+  its host, where the path was escaped to `%2F`. A path-bearing **trace** endpoint (a bare trailing
+  `/` included) booted and then failed every export, visible only through `otel.Handle`. A
+  path-bearing **metrics** or **logs** endpoint failed `NewProvider` ("invalid port", or "invalid
+  URL escape" with no port); inside an
   App that became a WARN and a no-op provider for all three signals, so the service booted green
   and exported nothing. Now the host goes to `WithEndpoint` and the path to `WithURLPath`, used
-  exactly and never joined with `/v1/<signal>`; no path, or `/`, keeps `/v1/<signal>` (or the
+  exactly and never joined with `/v1/<signal>`; no path, or `/`, sends to `/v1/<signal>` (or the
   path in `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT`). **Unchanged**: gRPC endpoints, host-only HTTP
   endpoints, and an HTTP endpoint carrying userinfo, a query, a fragment or an encoded slash
   (`%2F`), which reaches the exporter exactly as before and still does not export.

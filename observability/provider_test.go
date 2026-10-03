@@ -1401,8 +1401,7 @@ func TestCreateOTLPHTTPExporterURLPath(t *testing.T) {
 }
 
 // TestNewProviderPathBearingHTTPEndpoints pins that the documented signal-path
-// endpoints build a provider: before, the path landed in the URL host and the
-// metrics and logs exporters failed construction.
+// endpoints build a provider.
 func TestNewProviderPathBearingHTTPEndpoints(t *testing.T) {
 	srv, _ := newOTLPPathServer(t)
 	cfg := &Config{
