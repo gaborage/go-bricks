@@ -106,6 +106,10 @@ headers:
   authorization: ${OTEL_BEARER_AUTHORIZATION}   # "Bearer <token>" pre-formatted in env
 ```
 
+## `OTEL_EXPORTER_OTLP_HEADERS`
+
+The exporters' own `OTEL_EXPORTER_OTLP_HEADERS` (and `OTEL_EXPORTER_OTLP_<SIGNAL>_HEADERS`) still applies, but only to a signal whose config sets no `headers`; a configured `headers` map replaces it whole. Unlike the endpoint and TLS variables, which no longer apply ([ADR-137](adr_137_otlp_transport_config_authoritative.md)), it never changes where or how data is sent.
+
 ## Why Not Auto-Derive Header Names from Env Vars?
 
 A flag like `OBSERVABILITY_TRACE_HEADERS_API_KEY=...` would force the framework to invent header names from env var paths (`API_KEY` → `api-key`? `Api-Key`? `X-API-Key`?). That conflicts with Koanf's nested key handling and forces a lossy convention. Declaring the header *structure* in YAML and rendering *values* from env vars before GoBricks reads the file (via your deployment tooling — see Recommended Approach above) gives you the best of both:

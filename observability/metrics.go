@@ -179,9 +179,7 @@ func (p *provider) createOTLPGRPCMetricExporter(ctx context.Context, useInsecure
 	debugLogger.Printf("Creating OTLP gRPC metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
 		p.config.Metrics.Endpoint, useInsecure, p.config.Metrics.Compression, p.config.Metrics.Temporality, len(headers))
 
-	opts := []otlpmetricgrpc.Option{
-		otlpmetricgrpc.WithEndpoint(p.config.Metrics.Endpoint),
-	}
+	var opts []otlpmetricgrpc.Option
 
 	// Configure compression
 	if p.config.Metrics.Compression == CompressionGzip {
@@ -201,6 +199,8 @@ func (p *provider) createOTLPGRPCMetricExporter(ctx context.Context, useInsecure
 	if useInsecure {
 		opts = append(opts, otlpmetricgrpc.WithTLSCredentials(insecure.NewCredentials()))
 		debugLogger.Println("Using insecure gRPC credentials for metrics (no TLS)")
+	} else {
+		opts = append(opts, otlpmetricgrpc.WithEndpointURL(otlpGRPCSecurePlaceholder))
 	}
 
 	// Add custom headers (e.g., for authentication)
@@ -208,6 +208,8 @@ func (p *provider) createOTLPGRPCMetricExporter(ctx context.Context, useInsecure
 		opts = append(opts, otlpmetricgrpc.WithHeaders(headers))
 		debugLogger.Printf("Added %d custom headers to metrics gRPC exporter", len(headers))
 	}
+
+	opts = append(opts, otlpmetricgrpc.WithEndpoint(p.config.Metrics.Endpoint))
 
 	exporter, err := otlpmetricgrpc.New(ctx, opts...)
 	if err != nil {

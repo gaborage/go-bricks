@@ -710,6 +710,16 @@ func newLogHTTPExport(t *testing.T, endpoint string, insecure bool) (func(contex
 	return func(ctx context.Context) error { return exporter.Export(ctx, probeLogRecords()) }, nil
 }
 
+func newLogGRPCExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
+	p := &provider{config: Config{Logs: LogsConfig{Endpoint: endpoint, Protocol: ProtocolGRPC, Compression: CompressionNone, Insecure: BoolPtr(insecure)}}}
+	exporter, err := p.createOTLPGRPCLogExporter(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { shutdownWithin(exporter.Shutdown) })
+	return func(ctx context.Context) error { return exporter.Export(ctx, probeLogRecords()) }, nil
+}
+
 func probeLogRecords() []sdklog.Record {
 	return []sdklog.Record{logtest.RecordFactory{Body: attribute.StringValue("probe")}.NewRecord()}
 }

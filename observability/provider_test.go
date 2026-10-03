@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1380,7 +1382,7 @@ func TestCreateOTLPHTTPExporterURLPath(t *testing.T) {
 // pushes one item through it; the exporter is shut down when the test ends.
 type otlpExportFactory func(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error)
 
-// otlpExporterCase is one of the OTLP exporter constructors.
+// otlpExporterCase is one of the six OTLP exporter constructors.
 type otlpExporterCase struct {
 	name      string
 	signal    string
@@ -1391,8 +1393,11 @@ type otlpExporterCase struct {
 func otlpExporterCases() []otlpExporterCase {
 	return []otlpExporterCase{
 		{name: "trace_http", signal: "traces", http: true, newExport: newTraceHTTPExport},
+		{name: "trace_grpc", signal: "traces", newExport: newTraceGRPCExport},
 		{name: "metric_http", signal: "metrics", http: true, newExport: newMetricHTTPExport},
+		{name: "metric_grpc", signal: "metrics", newExport: newMetricGRPCExport},
 		{name: "log_http", signal: "logs", http: true, newExport: newLogHTTPExport},
+		{name: "log_grpc", signal: "logs", newExport: newLogGRPCExport},
 	}
 }
 
@@ -1525,6 +1530,73 @@ func TestOTLPExportersEnvCannotDowngrade(t *testing.T) {
 	}
 }
 
+// shortTempDir is a temp dir short enough for a unix socket path (sun_path is
+// 104 bytes on macOS, and t.TempDir embeds the test name).
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "otlp")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func tcpTarget(prefix string) func(*testing.T) (string, string, func(string) string) {
+	return func(*testing.T) (string, string, func(string) string) {
+		return "tcp", "127.0.0.1:0", func(addr string) string { return prefix + addr }
+	}
+}
+
+// TestOTLPGRPCExportersTargetsStayTLS pins, for every gRPC target form, that an
+// exporter configured with insecure:false stays on TLS while both *_INSECURE
+// variables say true.
+func TestOTLPGRPCExportersTargetsStayTLS(t *testing.T) {
+	targets := []struct {
+		name  string
+		unix  bool
+		goos  string
+		setup func(t *testing.T) (network, address string, target func(addr string) string)
+	}{
+		{name: "host_port", setup: tcpTarget("")},
+		{name: "dns_scheme", setup: tcpTarget("dns:///")},
+		{name: "passthrough_scheme", setup: tcpTarget("passthrough:///")},
+		{name: "unix_absolute", unix: true, setup: func(t *testing.T) (string, string, func(string) string) {
+			sock := filepath.Join(shortTempDir(t), "otlp.sock")
+			return "unix", sock, func(string) string { return "unix://" + sock }
+		}},
+		{name: "unix_relative", unix: true, setup: func(t *testing.T) (string, string, func(string) string) {
+			t.Chdir(shortTempDir(t))
+			return "unix", "otlp.sock", func(string) string { return "unix:otlp.sock" }
+		}},
+		{name: "unix_abstract", unix: true, goos: "linux", setup: func(*testing.T) (string, string, func(string) string) {
+			name := fmt.Sprintf("gobricks-otlp-%d", time.Now().UnixNano())
+			return "unix", "@" + name, func(string) string { return "unix-abstract:" + name }
+		}},
+	}
+
+	for _, exp := range otlpExporterCases() {
+		if exp.http {
+			continue
+		}
+		for _, tt := range targets {
+			t.Run(exp.name+"/"+tt.name, func(t *testing.T) {
+				if tt.unix && runtime.GOOS == "windows" {
+					t.Skip("gRPC unix targets are not exercised on windows")
+				}
+				if tt.goos != "" && runtime.GOOS != tt.goos {
+					t.Skipf("%s targets exist only on %s", tt.name, tt.goos)
+				}
+				network, address, target := tt.setup(t)
+				probe := newTransportProbe(t, network, address)
+				clearOTLPEnv(t, exp.signal)
+				t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
+				t.Setenv(otlpSignalEnv(exp.signal, "INSECURE"), "true")
+
+				assert.Equal(t, "tls", firstTransport(t, probe, exp.newExport, target(probe.addr)))
+			})
+		}
+	}
+}
+
 // TestOTLPHTTPExportersKeptEnvChannels pins the env channels that still apply to
 // an HTTP exporter: *_CERTIFICATE on the TLS path and *_HEADERS when config sets
 // none, while *_PROTOCOL=http/json no longer switches the encoding.
@@ -1586,6 +1658,18 @@ func TestOTLPHTTPExportersRefuseUnsplittableEndpoint(t *testing.T) {
 func newTraceHTTPExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
 	p := &provider{config: Config{Trace: TraceConfig{Endpoint: endpoint, Insecure: insecure, Compression: CompressionNone}}}
 	exporter, err := p.createOTLPHTTPExporter(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { shutdownWithin(exporter.Shutdown) })
+	return func(ctx context.Context) error {
+		return exporter.ExportSpans(ctx, tracetest.SpanStubs{{Name: testSpanName}}.Snapshots())
+	}, nil
+}
+
+func newTraceGRPCExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
+	p := &provider{config: Config{Trace: TraceConfig{Endpoint: endpoint, Protocol: ProtocolGRPC, Insecure: insecure, Compression: CompressionNone}}}
+	exporter, err := p.createOTLPGRPCExporter(context.Background())
 	if err != nil {
 		return nil, err
 	}

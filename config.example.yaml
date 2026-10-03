@@ -417,6 +417,12 @@ observability:
     # Default: "stdout"
     endpoint: "stdout"
 
+    # insecure alone decides TLS: false exports over TLS whatever the endpoint
+    # scheme says, true exports in plaintext. OTEL_EXPORTER_OTLP_* endpoint,
+    # insecure and protocol variables are ignored.
+    # Can be overridden by environment variable: OBSERVABILITY_TRACE_INSECURE
+    # insecure: false
+
     # sample.rate controls what fraction of traces to collect (0.0 to 1.0).
     # 1.0 = collect all traces (use in development/staging)
     # 0.1 = collect 10% of traces (reduces costs in production)
@@ -476,7 +482,8 @@ observability:
     # Can be overridden by OBSERVABILITY_METRICS_PROTOCOL.
     protocol: ""
 
-    # insecure controls whether to use insecure connections (no TLS).
+    # insecure controls whether to use insecure connections (no TLS); like the
+    # trace key, it alone decides TLS.
     # Omit or set to null to inherit trace.insecure (default false, which means TLS).
     # insecure: false
 

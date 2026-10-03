@@ -131,9 +131,7 @@ func (p *provider) createOTLPGRPCLogExporter(ctx context.Context) (sdklog.Export
 	debugLogger.Printf("Creating OTLP gRPC log exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Logs.Endpoint, useInsecure, p.config.Logs.Compression, len(p.config.Logs.Headers))
 
-	opts := []otlploggrpc.Option{
-		otlploggrpc.WithEndpoint(p.config.Logs.Endpoint),
-	}
+	var opts []otlploggrpc.Option
 
 	// Configure compression
 	if p.config.Logs.Compression == CompressionGzip {
@@ -145,6 +143,8 @@ func (p *provider) createOTLPGRPCLogExporter(ctx context.Context) (sdklog.Export
 	if useInsecure {
 		opts = append(opts, otlploggrpc.WithTLSCredentials(insecure.NewCredentials()))
 		debugLogger.Println("Using insecure gRPC credentials for logs (no TLS)")
+	} else {
+		opts = append(opts, otlploggrpc.WithEndpointURL(otlpGRPCSecurePlaceholder))
 	}
 
 	// Add custom headers (e.g., for authentication)
@@ -152,6 +152,8 @@ func (p *provider) createOTLPGRPCLogExporter(ctx context.Context) (sdklog.Export
 		opts = append(opts, otlploggrpc.WithHeaders(p.config.Logs.Headers))
 		debugLogger.Printf("Added %d custom headers to logs gRPC exporter", len(p.config.Logs.Headers))
 	}
+
+	opts = append(opts, otlploggrpc.WithEndpoint(p.config.Logs.Endpoint))
 
 	exporter, err := otlploggrpc.New(ctx, opts...)
 	if err != nil {
