@@ -6137,6 +6137,10 @@ Response (trace_id in logs)
 
 ```go
 import (
+    "bytes"
+    "context"
+    "net/http"
+
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/propagation"
 )
