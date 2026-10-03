@@ -11896,7 +11896,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   Histogram and ExponentialHistogram values above 2^53 stay exact (#8981); an empty
   `OTEL_TRACES_SAMPLER` or `OTEL_TRACES_SAMPLER_ARG` is treated as unset instead of printing an
   `otel.Handle` stderr line (#8873); a global `OTEL_EXPORTER_OTLP_ENDPOINT` ending in `/` no longer
-  produces a `//v1/logs` path (#8864); a zero attribute length limit now also empties strings that
+  produces a `//v1/logs` path (#8864), though the OTLP/HTTP exporters no longer read that variable
+  at all (C72.4); a zero attribute length limit now also empties strings that
   start with U+FFFD or a malformed byte (#9054); and inbound extraction of dense W3C baggage
   property metadata is memory-bounded when observability is enabled (probe routes are skipped).
 - ref: gaborage/go-bricks#1983 (supersedes Renovate #1951, #1952, #1957) · otel CHANGELOG v1.47.0 ·
