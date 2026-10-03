@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,7 +38,9 @@ func semconvVersionsUnder(t *testing.T, root string) (versions map[string]string
 	versions = map[string]string{}
 	scanned = walkModuleGoFiles(t, root, token.NewFileSet(), parser.ImportsOnly, func(rel string, file *ast.File) {
 		for _, imp := range file.Imports {
-			match := semconvVersionPattern.FindStringSubmatch(strings.Trim(imp.Path.Value, `"`))
+			path, err := strconv.Unquote(imp.Path.Value)
+			require.NoError(t, err, "%s: import path %s", rel, imp.Path.Value)
+			match := semconvVersionPattern.FindStringSubmatch(path)
 			if match == nil {
 				continue
 			}
@@ -84,6 +86,14 @@ func TestSemconvVersionsUnderJudgesPlantedTrees(t *testing.T) {
 				"next.go":    "package p\n\nimport \"go.opentelemetry.io/otel/semconv/v2.0.0\"\n",
 			},
 			versions: []string{"v1.43.0", "v2.0.0"},
+		},
+		{
+			name: "raw_string_import_path_splits_the_version",
+			files: map[string]string{
+				"current.go": current,
+				"raw.go":     "package p\n\nimport semconv `go.opentelemetry.io/otel/semconv/v1.32.0`\n",
+			},
+			versions: []string{"v1.32.0", "v1.43.0"},
 		},
 		{
 			name: "non_semconv_import_is_ignored",
