@@ -616,8 +616,8 @@ func validateEndpointFormat(endpoint, protocol string) error {
 
 	hasScheme := strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://")
 
-	// grpc:// boots but fails every RPC; dns:///, unix:, unix-abstract: and
-	// passthrough:/// are valid gRPC targets and stay accepted.
+	// A grpc scheme boots but fails every RPC. The dns, unix, unix-abstract and
+	// passthrough target schemes are valid gRPC targets and stay accepted.
 	if protocol == ProtocolGRPC && (hasScheme || strings.HasPrefix(endpoint, "grpc://")) {
 		return ErrInvalidEndpointFormat
 	}
