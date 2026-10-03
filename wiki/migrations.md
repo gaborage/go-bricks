@@ -12064,8 +12064,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - apply: nothing to change. Expect the evicting lookup to absorb the victim's close time. A request
   path carries its deadline, so the wait is bounded there; a deadline-free background caller waits
   as long as the close does.
-- verify: with `database.manager.maxsize: 1`, borrow tenant `a` without a lease scope, then tenant
-  `b`: `a`'s `Close` has been called by the time `b`'s `DB` returns.
+- verify: with `database.manager.maxsize: 1`, borrow tenant `a` and release its lease (call the
+  `ReleaseFunc` that `DbManager.Get` returned, or use `deps.DB` on a context with no lease scope,
+  which releases on return), then borrow tenant `b`: `a`'s `Close` has been called by the time
+  `b`'s lookup returns.
 - ref: gaborage/go-bricks#1985 · #2002 · regression from #1976 ·
   `internal/resourcepool/resourcepool.go` (`installCreated`, `await`)
 
