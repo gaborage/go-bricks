@@ -433,9 +433,15 @@ type QueueConfig struct {
 
 // MaxBatchConfig defines batch size configuration.
 type MaxBatchConfig struct {
-	// Size limits the number of spans per export batch.
+	// Size limits the number of items (spans, log records or metric data points) per export batch.
 	// Smaller batches reduce latency, larger batches reduce overhead.
 	Size int `mapstructure:"size"`
+}
+
+// MetricsMaxConfig defines metric export batching limits.
+type MetricsMaxConfig struct {
+	// Batch contains batch size configuration.
+	Batch MaxBatchConfig `mapstructure:"batch"`
 }
 
 // MetricsConfig defines configuration for metrics collection.
@@ -485,6 +491,12 @@ type MetricsConfig struct {
 
 	// Export contains export timeout configuration.
 	Export MetricsExportConfig `mapstructure:"export"`
+
+	// Max contains export batching limits.
+	// Max.Batch.Size caps the metric data points per Export call; the export timeout
+	// applies per batch. 0 (the default) means no cap, unlike the trace and logs keys,
+	// where 0 becomes 512. Negative values are rejected.
+	Max MetricsMaxConfig `mapstructure:"max"`
 }
 
 // MetricsExportConfig defines export timeout configuration for metrics.
@@ -698,6 +710,10 @@ func (c *Config) validateMetricsConfig() error {
 	// Validate histogram aggregation
 	if err := validateHistogramAggregation(c.Metrics.HistogramAggregation); err != nil {
 		return err
+	}
+
+	if c.Metrics.Max.Batch.Size < 0 {
+		return ErrInvalidMetricsMaxBatchSize
 	}
 
 	if c.Metrics.Endpoint == EndpointStdout || c.Metrics.Endpoint == "" {

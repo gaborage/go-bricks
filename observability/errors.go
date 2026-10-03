@@ -40,6 +40,9 @@ var ErrInvalidTemporality = errors.New("observability: temporality must be eithe
 // ErrInvalidHistogramAggregation is returned when the histogram aggregation is not "exponential" or "explicit".
 var ErrInvalidHistogramAggregation = errors.New("observability: histogram aggregation must be either 'exponential' or 'explicit'")
 
+// ErrInvalidMetricsMaxBatchSize is returned when metrics.max.batch.size is negative.
+var ErrInvalidMetricsMaxBatchSize = errors.New("observability: metrics max batch size must not be negative")
+
 // errCreateResourceFmt is the format string for resource creation errors.
 // Used across provider.go, metrics.go, and logs.go for consistent error messages.
 const errCreateResourceFmt = "failed to create resource: %w"

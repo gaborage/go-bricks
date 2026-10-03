@@ -5536,6 +5536,9 @@ observability:
     compression: gzip
     temporality: delta              # Lower memory; backend-friendly
     histogramaggregation: exponential
+    max:
+      batch:
+        size: 1000                  # ≤1000 data points per Export call; 0 (default) = no cap; negative fails validation
   logs:
     enabled: true
     endpoint: otel-collector:4317

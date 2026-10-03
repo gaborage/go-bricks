@@ -43,6 +43,7 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 		exporter,
 		sdkmetric.WithInterval(p.config.Metrics.Interval),
 		sdkmetric.WithTimeout(p.config.Metrics.Export.Timeout),
+		sdkmetric.WithMaxExportBatchSize(p.config.Metrics.Max.Batch.Size),
 		sdkmetric.WithProducer(runtime.NewProducer()),
 	)
 

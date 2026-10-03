@@ -1528,6 +1528,41 @@ func TestConfigValidateHistogramAggregation(t *testing.T) {
 	}
 }
 
+func TestConfigValidateMetricsMaxBatchSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		size     int
+		wantErr  error
+	}{
+		{name: "zero_means_no_cap", endpoint: EndpointStdout, size: 0},
+		{name: "positive_accepted", endpoint: EndpointStdout, size: 1},
+		{name: "negative_rejected_on_stdout", endpoint: EndpointStdout, size: -1, wantErr: ErrInvalidMetricsMaxBatchSize},
+		{name: "negative_rejected_on_empty_endpoint", endpoint: "", size: -1, wantErr: ErrInvalidMetricsMaxBatchSize},
+		{name: "negative_rejected_on_otlp", endpoint: "http://localhost:4318", size: -1, wantErr: ErrInvalidMetricsMaxBatchSize},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:  BoolPtr(true),
+					Endpoint: tt.endpoint,
+					Max:      MetricsMaxConfig{Batch: MaxBatchConfig{Size: tt.size}},
+				},
+			}
+			err := cfg.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
 func TestConfigTemporalityDefaults(t *testing.T) {
 	tests := []struct {
 		name                 string
