@@ -478,6 +478,49 @@ func TestBuildLogRecordWithoutTraceContext(t *testing.T) {
 	assert.False(t, foundTraceAttr, "no trace attributes should be added when trace context is absent")
 }
 
+func writeAndReadAttr(t *testing.T, line, key string) attribute.Value {
+	t.Helper()
+	bridge, proc := newCaptureBridge(t)
+	_, err := bridge.Write([]byte(line))
+	require.NoError(t, err)
+
+	rec, ok := dataRecord(proc.snapshot())
+	require.True(t, ok, "bridge emitted no data record")
+	val, found := recordAttrValue(&rec, key)
+	require.True(t, found, "attribute %q missing from the record", key)
+	return val
+}
+
+func TestOTelBridgeNestedObjectArrivesAsMap(t *testing.T) {
+	val := writeAndReadAttr(t,
+		`{"level":"info","message":"m","request":{"route":"/users","cached":true,"auth":{"scheme":"bearer"}}}`,
+		"request")
+
+	assert.Equal(t, attribute.MapValue(
+		attribute.String("route", "/users"),
+		attribute.Bool("cached", true),
+		attribute.Map("auth", attribute.String("scheme", "bearer")),
+	), val)
+}
+
+func TestOTelBridgeArrayArrivesAsSlice(t *testing.T) {
+	val := writeAndReadAttr(t, `{"level":"info","message":"m","tags":["alpha","beta",true]}`, "tags")
+
+	assert.Equal(t, attribute.SliceValue(
+		attribute.StringValue("alpha"),
+		attribute.StringValue("beta"),
+		attribute.BoolValue(true),
+	), val)
+}
+
+func TestOTelBridgeJSONNullArrivesAsEmptyString(t *testing.T) {
+	top := writeAndReadAttr(t, `{"level":"info","message":"m","parent":null}`, "parent")
+	assert.Equal(t, attribute.StringValue(""), top)
+
+	inSlice := writeAndReadAttr(t, `{"level":"info","message":"m","ids":[null]}`, "ids")
+	assert.Equal(t, attribute.SliceValue(attribute.StringValue("")), inSlice)
+}
+
 // benchNoopProcessor discards every record; keeps BenchmarkOTelBridgeWrite's
 // allocation profile isolated to buildLogRecord + Emit, not processor-side
 // bookkeeping.
@@ -506,6 +549,11 @@ func BenchmarkOTelBridgeWrite(b *testing.B) {
 			name: "with_trace_context",
 			line: []byte(`{"level":"info","time":"2025-10-10T12:00:00.123456789Z","message":"benchmark line","user_id":"123","method":"POST",` +
 				`"trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef","trace_flags":"1"}`),
+		},
+		{
+			name: "with_nested_fields",
+			line: []byte(`{"level":"info","time":"2025-10-10T12:00:00.123456789Z","message":"benchmark line",` +
+				`"request":{"route":"/users","cached":true,"auth":{"scheme":"bearer"}},"tags":["alpha","beta"]}`),
 		},
 	}
 
