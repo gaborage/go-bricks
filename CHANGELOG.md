@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.71.0](https://github.com/gaborage/go-bricks/compare/v0.70.0...v0.71.0) (2026-10-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **messaging,testing:** drop Client.Consume and unused test consts ([#1949](https://github.com/gaborage/go-bricks/issues/1949))
+* **httpclient:** remove trace forwarders and IsJOSEError ([#1948](https://github.com/gaborage/go-bricks/issues/1948))
+* **app:** remove hypothetical public seams from app ([#1938](https://github.com/gaborage/go-bricks/issues/1938))
+* **database:** remove TrackedDB and the *sql.DB tracking wrapper ([#1940](https://github.com/gaborage/go-bricks/issues/1940))
+* **database:** remove dead tracking re-exports ([#1939](https://github.com/gaborage/go-bricks/issues/1939))
+* **logger,app,server,database:** remove compatibility shims ([#1935](https://github.com/gaborage/go-bricks/issues/1935))
+
+### Fixed
+
+* **app:** remove hypothetical public seams from app ([#1938](https://github.com/gaborage/go-bricks/issues/1938)) ([8fd1285](https://github.com/gaborage/go-bricks/commit/8fd12856179a2c45697783e8ca8656d97e173720))
+* **database:** remove dead tracking re-exports ([#1939](https://github.com/gaborage/go-bricks/issues/1939)) ([c0a2796](https://github.com/gaborage/go-bricks/commit/c0a279600732811b7fb4f2a11b130c5d7cfb4203))
+* **database:** remove TrackedDB and the *sql.DB tracking wrapper ([#1940](https://github.com/gaborage/go-bricks/issues/1940)) ([9106519](https://github.com/gaborage/go-bricks/commit/9106519ead3cc09237de3e7431cd89c3df45ba66))
+* **httpclient:** remove trace forwarders and IsJOSEError ([#1948](https://github.com/gaborage/go-bricks/issues/1948)) ([748c590](https://github.com/gaborage/go-bricks/commit/748c5902d97d237421194e07d1e7598f55acaf28))
+* **logger,app,server,database:** remove compatibility shims ([#1935](https://github.com/gaborage/go-bricks/issues/1935)) ([c3d791e](https://github.com/gaborage/go-bricks/commit/c3d791e69218c80dbf76bf508797c2081d378c88))
+* **messaging,testing:** drop Client.Consume and unused test consts ([#1949](https://github.com/gaborage/go-bricks/issues/1949)) ([b4ca1fb](https://github.com/gaborage/go-bricks/commit/b4ca1fb2f928aa2d2b69426d298dccef7f9e816f))
+* **resourcepool:** reserve a create's seed lease for every waiter ([#1976](https://github.com/gaborage/go-bricks/issues/1976)) ([0a1ca46](https://github.com/gaborage/go-bricks/commit/0a1ca46ba5b092f7c57ec39c96f309a1851d3380))
+
+
+### Changed
+
+* collapse single-adapter internal seams ([#1936](https://github.com/gaborage/go-bricks/issues/1936)) ([3ce6cec](https://github.com/gaborage/go-bricks/commit/3ce6cec8f81613f0559174aa74de3b52c2c334be))
+* delete dead internal packages and test-only leftovers ([#1934](https://github.com/gaborage/go-bricks/issues/1934)) ([7c63ddb](https://github.com/gaborage/go-bricks/commit/7c63ddb6b02f719d347e78fb6cd9681deec1f658))
+* **resourcepool:** drop the churn retry now creates cannot miss ([#1977](https://github.com/gaborage/go-bricks/issues/1977)) ([cadeb1c](https://github.com/gaborage/go-bricks/commit/cadeb1c1df365080e7542012ef4e95950b56d409))
+
 ## [0.70.0](https://github.com/gaborage/go-bricks/compare/v0.69.0...v0.70.0) (2026-10-01)
 
 
