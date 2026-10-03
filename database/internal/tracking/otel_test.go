@@ -105,7 +105,7 @@ func TestCreateDBSpanSpanAttributes(t *testing.T) {
 		attrMap[string(attr.Key)] = attr.Value.AsInterface()
 	}
 
-	// Verify standard database attributes per OTel v1.32.0
+	// Verify standard database attributes per OTel semantic conventions
 	assert.Equal(t, "postgresql", attrMap["db.system.name"], "Should have db.system.name attribute per OTel spec")
 	assert.Equal(t, query, attrMap["db.query.text"], "Should have db.query.text attribute")
 	assert.Equal(t, "insert", attrMap["db.operation.name"], "Should have db.operation.name attribute")
@@ -354,7 +354,7 @@ func TestCreateDBSpanDifferentVendors(t *testing.T) {
 			spans := exporter.GetSpans()
 			require.Len(t, spans, 1)
 
-			// Find db.system.name attribute (per OTel spec v1.32.0)
+			// Find db.system.name attribute (per OTel semantic conventions)
 			attrs := spans[0].Attributes
 			var systemAttr string
 			for _, attr := range attrs {
@@ -540,7 +540,7 @@ func TestTrackDBOperationWithError(t *testing.T) {
 	// Calls counter removed per OTel spec - only duration histogram remains
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 
-	// Note: Error tracking moved to spans only per OTel spec v1.32.0
+	// Note: Error tracking moved to spans only per OTel semantic conventions
 	// Metrics focus on performance (duration), errors are tracked in span status
 	// The test above already verified span status is Error
 }
@@ -572,7 +572,7 @@ func TestTrackDBOperationSQLErrNoRows(t *testing.T) {
 	// Calls counter removed per OTel spec - only duration histogram remains
 	obtest.AssertMetricExists(t, rm, metricDBDuration)
 
-	// Note: Error tracking moved to spans only per OTel spec v1.32.0
+	// Note: Error tracking moved to spans only per OTel semantic conventions
 	// Metrics focus on performance (duration), errors are in span status
 }
 

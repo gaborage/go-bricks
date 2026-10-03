@@ -194,9 +194,6 @@ func TestRecordDBMetricsWithDifferentVendors(t *testing.T) {
 	}
 }
 
-// TestRecordDBMetricsErrorAttribute removed - error tracking no longer in metrics per OTel spec.
-// Errors are tracked in spans only. Metrics focus on performance (duration) per OTel v1.32.0.
-
 func TestRecordDBMetricsMultipleOperations(t *testing.T) {
 	mp, cleanup := setupTestMeterProvider(t)
 	defer cleanup()

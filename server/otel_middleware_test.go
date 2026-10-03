@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/config"
@@ -181,7 +181,7 @@ func TestOTelMiddlewareSpanAttributes(t *testing.T) {
 		attrMap[string(attr.Key)] = attr.Value.AsInterface()
 	}
 
-	// Verify standard HTTP semantic attributes (v1.32.0+ uses different attribute names)
+	// Verify standard HTTP semantic attributes (current semconv renamed the old keys)
 	// Check for http.request.method (new) or http.method (old)
 	hasMethod := attrMap["http.request.method"] != nil || attrMap["http.method"] != nil
 	assert.True(t, hasMethod, "Should have HTTP method attribute")

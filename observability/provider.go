@@ -22,7 +22,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials/insecure"
@@ -345,7 +345,7 @@ func (p *provider) createResource(ctx context.Context) (*resource.Resource, erro
 		resource.WithAttributes(
 			semconv.ServiceName(p.config.Service.Name),
 			semconv.ServiceVersion(p.config.Service.Version),
-			semconv.DeploymentEnvironmentName(p.config.Environment),
+			semconv.DeploymentEnvironmentNameKey.String(p.config.Environment),
 		),
 	)
 	if err != nil {
