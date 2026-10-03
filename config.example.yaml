@@ -493,8 +493,8 @@ observability:
     max:
       batch:
         # max.batch.size caps the metric data points sent in one Export call.
-        # A collection cycle splits into ceil(points/size) calls, and
-        # export.timeout applies to each call. Unlike the trace and logs
+        # With a positive size a collection cycle splits into ceil(points/size)
+        # calls, and export.timeout applies to each call. Unlike the trace and logs
         # max.batch.size, 0 means no cap. Negative values fail validation.
         # Can be overridden by environment variable: OBSERVABILITY_METRICS_MAX_BATCH_SIZE
         # Default: 0
