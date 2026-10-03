@@ -773,7 +773,7 @@ func TestExtractStructValueCoverage(t *testing.T) {
 		ptr := &data
 
 		result := filter.FilterValue("data", ptr)
-		assert.Equal(t, ptr, result) // Should return original when nil pointer found
+		assert.Equal(t, data, result) // the nil element, which still renders as null
 	})
 
 	// Test non-struct type after pointer dereferencing
@@ -782,7 +782,7 @@ func TestExtractStructValueCoverage(t *testing.T) {
 		ptr := &str
 
 		result := filter.FilterValue("data", ptr)
-		assert.Equal(t, ptr, result) // Should return original for non-struct
+		assert.Equal(t, str, result) // a pointer is filtered as its element
 	})
 }
 

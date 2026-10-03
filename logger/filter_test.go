@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -2443,4 +2445,159 @@ func TestFilterNonRedactorLineIsUnchanged(t *testing.T) {
 		assert.JSONEq(t, golden, buf.String())
 		assert.Len(t, buf.String(), len(golden))
 	})
+}
+
+const (
+	indirectionSecret  = "zq7-sentinel-4471"
+	indirectionControl = "control-visible-value"
+	indirectionDoc     = `{"password":"` + indirectionSecret + `"}`
+	indirectionPEM     = "-----BEGIN PRIVATE KEY-----\n" + indirectionSecret + "\n-----END PRIVATE KEY-----"
+)
+
+type indirectionHolder struct {
+	Meta *map[string]any `json:"meta"`
+}
+
+type indirectionDocs struct {
+	Docs []string `json:"docs"`
+}
+
+type indirectionDocArray struct {
+	Docs [1]string `json:"docs"`
+}
+
+type indirectionCase struct {
+	name  string
+	value func() any
+}
+
+func indirectionCases() []indirectionCase {
+	return []indirectionCase{
+		{"value_map_baseline", func() any { return map[string]any{"password": indirectionSecret} }},
+		{"pointer_to_struct_baseline", func() any { return &walkerUser{Password: indirectionSecret} }},
+		{"value_bytes_baseline", func() any { return []byte(indirectionDoc) }},
+		{"value_raw_message_baseline", func() any { return json.RawMessage(indirectionDoc) }},
+		{"pointer_to_map", func() any { m := map[string]any{"password": indirectionSecret}; return &m }},
+		{"pointer_to_string_map", func() any { m := map[string]string{"password": indirectionSecret}; return &m }},
+		{"pointer_to_slice", func() any { s := []any{map[string]any{"password": indirectionSecret}}; return &s }},
+		{"pointer_to_raw_message", func() any { r := json.RawMessage(indirectionDoc); return &r }},
+		{"pointer_to_bytes", func() any { b := []byte(indirectionDoc); return &b }},
+		{"pointer_to_json_string", func() any { s := indirectionDoc; return &s }},
+		{"pointer_to_defined_bytes", func() any { b := blobPayload(indirectionDoc); return &b }},
+		{"pointer_to_defined_string", func() any { s := jsonText(indirectionDoc); return &s }},
+		{"pointer_to_pointer_to_struct", func() any { p := &walkerUser{Password: indirectionSecret}; return &p }},
+		{"pointer_to_interface", func() any { var v any = map[string]any{"password": indirectionSecret}; return &v }},
+		{"struct_field_pointer_to_map", func() any {
+			m := map[string]any{"password": indirectionSecret}
+			return indirectionHolder{Meta: &m}
+		}},
+		{"struct_pointer_at_container_address", func() any {
+			node := &sharedAddressNode{Inner: walkerUser{Name: testNameJohn, Password: indirectionSecret}}
+			node.Ref = &node.Inner
+			return node
+		}},
+		{"string_slice_holding_json", func() any { return []string{"plain", indirectionDoc} }},
+		{"string_array_holding_json", func() any { return [2]string{"plain", indirectionDoc} }},
+		{"pointer_to_string_slice_holding_json", func() any { s := []string{indirectionDoc}; return &s }},
+		{"struct_field_string_slice_holding_json", func() any { return indirectionDocs{Docs: []string{indirectionDoc}} }},
+		{"pointer_to_string_array_holding_json", func() any { a := [1]string{indirectionDoc}; return &a }},
+		{"struct_field_string_array_holding_json", func() any { return indirectionDocArray{Docs: [1]string{indirectionDoc}} }},
+		{"string_slice_holding_pem", func() any { return []string{"plain", indirectionPEM} }},
+	}
+}
+
+func TestFilterMasksSensitiveKeysBehindIndirection(t *testing.T) {
+	doors := []struct {
+		name string
+		emit func(t *testing.T, value any) string
+	}{
+		{"interface", func(t *testing.T, value any) string {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Str("note", indirectionControl).Interface("body", value).Msg("payload")
+			return buf.String()
+		}},
+		{"with_fields", func(t *testing.T, value any) string {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.WithFields(map[string]any{"note": indirectionControl, "body": value}).Info().Msg("payload")
+			return buf.String()
+		}},
+		{"otel_bridge_export", func(t *testing.T, value any) string {
+			bridge, proc := newCaptureBridge(t)
+			zl := zerolog.New(bridge)
+			log := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(DefaultFilterConfig())}
+			log.Info().Str("note", indirectionControl).Interface("body", value).Msg("payload")
+			rec, ok := dataRecord(proc.snapshot())
+			require.True(t, ok, "bridge emitted no data record")
+			var out strings.Builder
+			rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+				out.WriteString(string(kv.Key) + "=" + kv.Value.String() + ";")
+				return true
+			})
+			return out.String()
+		}},
+	}
+
+	for _, door := range doors {
+		for _, tc := range indirectionCases() {
+			t.Run(door.name+"/"+tc.name, func(t *testing.T) {
+				out := door.emit(t, tc.value())
+
+				assert.Contains(t, out, indirectionControl)
+				assert.NotContains(t, out, indirectionSecret)
+				assert.NotContains(t, out, base64.StdEncoding.EncodeToString([]byte(indirectionDoc)), "document shipped base64-encoded")
+			})
+		}
+	}
+}
+
+func TestFilterValuePointerCycleIsMaskedNotFollowed(t *testing.T) {
+	var self any
+	self = &self
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	var got any
+	require.NotPanics(t, func() { got = filter.FilterValue("body", &self) })
+
+	assert.Equal(t, DefaultFilterConfig().MaskValue, got)
+}
+
+func TestFilterValueNilNonStructPointerStaysNil(t *testing.T) {
+	var m *map[string]any
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	got := filter.FilterValue("body", m)
+
+	assert.Equal(t, m, got)
+}
+
+type sharedAddressNode struct {
+	Inner walkerUser  `json:"inner"`
+	Ref   *walkerUser `json:"ref"`
+}
+
+type centsWithPointerMarshaler int64
+
+func (c *centsWithPointerMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte(`"$` + strconv.FormatInt(int64(*c)/100, 10) + `"`), nil
+}
+
+func TestFilterScalarPointerKeepsItsMarshaler(t *testing.T) {
+	price := centsWithPointerMarshaler(500)
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+	log.Info().Interface("price", &price).Msg("payload")
+
+	assert.Equal(t, "$5", loggedField(t, buf, "price"))
+}
+
+func TestFilterValuePointerChainSpendsDepth(t *testing.T) {
+	leaf := "visible-leaf"
+	var chain any = &leaf
+	for range DefaultMaxDepth - 1 {
+		link := chain
+		chain = &link
+	}
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	assert.Equal(t, DefaultFilterConfig().MaskValue, filter.FilterValue("body", chain))
 }

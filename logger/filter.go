@@ -220,9 +220,8 @@ func (f *SensitiveDataFilter) filterValueWithProtection(key string, value any, v
 	}
 
 	// Check depth limit — fail-closed: mask the subtree rather than leaking sensitive
-	// leaves the recursion budget didn't reach. Contrast with cycle detection (below)
-	// which returns value because masking a cycle root discards the rest of the tree;
-	// depth exhaustion can always safely substitute the mask.
+	// leaves the recursion budget didn't reach; depth exhaustion can always safely
+	// substitute the mask.
 	if maxDepth <= 0 {
 		return f.config.MaskValue
 	}
@@ -337,16 +336,37 @@ func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, 
 	case reflect.Struct:
 		return f.filterStructWithProtection(value, visited, maxDepth)
 	case reflect.Pointer:
-		if !rv.IsNil() && rv.Type().Elem().Kind() == reflect.Struct {
-			return f.filterStructWithProtection(value, visited, maxDepth)
-		}
-		return value
+		return f.filterPointerWithProtection(key, rv, visited, maxDepth)
 	case reflect.Map:
 		return f.filterReflectMapWithProtection(rv, visited, maxDepth)
 	default:
 		// All other types pass through unchanged
 		return value
 	}
+}
+
+// filterPointerWithProtection filters a non-nil pointer by its element, so a
+// value logged through a pointer is masked as it would be by value (ADR-086
+// judges the element's kind). A scalar element holds nothing to mask and keeps
+// the pointer, and with it any pointer-receiver marshaler.
+func (f *SensitiveDataFilter) filterPointerWithProtection(key string, rv reflect.Value, visited map[uintptr]struct{}, maxDepth int) any {
+	if rv.IsNil() {
+		return rv.Interface()
+	}
+	elem := rv.Elem()
+	switch {
+	case elem.Kind() == reflect.Struct:
+		return f.filterStructWithProtection(rv.Interface(), visited, maxDepth)
+	case elem.Kind() != reflect.String && !rewritesType(elem.Type()):
+		return rv.Interface()
+	}
+	ptr := rv.Pointer()
+	if _, seen := visited[ptr]; seen {
+		return f.config.MaskValue
+	}
+	visited[ptr] = struct{}{}
+	defer delete(visited, ptr)
+	return f.filterValueWithProtection(key, elem.Interface(), visited, maxDepth-1)
 }
 
 // filterStringMapWithProtection handles map[string]any filtering with cycle detection
@@ -372,14 +392,15 @@ func (f *SensitiveDataFilter) filterSliceOrArrayWithProtection(key string, rv re
 	// changes, which panics the moment an element holds an uncomparable dynamic
 	// type — a map or a slice inside an []any, i.e. every JSON list of objects.
 	// A slice whose elements the walker cannot rewrite is returned as-is, which
-	// is what keeps []string a []string and []byte base64 in the output. Depth
+	// is what keeps []string a []string and []byte base64 in the output — unless
+	// a string element is an opaque payload, which is walked like any other. Depth
 	// is part of the decision: at maxDepth 1 the elements are masked, and a mask
 	// is a rewrite whatever the element type says. Decided first: the cycle
 	// bookkeeping below never fires for a slice anyway — reflect.ValueOf never
 	// returns an addressable Value, so CanAddr is always false here, and slice
 	// cycles terminate on depth. Struct cycles are caught by the reachable
 	// visited map in filterStructWithProtection.
-	if maxDepth > 1 && !rewritesType(rv.Type().Elem()) {
+	if maxDepth > 1 && !rewritesType(rv.Type().Elem()) && !holdsOpaqueString(rv) {
 		return rv.Interface()
 	}
 
@@ -475,7 +496,8 @@ func (f *SensitiveDataFilter) filterStructWithProtection(value any, visited map[
 	// Check for cycles using the pointer
 	if ptr != 0 {
 		if _, exists := visited[ptr]; exists {
-			return value // Return original if cycle detected
+			// Returned unwalked, a revisited pointer would reach the encoder raw.
+			return f.config.MaskValue
 		}
 		visited[ptr] = struct{}{}
 		defer delete(visited, ptr)

@@ -221,6 +221,21 @@ func looksLikePEMPrivateKey[T ~string | ~[]byte](value T) bool {
 	return pemPrivateKeyPattern.MatchString(string(value))
 }
 
+// holdsOpaqueString reports whether a string slice or array carries an element
+// this walk would judge — JSON-shaped, or holding a PEM header — so the slice
+// walker visits each element instead of passing the slice through whole.
+func holdsOpaqueString(rv reflect.Value) bool {
+	if rv.Type().Elem().Kind() != reflect.String {
+		return false
+	}
+	for i := range rv.Len() {
+		if s := rv.Index(i).String(); looksLikeJSON(s) || containsPEMBeginMarker(s) {
+			return true
+		}
+	}
+	return false
+}
+
 // containsPEMBeginMarker scans for the header without converting between string
 // and []byte. Converting first is what a bytes payload must not pay: it copies
 // the whole slice on the ordinary path where the answer is no, which a

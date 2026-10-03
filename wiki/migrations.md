@@ -11780,6 +11780,59 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: [ADR-135](adr_135_dead_public_surface.md) · `cache/testing/assertions.go`
   (`AssertOperationCountAtLeast`)
 
+## E7x · v0.71.0 → v0.7x.0 — a value logged through a pointer, or held in a string slice, is filtered like the value itself
+
+- gist: the log filter followed a pointer only to a struct, and passed a `[]string` through
+  whole, so sensitive keys inside any other pointer, or inside a JSON document held in a string
+  slice, reached the sink and the OTel log export unfiltered. A non-nil pointer is now filtered
+  by its element, and a string slice holding a payload element by element (C7x.N). ADR-086
+  amendment.
+
+### [C7x.N] a value logged through a pointer, or a payload held in a string slice, is filtered like the value itself · silent-behavior · when: match
+
+- detect: the log calls that hand a door a POINTER to anything other than a struct, and the
+  logged structs that carry one. `git grep -nE '[.]Interface\([^,]+, *&' -- '*.go'` finds the
+  direct spelling; then read every `.Interface(` and `WithFields(` hit whose value is a variable
+  of pointer type — `*map[…]…`, `*[]…`, `*json.RawMessage`, `*[]byte`, `*string`, `*any`, `**T`,
+  or a pointer to a defined type over any of those — and every logged struct with a field of
+  such a type. Then find every `[]string` or `[N]string` — by value, through a pointer or as a
+  struct field — whose elements can hold a JSON document or a PEM block (marshaled bodies
+  collected into a list, batched payloads). Also grep log fixtures that pin such a value's
+  output byte-for-byte.
+- scope: the filter followed a pointer only to a struct; any other pointer was handed to the
+  encoder unfiltered, so sensitive keys inside it reached the log sink and the OTel log export
+  in clear (a `*[]byte` document as base64). Now a non-nil pointer is filtered by its element,
+  exactly as that value is filtered by value, including the opaque-payload walk (ADR-086), and
+  dereferencing a pointer to anything but a struct spends one level of the depth budget. A struct pointer seen again on the
+  current path — a cycle, or a field pointing at its container's first field, which shares the
+  container's address — is now masked; it used to be returned unwalked, its contents in clear.
+  A `[]string` or `[N]string` was passed through whole, so a document in one of its elements was
+  never judged; one holding a JSON document or a PEM block is now walked element by element
+  and logs as a list whose payload elements are filtered.
+  An element that starts with `{` or `[` but does not parse is masked whole, as a lone string
+  already was.
+  **Unchanged**: values logged by value other than those string slices, a pointer to a scalar
+  other than a string (left as is), a `[]string` none of whose elements starts with `{` or `[`
+  or carries a PEM header (still passed through), a nil pointer (still `null`),
+  `logger.Redactor` (ADR-110) and the needle list.
+- class note: `silent-behavior`, not `breaking`: nothing fails to compile or start; log lines
+  change. A direct `FilterValue` call returns the filtered element for a pointer to a string or
+  a non-scalar rather than the pointer. The JSON keeps its shape, except that a pointer-receiver
+  `MarshalJSON` or `MarshalText` on such an element is no longer called: it renders as it does
+  when logged by value, so a string type that masks itself only through a pointer-receiver
+  marshaler now logs its raw value — give that method a value receiver, or implement
+  `logger.Redactor`.
+- gate: match = any detect hit. no-match = otherwise.
+- apply: no code change is required. Update fixtures that pinned the unmasked output. Logs
+  written by earlier versions through such pointers may hold secrets: rotate any credential that
+  could have been logged that way and purge retained logs per your retention policy.
+- verify: `log.Info().Interface("body", &map[string]any{"password": "x"}).Msg("m")` writes
+  `"body":{"password":"***"}`, and ``.Interface("body", []string{`{"password":"x"}`})`` writes
+  `"body":[{"password":"***"}]`.
+- ref: [ADR-086](adr_086_mask_inside_opaque_payloads.md) (2026-10-03 amendment) ·
+  `logger/filter.go` (`filterPointerWithProtection`) · `logger/opaque.go` (`holdsOpaqueString`) ·
+  [GHSA-3m9p-48v4-c9vp](https://github.com/gaborage/go-bricks/security/advisories/GHSA-3m9p-48v4-c9vp)
+
 ---
 
 *The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*

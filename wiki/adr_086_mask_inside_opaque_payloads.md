@@ -4,6 +4,22 @@
 - **Date**: 2026-08-28
 - **Related**: [ADR-072](adr_072_default_log_filter_names_key_material_explicitly.md) (the needle list this walks payloads with, and whose `log.sensitivefields: [keys]` remedy this makes unnecessary for JWKS) · [ADR-079](adr_079_log_filter_walks_slices_without_comparing.md) (the array walk this extends past the byte-slice leaf) · [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (the sibling rule for a value the filter cannot judge by name)
 
+> **Amended (2026-10-03, GHSA-3m9p-48v4-c9vp):** every rule on this page, and the name filter
+> itself, now applies to a value logged through a pointer. The filter used to follow a pointer
+> only when it pointed at a struct, so a pointer to a `json.RawMessage`, `[]byte`, string, map,
+> slice or interface, a pointer to a pointer, and a struct field of such a type reached the sink
+> unfiltered. A non-nil pointer is now filtered by its element, so the KIND test below judges
+> what the pointer points at. A pointer to a scalar other than a string holds nothing to mask and
+> is left as is. A
+> pointer seen again on one path — a cycle, or a struct reached at the address of the container
+> that holds it — is masked rather than handed to the encoder unwalked. Dereferencing a pointer
+> to anything but a struct spends one level of the depth budget, and a nil pointer still logs as
+> null. The same amendment
+> closes the string-slice gap: a `[]string` or `[N]string` was passed through whole because its
+> element type is not one the walker rewrites, so a JSON document or a PEM block held in one of
+> its elements was never judged. A string slice or array with such an element is now walked
+> element by element; one without stays a `[]string`.
+
 ## Context
 
 The sensitive-data filter masks by field NAME. That works while the log line is a tree of
