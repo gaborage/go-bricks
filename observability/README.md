@@ -229,6 +229,7 @@ observability:
 | `metrics.interval` | duration | `10s` | Metric export interval |
 | `metrics.export.timeout` | duration | `10s (development/stdout) / 60s (production)` | Maximum time for metric export operation |
 | `metrics.max.batch.size` | int | `0` (no cap) | Maximum metric data points per Export call. With a positive size, collection gets one `metrics.export.timeout` and each of the `ceil(points/size)` batches gets its own, so a cycle can take `(1 + ceil(points/size)) × metrics.export.timeout`; uncapped, collection and the single export share one timeout. `0` means no cap, unlike `trace.max.batch.size` and `logs.max.batch.size`, where `0` becomes 512. Negative values fail validation |
+| `metrics.cardinalitylimit` | int | unset (`OTEL_GO_X_CARDINALITY_LIMIT`, else the SDK default 2000) | Attribute sets each instrument keeps per reader: a limit of L keeps L-1 sets plus one `otel.metric.overflow=true` series, a lifetime cap for synchronous instruments under cumulative temporality and a per-cycle cap under delta. Unset passes no option, the one metrics key without an explicit default. Zero or negative fails validation |
 
 ## Advanced Usage
 

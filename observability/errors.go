@@ -43,6 +43,9 @@ var ErrInvalidHistogramAggregation = errors.New("observability: histogram aggreg
 // ErrInvalidMetricsMaxBatchSize is returned when metrics.max.batch.size is negative.
 var ErrInvalidMetricsMaxBatchSize = errors.New("observability: metrics max batch size must not be negative")
 
+// ErrInvalidMetricsCardinalityLimit is returned when metrics.cardinalitylimit is set to zero or less.
+var ErrInvalidMetricsCardinalityLimit = errors.New("observability: metrics cardinality limit must be positive")
+
 // errCreateResourceFmt is the format string for resource creation errors.
 // Used across provider.go, metrics.go, and logs.go for consistent error messages.
 const errCreateResourceFmt = "failed to create resource: %w"

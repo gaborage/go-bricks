@@ -5539,6 +5539,7 @@ observability:
     max:
       batch:
         size: 1000                  # ≤1000 data points per Export call; 0 (default) = no cap; negative fails validation
+    # cardinalitylimit: 5000        # attribute sets per instrument per reader (L-1 + 1 overflow); unset = OTEL_GO_X_CARDINALITY_LIMIT or 2000
   logs:
     enabled: true
     endpoint: otel-collector:4317

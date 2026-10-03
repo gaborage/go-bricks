@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	testMeterName   = "test-meter"
-	testAPIEndpoint = "/api/users"
+	testMeterName          = "test-meter"
+	testAPIEndpoint        = "/api/users"
+	testCardinalityCounter = "test.cardinality.counter"
 )
 
 func TestCreateCounter(t *testing.T) {
@@ -912,20 +913,18 @@ func countDataPoints(rm *metricdata.ResourceMetrics) int {
 	return n
 }
 
-// flushExportSizes builds a provider with metrics.max.batch.size = size, records
-// five counter series, force-flushes once and returns each Export call's point count.
-func flushExportSizes(t *testing.T, size int) []int {
+// recordSeriesAndFlush builds a stdout provider whose metric exporter is replaced
+// by exporter, records one counter across `series` attribute sets and force-flushes
+// once. The wrapper and provider are restored and shut down at test cleanup.
+func recordSeriesAndFlush(t *testing.T, exporter sdkmetric.Exporter, metrics *MetricsConfig, name string, series int) {
 	t.Helper()
-	exporter := &countingMetricExporter{}
+	metrics.Enabled = BoolPtr(true)
+	metrics.Endpoint = EndpointStdout
+	metrics.Interval = time.Hour
 	cfg := &Config{
 		Enabled: true,
-		Service: ServiceConfig{Name: "test-batch-service", Version: "1.0.0"},
-		Metrics: MetricsConfig{
-			Enabled:  BoolPtr(true),
-			Endpoint: EndpointStdout,
-			Interval: time.Hour,
-			Max:      MetricsMaxConfig{Batch: MaxBatchConfig{Size: size}},
-		},
+		Service: ServiceConfig{Name: "test-metrics-service", Version: "1.0.0"},
+		Metrics: *metrics,
 	}
 	cfg.ApplyDefaults()
 
@@ -933,25 +932,33 @@ func flushExportSizes(t *testing.T, size int) []int {
 	setMetricExporterWrapper(func(_ sdkmetric.Exporter) sdkmetric.Exporter {
 		return exporter
 	})
-	defer setMetricExporterWrapper(originalWrapper)
+	t.Cleanup(func() { setMetricExporterWrapper(originalWrapper) })
 
 	provider, err := NewProvider(cfg)
 	require.NoError(t, err)
-	defer func() {
+	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = provider.Shutdown(ctx)
-	}()
+	})
 
-	counter, err := CreateCounter(provider.MeterProvider().Meter(testMeterName), "test.batch.counter", "batch test counter")
+	counter, err := CreateCounter(provider.MeterProvider().Meter(testMeterName), name, "series test counter")
 	require.NoError(t, err)
-	for i := range 5 {
+	for i := range series {
 		counter.Add(context.Background(), 1, metric.WithAttributes(attribute.Int("series", i)))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	require.NoError(t, provider.ForceFlush(ctx))
+}
+
+// flushExportSizes records five counter series with metrics.max.batch.size = size
+// and returns each Export call's point count.
+func flushExportSizes(t *testing.T, size int) []int {
+	t.Helper()
+	exporter := &countingMetricExporter{}
+	recordSeriesAndFlush(t, exporter, &MetricsConfig{Max: MetricsMaxConfig{Batch: MaxBatchConfig{Size: size}}}, "test.batch.counter", 5)
 	return exporter.exportSizes()
 }
 
@@ -969,4 +976,59 @@ func TestMetricsMaxBatchSizeZeroExportsOneBatch(t *testing.T) {
 
 	require.Len(t, sizes, 1, "an uncapped flush is a single Export call")
 	assert.GreaterOrEqual(t, sizes[0], 5)
+}
+
+// flushCounterPoints records one counter across `series` attribute sets with the
+// given metrics.cardinalitylimit and returns that counter's data points.
+func flushCounterPoints(t *testing.T, limit *int, series int) []metricdata.DataPoint[int64] {
+	t.Helper()
+	exporter := &inMemoryMetricExporter{}
+	recordSeriesAndFlush(t, exporter, &MetricsConfig{CardinalityLimit: limit}, testCardinalityCounter, series)
+
+	for _, rm := range exporter.GetMetrics() {
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name == testCardinalityCounter {
+					return m.Data.(metricdata.Sum[int64]).DataPoints
+				}
+			}
+		}
+	}
+	t.Fatal(testCardinalityCounter + " was not exported")
+	return nil
+}
+
+func overflowPoints(points []metricdata.DataPoint[int64]) int {
+	n := 0
+	for _, p := range points {
+		if v, ok := p.Attributes.Value("otel.metric.overflow"); ok && v.AsBool() {
+			n++
+		}
+	}
+	return n
+}
+
+func TestMetricsCardinalityLimitKeepsLimitMinusOneSetsPlusOverflow(t *testing.T) {
+	points := flushCounterPoints(t, new(3), 5)
+
+	assert.Len(t, points, 3)
+	assert.Equal(t, 1, overflowPoints(points))
+}
+
+func TestMetricsCardinalityLimitNilHonorsEnv(t *testing.T) {
+	t.Setenv("OTEL_GO_X_CARDINALITY_LIMIT", "3")
+
+	points := flushCounterPoints(t, nil, 5)
+
+	assert.Len(t, points, 3)
+	assert.Equal(t, 1, overflowPoints(points))
+}
+
+func TestMetricsCardinalityLimitKeyBeatsEnv(t *testing.T) {
+	t.Setenv("OTEL_GO_X_CARDINALITY_LIMIT", "3")
+
+	points := flushCounterPoints(t, new(10), 5)
+
+	assert.Len(t, points, 5)
+	assert.Zero(t, overflowPoints(points))
 }

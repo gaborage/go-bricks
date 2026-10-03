@@ -497,6 +497,15 @@ type MetricsConfig struct {
 	// applies per batch. 0 (the default) means no cap, unlike the trace and logs keys,
 	// where 0 becomes 512. Negative values are rejected.
 	Max MetricsMaxConfig `mapstructure:"max"`
+
+	// CardinalityLimit caps the attribute sets each instrument keeps per reader: a limit
+	// of L keeps L-1 sets plus one otel.metric.overflow=true series. For synchronous
+	// instruments under cumulative temporality that is a lifetime cap; under delta it
+	// applies per cycle.
+	// nil (the default) passes no option, so OTEL_GO_X_CARDINALITY_LIMIT or the SDK
+	// default of 2000 applies — a deliberate exception to the explicit-default posture.
+	// Values of zero or less are rejected.
+	CardinalityLimit *int `mapstructure:"cardinalitylimit"`
 }
 
 // MetricsExportConfig defines export timeout configuration for metrics.
@@ -714,6 +723,10 @@ func (c *Config) validateMetricsConfig() error {
 
 	if c.Metrics.Max.Batch.Size < 0 {
 		return ErrInvalidMetricsMaxBatchSize
+	}
+
+	if c.Metrics.CardinalityLimit != nil && *c.Metrics.CardinalityLimit <= 0 {
+		return ErrInvalidMetricsCardinalityLimit
 	}
 
 	if c.Metrics.Endpoint == EndpointStdout || c.Metrics.Endpoint == "" {

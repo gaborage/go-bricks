@@ -501,6 +501,16 @@ observability:
         # Default: 0
         size: 0
 
+    # cardinalitylimit caps the attribute sets each instrument keeps per reader: a
+    # limit of L keeps L-1 sets plus one otel.metric.overflow=true series, for the
+    # process lifetime (synchronous instruments) under cumulative temporality and per
+    # cycle under delta. Tenant, server.address and routing-key dimensions can exceed
+    # the SDK default of 2000.
+    # Leave it unset to keep OTEL_GO_X_CARDINALITY_LIMIT or that default; zero or
+    # negative fails validation.
+    # Can be overridden by environment variable: OBSERVABILITY_METRICS_CARDINALITYLIMIT
+    # cardinalitylimit: 5000
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment-Specific Examples
 # ─────────────────────────────────────────────────────────────────────────────

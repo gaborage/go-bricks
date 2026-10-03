@@ -35,7 +35,8 @@ import (
 // It bounds each value's LENGTH, not how many distinct values there are. A topic
 // binding lets a publisher pick a new routing key per message, and each distinct
 // one is a fresh attribute set on the consume instruments — bounded only by the
-// OTel SDK's default 2000-series cardinality limit, after which the series
+// OTel SDK's cardinality limit (2000 sets unless OTEL_GO_X_CARDINALITY_LIMIT or
+// observability.metrics.cardinalitylimit sets another), after which the series
 // overflow. That exposure predates this rule and this rule does not close it.
 var routingKeyPattern = regexp.MustCompile(`^[[:print:]]{1,255}$`)
 
