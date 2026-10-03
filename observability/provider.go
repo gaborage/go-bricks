@@ -406,11 +406,21 @@ func stripScheme(endpoint string) string {
 	return endpoint
 }
 
+// parseOTLPHTTPEndpoint parses an OTLP/HTTP endpoint and reports whether it splits
+// cleanly into the host and the exact path an exporter can send.
+func parseOTLPHTTPEndpoint(endpoint string) (*url.URL, bool) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
+		return nil, false
+	}
+	return u, true
+}
+
 // otlpHTTPTarget splits an OTLP/HTTP endpoint into a host and an exact URL path
 // ("" for none or "/"); a form it cannot split cleanly falls through to stripScheme.
 func otlpHTTPTarget(endpoint string) (host, urlPath string) {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
+	u, ok := parseOTLPHTTPEndpoint(endpoint)
+	if !ok {
 		return stripScheme(endpoint), ""
 	}
 	if u.Path == "/" {
