@@ -11948,6 +11948,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   signal. **Unchanged**: `dns:///`, `unix:`, `unix-abstract:` and
   `passthrough:///` gRPC targets stay accepted, and a scheme that disagrees with `insecure` is
   still accepted.
+- class note: `breaking`, not `silent-behavior`: the process still boots, with a WARN, but a
+  trace or `grpc://` endpoint that used to boot now takes every signal down at startup.
 - gate: match = a detect hit. no-match = otherwise.
 - apply: for HTTP, move credentials into `headers`, drop the query and fragment, write the path
   unescaped and give the host; for gRPC, write `host:port` or a `dns:///`/`unix:` target.

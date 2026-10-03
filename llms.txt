@@ -5582,7 +5582,7 @@ observability:
 | `http` | `https://host:port[/path]` | `https://otlp.example.com:4318/v1/traces` | On |
 | `http` (insecure) | `http://host:port[/path]` + `insecure: true` | `http://localhost:4318/v1/traces` | Off |
 
-HTTP path rule: the path is the export path, used exactly (never joined with `/v1/<signal>`), so a gateway prefix is written in full (`/otlp/v1/traces`); no path, or `/`, sends to `/v1/traces`/`/v1/metrics`/`/v1/logs`. Userinfo, a query, a fragment or an encoded slash (`%2F`) fails `Validate`, as does a gRPC `grpc://` endpoint.
+HTTP path rule: the path is the export path, used exactly (never joined with `/v1/<signal>`), so a gateway prefix is written in full (`/otlp/v1/traces`); no path, or `/`, sends to `/v1/traces`/`/v1/metrics`/`/v1/logs`. Userinfo, a query, a fragment, an encoded slash (`%2F`) or no host fails `Validate`, as does a gRPC `grpc://` endpoint.
 
 **Common mistakes:**
 - ❌ `https://otlp.example.com:4317` + `protocol: grpc` → fails ("too many colons" / HTTP/1.1 frame mismatch)
