@@ -11986,16 +11986,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   where it used to, and nothing reports it at startup.
 - gate: match = a detect hit. no-match = otherwise.
 - apply: in the same rollout as the bump (before it, a path-bearing config endpoint does not
-  export, [C72.2]), move each value to the framework's keys, `OBSERVABILITY_<SIGNAL>_ENDPOINT`
-  and `OBSERVABILITY_<SIGNAL>_INSECURE`, which still override YAML. A per-signal variable's URL
-  moves as-is; the generic `OTEL_EXPORTER_OTLP_ENDPOINT` was a base the exporter joined with
-  `/v1/<signal>`, so append that suffix. An `http://` env URL chose plaintext by its scheme, so
-  set `OBSERVABILITY_<SIGNAL>_INSECURE=true` with it (unless an explicit `*_INSECURE=false`
-  overrode the scheme): TLS now follows that key alone. A per-signal URL whose path was a bare
-  `/` exported to the collector's root path, which config cannot express (`/` means
-  `/v1/<signal>`); have that collector serve `/v1/<signal>` or give its full path. Drop
-  `*_PROTOCOL`: it never chose the transport (that is `observability.<signal>.protocol`); it
-  only switched trace export to JSON, which no longer exists.
+  export, [C72.2]), move each value to the framework's keys, `OBSERVABILITY_<SIGNAL>_ENDPOINT` and
+  `OBSERVABILITY_<SIGNAL>_INSECURE`, which still override YAML. A per-signal variable's URL moves
+  as-is; the generic `OTEL_EXPORTER_OTLP_ENDPOINT` was a base the exporter joined with
+  `/v1/<signal>`, so join that suffix with a single slash (`https://collector/otlp/` becomes
+  `https://collector/otlp/v1/traces`). An `http://` env URL chose plaintext by its scheme, so set
+  `OBSERVABILITY_<SIGNAL>_INSECURE=true` with it (unless an explicit `*_INSECURE=false` overrode
+  the scheme): TLS now follows that key alone. A per-signal URL whose path was a bare `/` exported
+  to the collector's root path, which config cannot express (`/` means `/v1/<signal>`); have that
+  collector serve `/v1/<signal>` or give its full path. Drop `*_PROTOCOL`: it never chose the
+  transport (that is `observability.<signal>.protocol`); it only switched trace export to JSON,
+  which no longer exists.
 - verify: boot with the old variables still exported: the collector receives at the configured
   endpoint, over TLS wherever `insecure` is false.
 - ref: [ADR-137](adr_137_otlp_transport_config_authoritative.md) · `observability/provider.go`
