@@ -408,9 +408,10 @@ func parseOTLPHTTPEndpoint(endpoint string) (*url.URL, bool) {
 }
 
 // otlpHTTPEndpointURL builds the URL an OTLP/HTTP exporter is given from the
-// endpoint's parsed parts: the scheme comes from insecure and the path is always
-// explicit (defaultPath for none or "/"), so no OTEL_* variable can change either.
-func otlpHTTPEndpointURL(endpoint string, insecure bool, defaultPath string) (string, error) {
+// endpoint's parsed parts: the scheme comes from the insecure key (plaintext) and
+// the path is always explicit (defaultPath for none or "/"), so no OTEL_* variable
+// can change either.
+func otlpHTTPEndpointURL(endpoint string, plaintext bool, defaultPath string) (string, error) {
 	u, ok := parseOTLPHTTPEndpoint(endpoint)
 	if !ok {
 		return "", ErrInvalidEndpointFormat
@@ -420,7 +421,7 @@ func otlpHTTPEndpointURL(endpoint string, insecure bool, defaultPath string) (st
 		urlPath = defaultPath
 	}
 	scheme := "https"
-	if insecure {
+	if plaintext {
 		scheme = "http"
 	}
 	return (&url.URL{Scheme: scheme, Host: u.Host, Path: urlPath}).String(), nil

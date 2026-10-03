@@ -1422,7 +1422,7 @@ func clearOTLPEnv(t *testing.T, signal string) {
 // plaintext. It never answers, so no export through it succeeds.
 func newTransportProbe(t *testing.T, network, address string) (net.Listener, <-chan string) {
 	t.Helper()
-	ln, err := net.Listen(network, address)
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), network, address)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
@@ -1433,25 +1433,29 @@ func newTransportProbe(t *testing.T, network, address string) (net.Listener, <-c
 			if err != nil {
 				return
 			}
-			go func() {
-				defer conn.Close()
-				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-				first := make([]byte, 1)
-				if _, err := io.ReadFull(conn, first); err != nil {
-					return
-				}
-				kind := "plaintext"
-				if first[0] == 0x16 { // TLS handshake record
-					kind = "tls"
-				}
-				select {
-				case opened <- kind:
-				default:
-				}
-			}()
+			go reportFirstByte(conn, opened)
 		}
 	}()
 	return ln, opened
+}
+
+// reportFirstByte reads one byte from conn and reports "tls" for a TLS
+// handshake record, "plaintext" otherwise, then closes conn.
+func reportFirstByte(conn net.Conn, opened chan<- string) {
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	first := make([]byte, 1)
+	if _, err := io.ReadFull(conn, first); err != nil {
+		return
+	}
+	kind := "plaintext"
+	if first[0] == 0x16 {
+		kind = "tls"
+	}
+	select {
+	case opened <- kind:
+	default:
+	}
 }
 
 // firstTransport builds the exporter, runs one export until the probe reports a
