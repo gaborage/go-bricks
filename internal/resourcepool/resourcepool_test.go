@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -421,9 +422,9 @@ func TestPoolCreateInheritsCallerDeadline(t *testing.T) {
 }
 
 // TestPoolAbandonedCreateReleasesSeedLease pins the counterpart of the abandon path: a create whose
-// caller gave up still installs the entry, and that entry's seed lease — which no caller is left to
-// claim — must be handed back. Otherwise refs stays >= 1 forever, eviction can only detach the
-// resource, and its close is deferred to a release that never comes: a leaked connection.
+// caller gave up still installs the entry, and no seed lease may be left for that caller — it
+// withdrew, so nobody would ever claim it. Otherwise refs stays >= 1 forever, eviction can only
+// detach the resource, and its close is deferred to a release that never comes: a leaked connection.
 func TestPoolAbandonedCreateReleasesSeedLease(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(1, 0, tr.closer) // capacity 1: the next key evicts the abandoned entry
@@ -457,7 +458,7 @@ func TestPoolAbandonedCreateReleasesSeedLease(t *testing.T) {
 	require.NoError(t, err)
 	defer rel2()
 	require.Eventually(t, func() bool { return tr.wasClosed("abandoned") }, 2*time.Second, 5*time.Millisecond,
-		"an abandoned create's resource must remain closable — its unclaimed seed lease was never handed back")
+		"an abandoned create's resource must remain closable — a seed was left for a caller that withdrew")
 	assert.Equal(t, 1, tr.count("abandoned"), "exactly one close")
 }
 
@@ -873,8 +874,38 @@ func TestPoolUsableAfterCreatePanic(t *testing.T) {
 	assert.Equal(t, 1, st.Size)
 }
 
+// TestPoolCreateGoexitFailsWaitersAndFreesKey pins that a create ending in runtime.Goexit, which
+// callCreate's recover cannot see, still finishes: its waiter gets an error instead of blocking,
+// and the next caller for the key creates afresh instead of joining the dead create.
+func TestPoolCreateGoexitFailsWaitersAndFreesKey(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+	// A guard, not a wait: a correct pool answers as soon as the create's goroutine exits, and a
+	// regression surfaces as context.DeadlineExceeded instead of hanging the package.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	goexit := func(context.Context) (*fakeResource, error) {
+		runtime.Goexit()
+		return nil, errors.New("unreachable")
+	}
+	_, rel, err := p.GetOrCreate(ctx, keyOne, goexit)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `resourcepool: create for key "key-1" exited without returning`)
+	assert.Nil(t, rel)
+
+	v, rel, err := p.GetOrCreate(ctx, keyOne, keyedCreate(keyOne))
+	require.NoError(t, err, "the next caller must create afresh, not join the exited create")
+	defer rel()
+	assert.Equal(t, keyOne, v.id)
+	st := p.Stats()
+	assert.Equal(t, 1, st.Errors, "the exited create counts once")
+	assert.Equal(t, 1, st.TotalCreated)
+}
+
 // childModeEnv selects a child-process body inside a re-executed test binary. Two properties of
-// the panic guard cannot be observed in-process: an UNRECOVERED panic on singleflight's own
+// the panic guard cannot be observed in-process: an UNRECOVERED panic on the pool's create
 // goroutine takes the process down (that is the whole reason the guard exists), and
 // GODEBUG=panicnil=1 is read at startup, so it cannot be set from inside a running test.
 const childModeEnv = "GOBRICKS_RESOURCEPOOL_CHILD"
@@ -1293,9 +1324,9 @@ func TestPoolRemoveCountsInFlightOnlyRemoval(t *testing.T) {
 	got.rel()
 }
 
-// TestPoolAbandonedCreateAfterRemoveClosesResource pins that a detached-at-birth entry still
-// holds its seed lease: if the sole waiter cancels after Remove, releaseAbandoned must release
-// that seed or the resource leaks.
+// TestPoolAbandonedCreateAfterRemoveClosesResource pins that a detached-at-birth entry whose sole
+// waiter canceled after Remove still closes: with no waiter left, the install reserves no seed
+// and closes it at once, or the resource leaks.
 func TestPoolAbandonedCreateAfterRemoveClosesResource(t *testing.T) {
 	tr := newCloseTracker()
 	closedCh := make(chan struct{})
@@ -1329,6 +1360,148 @@ func TestPoolAbandonedCreateAfterRemoveClosesResource(t *testing.T) {
 	<-closedCh
 	assert.Equal(t, 1, tr.count("abandoned"), "the abandoned create still closed once")
 	assert.Equal(t, 0, p.Size())
+}
+
+// TestPoolDetachedAbandonedCreateCountsCloseError pins the close accounting on installCreated's
+// closeNow branch: Remove invalidated the create and its only waiter withdrew, so the install closes
+// the value at once, and a failing close must add one to Errors while a clean close adds none. The
+// install runs on the test goroutine because the closer returns before the counter moves, so a
+// signal sent from inside the closer would race the assertion.
+func TestPoolDetachedAbandonedCreateCountsCloseError(t *testing.T) {
+	tests := []struct {
+		name       string
+		closeErr   error
+		wantErrors int
+	}{
+		{name: "close_fails", closeErr: errors.New("close failed"), wantErrors: 1},
+		{name: "close_succeeds", closeErr: nil, wantErrors: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newCloseTracker()
+			p := New(0, 0, tr.closer)
+			defer p.Close()
+
+			c := beginWithWaiters(p, keyTwo, 1) // in flight, one waiter joined
+			dead, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err := p.await(dead, c)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Zero(t, c.waiters, "the canceled waiter withdrew its reservation")
+			p.Remove(keyTwo)
+
+			p.createEntry(context.Background(), keyTwo, c, func(context.Context) (*fakeResource, error) {
+				r := newFakeResource("abandoned")
+				r.closeErr = tt.closeErr
+				return r, nil
+			})
+
+			assert.Equal(t, 1, tr.count("abandoned"), "the install closes the abandoned value exactly once")
+			assert.Equal(t, tt.wantErrors, p.Stats().Errors)
+			assert.Equal(t, 0, p.Size(), "a detached create is never cached")
+		})
+	}
+}
+
+// TestPoolInstallReservesSeedPerWaiter pins one seed per waiter: a create's entry stays open until
+// EVERY waiter has claimed, even when the first waiter claims and releases before the second claims
+// and a Remove detaches the entry. With a single seed, that first release closed the entry, the
+// second waiter found it closed and retried, and enough concurrent Removes exhausted its attempts
+// ("pool churn").
+func TestPoolInstallReservesSeedPerWaiter(t *testing.T) {
+	tests := []struct {
+		name                string
+		removeBeforeInstall bool
+	}{
+		{name: "detached_at_birth", removeBeforeInstall: true},
+		{name: "removed_after_first_release", removeBeforeInstall: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newCloseTracker()
+			p := New(0, 0, tr.closer)
+			defer p.Close()
+
+			c := beginWithWaiters(p, keyOne, 2)
+			if tt.removeBeforeInstall {
+				p.Remove(keyOne)
+			}
+			e := install(t, p, keyOne, c)
+
+			require.True(t, p.claimSeed(e), "the first waiter claims its seed")
+			p.releaseEntry(e)
+			if !tt.removeBeforeInstall {
+				_, shouldClose := p.Remove(keyOne)
+				require.False(t, shouldClose, "the second waiter's seed is a lease, so Remove defers the close")
+			}
+			assert.False(t, tr.wasClosed(keyOne), "the second waiter's seed keeps the entry open")
+
+			require.True(t, p.claimSeed(e), "the second waiter still claims its seed")
+			p.releaseEntry(e)
+			assert.Equal(t, 1, tr.count(keyOne), "the final release closes it exactly once")
+		})
+	}
+}
+
+// TestPoolInstallKeepsNewerPendingCreate pins that a create Remove invalidated, finishing after a
+// newer create for its key started, leaves the newer one joinable. Dropping it would let the next
+// caller start a third create, and two valid creates would race to install the same key.
+func TestPoolInstallKeepsNewerPendingCreate(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+	ctx := context.Background()
+
+	staleBlocked := testutil.NewBlockedCreate(t)
+	staleCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(ctx, keyOne, gatedConnector(inFlightOldID, staleBlocked))
+		staleCh <- leaseResult{v, rel, err}
+	}()
+	<-staleBlocked.Started
+	p.Remove(keyOne)
+
+	newerBlocked := testutil.NewBlockedCreate(t)
+	newerCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(ctx, keyOne, gatedConnector(inFlightNewID, newerBlocked))
+		newerCh <- leaseResult{v, rel, err}
+	}()
+	<-newerBlocked.Started
+
+	staleBlocked.Release()
+	stale := <-staleCh
+	require.NoError(t, stale.err)
+	stale.rel()
+	assert.Equal(t, 1, tr.count(inFlightOldID), "the invalidated create closed at its final release")
+
+	var thirdCreates atomic.Int32
+	thirdCh := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(ctx, keyOne, func(context.Context) (*fakeResource, error) {
+			thirdCreates.Add(1)
+			return newFakeResource("third"), nil
+		})
+		thirdCh <- leaseResult{v, rel, err}
+	}()
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		c := p.pending[keyOne]
+		return c != nil && c.waiters == 2
+	}, 2*time.Second, time.Millisecond, "the third caller must join the newer create")
+
+	newerBlocked.Release()
+	newer, third := <-newerCh, <-thirdCh
+	require.NoError(t, newer.err)
+	require.NoError(t, third.err)
+	defer newer.rel()
+	defer third.rel()
+	assert.Same(t, newer.v, third.v, "both callers share the newer create's resource")
+	assert.Zero(t, thirdCreates.Load(), "the third caller must not start its own create")
+	assert.Equal(t, 1, p.Size())
 }
 
 // TestPoolRecordCloseErrorCountsOnlyErrors pins that a caller-run close failure, recorded after
@@ -1651,6 +1824,27 @@ func TestPoolCloseRacingFinalReleaseClosesExactlyOnce(t *testing.T) {
 	}
 }
 
+// beginWithWaiters starts a create for key with the given number of joined waiters, without
+// running it, so a test can act between the join and the install.
+func beginWithWaiters(p *Pool[*fakeResource], key string, waiters int) *pendingCreate[*fakeResource] {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	c := p.beginCreateLocked(key)
+	c.waiters = waiters
+	return c
+}
+
+// install runs c's create synchronously and returns the installed entry: refs == seeds ==
+// waiters, exactly the state those GetOrCreate callers are in between the install and their
+// claimSeed.
+func install(t *testing.T, p *Pool[*fakeResource], key string, c *pendingCreate[*fakeResource]) *entry[*fakeResource] {
+	t.Helper()
+	p.createEntry(context.Background(), key, c, keyedCreate(key))
+	require.NoError(t, c.err)
+	require.NotNil(t, c.e)
+	return c.e
+}
+
 // TestPoolCloseClosesUnclaimedSeedEntry verifies an UNCLAIMED SEED is not a borrower: Close
 // closes such an entry, so a late claimer is refused and GetOrCreate reports ErrPoolClosed
 // instead of handing out a live resource.
@@ -1658,14 +1852,11 @@ func TestPoolCloseClosesUnclaimedSeedEntry(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(5, 0, tr.closer)
 
-	// createEntry installs the entry with refs==1, seedHeld — exactly the state a GetOrCreate
-	// caller is in between createEntry and claimOrAcquire.
-	e, err := p.createEntry(context.Background(), keyOne, keyedCreate(keyOne))
-	require.NoError(t, err)
+	e := install(t, p, keyOne, beginWithWaiters(p, keyOne, 1))
 
 	require.NoError(t, p.Close())
 	assert.Equal(t, 1, tr.count(keyOne), "a seed-only entry has no borrower — Close closes it")
-	assert.False(t, p.claimOrAcquire(e), "the late claim must be refused, so GetOrCreate reports ErrPoolClosed")
+	assert.False(t, p.claimSeed(e), "the late claim must be refused, so GetOrCreate reports ErrPoolClosed")
 }
 
 // TestPoolCloseDefersBorrowerHoldingAlongsideSeed verifies the quadrant the seed discount must
@@ -1675,17 +1866,17 @@ func TestPoolCloseDefersBorrowerHoldingAlongsideSeed(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(5, 0, tr.closer)
 
-	e, err := p.createEntry(context.Background(), keyOne, keyedCreate(keyOne))
-	require.NoError(t, err)
-	require.NotNil(t, p.getExisting(keyOne), "a second caller borrows it: refs==2, seed still unclaimed")
+	e := install(t, p, keyOne, beginWithWaiters(p, keyOne, 1))
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err, "a second caller borrows it: refs==2, seed still unclaimed")
 
 	require.NoError(t, p.Close())
 	assert.Equal(t, 0, tr.count(keyOne), "one live borrower is enough to defer the close")
 
-	require.True(t, p.claimOrAcquire(e), "the pending caller still claims the seed")
+	require.True(t, p.claimSeed(e), "the pending caller still claims the seed")
 	p.releaseEntry(e)
 	assert.Equal(t, 0, tr.count(keyOne), "one release is not the last one")
-	p.releaseEntry(e)
+	rel()
 	assert.Equal(t, 1, tr.count(keyOne), "the final release closes it exactly once")
 }
 
@@ -1882,10 +2073,9 @@ func TestPoolConcurrentGetRacesClose(t *testing.T) {
 	}
 }
 
-// TestPoolThreadSafety exercises concurrent Get/release against a shared pool under -race. With
-// no eviction (unlimited) and no removal, every GetOrCreate must succeed: first touch of a key
-// takes a seed lease (which cannot be closed before it is claimed) and reuse leases the cached
-// entry, so there is no acquire churn.
+// TestPoolThreadSafety exercises concurrent Get/release against a shared pool under -race. Every
+// GetOrCreate must succeed: each waiter of a key's first create holds a seed lease (which cannot be
+// closed before it is claimed) and reuse leases the cached entry.
 func TestPoolThreadSafety(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(0, 0, tr.closer)
@@ -1963,9 +2153,8 @@ func TestPoolConcurrentGetRacesRemove(t *testing.T) {
 }
 
 // TestPoolConcurrentGetRemoveClosesEveryCreate pins that Remove racing GetOrCreate cannot
-// orphan a handle: every create is closed once, either at final release or by Close. Forget
-// can split two same-generation creates; installCreated must close the duplicate rather than
-// overwrite the map (an overwritten LRU entry is invisible to Close).
+// orphan a handle or fail a caller: every GetOrCreate succeeds, and every create is closed once,
+// either at final release or by Close.
 func TestPoolConcurrentGetRemoveClosesEveryCreate(t *testing.T) {
 	tr := newCloseTracker()
 	var created atomic.Int32
@@ -2024,10 +2213,10 @@ func TestPoolStartCleanupAfterCloseIsNoOp(t *testing.T) {
 }
 
 // TestPoolConcurrentLeasesAllCountedBeforeClose pins that EVERY concurrent follower's lease is
-// counted (claimOrAcquire's non-seed refs++), not just the seed claim. N callers race on one key
-// (singleflight -> one create, N leases); Remove then detaches the entry while all N are held, so
-// the deferred close must wait for the FINAL release. If the follower refs++ were dropped, refs
-// would sit at 1 and the first release would close the resource while N-1 leases still hold it.
+// counted (one seed per waiter at install), not just the first claim. N callers race on one key
+// (one create, N leases); Remove then detaches the entry while all N are held, so the deferred
+// close must wait for the FINAL release. If the install reserved one seed instead of N, refs would
+// sit at 1 and the first release would close the resource while N-1 leases still hold it.
 func TestPoolConcurrentLeasesAllCountedBeforeClose(t *testing.T) {
 	tr := newCloseTracker()
 	var creations atomic.Int32
