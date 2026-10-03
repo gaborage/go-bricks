@@ -11858,7 +11858,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     `go.work`; empty output means none.
 - gate: match = any hit. no-match = otherwise. What each hit means:
   - (a) The variable is ignored, and the PeriodicReader exports unbatched.
-  - (b) This matters only for composite values built from unbounded data. At depth 65 or deeper,
+  - (b) This matters whenever an attribute value can nest deeper than 64, which in practice means
+    composite values built from unbounded data. At depth 65 or deeper,
     arrays and maps on span, event, link, log-record and instrumentation-scope attributes become
     empty. Resource attributes, metric attributes and log bodies are exempt, and there is no env
     var. Fields logged by value through the GoBricks logger are masked at depth 8 before this limit applies.
