@@ -106,4 +106,4 @@ sampler := sdktrace.ParentBased(ratio,
   `TestProviderSamplerDropsSyntheticTraceParentAtZeroRate`
 - `trace/trace.go` — `GenerateTraceParent`; `httpclient/client.go` — the
   legacy `traceparent` fallback
-- See [migrations.md](migrations.md) `[C72.5]`.
+- See [migrations.md](migrations.md) `[C72.6]`.
