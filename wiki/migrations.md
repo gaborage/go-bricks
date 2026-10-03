@@ -11916,8 +11916,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   and the path to `WithURLPath`, used exactly and never joined with `/v1/<signal>`; no path, or
   `/`, sends to `/v1/<signal>` (or the path in `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT`).
   **Unchanged**: gRPC endpoints and host-only HTTP endpoints. An HTTP endpoint carrying userinfo,
-  a query, a fragment or an encoded slash (`%2F`) never exported and now fails `Validate`
-  (C72.3).
+  a query, a fragment, an encoded slash (`%2F`) or another escape the path does not need
+  (`%74`) never exported and now fails `Validate` (C72.3).
 - class note: `silent-behavior`, not `breaking`: nothing that started before stops starting;
   telemetry that was dropped now leaves the service, which is new egress and new vendor ingest.
 - gate: match = a detect hit. no-match = otherwise.
