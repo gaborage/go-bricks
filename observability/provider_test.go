@@ -1351,7 +1351,8 @@ func testOTLPHTTPURLPaths(t *testing.T, signal string, export func(t *testing.T,
 				if tt.genericEnv {
 					key = "OTEL_EXPORTER_OTLP_ENDPOINT"
 				}
-				t.Setenv(key, srv.URL+tt.envPath)
+				// A dead host: if the env endpoint were dialed, nothing reaches srv.
+				t.Setenv(key, "http://127.0.0.1:1"+tt.envPath)
 			}
 
 			export(t, srv.URL+tt.path)
