@@ -970,3 +970,93 @@ func TestMetricsMaxBatchSizeZeroExportsOneBatch(t *testing.T) {
 	require.Len(t, sizes, 1, "an uncapped flush is a single Export call")
 	assert.GreaterOrEqual(t, sizes[0], 5)
 }
+
+// flushCounterPoints builds a provider with the given metrics.cardinalitylimit,
+// records one counter across `series` attribute sets, force-flushes once and
+// returns that counter's data points.
+func flushCounterPoints(t *testing.T, limit *int, series int) []metricdata.DataPoint[int64] {
+	t.Helper()
+	exporter := &inMemoryMetricExporter{}
+	cfg := &Config{
+		Enabled: true,
+		Service: ServiceConfig{Name: "test-cardinality-service", Version: "1.0.0"},
+		Metrics: MetricsConfig{
+			Enabled:          BoolPtr(true),
+			Endpoint:         EndpointStdout,
+			Interval:         time.Hour,
+			CardinalityLimit: limit,
+		},
+	}
+	cfg.ApplyDefaults()
+
+	originalWrapper := getMetricExporterWrapper()
+	setMetricExporterWrapper(func(_ sdkmetric.Exporter) sdkmetric.Exporter {
+		return exporter
+	})
+	defer setMetricExporterWrapper(originalWrapper)
+
+	provider, err := NewProvider(cfg)
+	require.NoError(t, err)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = provider.Shutdown(ctx)
+	}()
+
+	counter, err := CreateCounter(provider.MeterProvider().Meter(testMeterName), "test.cardinality.counter", "cardinality test counter")
+	require.NoError(t, err)
+	for i := range series {
+		counter.Add(context.Background(), 1, metric.WithAttributes(attribute.Int("series", i)))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, provider.ForceFlush(ctx))
+
+	for _, rm := range exporter.GetMetrics() {
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name == "test.cardinality.counter" {
+					return m.Data.(metricdata.Sum[int64]).DataPoints
+				}
+			}
+		}
+	}
+	t.Fatal("test.cardinality.counter was not exported")
+	return nil
+}
+
+func overflowPoints(points []metricdata.DataPoint[int64]) int {
+	n := 0
+	for _, p := range points {
+		if v, ok := p.Attributes.Value("otel.metric.overflow"); ok && v.AsBool() {
+			n++
+		}
+	}
+	return n
+}
+
+func TestMetricsCardinalityLimitKeepsLimitMinusOneSetsPlusOverflow(t *testing.T) {
+	points := flushCounterPoints(t, new(3), 5)
+
+	assert.Len(t, points, 3)
+	assert.Equal(t, 1, overflowPoints(points))
+}
+
+func TestMetricsCardinalityLimitNilHonorsEnv(t *testing.T) {
+	t.Setenv("OTEL_GO_X_CARDINALITY_LIMIT", "3")
+
+	points := flushCounterPoints(t, nil, 5)
+
+	assert.Len(t, points, 3)
+	assert.Equal(t, 1, overflowPoints(points))
+}
+
+func TestMetricsCardinalityLimitKeyBeatsEnv(t *testing.T) {
+	t.Setenv("OTEL_GO_X_CARDINALITY_LIMIT", "3")
+
+	points := flushCounterPoints(t, new(10), 5)
+
+	assert.Len(t, points, 5)
+	assert.Zero(t, overflowPoints(points))
+}

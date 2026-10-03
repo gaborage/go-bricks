@@ -52,6 +52,9 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(reader),
 	}
+	if p.config.Metrics.CardinalityLimit != nil {
+		meterOpts = append(meterOpts, sdkmetric.WithCardinalityLimit(*p.config.Metrics.CardinalityLimit))
+	}
 
 	// Apply exponential histogram view if configured (New Relic recommendation)
 	if p.config.Metrics.HistogramAggregation == HistogramAggregationExponential {

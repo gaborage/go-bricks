@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
@@ -1559,6 +1560,70 @@ func TestConfigValidateMetricsMaxBatchSize(t *testing.T) {
 				return
 			}
 			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestConfigValidateMetricsCardinalityLimit(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		limit    *int
+		wantErr  error
+	}{
+		{name: "nil_leaves_sdk_default", endpoint: EndpointStdout},
+		{name: "one_accepted", endpoint: EndpointStdout, limit: new(1)},
+		{name: "zero_rejected_on_stdout", endpoint: EndpointStdout, limit: new(0), wantErr: ErrInvalidMetricsCardinalityLimit},
+		{name: "negative_rejected_on_empty_endpoint", endpoint: "", limit: new(-1), wantErr: ErrInvalidMetricsCardinalityLimit},
+		{name: "zero_rejected_on_otlp", endpoint: "http://localhost:4318", limit: new(0), wantErr: ErrInvalidMetricsCardinalityLimit},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Enabled: true,
+				Service: ServiceConfig{Name: testServiceName},
+				Metrics: MetricsConfig{
+					Enabled:          BoolPtr(true),
+					Endpoint:         tt.endpoint,
+					CardinalityLimit: tt.limit,
+				},
+			}
+			err := cfg.Validate()
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestMetricsCardinalityLimitDecode(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics map[string]any
+		want    *int
+		wantErr string
+	}{
+		{name: "absent_stays_nil", metrics: map[string]any{"enabled": true}},
+		{name: "numeric_string_binds_by_key", metrics: map[string]any{"cardinalitylimit": "5000"}, want: new(5000)},
+		{name: "empty_string_fails_decode", metrics: map[string]any{"cardinalitylimit": ""}, wantErr: "delivered empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := config.LoadFromMap(map[string]any{"observability": map[string]any{"metrics": tt.metrics}})
+			require.NoError(t, err)
+
+			var obs Config
+			err = cfg.Unmarshal("observability", &obs)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, obs.Metrics.CardinalityLimit)
 		})
 	}
 }
