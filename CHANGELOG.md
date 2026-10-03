@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.72.0](https://github.com/gaborage/go-bricks/compare/v0.71.1...v0.72.0) (2026-10-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** honor parent sampling decisions ([#2000](https://github.com/gaborage/go-bricks/issues/2000))
+* **observability:** keep OTLP/gRPC on TLS when env says insecure ([#1995](https://github.com/gaborage/go-bricks/issues/1995))
+* **observability:** make OTLP/HTTP endpoint and TLS config authoritative ([#1994](https://github.com/gaborage/go-bricks/issues/1994))
+* **observability:** reject malformed OTLP endpoints ([#1991](https://github.com/gaborage/go-bricks/issues/1991))
+
+### Added
+
+* **observability:** add metrics.cardinalitylimit key ([#1997](https://github.com/gaborage/go-bricks/issues/1997)) ([9a34474](https://github.com/gaborage/go-bricks/commit/9a3447472dce223c9029c0fe581792cfab8e7f5a))
+* **observability:** add metrics.max.batch.size export batching ([#1990](https://github.com/gaborage/go-bricks/issues/1990)) ([d2cccfa](https://github.com/gaborage/go-bricks/commit/d2cccfaea1b31d1a77877e8a14dedcb134369d24))
+
+
+### Fixed
+
+* **deps:** bump OpenTelemetry Go to v1.47.0 with stable logs ([#1983](https://github.com/gaborage/go-bricks/issues/1983)) ([2267c82](https://github.com/gaborage/go-bricks/commit/2267c82e613bc3b6ea83e7e39173c523ac675978))
+* **migration:** export audit log records as action logs ([#1998](https://github.com/gaborage/go-bricks/issues/1998)) ([f6e63d5](https://github.com/gaborage/go-bricks/commit/f6e63d54fda74db4abea4a57df89c67108edd29e))
+* **observability:** honor parent sampling decisions ([#2000](https://github.com/gaborage/go-bricks/issues/2000)) ([cae7e3d](https://github.com/gaborage/go-bricks/commit/cae7e3d15aa31252a59cb0211b9bc6aa919b4291))
+* **observability:** honor path-bearing OTLP/HTTP endpoints ([#1989](https://github.com/gaborage/go-bricks/issues/1989)) ([97fe3f0](https://github.com/gaborage/go-bricks/commit/97fe3f0e5b5cff9f5ce8f52d2bb08d67be802a71))
+* **observability:** keep OTLP/gRPC on TLS when env says insecure ([#1995](https://github.com/gaborage/go-bricks/issues/1995)) ([d1cacb0](https://github.com/gaborage/go-bricks/commit/d1cacb0a577d8b15df10a8f5c2e2bcb67394930b))
+* **observability:** make OTLP/HTTP endpoint and TLS config authoritative ([#1994](https://github.com/gaborage/go-bricks/issues/1994)) ([c0fcc39](https://github.com/gaborage/go-bricks/commit/c0fcc3977d5529f4055c70ae63d1893e66061035))
+* **observability:** reject malformed OTLP endpoints ([#1991](https://github.com/gaborage/go-bricks/issues/1991)) ([e00af08](https://github.com/gaborage/go-bricks/commit/e00af08026a1198aae4b5ce697a9f43b5c41f77b))
+* **resourcepool:** waiters woke before displaced resources closed ([#2008](https://github.com/gaborage/go-bricks/issues/2008)) ([923541e](https://github.com/gaborage/go-bricks/commit/923541e750a4d134be336655eb8afab62bd91c2e))
+
+
+### Changed
+
+* consolidate semconv imports on v1.43.0 ([#1984](https://github.com/gaborage/go-bricks/issues/1984)) ([3dd9271](https://github.com/gaborage/go-bricks/commit/3dd9271b7cd32f2367f2a8abddbcfbf9e3392c9f))
+
 ## [0.71.1](https://github.com/gaborage/go-bricks/compare/v0.71.0...v0.71.1) (2026-10-03)
 
 
