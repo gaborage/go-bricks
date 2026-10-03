@@ -5600,6 +5600,8 @@ The framework attaches `service.name`, `service.version`, and `deployment.enviro
 
 **Export timeout** defaults to 10s when `observability.environment` is `development` (its value when the key is unset) **or** the signal's endpoint is `stdout`, and 60s otherwise (accommodates TLS + cross-region latency). `observability.environment` is a separate key and is never derived from `app.env`, so `app.env: production` against a remote collector still gets 10s unless you set it. Each signal has its own key — set `observability.trace.export.timeout`, `observability.metrics.export.timeout`, and `observability.logs.export.timeout` independently; there is no global override.
 
+**Trace sampling:** `observability.trace.sample.rate` (default `1.0`) decides root spans and spans whose remote parent arrived sampled, so an upstream `-01` flag cannot force recording. A remote parent marked not sampled (a `traceparent` ending `-00`) always drops the span at any rate, and a span under a local parent inherits that parent's decision. `0.0` records nothing. Below `1.0`, a trace sampled upstream at a higher rate, or by a different algorithm, can lose this service's spans. See ADR-138.
+
 **Batch behavior:** spans/metrics/logs are buffered and flushed on a schedule (~500ms in dev, ~5s in prod). Graceful shutdown (`fw.Run()` returning) flushes pending batches before exit. Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics (provider init, exporter setup, batch flushes) during local runs.
 
 ### Secrets Hygiene

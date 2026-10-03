@@ -20,11 +20,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
+
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 const (
@@ -896,6 +900,97 @@ func TestNewProviderNilSampleRateGetsDefault(t *testing.T) {
 	// Cleanup
 	err = provider.Shutdown(context.Background())
 	assert.NoError(t, err)
+}
+
+func newSamplingTestTracer(t *testing.T, rate float64) trace.Tracer {
+	t.Helper()
+	p, err := NewProvider(&Config{
+		Enabled: true,
+		Service: ServiceConfig{Name: testServiceName},
+		Trace: TraceConfig{
+			Enabled:  BoolPtr(true),
+			Endpoint: EndpointStdout,
+			Sample:   SampleConfig{Rate: Float64Ptr(rate)},
+		},
+		Metrics: MetricsConfig{Enabled: BoolPtr(false)},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, p.Shutdown(context.Background()))
+	})
+	return p.TracerProvider().Tracer("sampling-test")
+}
+
+// samplingTestParent is a parent span context whose trace ID falls above the
+// 0.5 ratio bound, so the ratio sampler alone would drop it at rate 0.5.
+func samplingTestParent(remote bool, flags trace.TraceFlags) trace.SpanContext {
+	return trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6, 0xa3, 0xce, 0x92, 0x9d, 0x0e, 0x0e, 0x47, 0x36},
+		SpanID:     trace.SpanID{0x00, 0xf0, 0x67, 0xaa, 0x0b, 0xa9, 0x02, 0xb7},
+		TraceFlags: flags,
+		Remote:     remote,
+	})
+}
+
+func remoteParent(flags trace.TraceFlags) func(context.Context) context.Context {
+	return func(ctx context.Context) context.Context {
+		return trace.ContextWithRemoteSpanContext(ctx, samplingTestParent(true, flags))
+	}
+}
+
+func localParent(flags trace.TraceFlags) func(context.Context) context.Context {
+	return func(ctx context.Context) context.Context {
+		return trace.ContextWithSpanContext(ctx, samplingTestParent(false, flags))
+	}
+}
+
+func TestProviderSamplerHonorsParentDecision(t *testing.T) {
+	root := func(ctx context.Context) context.Context { return ctx }
+
+	tests := []struct {
+		name        string
+		rate        float64
+		parent      func(context.Context) context.Context
+		wantSampled bool
+	}{
+		{name: "root_span_at_zero_rate_is_dropped", rate: 0.0, parent: root, wantSampled: false},
+		{name: "root_span_at_full_rate_is_kept", rate: 1.0, parent: root, wantSampled: true},
+		{name: "sampled_remote_parent_at_zero_rate_is_dropped", rate: 0.0, parent: remoteParent(trace.FlagsSampled), wantSampled: false},
+		{name: "sampled_remote_parent_at_full_rate_is_kept", rate: 1.0, parent: remoteParent(trace.FlagsSampled), wantSampled: true},
+		{name: "unsampled_remote_parent_at_full_rate_is_dropped", rate: 1.0, parent: remoteParent(0), wantSampled: false},
+		{name: "sampled_remote_parent_is_ratioed_at_half_rate", rate: 0.5, parent: remoteParent(trace.FlagsSampled), wantSampled: false},
+		{name: "sampled_local_parent_at_half_rate_is_kept", rate: 0.5, parent: localParent(trace.FlagsSampled), wantSampled: true},
+		{name: "unsampled_local_parent_at_full_rate_is_dropped", rate: 1.0, parent: localParent(0), wantSampled: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tracer := newSamplingTestTracer(t, tt.rate)
+
+			_, span := tracer.Start(tt.parent(context.Background()), testSpanName)
+			defer span.End()
+
+			assert.Equal(t, tt.wantSampled, span.IsRecording(), "IsRecording")
+			assert.Equal(t, tt.wantSampled, span.SpanContext().IsSampled(), "IsSampled")
+		})
+	}
+}
+
+// TestProviderSamplerDropsSyntheticTraceParentAtZeroRate pins the remote-sampled
+// delegate to the ratio: the httpclient fallback header always claims sampled,
+// and must not force recording on a service that sampled out at 0.0.
+func TestProviderSamplerDropsSyntheticTraceParentAtZeroRate(t *testing.T) {
+	carrier := propagation.MapCarrier{"traceparent": gobrickstrace.GenerateTraceParent()}
+	ctx := propagation.TraceContext{}.Extract(context.Background(), carrier)
+	require.True(t, trace.SpanContextFromContext(ctx).IsSampled(), "fixture must carry the sampled flag")
+	require.True(t, trace.SpanContextFromContext(ctx).IsRemote())
+
+	tracer := newSamplingTestTracer(t, 0.0)
+	_, span := tracer.Start(ctx, testSpanName)
+	defer span.End()
+
+	assert.False(t, span.IsRecording())
+	assert.False(t, span.SpanContext().IsSampled())
 }
 
 // startUnimplementedGRPCServer serves gRPC on an ephemeral loopback port with no

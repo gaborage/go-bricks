@@ -2277,6 +2277,22 @@ process environment holds.
 
 ---
 
+### [ADR-138: Trace Sampling Honors the Parent's Decision](adr_138_parent_based_sampling.md)
+
+**Date:** 2026-10-02 | **Status:** Accepted | **Breaking:** an inbound `traceparent` marked not sampled now drops this service's spans at every nonzero `trace.sample.rate`, including the default `1.0`
+
+The trace provider installed a bare ratio sampler, so a span under an upstream not-sampled
+parent was recorded, exported as an orphan and propagated as sampled. The sampler is now
+`ParentBased` with all four delegates written out: root spans and remote-sampled parents go
+through the ratio, remote-unsampled parents are dropped, and local parents keep their
+decision. Re-judging a remote sampled flag neutralizes the httpclient fallback's synthetic
+`-01` `traceparent`, and `0.0` stays an off switch. See [migrations.md](migrations.md) `[C72.6]`.
+
+**Key Benefits:** traces stay whole across services, and no caller-written flag decides
+whether this service records.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -3056,7 +3072,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-137) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-138) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

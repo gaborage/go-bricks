@@ -390,9 +390,9 @@ type TraceConfig struct {
 
 // SampleConfig defines sampling configuration for traces.
 type SampleConfig struct {
-	// Rate controls what fraction of traces to collect (0.0 to 1.0).
-	// 1.0 means collect all traces, 0.1 means collect 10% of traces, 0.0 means collect nothing.
-	// Lower values reduce overhead and costs.
+	// Rate is the fraction of traces sampled (0.0 to 1.0) for root spans and
+	// sampled remote parents; a not-sampled remote parent drops the span and a
+	// local parent's decision is inherited (ADR-138). 0.0 records nothing.
 	// nil = apply default (1.0), explicit value = use that value (including 0.0).
 	Rate *float64 `mapstructure:"rate"`
 }
