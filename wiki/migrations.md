@@ -7707,7 +7707,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   atom changed, and `delivery_tag` on the failure line identifies each one. Then re-read anything that consumes the RESPONSE
   `traceparent` header of your own services, since a client that echoed its own value back
   to itself now gets a framework-minted one instead. On the metric side, check dashboards
-  filtering `messaging.rabbitmq.destination.routing_key` or `messaging.rabbitmq.exchange`,
+  filtering `messaging.rabbitmq.routing_key` (spans carry
+  `messaging.rabbitmq.destination.routing_key`) or `messaging.rabbitmq.exchange`,
   or grouping by `messaging.destination.name`, on the AMQP consume instruments. A delivery
   whose exchange or routing key fails the shape loses that ATTRIBUTE entirely, and the
   destination name — which is built as `exchange:routing_key:queue` and is always emitted —

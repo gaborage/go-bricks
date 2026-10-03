@@ -407,7 +407,8 @@ observability:
 
     # endpoint specifies where to send trace data.
     # Special value "stdout" enables console logging for local development.
-    # For production, use OTLP gRPC endpoint: "http://localhost:4318" or "grpc://localhost:4317"
+    # For production, use an OTLP endpoint: "http://localhost:4318" with protocol "http",
+    # or "localhost:4317" (host:port, no scheme) with protocol "grpc".
     # For DataDog, point to the DataDog Agent's OTLP endpoint.
     # Can be overridden by environment variable: OBSERVABILITY_TRACE_ENDPOINT
     # Default: "stdout"
@@ -471,7 +472,7 @@ observability:
     protocol: ""
 
     # insecure controls whether to use insecure connections (no TLS).
-    # Omit or set to null to inherit the trace setting (default true).
+    # Omit or set to null to inherit trace.insecure (default false, which means TLS).
     # insecure: false
 
     # headers allows custom headers for metric exporters (e.g., API keys).
@@ -522,7 +523,7 @@ observability:
 #     version: "1.2.3"
 #   environment: "production"
 #   trace:
-#     endpoint: "grpc://localhost:4317"  # DataDog Agent OTLP receiver (gRPC)
+#     endpoint: "localhost:4317"  # DataDog Agent OTLP receiver (gRPC)
 #     protocol: "grpc"
 #     insecure: true
 #     sample:

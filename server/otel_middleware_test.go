@@ -464,7 +464,7 @@ func TestOTelMiddlewareConcurrentRequests(t *testing.T) {
 }
 
 func TestOTelMiddlewareIntegrationWithTraceContext(t *testing.T) {
-	// This test verifies that otelecho middleware and TraceContext middleware work together
+	// This test verifies that echo-otel/v5 middleware and TraceContext middleware work together
 	e, exporter := setupTestServerWithTracing(t)
 
 	var capturedContext context.Context

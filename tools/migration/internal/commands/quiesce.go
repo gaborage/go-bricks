@@ -232,8 +232,8 @@ var controllerOpener = func(ctx context.Context, flags *CommonFlags, table strin
 		// An unusable --table is misuse, and the controller does not exist yet.
 		return nil, nil, markNothingAttempted(err)
 	}
-	// Emit quiesce.set / quiesce.cleared through the always-on OTel seam (span +
-	// structured log), mirroring how the migrate path wires migration.applied.
+	// Emit quiesce.set / quiesce.cleared as the migrate path emits migration.applied:
+	// a structured JSON log line on stdout; the span goes to the global no-op provider.
 	ctrl.WithAudit(migration.NewEmitter(newCLILogger(flags), nil))
 	return ctrl, closeDB, nil
 }

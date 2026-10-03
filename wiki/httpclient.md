@@ -1008,7 +1008,7 @@ Rationale for the 4xx-as-OK convention: client spans treat 4xx as a normal flow-
 
 `httpclient` injects `traceparent` / `tracestate` headers per attempt with this precedence:
 
-1. **OTel propagator path** — when a recording span is active on the request context (the attempt span this package opens, *or* a surrounding span from `server/` middleware), `otel.GetTextMapPropagator().Inject(ctx, headerCarrier)` writes the *real* traceparent matching that span. The framework registers `propagation.TraceContext{}` as the default global propagator.
+1. **OTel propagator path** — when a recording span is active on the request context (the attempt span this package opens, *or* a surrounding span from `server/` middleware), `otel.GetTextMapPropagator().Inject(ctx, headerCarrier)` writes the *real* traceparent matching that span. The framework registers a composite of `propagation.TraceContext{}` and `propagation.Baggage{}` as the global propagator.
 2. **Legacy fallback** — when `c.config.EnableW3CTrace == true` AND no span is active on the context, the existing `trace.ParentFromContext` / `trace.GenerateTraceParent` path emits a synthetic traceparent. This preserves backward compatibility for callers wiring `httpclient` without an OTel tracer.
 3. **Disabled** — `WithW3CTrace(false)` disables W3C injection entirely.
 
