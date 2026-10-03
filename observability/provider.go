@@ -647,7 +647,8 @@ func warnIfZeroSampleRate(cfg *Config) {
 	if cfg.Enabled && cfg.Trace.Enabled != nil && *cfg.Trace.Enabled {
 		if cfg.Trace.Sample.Rate != nil && *cfg.Trace.Sample.Rate == 0.0 {
 			debugLogger.Println("WARNING: Trace sample rate is explicitly set to 0.0")
-			debugLogger.Println("         This means NO SPANS will be recorded or exported, whatever an inbound traceparent says")
+			debugLogger.Println("         Root spans and spans under a remote parent are all dropped; only a sampled")
+			debugLogger.Println("         local parent from another TracerProvider can still keep its children")
 			debugLogger.Println("         If this is unintentional, remove 'trace.sample.rate: 0.0' from your config")
 		}
 	}

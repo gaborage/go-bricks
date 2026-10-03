@@ -55,8 +55,10 @@ sampler := sdktrace.ParentBased(ratio,
 - An upstream **not sampled** decision is honored, which ends the orphans.
 - An upstream **sampled** flag is re-judged by the same ratio, so neither the
   synthetic `-01` nor a client-chosen flag can force recording.
-- `0.0` stays an off switch: every span this provider starts at `0.0` is
-  unsampled, so no sampled local parent arises inside the service.
+- `0.0` stays an off switch for this provider: every span it starts at `0.0`
+  is unsampled, so no sampled local parent of its own arises. Only a sampled
+  local parent from another `TracerProvider` in the process keeps its
+  children.
 
 ## Alternatives considered
 

@@ -392,7 +392,9 @@ type TraceConfig struct {
 type SampleConfig struct {
 	// Rate is the fraction of traces sampled (0.0 to 1.0) for root spans and
 	// sampled remote parents; a not-sampled remote parent drops the span and a
-	// local parent's decision is inherited (ADR-138). 0.0 records nothing.
+	// local parent's decision is inherited (ADR-138). 0.0 drops root and
+	// remote-parent spans; only a sampled local parent from another
+	// TracerProvider keeps its children.
 	// nil = apply default (1.0), explicit value = use that value (including 0.0).
 	Rate *float64 `mapstructure:"rate"`
 }
