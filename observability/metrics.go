@@ -63,7 +63,7 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 
 	p.meterProvider = sdkmetric.NewMeterProvider(meterOpts...)
 
-	// Start Go runtime metrics collection (memory, GC, goroutines, CPU, config)
+	// Start Go runtime metrics collection (memory, GC, goroutines, GOMAXPROCS, config)
 	// This automatically exports metrics when the periodic reader triggers:
 	//   - go.memory.used, go.memory.limit, go.memory.allocated, go.memory.allocations
 	//   - go.memory.gc.goal

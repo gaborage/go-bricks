@@ -670,7 +670,8 @@ func TestErrorChaining(t *testing.T) {
 
 func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 	// This test verifies that the error handler respects Response.Committed
-	// to prevent double-writes when invoked multiple times (e.g., by otelecho middleware)
+	// to prevent double-writes when invoked after a response was written (a handler that
+	// wrote and then returned an error, or a middleware that called HTTPErrorHandler itself)
 	e := echo.New()
 	cfg := &config.Config{
 		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},

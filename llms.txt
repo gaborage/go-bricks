@@ -5453,9 +5453,9 @@ When `observability.enabled: true`, the framework auto-emits:
 | Database pool | `db.client.connection.max` / `.idle.max` / `.idle.min` | UpDownCounter | — |
 | Database pool | `db.client.connection.wait_count` / `.timeouts` | Counter | — |
 | Database pool | `db.client.connection.pending_requests` | UpDownCounter | — |
-| Messaging | `messaging.client.operation.duration` | Histogram (s) | `messaging.system`, `messaging.operation.name`, `error.type` |
-| Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name`, `error.type` (consumed only, on failure) |
-| Messaging | `messaging.client.publish.retries` | Counter | `messaging.destination.name`, `retry.reason` (`publish_error`/`nack`/`returned`/`timeout`); an exhausted publish counts `maxpublishattempts − 1` (the last attempt is not a retry) |
+| Messaging | `messaging.client.operation.duration` | Histogram (s) | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type`, `messaging.rabbitmq.{exchange,routing_key,queue}` when set |
+| Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name`, `error.type` (consumed only, on failure), `messaging.rabbitmq.{exchange,routing_key,queue}` when set |
+| Messaging | `messaging.client.publish.retries` | Counter | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.{exchange,routing_key}` when set, `retry.reason` (`publish_error`/`nack`/`returned`/`timeout`); an exhausted publish counts `maxpublishattempts − 1` (the last attempt is not a retry) |
 | Messaging | `messaging.connection.create` / `.close` | Counter | — |
 | Messaging | `messaging.channel.create` / `.close` | Counter | — |
 | Messaging | `messaging.settlement.total` | Counter | `lane` (`classic`/`streams`), `outcome` (`acked`/`nacked`/`committed`/`failed`) |
@@ -5463,7 +5463,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system.name=redis` |
 | Cache manager | `cache.manager.active_caches` | UpDownCounter | — |
 | Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` — manager lifecycle, not probe health (`.errors` counts pool create and close failures only) | Counter | — |
-| Go runtime | `process.runtime.go.{mem.*,goroutines,gc.*,sched.*}` | various | OTel runtime semconv |
+| Go runtime | `go.memory.used` (attribute `go.memory.type`), `go.memory.limit` (only when a memory limit is set, through `GOMEMLIMIT` or `debug.SetMemoryLimit`), `go.memory.allocated`, `go.memory.allocations`, `go.memory.gc.goal`, `go.goroutine.count`, `go.processor.limit`, `go.config.gogc`, and `go.schedule.duration` from the runtime producer | various | OTel runtime semconv; the `process.runtime.go.*` names appear only with the deprecated opt-in `OTEL_GO_X_DEPRECATED_RUNTIME_METRICS=true` |
 | JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method`, `http.route` (omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
 | JOSE | `jose.operation.duration` | Histogram | `operation` |
 
@@ -5589,7 +5589,7 @@ observability:
 
 ### Resource Attributes & Export Behavior
 
-The framework attaches `service.name`, `service.version`, and `deployment.environment.name` to every signal's resource. `service.instance.id` and `process.*`/`host.*` attributes are NOT auto-attached by go-bricks — add them yourself via an OTel resource detector or `OTEL_RESOURCE_ATTRIBUTES` if you need them. Override `service.name`/`service.version` via `observability.service.{name,version}`.
+The framework attaches `service.name`, `service.version`, and `deployment.environment.name` to every signal's resource. `service.instance.id` and `process.*`/`host.*` attributes are NOT auto-attached by go-bricks, and it exposes no resource seam — set them through `OTEL_RESOURCE_ATTRIBUTES` if you need them. Override `service.name`/`service.version` via `observability.service.{name,version}`.
 
 **Export timeout** defaults to 10s when `observability.environment` is `development` (its value when the key is unset) **or** the signal's endpoint is `stdout`, and 60s otherwise (accommodates TLS + cross-region latency). `observability.environment` is a separate key and is never derived from `app.env`, so `app.env: production` against a remote collector still gets 10s unless you set it. Each signal has its own key — set `observability.trace.export.timeout`, `observability.metrics.export.timeout`, and `observability.logs.export.timeout` independently; there is no global override.
 
@@ -6136,13 +6136,20 @@ Response (trace_id in logs)
 **Trace Context Propagation (Cross-Service):**
 
 ```go
-import "go.opentelemetry.io/otel/propagation"
+import (
+    "bytes"
+    "context"
+    "net/http"
 
-// Outgoing HTTP request automatically propagates trace context
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/propagation"
+)
+
+// A plain *http.Client must inject trace context by hand; the GoBricks httpclient does it automatically
 func (s *Service) CallExternalAPI(ctx context.Context, data []byte) error {
     req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/process", bytes.NewReader(data))
 
-    // Inject trace headers (W3C traceparent) - automatic when using otelhttp
+    // Inject trace headers (W3C traceparent)
     otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 
     resp, err := http.DefaultClient.Do(req)
@@ -6405,6 +6412,7 @@ For application logs, exercise the production logger directly and capture into a
 | Logs are emitted but `trace_id` field is empty | Logger called without trace context | Use `logger.WithContext(ctx).Info()...` (not `logger.Info()...`); ensure the handler context comes from `ctx.RequestContext()` |
 | Action logs missing for some requests | Slow request threshold not configured — only severity escalation produces non-INFO action logs | Set `observability.logs.slowrequestthreshold` or call `c.EscalateSeverity(level)` |
 | INFO/DEBUG application logs are dropped | Default `samplingrate: 0.0` drops all `INFO`/`DEBUG` trace logs (action logs still emit at 100%) | Raise `observability.logs.samplingrate` (e.g. `0.1`); `ERROR`/`WARN` always export regardless |
+| Logs emitted via `otel.Logger(...)` or otelslog/otelzap never arrive | GoBricks registers no global LoggerProvider | Log through `deps.Logger` |
 | Custom metric is `nil` when recording | `observability.enabled: false` makes `deps.MeterProvider` a no-op, but the helper-returned instruments may still be `nil` if `Meter()` was never called | Always nil-check before recording: `if m.counter != nil { m.counter.Add(...) }` |
 | Noisy `[OBSERVABILITY]` debug output | `GOBRICKS_DEBUG` env var is set | Unset `GOBRICKS_DEBUG` |
 

@@ -799,7 +799,8 @@ func (s *Server) readyCheck(c *echo.Context) error {
 // it uses formatRawErrorResponse which writes minimal JSON without the envelope.
 func customErrorHandler(c *echo.Context, err error, cfg *config.Config, log logger.Logger) {
 	// SAFETY: Prevent double-writes if error handler is invoked multiple times.
-	// This can happen with certain middleware combinations (e.g., otelecho).
+	// This happens when a handler writes a response and then returns an error, or when a
+	// middleware calls HTTPErrorHandler itself (Echo's RequestLogger with HandleError: true).
 	// Matches Echo's default error handler behavior.
 	if isResponseCommitted(c) {
 		return

@@ -384,9 +384,12 @@ needing a separate parser.
 
 ## Audit events
 
-Every `migrate` invocation emits a `migration.applied` event per tenant via
-OpenTelemetry (always-on) and, when configured at the library layer, via the
-optional `AuditRecorder` durable-delivery seam. The event carries
+Every `migrate` invocation emits a `migration.applied` event for each tenant
+whose migration reaches Flyway; a tenant whose database config does not resolve
+emits none. The CLI writes each audit event as a structured JSON log line on stdout; its spans
+and counters go to the global no-op OpenTelemetry provider, so nothing is
+exported over OTLP. Library consumers of `migration` get the OTel span and log
+path plus the optional `AuditRecorder` durable-delivery seam. The event carries
 `Version` (the schema version after the run), `Outcome`, `ErrorClass` on
 failure, and `Attributes` (Flyway engine version, applied versions CSV,
 vendor, dry-run flag). See

@@ -18,7 +18,7 @@ linters:
     - errname                   # checks that error variables/types follow the errFoo/FooError convention
     - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
     - exhaustive                # checks exhaustiveness of enum switch statements
-    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083)
+    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083; the global LoggerProvider)
     - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present
@@ -79,6 +79,8 @@ linters:
           msg: record span errors by type through observability.RecordErrorByType (ADR-083) — RecordError writes the error's message into the span.
         - pattern: ^semconv\.Exception.*$
           msg: build the exception event through observability.RecordErrorByType (ADR-083) rather than assembling semconv exception attributes by hand.
+        - pattern: ^otel\.(Logger|GetLoggerProvider|SetLoggerProvider)$
+          msg: GoBricks registers no global LoggerProvider (observability/CLAUDE.md) — otel.Logger/GetLoggerProvider are a no-op here and drop records, and otel.SetLoggerProvider would let foreign records bypass SensitiveDataFilter; log through logger.Logger.
     gocognit:
       min-complexity: 15
     goconst:

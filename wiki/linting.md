@@ -59,8 +59,13 @@ Pick the order that moves you *toward* your existing convention, not away from i
 Every entry under `linters.exclusions.rules` is a GoBricks path and means nothing in your
 repo — `logger/adapter.go` (zerologlint), `cmd/seal-payload/` (an importas carve-out), and
 a few rules scoped to `_test.go`. Delete them all and add your own as findings justify.
-Drop the `forbidigo` settings block too: its patterns enforce a GoBricks architecture
-decision (ADR-083) and mean nothing outside this repo.
+Drop the two ADR-083 `forbidigo` patterns too (`trace.Span.RecordError`, `semconv.Exception*`):
+they enforce a GoBricks architecture decision and mean nothing outside this repo. Keep the
+`otel.(Logger|GetLoggerProvider|SetLoggerProvider)` pattern, with `analyze-types: true`, if
+your app logs through GoBricks. GoBricks registers no global LoggerProvider, so records emitted
+through `otel.Logger` or a logger from `otel.GetLoggerProvider` are dropped, and
+`otel.SetLoggerProvider` would register a provider whose records bypass `SensitiveDataFilter`.
+Rewrite its `msg`, which points at a GoBricks path.
 
 The `testifylint` block is portable in full — copy it as it stands:
 

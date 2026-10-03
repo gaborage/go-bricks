@@ -10,9 +10,32 @@
       "matchDatasources": ["go"],
       "matchPackageNames": [
         "github.com/labstack/echo/v5",
-        "github.com/labstack/echo-opentelemetry"
+        "github.com/labstack/echo-otel/v5"
       ],
       "groupName": "echo (engine + otel)"
+    },
+    {
+      "description": "Group every go.opentelemetry.io/otel and go.opentelemetry.io/contrib module into one PR. This overrides config:recommended's two monorepo groups (OpenTelemetry Go core and contrib), because their releases only work as a whole: a contrib release requires the matching core, and core moves the v0 log exporters, which MVS does not lift. otelhttp and go.opentelemetry.io/proto/otlp stay held on purpose. Both are indirect in the root and in tools/migration, and no rule here enables them (the tools/migration rule below enables only the otel modules and contrib runtime): otelhttp reaches the graph only through the test-only testcontainers path, a requirement is a floor rather than a ceiling, and pinning a newer otelhttp would force its behavior changes on every consumer; proto/otlp moves only when an exporter release requires it. Land a grouped PR with the recipe in prBodyNotes: go get every grouped module, go mod tidy, go work sync, a second go mod tidy in tools/migration, a scope check, and both GOWORK modes. Renovate leaves a major (v0 to v1) slice untidied, and that slice always needs the recipe.",
+      "matchDatasources": ["go"],
+      "matchPackageNames": [
+        "go.opentelemetry.io/otel{/,}**",
+        "go.opentelemetry.io/contrib{/,}**"
+      ],
+      "groupName": "opentelemetry-go",
+      "prBodyNotes": [
+        "**OpenTelemetry landing recipe.** Use it whenever this PR is a major slice or CI's verify-mod is red.\n\n1. On a fresh branch off main, `go get` every module in this group at its new version. Name the v0 log exporters and `sdk/log/logtest` explicitly; never name `otelhttp` or `go.opentelemetry.io/proto/otlp`.\n2. Run `go mod tidy`, then `go work sync`, then `(cd tools/migration && go mod tidy)`. The second tidy adds the `/go.mod` hashes that `go work sync` omits.\n3. `git diff -U0 tools/migration/go.mod` may move only OpenTelemetry and `genproto/googleapis/{api,rpc}` lines; revert any other line.\n4. Run `go mod download && go build ./...`; `git diff --exit-code go.work.sum` must be clean.\n5. Check both GOWORK modes: `GOWORK=off go build ./...` at the root, and `go mod tidy -diff` plus `GOWORK=off go build ./...` in `tools/migration`.\n6. Commit, then run `make check`: its verify-mod step fails on any unstaged change to go.mod, go.sum or go.work.sum. Open the PR and close this one as superseded."
+      ]
+    },
+    {
+      "description": "Enable tools/migration's indirect OpenTelemetry requirements, so a grouped OpenTelemetry minor PR moves both go.mod files together. With this rule the PR's output matches go work sync plus a second tidy byte for byte, and go.work.sum stays unchanged. It enables only the otel modules and contrib runtime: otelhttp, go.opentelemetry.io/proto/otlp and go.opentelemetry.io/auto/sdk stay disabled like every other indirect requirement. Two cases still need the landing recipe from the opentelemetry-go rule: a major slice, which Renovate leaves untidied, and a release that breaks the published go-bricks under GOWORK=off.",
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["tools/migration/go.mod"],
+      "matchDepTypes": ["indirect"],
+      "matchPackageNames": [
+        "go.opentelemetry.io/otel{/,}**",
+        "go.opentelemetry.io/contrib/instrumentation/runtime"
+      ],
+      "enabled": true
     },
     {
       "description": "Type the go-bricks-migrate CLI's self-pin as 'chore' so it does not cut a framework release. tools/migration is the only module that depends on go-bricks, and config:recommended's :semanticPrefixFixDepsChoreOthers types dependency updates as 'fix' — which release-please counts as version-bumping for the root module. That made catching the pin up self-defeating: pinning the CLI to v0.58.1 (#960) released framework v0.58.2 (#962, whose entire changelog was that one line), which re-staled the pin and the tools/migration/v* tag the drift check watches (#958). 'chore' does not bump because release-please's default versioning strategy advances the version only on feat/fix/breaking; that is what breaks the loop. release-please-config.json separately marks chore hidden, which affects only changelog rendering — un-hiding it would not re-arm this. Scoped to this one package on purpose: every other fix(deps) carries real content and must keep bumping, since release-cli.sh requires the CLI tag to equal the pinned framework version, so framework releases are what mint the CLI's next releasable number.",
