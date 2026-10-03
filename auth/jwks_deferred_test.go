@@ -152,7 +152,9 @@ func statusTLSServer(t *testing.T, code int) (uri string, client httpclient.Clie
 	return srv.URL + authtesting.JWKSPath, buildClient(t, srv.Client(), 0)
 }
 
-// hungTLSServer never answers until the test ends.
+// hungTLSServer never answers. Its handler aborts rather than returns: on
+// return net/http sends an implicit empty 200, which the timed-out client's
+// TLS close_notify can elicit early enough to be read as the response.
 func hungTLSServer(t *testing.T) (uri string, client httpclient.Client) {
 	t.Helper()
 	release := make(chan struct{})
@@ -161,6 +163,7 @@ func hungTLSServer(t *testing.T) (uri string, client httpclient.Client) {
 		case <-release:
 		case <-r.Context().Done():
 		}
+		panic(nethttp.ErrAbortHandler)
 	}))
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { close(release) })
