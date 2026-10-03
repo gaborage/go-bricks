@@ -319,8 +319,16 @@ func (p *provider) initTraceProvider(ctx context.Context) error {
 	if p.config.Trace.Sample.Rate != nil {
 		sampleRate = *p.config.Trace.Sample.Rate
 	}
-	sampler := sdktrace.TraceIDRatioBased(sampleRate)
-	debugLogger.Printf("Creating TracerProvider with sampler rate=%.2f", sampleRate)
+	// Remote-sampled parents are re-judged by the ratio so a caller's -01
+	// cannot force recording (ADR-138).
+	ratio := sdktrace.TraceIDRatioBased(sampleRate)
+	sampler := sdktrace.ParentBased(ratio,
+		sdktrace.WithRemoteParentSampled(ratio),
+		sdktrace.WithRemoteParentNotSampled(sdktrace.NeverSample()),
+		sdktrace.WithLocalParentSampled(sdktrace.AlwaysSample()),
+		sdktrace.WithLocalParentNotSampled(sdktrace.NeverSample()),
+	)
+	debugLogger.Printf("Creating TracerProvider with parent-based sampler, root and remote-sampled rate=%.2f", sampleRate)
 
 	p.tracerProvider = sdktrace.NewTracerProvider(
 		append(FrameworkTracerProviderOptions(),
@@ -639,7 +647,8 @@ func warnIfZeroSampleRate(cfg *Config) {
 	if cfg.Enabled && cfg.Trace.Enabled != nil && *cfg.Trace.Enabled {
 		if cfg.Trace.Sample.Rate != nil && *cfg.Trace.Sample.Rate == 0.0 {
 			debugLogger.Println("WARNING: Trace sample rate is explicitly set to 0.0")
-			debugLogger.Println("         This means NO SPANS will be recorded or exported")
+			debugLogger.Println("         Root spans and spans under a remote parent are all dropped; only a sampled")
+			debugLogger.Println("         local parent from another TracerProvider can still keep its children")
 			debugLogger.Println("         If this is unintentional, remove 'trace.sample.rate: 0.0' from your config")
 		}
 	}

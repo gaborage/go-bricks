@@ -424,10 +424,12 @@ observability:
     # Default: false
     insecure: false
 
-    # sample.rate controls what fraction of traces to collect (0.0 to 1.0).
-    # 1.0 = collect all traces (use in development/staging)
-    # 0.1 = collect 10% of traces (reduces costs in production)
-    # 0.01 = collect 1% of traces (high-volume production)
+    # sample.rate is the fraction of traces sampled (0.0 to 1.0) for root spans
+    # and for spans whose remote parent arrived sampled. A remote parent marked
+    # not sampled (traceparent ending -00) always drops the span (ADR-138).
+    # 1.0 = sample all of them (use in development/staging)
+    # 0.1 = sample 10% (reduces costs in production)
+    # 0.01 = sample 1% (high-volume production)
     # Can be overridden by environment variable: OBSERVABILITY_TRACE_SAMPLE_RATE
     # Default: 1.0
     sample:
@@ -550,7 +552,7 @@ observability:
 #     protocol: "grpc"
 #     insecure: true
 #     sample:
-#       rate: 0.1  # 10% sampling for cost control
+#       rate: 0.1  # 10% of root and remote-sampled traces, for cost control
 #   metrics:
 #     endpoint: "https://api.datadoghq.com"
 #     protocol: "http"
@@ -567,7 +569,7 @@ observability:
 #   trace:
 #     endpoint: "http://localhost:4318"
 #     sample:
-#       rate: 0.01  # 1% sampling
+#       rate: 0.01  # 1% of root and remote-sampled traces
 #     max:
 #       queue:
 #         size: 4096  # Larger buffer for bursts

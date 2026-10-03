@@ -6,7 +6,7 @@ The observability package provides production-ready distributed tracing using Op
 
 - **Flexible Exporters**: stdout for development, OTLP for production
 - **Protocol Support**: Both OTLP/HTTP and OTLP/gRPC protocols
-- **Configurable Sampling**: Control trace collection rate (0.0 - 1.0)
+- **Parent-Based Sampling**: Sample root and remote-sampled traces at a configurable rate (0.0 - 1.0); an upstream not-sampled decision is honored
 - **Custom Headers**: Support for authentication tokens and custom headers
 - **Independent Pipelines**: Configure tracing and metrics with separate transports and credentials
 - **Resource Attributes**: Automatic service name, version, and environment tagging
@@ -97,7 +97,7 @@ observability:
     headers:
       Authorization: "Bearer ${OTEL_API_KEY}"
     sample:
-      rate: 0.1  # Sample 10% of traces
+      rate: 0.1  # Sample 10% of root and remote-sampled traces
     batch:
       timeout: "5s"
     export:
@@ -135,7 +135,7 @@ observability:
     headers:
       x-api-key: "${OTEL_API_KEY}"
     sample:
-      rate: 0.25  # Sample 25% of traces
+      rate: 0.25  # Sample 25% of root and remote-sampled traces
 ```
 
 ### Cloud Provider Examples
@@ -211,7 +211,7 @@ observability:
 | `trace.protocol` | string | `"http"` | OTLP protocol: "http" or "grpc" |
 | `trace.insecure` | bool | `false` | Use insecure connection (no TLS). Decides TLS alone: the endpoint scheme and `OTEL_EXPORTER_OTLP_*` endpoint/insecure variables never change it |
 | `trace.headers` | map[string]string | - | Custom headers for authentication |
-| `trace.sample.rate` | float64 | `1.0` | Sampling rate (0.0 = none, 1.0 = all) |
+| `trace.sample.rate` | float64 | `1.0` | Sampling rate for root spans and sampled remote parents (0.0 = none, 1.0 = all); a not-sampled remote parent always drops the span (ADR-138) |
 | `trace.batch.timeout` | duration | `500ms (development/stdout) / 5s (production)` | Time to wait before sending batch |
 | `trace.export.timeout` | duration | `10s (development/stdout) / 60s (production)` | Maximum time for export operation |
 | `trace.max.queue.size` | int | `2048` | Maximum buffered spans |
@@ -338,7 +338,7 @@ For services with high request rates, reduce overhead:
 observability:
   trace:
     sample:
-      rate: 0.01  # Sample 1% of traces
+      rate: 0.01  # Sample 1% of root and remote-sampled traces
     batch:
       timeout: "10s"  # Larger batches
     max:
@@ -367,8 +367,9 @@ observability:
 1. **Check observability is enabled**: `observability.enabled: true`
 2. **Verify service name**: `observability.service.name` is set
 3. **Check sampling rate**: `trace.sample.rate > 0.0`
-4. **Verify endpoint**: OTLP collector is reachable
-5. **Check logs**: Look for initialization or export errors
+4. **Check upstream sampling**: a request whose `traceparent` ends in `-00` (not sampled) drops this service's spans at any rate
+5. **Verify endpoint**: OTLP collector is reachable
+6. **Check logs**: Look for initialization or export errors
 
 ### Connection Errors
 
@@ -394,8 +395,10 @@ observability:
       queue:
         size: 512  # Reduce buffer size
     sample:
-      rate: 0.05  # Lower sampling rate
+      rate: 0.05  # Lower root and remote-sampled rate
 ```
+
+The span queue bounds memory: when `trace.max.queue.size` is full, the batch processor drops new spans instead of blocking.
 
 ## Best Practices
 
