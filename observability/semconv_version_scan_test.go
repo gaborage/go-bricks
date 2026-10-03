@@ -22,8 +22,7 @@ var semconvVersionPattern = regexp.MustCompile(`^` + regexp.QuoteMeta(semconvPat
 
 // TestSemconvImportsShareOneVersion keeps the framework on a single semantic
 // conventions version. No linter enforces it: the import-alias linter checks
-// aliases only, and files behind build tags skip lint, so a second version
-// would merge silently.
+// aliases only, so a second version would merge silently.
 func TestSemconvImportsShareOneVersion(t *testing.T) {
 	versions, scanned := semconvVersionsUnder(t, repoRoot(t))
 
