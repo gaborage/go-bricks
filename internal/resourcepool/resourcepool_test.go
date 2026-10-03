@@ -2118,8 +2118,7 @@ func hammerGetRemove(t *testing.T, p *Pool[*fakeResource], tr *closeTracker, ops
 		key := fmt.Sprintf("key-%d", j%6)
 		_, rel, err := p.GetOrCreate(ctx, key, keyedCreate(key))
 		if err != nil {
-			// Only the bounded-retry churn error is tolerated here.
-			assert.Contains(t, err.Error(), "pool churn", "unexpected GetOrCreate error")
+			t.Errorf("GetOrCreate failed: %v", err)
 			continue
 		}
 		rel()
@@ -2131,10 +2130,11 @@ func hammerGetRemove(t *testing.T, p *Pool[*fakeResource], tr *closeTracker, ops
 	}
 }
 
-// TestPoolConcurrentGetRacesRemove stress-tests concurrent GetOrCreate + Remove under -race.
-// The bounded acquire retry can, under this pathological churn, exhaust its attempts when a
-// peeked entry is removed before it can be claimed — a legitimate, documented outcome (mirrors
-// cache's maxGetAttempts bound). Any OTHER error, a panic, or a double-close is a failure.
+// TestPoolConcurrentGetRacesRemove stress-tests concurrent GetOrCreate + Remove under -race. Every
+// GetOrCreate must succeed: a caller either leases the cached entry under the lookup's lock or
+// holds a seed the install reserved for it, so a concurrent Remove can detach the entry but never
+// close it under a caller still on its way to claim. Any error, a panic, or a double-close is a
+// failure.
 func TestPoolConcurrentGetRacesRemove(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(0, 0, tr.closer)
@@ -2296,7 +2296,7 @@ func TestPoolConcurrentEvictWhileLeasedRace(t *testing.T) {
 				key := fmt.Sprintf("key-%d", (w+j)%8)
 				_, rel, err := p.GetOrCreate(ctx, key, create)
 				if err != nil {
-					assert.Contains(t, err.Error(), "pool churn", "unexpected GetOrCreate error")
+					t.Errorf("GetOrCreate failed: %v", err)
 					continue
 				}
 				time.Sleep(time.Millisecond) // hold the lease across other goroutines' evictions
