@@ -2268,7 +2268,8 @@ an explicit URL built from the endpoint's parsed parts with the scheme taken fro
 the trace HTTP exporter pins protobuf, and the gRPC exporters mark TLS explicitly with a
 constant placeholder URL before their real target. `Validate` rejects HTTP endpoints with
 userinfo, a query, a fragment, an encoded slash or no host, and gRPC `grpc://`. `*_HEADERS`,
-`*_CERTIFICATE`, `*_TIMEOUT` and gRPC compression stay. See [migrations.md](migrations.md)
+`*_CERTIFICATE`, `*_TIMEOUT` and gRPC compression (when the config compression is not gzip)
+stay. See [migrations.md](migrations.md)
 `[C72.3]` (endpoint rejections) and `[C72.4]` (environment channels).
 
 **Key Benefits:** TLS comes from the `insecure` key alone, as documented, whatever the

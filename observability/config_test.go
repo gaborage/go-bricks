@@ -827,6 +827,8 @@ func TestValidateEndpointFormat(t *testing.T) {
 		{name: "http_port_only_valid", endpoint: "http://:4318", protocol: ProtocolHTTP},
 		{name: "http_gateway_prefix_valid", endpoint: "https://gateway/otlp/v1/traces", protocol: ProtocolHTTP},
 		{name: "grpc_grpc_scheme", endpoint: "grpc://collector:4317", protocol: ProtocolGRPC, wantErr: ErrInvalidEndpointFormat},
+		{name: "grpc_uppercase_grpc_scheme", endpoint: "GRPC://collector:4317", protocol: ProtocolGRPC, wantErr: ErrInvalidEndpointFormat},
+		{name: "grpc_uppercase_https_scheme", endpoint: "HTTPS://collector:4317", protocol: ProtocolGRPC, wantErr: ErrInvalidEndpointFormat},
 		{name: "grpc_dns_target_valid", endpoint: "dns:///collector:4317", protocol: ProtocolGRPC},
 		{name: "grpc_unix_absolute_target_valid", endpoint: "unix:///var/run/otel.sock", protocol: ProtocolGRPC},
 		{name: "grpc_unix_relative_target_valid", endpoint: "unix:otel.sock", protocol: ProtocolGRPC},

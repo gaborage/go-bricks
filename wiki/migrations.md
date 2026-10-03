@@ -11848,10 +11848,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   every export, and metrics and logs endpoints failed provider construction, which an App turned
   into a WARN and a no-op provider for all three signals. The path is now the export path, used
   exactly; no path, or `/`, sends to `/v1/<signal>` (C72.2).
-- gist: OTLP endpoints that could never export booted silently: HTTP ones with userinfo, a
-  query, a fragment, an encoded slash or no host, and gRPC `grpc://`. They now fail `Validate`
-  with a sentinel that never echoes the endpoint; inside an App that disables every signal
-  (C72.3, ADR-137).
+- gist: OTLP endpoints that could never export were accepted: HTTP ones with userinfo, a query,
+  a fragment, an encoded slash or no host (a trace one booted and dropped every span; a metrics
+  or logs one already failed construction), and gRPC `grpc://`, which booted and failed every
+  RPC. They now fail `Validate` with a sentinel that never echoes the endpoint; inside an App
+  that disables every signal (C72.3, ADR-137).
 
 ### [C72.1] OpenTelemetry Go moves to v1.47.0: `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read and attribute values nested deeper than 64 export empty · silent-behavior · when: match
 
@@ -11933,13 +11934,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: an `observability.{trace,metrics,logs}.endpoint` (env `OBSERVABILITY_<SIGNAL>_ENDPOINT`)
   on protocol `http` with userinfo (`user:pass@`), a query, a fragment, an encoded slash (`%2F`)
   or another escape the path does not need, or no host (`http:///v1/traces`); or one on protocol
-  `grpc` starting with `grpc://`.
-- scope: these forms booted and never exported. The HTTP ones reached the exporter as one host
-  string ([C72.2]), and `grpc://host:4317` failed every RPC with "too many colons". They now
-  fail `Validate` with `ErrInvalidEndpointFormat`, a sentinel that never echoes the endpoint, so
-  a userinfo password does not reach the startup log. Inside an App, `Validate` runs during
-  provider construction, so a rejection is a WARN and a no-op provider for **every** signal, not
-  only the malformed one. **Unchanged**: `dns:///`, `unix:`, `unix-abstract:` and
+  `grpc` starting with `grpc://` in any letter case.
+- scope: these forms never exported. The HTTP ones reached the exporter as one host string
+  ([C72.2]): a trace endpoint booted and failed every export, and a metrics or logs endpoint
+  already failed construction. `grpc://host:4317` booted and failed every RPC with "too many
+  colons". They now fail `Validate` with `ErrInvalidEndpointFormat`, a sentinel that never
+  echoes the endpoint, so a userinfo password does not reach the startup WARN. Inside an App,
+  `Validate` runs during provider construction, so a rejection is a WARN and a no-op provider for
+  **every** signal: new for a trace or `grpc://` endpoint, which used to silence only its own
+  signal. **Unchanged**: `dns:///`, `unix:`, `unix-abstract:` and
   `passthrough:///` gRPC targets stay accepted, and a scheme that disagrees with `insecure` is
   still accepted.
 - gate: match = a detect hit. no-match = otherwise.

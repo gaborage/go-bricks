@@ -1,8 +1,8 @@
 # ADR-137: OTLP Endpoint and TLS Config Are Authoritative Over `OTEL_*` Env
 
-- **Status**: Accepted
-- **Date**: 2026-10-02
-- **Related**: [ADR-062](adr_062_database_tls_fail_closed.md) · [ADR-085](adr_085_framework_owned_flyway_url.md) · [ADR-108](adr_108_cache_redis_tls.md) (the fail-closed transport family) · [New Relic OTLP](new_relic_otlp.md) (the "derives TLS solely from the `insecure` field" contract)
+**Status:** Accepted
+**Date:** 2026-10-02
+**Related:** [ADR-062](adr_062_database_tls_fail_closed.md) · [ADR-085](adr_085_framework_owned_flyway_url.md) · [ADR-108](adr_108_cache_redis_tls.md) (the fail-closed transport family) · [New Relic OTLP](new_relic_otlp.md) (the "derives TLS solely from the `insecure` field" contract)
 
 ## Context
 
@@ -25,9 +25,11 @@ port 80, with the vendor `api-key` header in cleartext. That breaks the contract
 [new_relic_otlp.md](new_relic_otlp.md) states: GoBricks "derives TLS solely from the
 `insecure` field".
 
-Endpoint grammar had the same blind spot. An HTTP endpoint with userinfo, a query, a fragment,
-an encoded slash or no host booted and never exported ([C72.2]); a gRPC `grpc://host:4317`
-booted and failed every RPC with "too many colons".
+Endpoint grammar had a blind spot too. An HTTP endpoint with userinfo, a query, a fragment, an
+encoded slash or no host could never export: the trace exporter booted and failed every export,
+while the metrics and logs exporters failed construction, which an App turns into a no-op for
+all three signals ([C72.2]). A gRPC `grpc://host:4317` booted and failed every RPC with "too
+many colons".
 
 This is not an attacker boundary: whoever controls the environment already controls
 `OBSERVABILITY_<SIGNAL>_INSECURE` and `OBSERVABILITY_<SIGNAL>_ENDPOINT`, which GoBricks reads
@@ -62,8 +64,8 @@ scheme and path.**
    - HTTP: no `http://`/`https://` scheme (as before), unparseable, no host, userinfo, a
      query, a fragment, or an encoded slash or other non-canonical escape (`u.RawPath != ""`),
      which no exporter can send as written;
-   - gRPC: an `http://`/`https://` scheme (as before) and `grpc://`. `dns:///`, `unix:`,
-     `unix-abstract:` and `passthrough:///` targets stay accepted.
+   - gRPC: an `http://`/`https://` scheme (as before) and `grpc://`, in any letter case.
+     `dns:///`, `unix:`, `unix-abstract:` and `passthrough:///` targets stay accepted.
 5. **No scheme/insecure mismatch rejection.** `http://` with `insecure: false` exports over
    TLS and `https://` with `insecure: true` in plaintext, as documented.
 
@@ -77,7 +79,7 @@ Environment channels after this change:
 | Kept | `*_HEADERS` | only when the config sets no headers for that signal |
 | Kept | `*_CERTIFICATE`, `*_CLIENT_CERTIFICATE`, `*_CLIENT_KEY` | TLS path only; they can never turn TLS on. With `insecure: true`, an env CA still makes HTTP exporter construction fail (upstream, unchanged) |
 | Kept | `*_TIMEOUT` | |
-| Kept | gRPC `*_COMPRESSION` other than gzip | |
+| Kept | gRPC `*_COMPRESSION` | only when the config compression is not gzip |
 
 ## Alternatives considered
 
@@ -101,8 +103,9 @@ Environment channels after this change:
   YAML. See [migrations.md](migrations.md) `[C72.4]`; the endpoint rejections are `[C72.3]`.
 - **A rejection in an App is total.** `Validate` runs inside provider construction, and the
   bootstrap turns a construction failure into a WARN plus a no-op provider for **every**
-  signal. A malformed endpoint on one signal therefore stops traces, metrics and logs alike,
-  where before only that signal was dead.
+  signal. A malformed trace endpoint or a `grpc://` endpoint, which used to boot and silence
+  only its own signal, now stops traces, metrics and logs alike; a malformed metrics or logs
+  HTTP endpoint already did, at construction.
 - Six exporters, both downgrade vectors, every gRPC target form, the kept channels and the
   protobuf pin are covered by tests that observe the transport on the wire.
 
