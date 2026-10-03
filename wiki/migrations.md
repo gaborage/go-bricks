@@ -12000,10 +12000,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the scheme): TLS now follows that key alone. A per-signal URL whose path was a bare `/` exported
   to the collector's root path, which config cannot express (`/` means `/v1/<signal>`); have that
   collector serve `/v1/<signal>` or give its full path. For gRPC, drop an `http://`/`https://`
-  scheme and keep `host:port`; a `unix:`, `unix-abstract:`, `dns:///` or `passthrough:///` target
-  moves as written. Drop `*_PROTOCOL`: it never chose the transport (that is
-  `observability.<signal>.protocol`); it only switched trace export to JSON, which no longer
-  exists.
+  scheme and keep `host:port`, setting `OBSERVABILITY_<SIGNAL>_INSECURE=true` when the dropped
+  scheme was `http://` and leaving it false for `https://`; a `unix:`, `unix-abstract:`, `dns:///`
+  or `passthrough:///` target moves as written. Drop `*_PROTOCOL`: it never chose the transport
+  (that is `observability.<signal>.protocol`); it only switched trace export to JSON, which no
+  longer exists.
 - verify: boot with the old variables still exported: the collector receives at the configured
   endpoint, over TLS wherever `insecure` is false.
 - ref: [ADR-137](adr_137_otlp_transport_config_authoritative.md) · `observability/provider.go`
