@@ -870,11 +870,11 @@ type countingMetricExporter struct {
 	sizes []int
 }
 
-func (e *countingMetricExporter) Export(_ context.Context, rm *metricdata.ResourceMetrics) error {
+func (e *countingMetricExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.sizes = append(e.sizes, countDataPoints(rm))
-	return nil
+	return e.inMemoryMetricExporter.Export(ctx, rm)
 }
 
 func (e *countingMetricExporter) exportSizes() []int {
