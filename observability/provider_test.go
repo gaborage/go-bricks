@@ -1337,17 +1337,15 @@ func testOTLPHTTPURLPaths(t *testing.T, signal string, export func(t *testing.T,
 		{name: "gateway_prefix_used_exactly", path: "/otlp" + defaultPath, wantPath: "/otlp" + defaultPath},
 		{name: "signal_env_path_ignored", envPath: "/env" + defaultPath, wantPath: defaultPath},
 		{name: "generic_env_path_with_trailing_slash_ignored", envPath: "/env/", genericEnv: true, wantPath: defaultPath},
-		{name: "config_path_beats_env_path", path: "/cfg" + defaultPath, envPath: "/env" + defaultPath, wantPath: "/cfg" + defaultPath},
+		{name: "config_path_with_env_path_set", path: "/cfg" + defaultPath, envPath: "/env" + defaultPath, wantPath: "/cfg" + defaultPath},
 	}
-	signalEnv := "OTEL_EXPORTER_OTLP_" + strings.ToUpper(signal) + "_ENDPOINT"
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, rec := newOTLPPathServer(t)
-			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-			t.Setenv(signalEnv, "")
+			clearOTLPEnv(t, signal)
 			if tt.envPath != "" {
-				key := signalEnv
+				key := otlpSignalEnv(signal, "ENDPOINT")
 				if tt.genericEnv {
 					key = "OTEL_EXPORTER_OTLP_ENDPOINT"
 				}
@@ -1418,26 +1416,31 @@ func clearOTLPEnv(t *testing.T, signal string) {
 	}
 }
 
-// newTransportProbe listens on network/address and reports, per accepted
-// connection, whether the client opened with a TLS handshake record or in
-// plaintext. It never answers, so no export through it succeeds.
-func newTransportProbe(t *testing.T, network, address string) (ln net.Listener, opened <-chan string) {
+// transportProbe is a listener that reports, per accepted connection, whether
+// the client opened with a TLS handshake record or in plaintext. It never
+// answers, so no export through it succeeds.
+type transportProbe struct {
+	addr   string
+	opened <-chan string
+}
+
+func newTransportProbe(t *testing.T, network, address string) transportProbe {
 	t.Helper()
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), network, address)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
-	kinds := make(chan string, 16)
+	opened := make(chan string, 16)
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			go reportFirstByte(conn, kinds)
+			go reportFirstByte(conn, opened)
 		}
 	}()
-	return ln, kinds
+	return transportProbe{addr: ln.Addr().String(), opened: opened}
 }
 
 // reportFirstByte reads one byte from conn and reports "tls" for a TLS
@@ -1461,7 +1464,7 @@ func reportFirstByte(conn net.Conn, opened chan<- string) {
 
 // firstTransport builds the exporter, runs one export until the probe reports a
 // connection, then cancels it and returns how that connection opened.
-func firstTransport(t *testing.T, opened <-chan string, newExport otlpExportFactory, endpoint string) string {
+func firstTransport(t *testing.T, probe transportProbe, newExport otlpExportFactory, endpoint string) string {
 	t.Helper()
 	export, err := newExport(t, endpoint, false)
 	require.NoError(t, err)
@@ -1478,7 +1481,7 @@ func firstTransport(t *testing.T, opened <-chan string, newExport otlpExportFact
 	}()
 
 	select {
-	case kind := <-opened:
+	case kind := <-probe.opened:
 		return kind
 	case <-time.After(15 * time.Second):
 		t.Fatal("the exporter never connected to the probe")
@@ -1503,19 +1506,19 @@ func TestOTLPExportersEnvCannotDowngrade(t *testing.T) {
 		}
 		for _, v := range vectors {
 			t.Run(exp.name+"/"+v.name, func(t *testing.T) {
-				ln, opened := newTransportProbe(t, "tcp", "127.0.0.1:0")
+				probe := newTransportProbe(t, "tcp", "127.0.0.1:0")
 				clearOTLPEnv(t, exp.signal)
 				value := "true"
 				if v.endpoint {
-					value = "http://" + ln.Addr().String()
+					value = "http://" + probe.addr
 				}
 				t.Setenv(v.key, value)
 
-				endpoint := ln.Addr().String()
+				endpoint := probe.addr
 				if exp.http {
 					endpoint = "http://" + endpoint
 				}
-				assert.Equal(t, "tls", firstTransport(t, opened, exp.newExport, endpoint))
+				assert.Equal(t, "tls", firstTransport(t, probe, exp.newExport, endpoint))
 			})
 		}
 	}
@@ -1573,7 +1576,7 @@ func TestOTLPHTTPExportersRefuseUnsplittableEndpoint(t *testing.T) {
 			continue
 		}
 		t.Run(exp.name, func(t *testing.T) {
-			_, err := exp.newExport(t, "https://user:hunter2@collector:4318/v1/traces", false)
+			_, err := exp.newExport(t, "https://user@collector:4318/v1/traces", false)
 			assert.ErrorIs(t, err, ErrInvalidEndpointFormat)
 		})
 	}

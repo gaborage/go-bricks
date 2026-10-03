@@ -11981,6 +11981,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   when the signal has no config headers (metrics and logs inherit the trace headers);
   `*_CERTIFICATE`, `*_CLIENT_CERTIFICATE` and `*_CLIENT_KEY` on the TLS path; `*_TIMEOUT`. A
   scheme that disagrees with `insecure` is still accepted: TLS follows `insecure`.
+- class note: `breaking`, not `silent-behavior`: nothing fails to compile or start, but a
+  deployment that set its endpoint, path or TLS through `OTEL_EXPORTER_OTLP_*` stops exporting
+  where it used to, and nothing reports it at startup.
 - gate: match = a detect hit. no-match = otherwise.
 - apply: in the same rollout as the bump (before it, a path-bearing config endpoint does not
   export, [C72.2]), move each value to the framework's keys, `OBSERVABILITY_<SIGNAL>_ENDPOINT`
