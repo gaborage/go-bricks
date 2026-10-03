@@ -11970,17 +11970,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   platform or sidecar defaults): `git grep -nE 'OTEL_EXPORTER_OTLP_([A-Z]+_)?(ENDPOINT|INSECURE|PROTOCOL)'`,
   then each environment's live variables.
 - scope: the HTTP exporters read those variables themselves, and the framework never marked a
-  transport secure, so `*_INSECURE=true`, or an env endpoint with an `http://` or `unix://`
-  scheme (for logs, any scheme but `https`), turned an exporter configured with
-  `insecure: false` into plaintext, vendor headers included; an env endpoint also supplied the
-  path, and `*_PROTOCOL=http/json` switched trace export to JSON. Now each HTTP exporter gets an
-  explicit URL built from the configured endpoint, its scheme from `insecure` and its path as
-  configured or `/v1/<signal>`, and trace export is always protobuf. A deployment that relied on
-  an env path or env insecure gets no startup error: it exports to the configured path over TLS,
-  and if the collector does not serve that, every export fails at runtime. **Kept**: `*_HEADERS`
-  when the signal has no config headers (metrics and logs inherit the trace headers);
-  `*_CERTIFICATE`, `*_CLIENT_CERTIFICATE` and `*_CLIENT_KEY` on the TLS path; `*_TIMEOUT`. A
-  scheme that disagrees with `insecure` is still accepted: TLS follows `insecure`.
+  transport secure, so `*_INSECURE=true`, or an env endpoint with an `http://` or `unix://` scheme
+  (for logs, any scheme but `https`), turned an exporter configured with `insecure: false` into
+  plaintext, vendor headers included; an env endpoint also supplied the path, and
+  `*_PROTOCOL=http/json` switched trace export to JSON. Now each HTTP exporter gets an explicit
+  URL built from the configured endpoint, its scheme from `insecure` and its path as configured or
+  `/v1/<signal>`, and trace export is always protobuf. A deployment that relied on an env path or
+  env insecure gets no startup error: it exports to the configured path, over TLS unless
+  `insecure: true`, and if the collector does not serve that, every export fails at runtime.
+  **Kept**: `*_HEADERS` when the signal has no config headers (metrics and logs inherit the trace
+  headers); `*_CERTIFICATE`, `*_CLIENT_CERTIFICATE` and `*_CLIENT_KEY` on the TLS path;
+  `*_TIMEOUT`. A scheme that disagrees with `insecure` is still accepted: TLS follows `insecure`.
 - class note: `breaking`, not `silent-behavior`: nothing fails to compile or start, but a
   deployment that set its endpoint, path or TLS through `OTEL_EXPORTER_OTLP_*` stops exporting
   where it used to, and nothing reports it at startup.
