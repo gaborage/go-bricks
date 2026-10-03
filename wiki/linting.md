@@ -63,6 +63,7 @@ Drop the two ADR-083 `forbidigo` patterns too (`trace.Span.RecordError`, `semcon
 they enforce a GoBricks architecture decision and mean nothing outside this repo. Keep the
 `otel.(Logger|GetLoggerProvider|SetLoggerProvider)` pattern, with `analyze-types: true`, if
 your app logs through GoBricks: it registers no global LoggerProvider, so those calls drop records.
+Rewrite its `msg`, which points at a GoBricks path.
 
 The `testifylint` block is portable in full — copy it as it stands:
 
