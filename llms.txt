@@ -5590,6 +5590,10 @@ HTTP path rule: the path is the export path, used exactly (never joined with `/v
 - ❌ `otlp.example.com:4318` + `protocol: http` (missing scheme; the path is optional)
 - ✅ `https://otlp.example.com:4318/v1/traces` + `protocol: http`
 
+### OTLP Env Precedence
+
+The configured `endpoint` and `insecure` keys alone decide each exporter's host, path and TLS (ADR-137). The exporters' own variables are cut: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_INSECURE`, `OTEL_EXPORTER_OTLP_PROTOCOL` and their `_TRACES_`/`_METRICS_`/`_LOGS_` variants (trace HTTP export is always protobuf). Still applied: `*_HEADERS` when the signal has no headers of its own or inherited (metrics and logs inherit `trace.headers`), `*_CERTIFICATE`/`*_CLIENT_CERTIFICATE`/`*_CLIENT_KEY` on the TLS path, `*_TIMEOUT`, gRPC compression when the config compression is not gzip. Set endpoint or TLS from the environment with `OBSERVABILITY_<SIGNAL>_ENDPOINT` / `OBSERVABILITY_<SIGNAL>_INSECURE` (they override YAML).
+
 ### Resource Attributes & Export Behavior
 
 The framework attaches `service.name`, `service.version`, and `deployment.environment.name` to every signal's resource. `service.instance.id` and `process.*`/`host.*` attributes are NOT auto-attached by go-bricks, and it exposes no resource seam — set them through `OTEL_RESOURCE_ATTRIBUTES` if you need them. Override `service.name`/`service.version` via `observability.service.{name,version}`.

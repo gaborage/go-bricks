@@ -209,7 +209,7 @@ observability:
 | `trace.enabled` | bool | `true` | Enable/disable tracing |
 | `trace.endpoint` | string | `"stdout"` | Endpoint for trace export: `stdout`, `http(s)://host:port[/path]` (HTTP) or `host:port` (gRPC). An HTTP path is used exactly; none, or `/`, sends to `/v1/traces` |
 | `trace.protocol` | string | `"http"` | OTLP protocol: "http" or "grpc" |
-| `trace.insecure` | bool | `false` | Use insecure connection (no TLS) |
+| `trace.insecure` | bool | `false` | Use insecure connection (no TLS). Decides TLS alone: the endpoint scheme and `OTEL_EXPORTER_OTLP_*` endpoint/insecure variables never change it |
 | `trace.headers` | map[string]string | - | Custom headers for authentication |
 | `trace.sample.rate` | float64 | `1.0` | Sampling rate (0.0 = none, 1.0 = all) |
 | `trace.batch.timeout` | duration | `500ms (development/stdout) / 5s (production)` | Time to wait before sending batch |
@@ -224,12 +224,14 @@ observability:
 | `metrics.enabled` | bool | `true` | Enable/disable metrics |
 | `metrics.endpoint` | string | `"stdout"` | Endpoint for metric export: `stdout`, `http(s)://host:port[/path]` (HTTP) or `host:port` (gRPC). An HTTP path is used exactly; none, or `/`, sends to `/v1/metrics` |
 | `metrics.protocol` | string | Fallback to `trace.protocol` or `"http"` | OTLP protocol for metrics transport |
-| `metrics.insecure` | bool | Fallback to `trace.insecure` | Use insecure connection (no TLS) |
+| `metrics.insecure` | bool | Fallback to `trace.insecure` | Use insecure connection (no TLS); decides TLS alone, like `trace.insecure` |
 | `metrics.headers` | map[string]string | Fallback to `trace.headers` | Custom headers for metrics authentication |
 | `metrics.interval` | duration | `10s` | Metric export interval |
 | `metrics.export.timeout` | duration | `10s (development/stdout) / 60s (production)` | Maximum time for metric export operation |
 | `metrics.max.batch.size` | int | `0` (no cap) | Maximum metric data points per Export call. With a positive size, collection gets one `metrics.export.timeout` and each of the `ceil(points/size)` batches gets its own, so a cycle can take `(1 + ceil(points/size)) × metrics.export.timeout`; uncapped, collection and the single export share one timeout. `0` means no cap, unlike `trace.max.batch.size` and `logs.max.batch.size`, where `0` becomes 512. Negative values fail validation |
 | `metrics.cardinalitylimit` | int | unset (`OTEL_GO_X_CARDINALITY_LIMIT`, else the SDK default 2000) | Attribute sets each instrument keeps per reader: a limit of L keeps L-1 sets plus one `otel.metric.overflow=true` series, a lifetime cap for synchronous instruments under cumulative temporality and a per-cycle cap under delta. Unset passes no option, the one metrics key without an explicit default. Zero or negative fails validation |
+
+**Logs:** `logs.insecure` does not inherit `trace.insecure`: it defaults to `false` on its own.
 
 ## Advanced Usage
 

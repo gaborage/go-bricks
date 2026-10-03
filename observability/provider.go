@@ -397,6 +397,11 @@ func (p *provider) createTraceExporter(ctx context.Context) (sdktrace.SpanExport
 	}
 }
 
+// otlpGRPCSecurePlaceholder goes to WithEndpointURL ahead of the real WithEndpoint:
+// it is the only option that marks the transport secure explicitly, so no
+// OTEL_EXPORTER_OTLP_*INSECURE or http:// endpoint variable can win.
+const otlpGRPCSecurePlaceholder = "https://localhost"
+
 // parseOTLPHTTPEndpoint parses an OTLP/HTTP endpoint and reports whether it splits
 // cleanly into the host and the exact path an exporter can send.
 func parseOTLPHTTPEndpoint(endpoint string) (*url.URL, bool) {
@@ -469,9 +474,7 @@ func (p *provider) createOTLPGRPCExporter(ctx context.Context) (sdktrace.SpanExp
 	debugLogger.Printf("Creating OTLP gRPC trace exporter: endpoint=%s, insecure=%v, compression=%s, headers_count=%d",
 		p.config.Trace.Endpoint, p.config.Trace.Insecure, p.config.Trace.Compression, len(p.config.Trace.Headers))
 
-	opts := []otlptracegrpc.Option{
-		otlptracegrpc.WithEndpoint(p.config.Trace.Endpoint),
-	}
+	var opts []otlptracegrpc.Option
 
 	// Configure compression
 	if p.config.Trace.Compression == CompressionGzip {
@@ -483,6 +486,8 @@ func (p *provider) createOTLPGRPCExporter(ctx context.Context) (sdktrace.SpanExp
 	if p.config.Trace.Insecure {
 		opts = append(opts, otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()))
 		debugLogger.Println("Using insecure gRPC credentials (no TLS)")
+	} else {
+		opts = append(opts, otlptracegrpc.WithEndpointURL(otlpGRPCSecurePlaceholder))
 	}
 
 	// Add custom headers (e.g., for authentication)
@@ -490,6 +495,8 @@ func (p *provider) createOTLPGRPCExporter(ctx context.Context) (sdktrace.SpanExp
 		opts = append(opts, otlptracegrpc.WithHeaders(p.config.Trace.Headers))
 		debugLogger.Printf("Added %d custom headers to gRPC exporter", len(p.config.Trace.Headers))
 	}
+
+	opts = append(opts, otlptracegrpc.WithEndpoint(p.config.Trace.Endpoint))
 
 	exporter, err := otlptracegrpc.New(ctx, opts...)
 	if err != nil {

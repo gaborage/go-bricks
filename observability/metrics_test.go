@@ -1061,6 +1061,16 @@ func newMetricHTTPExport(t *testing.T, endpoint string, insecure bool) (func(con
 	return func(ctx context.Context) error { return exporter.Export(ctx, probeResourceMetrics()) }, nil
 }
 
+func newMetricGRPCExport(t *testing.T, endpoint string, insecure bool) (func(context.Context) error, error) {
+	p := &provider{config: Config{Metrics: MetricsConfig{Endpoint: endpoint, Compression: CompressionNone}}}
+	exporter, err := p.createOTLPGRPCMetricExporter(context.Background(), insecure, nil)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { shutdownWithin(exporter.Shutdown) })
+	return func(ctx context.Context) error { return exporter.Export(ctx, probeResourceMetrics()) }, nil
+}
+
 func probeResourceMetrics() *metricdata.ResourceMetrics {
 	return &metricdata.ResourceMetrics{ScopeMetrics: []metricdata.ScopeMetrics{{
 		Metrics: []metricdata.Metrics{{
