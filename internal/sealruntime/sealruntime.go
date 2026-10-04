@@ -5,8 +5,8 @@
 // keystore — so a process that never imports messaging/sealed carries no sealing code.
 // The app already links go-jose through HTTP jose; the import gate keeps `messaging`
 // itself jose-free. It lives in the module's root internal tree because app and messaging
-// both import it, so no code outside go-bricks can register a codec or configure the
-// facts (ADR-139).
+// both import it, so only go-bricks code can call Register and Configure; two indirect
+// re-aim paths stay open (#2010, ADR-139).
 package sealruntime
 
 import (
