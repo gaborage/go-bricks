@@ -164,11 +164,11 @@ never seals, verifies or reaches a broker.
   whose document does not decode into `T`, therefore passes the door. The consumer refuses those decrypt and decode
   failures (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`) into the DLQ. A body signed by
   the producer's own sign key that carries a cleartext case-fold twin of the sealed Subject
-  member (`"card"` sealed, `"Card"` cleartext) is refused by neither side today: `Open` and
-  `Verify` accept it, only the sealer refuses twins, and `Seal`/`SealDocument` never produce
-  one. A follow-up issue tracks it. Only a holder of the producer's sign private key can mint
-  any of these, and since the door admits only a sign generation the producer holds with its
-  private key (#1898), that holds; the residual is accepted.
+  member (`"card"` sealed, `"Card"` cleartext) is no longer part of this residual: since #1897
+  `Verify`, and so `PublishSealed`, refuses such stored bytes as `SEAL_PAYLOAD_UNDECODABLE`
+  rule 10, non-recoverable (ADR-097 2026-10-03 amendment). Only a holder of the producer's sign
+  private key can mint any of these, and since the door admits only a sign generation the producer
+  holds with its private key (#1898), that holds; the residual is accepted.
 
 ## Alternatives considered
 

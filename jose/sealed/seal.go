@@ -98,7 +98,7 @@ func sealCore(plain []byte, spec *Spec, opts *Options) (data []byte, jti string,
 	if err != nil {
 		return nil, "", err
 	}
-	span, err := pinSubject(plain, spec.SubjectPath)
+	span, err := locateSubject(plain, spec.SubjectPath)
 	if err != nil {
 		return nil, "", sealError(CodeDocumentInvalid, fmt.Sprintf("cannot pin subject member %q", spec.SubjectPath), err)
 	}

@@ -15,6 +15,30 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-10-03, #1897):** rule 10 now also requires **no clear case-fold twin of the
+> Subject**. The case-fold rule the 2026-09-04 amendment ran on the serialized bytes for the
+> sealer now runs for every opener door as well — `Open`, `OpenDocument` and `Verify` — because
+> they share the one rule-10 subject walk (`locateSubject`, `jose/sealed/splice.go`). The
+> predicate is Unicode simple case folding (`strings.EqualFold`, the fold `encoding/json` applies
+> on decode): a top-level member whose name differs from the Subject member's name but equals it
+> under that fold is refused, in either member order and any spelling. The three opener doors
+> refuse identically: sentinel `ErrOpenFailed`, `*OpenError` code `SEAL_PAYLOAD_UNDECODABLE`,
+> rule 10, no `layer` detail, cause `errSubjectCaseFoldTwin`, message
+> `cannot pin subject member "<path>"` — the declared subject path only, never the twin's name
+> or any document byte. That is the code and rule the opener already returned for an
+> exact-duplicate Subject, so callers matching `Err.Code` need no change and the open-failure
+> metric gains no label value. The sealer is unchanged: `Seal`/`SealDocument` still refuse with
+> `SEAL_DOCUMENT_INVALID`; `ScanType` refuses a declared namesake with `SEAL_TAG_SUBJECT_INVALID`. Downstream, the sealed AMQP consumer treats the
+> refusal as non-recoverable (nack without requeue, into the DLQ), `Publisher[T].PublishSealed`
+> returns a non-recoverable `messaging.SealOpenRefusedError` and does not publish, and
+> `cmd/open-event` refuses with the code. On the consume path this detects and does not
+> prevent: the cleartext twin has already crossed the broker, and the refused body lands in the
+> DLQ in the clear, so a twin refusal in the DLQ is cleartext cardholder data at rest to scrub,
+> never to replay. Publication is prevented only at the `PublishSealed` gate. A clear copy under
+> a name that does not case-fold to the Subject, or nested below the top level, is not covered.
+> This narrows `[C63.5]`'s "`Open` is untouched": a message carrying a twin no longer opens.
+> This amendment's change is `[C72.11]`, breaking.
+>
 > **Amended (2026-10-03, [ADR-139](adr_139_sealing_seam_framework_only.md)):** the seam moves
 > to root `internal/sealruntime`, and the three exported sealing hooks and their alias family are
 > deleted. `messaging/sealed`'s blank import is the
@@ -142,7 +166,7 @@
 > **Amended (2026-09-04, #1408):** a second door, `jose/sealed.SealDocument` with
 > `NewDocumentSpec`, seals an already-serialized document for tooling (`cmd/seal-event`) and
 > JSON-fixture tests — same envelope, same invariants, the caller's bytes signed verbatim
-> except the Subject value. The typed door stays the production path. The G9 case-fold twin
+> except the Subject value. The typed door stays the production path. The case-fold twin
 > rule now runs on the serialized bytes for BOTH doors, closing the gap where a custom
 > `MarshalJSON` emitted a clear twin the struct scan never saw (`[C63.5]`, breaking).
 
@@ -335,7 +359,8 @@ non-empty, `sp` non-empty array) else `SEAL_HEADER_SLOT_INVALID` with a `slot` d
 carrying presence and length only (G7); (7) `etyp`; (8) `tid`; (9) `sp` manifest;
 (10) inner JWE checks incl. `iss` == outer kid, family pin, PRIVATE resolution, decrypt —
 the inner layer reuses the outer codes with a `layer: jwe` detail, and an unparseable
-payload document or a non-string Subject member is `SEAL_PAYLOAD_UNDECODABLE`; (11) splice
+payload document or a non-string Subject member is `SEAL_PAYLOAD_UNDECODABLE`, as is a
+duplicated Subject or a clear case-fold twin of it (2026-10-03 amendment); (11) splice
 and decode; (12) envelope. Rules 1–4 run on the peeked, still unauthenticated protected
 header. `tid` truth table (rule 8): shared tenancy — a signed `tid` is REQUIRED, absent is
 poison, present is equality-checked against the carrier's tenant; shared tenancy with the

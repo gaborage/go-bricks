@@ -3,6 +3,8 @@ package sealed
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -39,28 +41,56 @@ func TestLocateSubjectFindsSpanExactly(t *testing.T) {
 	}
 }
 
-// TestLocateSubjectIgnoresCaseFoldTwins is the opener's half of the G9 rule: walkToSubject
-// refuses a clear twin only for the sealer (pinSubject passes true), so locateSubject — the
-// door Open goes through at rule 10 — must keep returning the span. Without this, a change
-// that made the opener ask for the rule too would refuse messages sealed before the rule
-// existed, and no other test would notice.
-func TestLocateSubjectIgnoresCaseFoldTwins(t *testing.T) {
+// TestLocateSubjectRefusesCaseFoldTwins pins rule 10's case-fold rule on the one walk the
+// sealer and the three opener doors share: a clear member whose name case-folds to the Subject
+// is refused in either position and any spelling.
+func TestLocateSubjectRefusesCaseFoldTwins(t *testing.T) {
 	cases := []struct {
-		name  string
-		doc   string
-		value string
+		name string
+		doc  string
 	}{
-		{name: "twin_before_the_subject", doc: `{"Card":"clear","card":"sealed"}`, value: `"sealed"`},
-		{name: "twin_after_the_subject", doc: `{"card":"sealed","CARD":"clear"}`, value: `"sealed"`},
+		{name: "twin_before_the_subject", doc: `{"Card":"clear","card":"sealed"}`},
+		{name: "twin_after_the_subject", doc: `{"card":"sealed","Card":"clear"}`},
+		{name: "upper_case_twin", doc: `{"card":"sealed","CARD":"clear"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			span, err := locateSubject([]byte(tc.doc), "card")
-			require.NoError(t, err, "the opener judges no case-fold twin")
-			assert.Equal(t, tc.value, string(span.value))
+			_, err := locateSubject([]byte(tc.doc), "card")
+			assert.ErrorIs(t, err, errSubjectCaseFoldTwin)
+		})
+	}
+}
 
-			_, sealErr := pinSubject([]byte(tc.doc), "card")
-			assert.ErrorIs(t, sealErr, errSubjectCaseFoldTwin, "the sealer does")
+// TestLocateSubjectTwinRuleAgreesWithDecode ties the twin predicate to how Open's rule-11
+// decode matches member names: a member is refused exactly when encoding/json would decode it
+// into the Subject field, so a decoder change cannot silently narrow the rule.
+func TestLocateSubjectTwinRuleAgreesWithDecode(t *testing.T) {
+	cases := []struct {
+		name, member, path string
+	}{
+		{name: "title_case", member: "Card", path: "card"},
+		{name: "upper_case", member: "CARD", path: "card"},
+		{name: "mixed_case", member: "cArD", path: "card"},
+		{name: "kelvin_sign", member: "\u212Aey", path: "key"},
+		{name: "long_s", member: "\u017Fum", path: "sum"},
+		{name: "suffixed", member: "cards", path: "card"},
+		{name: "different_letter", member: "kard", path: "card"},
+		{name: "snake_variant", member: "ca_rd", path: "card"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			member, err := json.Marshal(tc.member)
+			require.NoError(t, err)
+			path, err := json.Marshal(tc.path)
+			require.NoError(t, err)
+
+			field := reflect.StructField{Name: "Subject", Type: reflect.TypeFor[string](), Tag: reflect.StructTag(`json:` + string(path))}
+			target := reflect.New(reflect.StructOf([]reflect.StructField{field}))
+			require.NoError(t, json.Unmarshal([]byte(`{`+string(member)+`:"clear"}`), target.Interface()))
+			decodes := target.Elem().Field(0).String() == "clear"
+
+			_, walkErr := locateSubject([]byte(`{`+string(path)+`:"sealed",`+string(member)+`:"clear"}`), tc.path)
+			assert.Equal(t, decodes, errors.Is(walkErr, errSubjectCaseFoldTwin), "refused iff the decode reads the member as the subject")
 		})
 	}
 }

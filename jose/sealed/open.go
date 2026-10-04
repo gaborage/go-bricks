@@ -172,8 +172,9 @@ func (e *OpenError) Unwrap() error {
 //	 7 etyp == declared EventType                       SEAL_EVENT_TYPE_MISMATCH
 //	 8 tid vs TenantExpectation                         SEAL_TENANT_MISMATCH
 //	 9 sp == declared sealed set                        SEAL_MANIFEST_MISMATCH
-//	10 payload object, Subject is a JWE, inner header,  SEAL_PAYLOAD_UNDECODABLE / outer codes with layer=jwe /
-//	   iss == kid, encrypt family, PRIVATE key, decrypt SEAL_AUTHORSHIP_MISMATCH / SEAL_DECRYPT_FAILED
+//	10 payload object, Subject once and no case-fold   SEAL_PAYLOAD_UNDECODABLE / outer codes with layer=jwe /
+//	   twin, Subject is a JWE, inner header, iss == kid, SEAL_AUTHORSHIP_MISMATCH / SEAL_DECRYPT_FAILED
+//	   encrypt family, PRIVATE key, decrypt
 //	11 splice the plaintext back, unmarshal into out    SEAL_PAYLOAD_UNDECODABLE
 //	12 Envelope
 //
