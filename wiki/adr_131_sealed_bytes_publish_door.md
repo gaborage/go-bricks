@@ -42,7 +42,7 @@ One setup stops working: destroying sign `v<N>`'s private key early and keeping 
 entry to drain stored `v<N>` bytes through the door. Keep the pair until the backlog drains, or
 re-`Seal` from the source record. Encrypt-family generations are out of reach of the rule, since
 the producer holds all of them public-only, the active one included, so their step 5 removal
-stays load-bearing. See [migrations.md](migrations.md) `[C73.2]`.
+stays load-bearing. See [migrations.md](migrations.md) `[C72.10]`.
 
 ## Context
 
@@ -188,7 +188,7 @@ never seals, verifies or reaches a broker.
 ## Consequences
 
 - Breaking at compile time (`fix(messaging)!:`): see [migrations.md](migrations.md) `[C70.15]`;
-  and, per the #1898 amendment, a runtime refusal rather than a compile break: `[C73.2]`.
+  and, per the #1898 amendment, a runtime refusal rather than a compile break: `[C72.10]`.
 - A republish is deduplicated by the consumer only within `inbox.retentionperiod` (7 days by
   default), and only while the bytes' sign and encrypt generations are still provisioned there.
   After step 5, or once the producer's sign private key is gone, the producer refuses them, and
