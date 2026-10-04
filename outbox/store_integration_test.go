@@ -196,9 +196,19 @@ func TestOutboxStoreManagedAlterIntegration(t *testing.T) {
 	assert.Greater(t, after[3].Seq, after[2].Seq, "the identity was advanced past the backfill")
 }
 
-// TestOutboxRelayTwoInstancesOneLedgerIntegration is the claim the whole leader mechanism
-// exists for: two relays against ONE table publish every row EXACTLY ONCE and drain every key
-// completely. The exclusion is the database's, not the code's, so no fake can prove it.
+// TestOutboxRelayTwoInstancesOneLedgerIntegration pins what the Leader row is for: two Relays
+// against ONE Ledger are admitted one drainer per tick, so in this fault-free run each row is
+// published once and every key drains completely. The exclusion is the database's, not the
+// code's, so no fake can prove it.
+//
+// The premise is fault-free: no publish or mark fails, so one Leader per tick sends each row
+// once. That describes this test, not a delivery guarantee — outbox delivery stays
+// at-least-once, and a row whose publish succeeded but whose mark failed is published again on
+// the next cycle (outcomePublishedUnrecorded).
+//
+// Each Relay keeps calling Execute until the Ledger has no pending rows, under one deadline:
+// a cycle drains one batch, and a cycle that finds the other Relay leading returns at once,
+// so a fixed cycle budget can run out before the Ledger is empty.
 //
 // It deliberately does NOT assert per-key publish ORDER: the AMQP fake records routing keys,
 // and every row of one key carries the same routing key, so the recording cannot distinguish
@@ -233,16 +243,13 @@ func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 	relayA, amqpA := newRelay()
 	relayB, amqpB := newRelay()
 
+	deadline := time.Now().Add(itPollTimeout)
 	var wg sync.WaitGroup
 	for _, r := range []*Relay{relayA, relayB} {
 		wg.Add(1)
 		go func(rel *Relay) {
 			defer wg.Done()
-			for range 10 {
-				// A cycle that finds another instance leading returns nil having done
-				// nothing; that is the mechanism working, not a failure.
-				assert.NoError(t, rel.Execute(newFakeJobCtx(conn)))
-			}
+			drainUntilEmpty(ctx, t, rel, store, conn, rows, deadline)
 		}(r)
 	}
 	wg.Wait()
@@ -250,7 +257,7 @@ func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 	published := append(append([]string{}, amqpA.PublishOrder...), amqpB.PublishOrder...)
 	assert.Len(t, published, rows, "every row published EXACTLY once across both relays")
 
-	// Every key drained completely rather than partially — a leader that stopped early or a
+	// Every key drained completely rather than partially — a drain cut off by the deadline or a
 	// key parked forever would show as a short count here.
 	perKey := map[string]int{}
 	for _, k := range published {
@@ -264,6 +271,34 @@ func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 	remaining, err := store.FetchPending(ctx, conn, rows)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "the ledger drained")
+}
+
+// drainUntilEmpty calls rel.Execute until the Ledger has no pending rows, failing the test
+// (off the test goroutine, so with t.Errorf) on an error or once deadline has passed.
+func drainUntilEmpty(ctx context.Context, t *testing.T, rel *Relay, store Store, conn dbtypes.Interface, rows int, deadline time.Time) {
+	t.Helper()
+	for {
+		// A cycle that finds another instance leading returns nil having done
+		// nothing; that is the mechanism working, not a failure.
+		if err := rel.Execute(newFakeJobCtx(conn)); err != nil {
+			t.Errorf("relay Execute: %v", err)
+			return
+		}
+		pending, err := store.FetchPending(ctx, conn, rows)
+		if err != nil {
+			t.Errorf("fetch pending: %v", err)
+			return
+		}
+		if len(pending) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("ledger not drained before the deadline: %d rows still pending", len(pending))
+			return
+		}
+		// Stands in for outbox.pollinterval, so a Relay that is not leading does not spin.
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // TestOutboxRelayDeposedLeaderStopsIntegration kills the leader's SESSION from another
