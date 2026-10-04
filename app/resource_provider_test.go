@@ -759,10 +759,7 @@ func (c *openHandleCounter) snapshot() (open, peak int) {
 	return c.open, c.peak
 }
 
-// TestForEachTenantBoundsOpenHandlesDuringASweep drives the real DbManager (max size 2) through
-// the per-tenant DB path for six tenants under an enclosing scope standing in for the job scope:
-// ForEachTenant keeps at most max size + 1 handles open; the same sweep on the job scope alone
-// keeps all six open until the job returns.
+// TestForEachTenantBoundsOpenHandlesDuringASweep sweeps six tenants through a real DbManager of max size 2.
 func TestForEachTenantBoundsOpenHandlesDuringASweep(t *testing.T) {
 	const maxSize = 2
 	tenants := []string{"t1", "t2", "t3", "t4", "t5", "t6"}

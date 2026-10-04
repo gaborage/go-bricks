@@ -41,12 +41,14 @@ func TestForEachTenantVisitsTenantsInOrderEachInItsOwnScope(t *testing.T) {
 }
 
 func TestForEachTenantNoTenantsCallsNothing(t *testing.T) {
-	for _, tenants := range [][]string{nil, {}} {
-		err := ForEachTenant(context.Background(), tenants, func(context.Context, string) error {
-			t.Errorf("fn called for an empty tenant list")
-			return nil
+	for name, tenants := range map[string][]string{"nil": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			err := ForEachTenant(context.Background(), tenants, func(context.Context, string) error {
+				t.Errorf("fn called for an empty tenant list")
+				return nil
+			})
+			require.NoError(t, err)
 		})
-		require.NoError(t, err)
 	}
 }
 

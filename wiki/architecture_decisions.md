@@ -423,6 +423,7 @@ unchanged and applications do not change**.
 Direct callers must capture and invoke it; unscoped contexts release immediately (non-leaking, unprotected).
 
 **Key Benefits:** An in-use handle is never closed — the M3 race is closed on every concurrent multi-tenant path (HTTP, consumers, jobs, outbox relay, inbox); no application-facing API change; robust under heavy eviction/`Remove` churn via the seed-lease hand-off
+
 Amended 2026-10-04 (#1866): `multitenant.ForEachTenant` runs a tenant-sweeping job's work in one fresh
 scope per tenant; the scope itself stays private.
 

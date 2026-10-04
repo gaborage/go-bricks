@@ -354,8 +354,10 @@ func (j *SweepJob) Execute(jobCtx scheduler.JobContext) error {
 		if err != nil {
 			return fmt.Errorf("tenant %q: %w", tenantID, err)
 		}
-		_, err = db.Exec(ctx, "DELETE FROM sessions WHERE expires_at < now()")
-		return err
+		if _, err := db.Exec(ctx, "DELETE FROM sessions WHERE expires_at < now()"); err != nil {
+			return fmt.Errorf("tenant %q: %w", tenantID, err)
+		}
+		return nil
 	})
 }
 ```
