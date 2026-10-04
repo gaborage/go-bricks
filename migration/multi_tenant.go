@@ -196,9 +196,10 @@ type MigratorIdentity struct {
 // 0 against 1521, Oracle's case-insensitive unquoted user and service names (app against APP),
 // distinct PostgreSQL roles with no role-level search_path (all land in public), and two
 // separate MigrateAll calls, which rely on Flyway's own lock. A type-less tenant under a typed
-// runner is keyed by its own username, which Flyway may not connect as: a possible false
-// negative, or a refusal fixed by setting the tenant's type. A tenant that claims a target and
-// then fails its own run still holds the claim.
+// runner gets none of its connection variables delivered, so its key may not be the target
+// Flyway connects to: a possible false negative; on a refusal, set the tenant's type so Flyway
+// connects as the keyed user, and a refusal that survives that is a real collision. A tenant
+// that claims a target and then fails its own run still holds the claim.
 var ErrDuplicateMigrationTarget = errors.New("migration: tenant resolves to a migration target another tenant of this run claimed")
 
 // ErrNoLister is returned when MigrateAll is called without a TenantLister.
@@ -274,11 +275,11 @@ func MigrateAll(
 // overlay credential is fleet-wide.
 func duplicateTargetError(tenantID, owner string) error {
 	if tenantID == owner {
-		return fmt.Errorf("%w: tenant %q is listed more than once; de-list the repeat, a re-run collides again",
+		return fmt.Errorf("%w: tenant %q is listed more than once; de-list the repeat (a re-run collides again)",
 			ErrDuplicateMigrationTarget, tenantID)
 	}
 	return fmt.Errorf("%w: tenant %q resolves to the same migration target as tenant %q; give each tenant a distinct "+
-		"postgresql.schema or migrator role, or de-list the alias, a re-run collides again", ErrDuplicateMigrationTarget, tenantID, owner)
+		"postgresql.schema or migrator role, or de-list the alias; a re-run collides again", ErrDuplicateMigrationTarget, tenantID, owner)
 }
 
 func validateMigratorIdentity(identity *MigratorIdentity) error {

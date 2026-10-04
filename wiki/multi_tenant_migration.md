@@ -278,9 +278,9 @@ DNS aliases (a CNAME, or an IP against a name), an Oracle port of 0 against
 1521, Oracle's case-insensitive unquoted user and service names (`app` against
 `APP`), distinct PostgreSQL roles with no role-level `search_path` (all land in
 `public`), and two separate `MigrateAll` calls, which rely on Flyway's own lock,
-are missed. A type-less tenant under a typed runner is keyed by its own
-username, which Flyway may not connect as: a possible false negative, or a
-refusal fixed by setting the tenant's `type`. In the shared-migrator
+are missed. A type-less tenant under a typed runner gets none of its connection
+variables delivered, so its key may not be the target Flyway connects to: a
+possible false negative; on a refusal, set the tenant's `type` so Flyway connects as the keyed user; a refusal that survives that is a real collision ([#2019](https://github.com/gaborage/go-bricks/issues/2019)). In the shared-migrator
 empty-schema case the first tenant is a false green too, and only
 [`WithSharedMigrator`](#schema-targeting-postgresql) catches it. A tenant that
 claims a target and then fails its own run still holds the claim.

@@ -1272,11 +1272,15 @@ func TestMigrateAllDuplicateTargetErrorCarriesNoTargetOrCredential(t *testing.T)
 }
 
 func TestMigrateAllScopesTargetClaimsToOneCall(t *testing.T) {
-	same := pgTenant("db", 5432, "app", "s", "u")
-	cfgs := map[string]*config.DatabaseConfig{"t1": same, "t2": same}
-	for _, id := range []string{"t1", "t2"} {
-		res, runs := runDuplicateTargetFleet(t, []string{id}, cfgs, nil, ActionMigrate)
-		require.NoError(t, res.Verdict(), "tenant %s", id)
-		assert.Equal(t, 1, runs)
+	requireShellStubs(t)
+	stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+	fm := newFlywayMigratorForTest(t)
+	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": pgTenant("db", 5432, "app", "s", "u")})
+	for call := 1; call <= 2; call++ {
+		res, err := MigrateAll(context.Background(), fm, &fakeLister{ids: []string{"t1"}}, provider, ActionMigrate,
+			MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub)})
+		require.NoError(t, err, "call %d", call)
+		require.NoError(t, res.Verdict(), "call %d", call)
+		assert.Equal(t, call, flywayRuns(t, runLog))
 	}
 }

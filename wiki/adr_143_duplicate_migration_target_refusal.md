@@ -60,7 +60,8 @@ Flyway's own lock.
 
 The key reuses the run path's own vendor resolution (`dbVendor`) and
 URL-ownership decision (`usesFrameworkOwnedURL`) rather than re-implementing
-them, so it cannot drift from what Flyway is actually handed.
+them; the environment builder's switch on the tenant's own `type` is the one
+input it does not share (see the blind spots).
 
 **Normalization:** the host is lowercased and IPv6 brackets are stripped; a
 PostgreSQL port of 0 equals 5432, the driver default; database, schema and
@@ -98,11 +99,12 @@ names this.
 - distinct PostgreSQL roles with no role-level `search_path`: all resolve to
   `public` through `$user, public`, but are keyed apart by username;
 - a type-less tenant under a typed runner: `runFor` resolves its vendor through
-  `dbVendor` and builds a framework `-url` from its fields, but the environment
-  builder switches on the tenant's own `type`, so no user variable is delivered
-  and its keyed username may not be the user Flyway connects as. That is a
-  possible false negative, or a loud refusal fixed by setting the tenant's
-  `type`. The mismatch predates this check;
+  `dbVendor`, but the environment builder switches on the tenant's own `type`,
+  so none of its connection variables are delivered. Under a PostgreSQL runner
+  its keyed username may not be the user Flyway connects as; under an Oracle
+  runner none of the `ORACLE_*` variables reach Flyway, so its whole key may
+  differ from Flyway's target. That is a possible false negative; on a refusal,
+  set the tenant's `type` so Flyway connects as the keyed user; a refusal that survives that is a real collision. The mismatch predates this check (#2019);
 - two separate `MigrateAll` calls, which rely on Flyway's own lock;
 - in the shared-migrator empty-schema case, the first tenant's own false green.
 
