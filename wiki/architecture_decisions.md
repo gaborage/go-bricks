@@ -91,6 +91,8 @@ Interface segregation for database testing utilities, enabling 73% less boilerpl
 
 **Key Benefits:** Simplified mocking, transaction tracking, partial SQL matching
 
+Amended 2026-10-04 (#1652): the duplication-over-abstraction trade-off is superseded — `TestTx` and `TestSession` share one expectation machinery, and `AssertAllExpectationsMet` reports every unmet expectation across the pool, transactions and sessions. See [migrations.md](migrations.md) `[C72.16]`.
+
 ---
 
 ### [ADR-009: Consumer Worker Pool Concurrency with NumCPU × 4 Default](adr_009_consumer_worker_pool_concurrency.md)

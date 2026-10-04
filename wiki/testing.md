@@ -194,6 +194,7 @@ sess.ExpectTransaction().ExpectExec("UPDATE ledger").WillReturnRowsAffected(3)
 svc.RelayLedger(ctx)
 
 dbtesting.AssertSessionClosed(t, sess)
+dbtesting.AssertAllExpectationsMet(t, db) // AssertSessionClosed alone misses an unused lock or transaction
 ```
 
 **Key Features:**
@@ -204,6 +205,7 @@ dbtesting.AssertSessionClosed(t, sess)
 - Vendor-agnostic RowSet builder
 - Partial SQL matching by default (or strict with StrictSQLMatching())
 - Dedicated-session fakes: `db.ExpectSession()` returns a `TestSession` carrying its OWN expectations (never the pool's), and `dbtesting.AssertSessionClosed(t, sess)` pins that the session was released
+- Leftover check: `dbtesting.AssertAllExpectationsMet(t, db)` reports, in one failure, every query/exec expectation never matched (pool, begun transactions, opened sessions; a pattern shadowed by an earlier, broader one counts as unmet), every transaction still queued, and every session never opened
 
 See [database/testing](../database/testing/) package and llms.txt's "Database Testing" section for full examples.
 

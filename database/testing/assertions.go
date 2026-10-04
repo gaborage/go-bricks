@@ -315,3 +315,49 @@ func AssertTxOptions(t *testing.T, tx *TestTx, want *sql.TxOptions) {
 		t.Errorf("transaction options: got %+v, want %+v", *got, *want)
 	}
 }
+
+// AssertAllExpectationsMet fails, in one report, on every expectation the test
+// declared but never used: a query or exec expectation no statement resolved to
+// (on the pool, in a begun transaction, or in an opened session), a transaction
+// still queued on the pool or on an opened session, and a session never opened.
+// Resolving to an expectation meets it even when it returned its configured
+// error or the no-rows error. Matching is first-match-wins, so a pattern shadowed by an earlier,
+// broader one is reported as unmet. A transaction whose Begin failed through
+// WillFailBegin counts as consumed. It is opt-in: call it at the end of a test.
+//
+// Example:
+//
+//	db := NewTestDB(dbtypes.PostgreSQL)
+//	// ... set expectations, execute test code ...
+//	AssertAllExpectationsMet(t, db)
+func AssertAllExpectationsMet(t *testing.T, db *TestDB) {
+	t.Helper()
+	unmet := unmetExpectations(db)
+	if len(unmet) > 0 {
+		t.Errorf("%d unmet expectation(s):\n  %s", len(unmet), strings.Join(unmet, "\n  "))
+	}
+}
+
+// unmetExpectations builds AssertAllExpectationsMet's report, one line per item.
+func unmetExpectations(db *TestDB) []string {
+	db.mu.RLock()
+	lines := unmetIn("pool", db.queries, db.execs)
+	for _, txExp := range db.txExpectations {
+		lines = append(lines, fmt.Sprintf("pool: transaction #%d was never begun", txExp.seq))
+	}
+	started := append([]*TxExpectation{}, db.startedTransactions...)
+	opened := append([]*TestSession{}, db.openedSessions...)
+	queued := append([]*TestSession{}, db.sessionExpectations...)
+	db.mu.RUnlock()
+
+	for _, txExp := range started {
+		lines = append(lines, txExp.tx.unmet(txExp.scope)...)
+	}
+	for _, sess := range opened {
+		lines = append(lines, sess.unmetItems()...)
+	}
+	for _, sess := range queued {
+		lines = append(lines, sess.label+" was never opened")
+	}
+	return lines
+}

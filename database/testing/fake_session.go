@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -14,8 +15,10 @@ import (
 // after Close every call returns sql.ErrConnDone, a second Close included.
 type TestSession struct {
 	expectationSet
-	txs    []*TxExpectation
-	closed bool
+	txs     []*TxExpectation
+	closed  bool
+	label   string
+	txCount int
 }
 
 // Compile-time interface check.
@@ -79,11 +82,28 @@ func (s *TestSession) WillReturnError(err error) *TestSession {
 // session. Returns a TestTx that can be configured with query/exec expectations.
 func (s *TestSession) ExpectTransaction() *TestTx {
 	tx := newTestTx(s.parent)
-	txExp := &TxExpectation{parent: s.parent, tx: tx}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.txCount++
+	txExp := &TxExpectation{
+		tx:    tx,
+		seq:   s.txCount,
+		scope: fmt.Sprintf("%s transaction #%d", s.label, s.txCount),
+	}
 	s.txs = append(s.txs, txExp)
 	return tx
+}
+
+// unmetItems lists the session's own unmet expectations, then each transaction
+// still queued on it.
+func (s *TestSession) unmetItems() []string {
+	lines := s.unmet(s.label)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, txExp := range s.txs {
+		lines = append(lines, fmt.Sprintf("%s: transaction #%d was never begun", s.label, txExp.seq))
+	}
+	return lines
 }
 
 // IsClosed reports whether Close was called on this session.

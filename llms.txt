@@ -1976,6 +1976,7 @@ func TestLedgerServiceRelay(t *testing.T) {
 
     assert.NoError(t, err)
     dbtesting.AssertSessionClosed(t, sess)
+    dbtesting.AssertAllExpectationsMet(t, db) // AssertSessionClosed alone misses an unused lock or transaction
 }
 ```
 
@@ -2080,6 +2081,7 @@ dbtesting.AssertExecExecuted(t, db, "INSERT")
 dbtesting.AssertTransactionCommitted(t, db)
 dbtesting.AssertTransactionRolledBack(t, db)
 dbtesting.AssertTxOptions(t, tx, &sql.TxOptions{ReadOnly: true}) // options BeginTx received (nil for Begin)
+dbtesting.AssertAllExpectationsMet(t, db) // every expectation matched, no transaction or session left queued
 
 // Fail the Begin itself: the entry is consumed, never registered as started
 db.ExpectTransaction().WillFailBegin(errConnRefused)

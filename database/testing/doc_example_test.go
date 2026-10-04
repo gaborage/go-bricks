@@ -98,6 +98,7 @@ func TestExpectSessionDocExample(t *testing.T) {
 	assert.Equal(t, int64(3), rows)
 	dbtesting.AssertSessionClosed(t, sess)
 	dbtesting.AssertTransactionCommitted(t, db)
+	dbtesting.AssertAllExpectationsMet(t, db)
 
 	execs := sess.ExecLog()
 	require.Len(t, execs, 2, "the lock and the unlock run on the session, the UPDATE on its transaction")
@@ -124,6 +125,7 @@ func TestExpectSessionDocExampleRollsBackFailedUpdate(t *testing.T) {
 	assert.Zero(t, rows)
 	dbtesting.AssertTransactionRolledBack(t, db)
 	dbtesting.AssertSessionClosed(t, sess)
+	dbtesting.AssertAllExpectationsMet(t, db)
 
 	execs := sess.ExecLog()
 	require.Len(t, execs, 2, "the unlock still runs after a failed UPDATE")

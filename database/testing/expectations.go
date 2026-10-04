@@ -111,11 +111,12 @@ func (e *expectationSet) resolveQuery(query string, args []any) (*QueryExpectati
 		if !e.parent.matchSQL(exp.sql, query) {
 			continue
 		}
+		exp.met = true
 		if exp.err != nil {
 			return nil, exp.err
 		}
 		if exp.rows == nil {
-			return nil, fmt.Errorf("%s query expectation for %q has no rows configured", e.scope, query)
+			return nil, fmt.Errorf("%s query expectation for %q has no rows configured (use WillReturnRows)", e.scope, query)
 		}
 		return exp, nil
 	}
@@ -137,12 +138,36 @@ func (e *expectationSet) resolveExec(query string, args []any) (*ExecExpectation
 		if !e.parent.matchSQL(exp.sql, query) {
 			continue
 		}
+		exp.met = true
 		if exp.err != nil {
 			return nil, exp.err
 		}
 		return exp, nil
 	}
 	return nil, fmt.Errorf("unexpected exec in %s: %s (no matching expectation)", e.scope, query)
+}
+
+// unmet lists, under scope, the expectations no statement ever resolved to.
+func (e *expectationSet) unmet(scope string) []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return unmetIn(scope, e.queries, e.execs)
+}
+
+// unmetIn lists, under scope, the query and exec expectations never marked met.
+func unmetIn(scope string, queries []*QueryExpectation, execs []*ExecExpectation) []string {
+	var lines []string
+	for _, exp := range queries {
+		if !exp.met {
+			lines = append(lines, fmt.Sprintf("%s: query %q was never matched", scope, exp.sql))
+		}
+	}
+	for _, exp := range execs {
+		if !exp.met {
+			lines = append(lines, fmt.Sprintf("%s: exec %q was never matched", scope, exp.sql))
+		}
+	}
+	return lines
 }
 
 // guarded consults the holder's own precondition, if it set one. The guard runs

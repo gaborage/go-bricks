@@ -27,17 +27,6 @@ func querySession(t *testing.T, sess dbtypes.Session, query string, args ...any)
 	require.NoError(t, rows.Err())
 }
 
-// querySessionErr runs a query expected to fail and returns its error, closing
-// any rows that came back anyway.
-func querySessionErr(t *testing.T, sess dbtypes.Session, query string) error {
-	t.Helper()
-	rows, err := sess.Query(t.Context(), query)
-	if rows != nil {
-		defer rows.Close()
-	}
-	return err
-}
-
 func TestTestDBSessionWithoutExpectationErrors(t *testing.T) {
 	db := NewTestDB(dbtypes.PostgreSQL)
 
@@ -113,7 +102,7 @@ func TestTestSessionUnexpectedStatementsError(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	require.Error(t, querySessionErr(t, sess, sessionSelectSQL))
+	require.Error(t, queryErr(t, sess, sessionSelectSQL))
 	require.Error(t, sess.QueryRow(t.Context(), sessionSelectSQL).Err())
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.Error(t, err)
@@ -130,7 +119,7 @@ func TestTestSessionWillReturnErrorTargetsMostRecent(t *testing.T) {
 	sess, err := db.Session(t.Context())
 	require.NoError(t, err)
 
-	require.ErrorIs(t, querySessionErr(t, sess, sessionSelectSQL), wantQueryErr)
+	require.ErrorIs(t, queryErr(t, sess, sessionSelectSQL), wantQueryErr)
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.ErrorIs(t, err, wantExecErr)
 }
@@ -203,7 +192,7 @@ func TestTestSessionClosedSessionRejectsEveryCall(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sess.Close())
 
-	require.ErrorIs(t, querySessionErr(t, sess, sessionSelectSQL), sql.ErrConnDone)
+	require.ErrorIs(t, queryErr(t, sess, sessionSelectSQL), sql.ErrConnDone)
 	require.ErrorIs(t, sess.QueryRow(t.Context(), sessionSelectSQL).Err(), sql.ErrConnDone)
 	_, err = sess.Exec(t.Context(), sessionExecSQL)
 	require.ErrorIs(t, err, sql.ErrConnDone)
