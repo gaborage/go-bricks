@@ -72,7 +72,7 @@ key are unchanged for a correctly wired service.
 ## Consequences
 
 - Compile-breaks, caught by `go build`, for code that named any deleted name
-  ([migrations.md](migrations.md) `[C73.1]`). A custom codec has no replacement; a module that
+  ([migrations.md](migrations.md) `[C72.9]`). A custom codec has no replacement; a module that
   read `SealingRuntime()` reads `ModuleDeps.KeyStore`, `ModuleDeps.MeterProvider` and
   `ModuleDeps.Config`.
 - A consumer can no longer exercise the sealed consume door outside a running App. Producer-side
@@ -95,6 +95,6 @@ key are unchanged for a correctly wired service.
 
 ## References
 
-- [migrations.md](migrations.md) `[C73.1]`
+- [migrations.md](migrations.md) `[C72.9]`
 - `internal/sealruntime/sealruntime.go`, `app/sealing.go` (`configureSealing`),
   `messaging/sealed` (`init`), #1872, #2010
