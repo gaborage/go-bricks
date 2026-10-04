@@ -478,13 +478,38 @@ queue yourself:
 declaration **before** registering:
 
 ```go
+decls.DeclareTopicExchange("orders.dlx")
+decls.DeclareQueue("orders.dlq")
+decls.DeclareBinding("orders.dlq", "orders.dlx", "#") // "#" parks every key; "" would not
 q := messaging.NewQueue("orders.queue")
 q.Args["x-dead-letter-exchange"] = "orders.dlx" // failed deliveries park here
 decls.RegisterQueue(q)
 ```
 
+When another service owns the DLX and its parking queue, replace the first three
+lines with `decls.DeclareExternalExchange("orders.dlx")`.
+
 For a queue already registered elsewhere, mutate the stored copy instead:
 `decls.Queues["orders.queue"].Args["x-dead-letter-exchange"] = "orders.dlx"`.
+
+`Validate()` reads the stored `x-dead-letter-exchange` (X) and
+`x-dead-letter-routing-key` (K), mutations included, and fails startup naming
+every queue whose route the set shows cannot park (ADR-142):
+
+- X absent from the set — declare it, or mark it external with
+  `DeclareExternalExchange` when another service owns it;
+- a fanout, direct or topic X with no binding — declare the parking queue and
+  binding, or let `DeclareQueueWithDLQ` own the route;
+- a direct or topic X with K set and no binding matching K (equality for direct,
+  `*`/`#` patterns for topic) — bind a matching key, or make X fanout;
+- a direct or topic X with K unset whose bindings all use `""` — a dead-lettered
+  message keeps its original key, so make X fanout (`RegisterExchange` with
+  `Type: messaging.ExchangeTypeFanout`), bind a key the messages carry, or set K to
+  a bound key.
+
+X `""`, an external, `headers` or `x-` plugin X, an X with an `alternate-exchange`
+argument, and non-string values are not judged. Migration: [migrations.md](migrations.md)
+`[C72.13]`.
 
 Args participate in RabbitMQ's declare-equivalence check: redeclaring an
 existing queue with different args fails the channel with 406

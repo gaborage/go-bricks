@@ -3309,9 +3309,13 @@ queue := decls.DeclareQueueWithDLQ("orders.processing", &messaging.DeadLetterSpe
 For custom DLX/parking-queue names or bespoke topology, declare a plain queue (again
 *instead of* the `DeclareQueue` above) and set `Args` BEFORE registering — `DeclareQueue`
 snapshots a deep copy, so mutating the returned pointer's `Args` afterward is silently
-dropped:
+dropped. Declare the DLX, parking queue and binding too — `Validate()` refuses a DLX absent
+from the set or one no binding delivers to (ADR-142):
 
 ```go
+decls.DeclareTopicExchange("orders.dlx") // or DeclareExternalExchange when another service owns it
+decls.DeclareQueue("orders.dlq")
+decls.DeclareBinding("orders.dlq", "orders.dlx", "#") // "#" parks every key; "" would not
 q := messaging.NewQueue("orders.processing")
 q.Args["x-dead-letter-exchange"] = "orders.dlx"
 decls.RegisterQueue(q)

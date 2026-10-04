@@ -504,6 +504,10 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
+	if err := d.validateDeadLetterTopology(); err != nil {
+		return err
+	}
+
 	for _, publisher := range d.Publishers {
 		if err := d.validatePublisherDestination(publisher); err != nil {
 			return err

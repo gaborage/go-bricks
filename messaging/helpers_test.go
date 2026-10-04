@@ -633,6 +633,9 @@ func TestDeclarationsConsumer(t *testing.T) {
 		opts := &ConsumerOptions{Queue: "shared.queue", Consumer: testConsumer, Handler: mockHandler}
 
 		decls.DeclareConsumer(opts, queue)
+		decls.RegisterExchange(newDurableExchange("shared.dlx", ExchangeTypeFanout))
+		decls.DeclareQueue("shared.dlq")
+		decls.DeclareBinding("shared.dlq", "shared.dlx", "")
 
 		require.NoError(t, decls.Validate())
 		assert.Equal(t, "shared.dlx", decls.Queues["shared.queue"].Args[dlxArgKey])

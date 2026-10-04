@@ -66,6 +66,7 @@ const (
 	argQueueMode            = "x-queue-mode"
 	argDeadLetterStrategy   = "x-dead-letter-strategy"
 	argOverflow             = "x-overflow"
+	argAlternateExchange    = "alternate-exchange"
 
 	overflowRejectPublish = "reject-publish"
 
