@@ -25,7 +25,7 @@ func resolveSharedMigrator(cmd *cobra.Command, flags *CommonFlags) error {
 	}
 	armed, err := strconv.ParseBool(v)
 	if err != nil {
-		return fmt.Errorf("%s=%q is not a boolean; use true or false", envSharedMigrator, v)
+		return fmt.Errorf("%s=%q is not a Go boolean (strconv.ParseBool forms, e.g. true, false, 1, 0)", envSharedMigrator, v)
 	}
 	flags.SharedMigrator = armed
 	return nil
@@ -52,7 +52,7 @@ func (p *sharedMigratorProvider) DBConfig(ctx context.Context, key string) (*con
 		return nil, nil
 	}
 	if err := database.ValidateDatabaseType(cfg.Type); err != nil {
-		return nil, fmt.Errorf("tenant %q: --shared-migrator cannot aim Flyway at it: %w", key, err)
+		return nil, fmt.Errorf("tenant %q: the shared-migrator guard refuses its type: %w", key, err)
 	}
 	return cfg, nil
 }
