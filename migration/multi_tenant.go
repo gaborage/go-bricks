@@ -258,11 +258,12 @@ func MigrateAll(
 			Str("action", action.String())
 	}, "Starting multi-tenant migration")
 
+	claims := newTargetClaims()
 	var out *MigrateAllResult
 	if opts.Parallelism <= 1 {
-		out, err = runSequential(ctx, migrator, configs, action, tenantIDs, opts)
+		out, err = runSequential(ctx, migrator, configs, action, tenantIDs, opts, claims)
 	} else {
-		out, err = runParallel(ctx, migrator, configs, action, tenantIDs, opts)
+		out, err = runParallel(ctx, migrator, configs, action, tenantIDs, opts, claims)
 	}
 	// Both paths dispatch in listing order, so the undispatched tenants are the tail.
 	out.NeverDispatched = slices.Clone(tenantIDs[len(out.Results):])
@@ -303,9 +304,9 @@ func runSequential(
 	action Action,
 	tenantIDs []string,
 	opts MigrateAllOptions,
+	claims *targetClaims,
 ) (*MigrateAllResult, error) {
 	out := &MigrateAllResult{Action: action, Results: make([]TenantResult, 0, len(tenantIDs))}
-	claims := newTargetClaims()
 	for _, id := range tenantIDs {
 		if err := dispatchBlocked(ctx, opts); err != nil {
 			return out, err
@@ -331,6 +332,7 @@ func runParallel(
 	action Action,
 	tenantIDs []string,
 	opts MigrateAllOptions,
+	claims *targetClaims,
 ) (*MigrateAllResult, error) {
 	parallelism := opts.Parallelism
 	if parallelism > maxParallelism {
@@ -355,7 +357,7 @@ func runParallel(
 		configs:  configs,
 		action:   action,
 		opts:     opts,
-		claims:   newTargetClaims(),
+		claims:   claims,
 	}
 	dispatched, stopErr := state.dispatch(runCtx, tenantIDs, parallelism)
 	state.wg.Wait()

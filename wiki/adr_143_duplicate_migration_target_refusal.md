@@ -102,7 +102,7 @@ names this.
   builder switches on the tenant's own `type`, so no user variable is delivered
   and its keyed username may not be the user Flyway connects as. That is a
   possible false negative, or a loud refusal fixed by setting the tenant's
-  `type`. The mismatch predates this check and is tracked in a follow-up issue;
+  `type`. The mismatch predates this check;
 - two separate `MigrateAll` calls, which rely on Flyway's own lock;
 - in the shared-migrator empty-schema case, the first tenant's own false green.
 
