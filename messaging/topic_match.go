@@ -17,23 +17,25 @@ func topicMatches(pattern, key string) bool {
 	return topicWordsMatch(topicWords(pattern), topicWords(key))
 }
 
+// topicWordsMatch walks the pattern one word at a time, keeping which key prefixes the pattern so
+// far matches: O(len(pattern)·len(key)), where backtracking over '#' is exponential.
 func topicWordsMatch(pattern, key []string) bool {
-	if len(pattern) == 0 {
-		return len(key) == 0
-	}
-	if pattern[0] == "#" {
-		for skip := 0; skip <= len(key); skip++ {
-			if topicWordsMatch(pattern[1:], key[skip:]) {
-				return true
+	reach := make([]bool, len(key)+1)
+	reach[0] = true
+	for _, word := range pattern {
+		next := make([]bool, len(key)+1)
+		if word == "#" {
+			matched := false
+			for j := range next {
+				matched = matched || reach[j]
+				next[j] = matched
+			}
+		} else {
+			for j := 1; j <= len(key); j++ {
+				next[j] = reach[j-1] && (word == "*" || word == key[j-1])
 			}
 		}
-		return false
+		reach = next
 	}
-	if len(key) == 0 {
-		return false
-	}
-	if pattern[0] != "*" && pattern[0] != key[0] {
-		return false
-	}
-	return topicWordsMatch(pattern[1:], key[1:])
+	return reach[len(key)]
 }

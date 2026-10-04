@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -53,4 +54,19 @@ func TestTopicMatches(t *testing.T) {
 			assert.Equal(t, tc.want, topicMatches(tc.pattern, tc.key))
 		})
 	}
+}
+
+// TestTopicMatchesIsPolynomialInTheWildcards runs patterns whose '#' words made a backtracking
+// matcher exponential; under the default test timeout they finish only if matching is O(p·k).
+func TestTopicMatchesIsPolynomialInTheWildcards(t *testing.T) {
+	key := strings.TrimSuffix(strings.Repeat("a.", 30), ".")
+	miss := strings.TrimSuffix(strings.Repeat("b.", 30), ".")
+	hashes := strings.TrimSuffix(strings.Repeat("#.", 12), ".")
+	alternating := strings.TrimSuffix(strings.Repeat("#.a.", 12), ".")
+
+	assert.True(t, topicMatches(hashes, key))
+	assert.True(t, topicMatches(hashes+".z", key+".z"))
+	assert.False(t, topicMatches(hashes+".z", key))
+	assert.False(t, topicMatches(alternating, miss))
+	assert.True(t, topicMatches(alternating, key))
 }
