@@ -4,6 +4,18 @@
 - **Date**: 2026-08-30
 - **Related**: [ADR-041](adr_041_shared_ledger_tenancy.md) (shared ledger tenancy; §4 deferred the consumer half this delivers) · [ADR-039](adr_039_composite_resolver_order.md) (tenant resolution is identification, not authorization — the rule this extends to the broker) · [ADR-059](adr_059_streams_consumption.md) / [ADR-063](adr_063_streams_native_publishing.md) (the streams lane, single-tenant until now) · [ADR-070](adr_070_inbound_trace_identifier_validation.md) (the sibling rule for an inbound identifier the framework must validate before trusting it)
 
+> **Amended (2026-10-04, #1854 — shared messaging takes the single-tenant publisher-pool
+> defaults):** under `multitenant.enabled` with `messaging.tenancy: shared` every publish resolves
+> the control-plane key `""` (decision 1), so the publisher pool only ever holds one client. An
+> unset or zero `messaging.publisher.idlettl` now normalizes to 1h and `messaging.publisher.maxcached`
+> to 50, the single-tenant values, instead of the per-tenant 10m and a cap scaled to
+> `multitenant.limits.tenants`; explicit positive values are kept. The startup
+> pool-below-tenant-count WARN is skipped for `resource=messaging` when the resource plan's messaging
+> row is shared; it still fires for per-tenant messaging and for database and cache. Separately, the
+> static tenant count behind that WARN is now taken only under `source.type: static`, so a leftover
+> `multitenant.tenants` map under a dynamic source warns for no pool. See [migrations.md](migrations.md)
+> `[C73.8]`.
+
 ## Context
 
 A consuming service in the #1230 topology has one broker and thousands of tenants. Its

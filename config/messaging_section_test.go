@@ -1168,3 +1168,53 @@ func TestValidateMessagingDeclareExternalWait(t *testing.T) {
 		})
 	}
 }
+
+// TestValidatePublisherPoolDefaultsFollowMessagingTenancy pins that the publisher pool's
+// idle TTL and cap follow the messaging tenancy, not the deployment mode alone: a shared
+// messaging kind only ever pools the control-plane key, so it takes the single-tenant
+// defaults. Every row is validated twice (ADR-064).
+func TestValidatePublisherPoolDefaultsFollowMessagingTenancy(t *testing.T) {
+	dynamicMultitenant := func() *Config {
+		cfg := staticMultitenantFixture()
+		cfg.Source = SourceConfig{Type: SourceTypeDynamic}
+		cfg.Multitenant.Tenants = nil
+		return cfg
+	}
+
+	tests := []struct {
+		name        string
+		cfg         func() *Config
+		tenancy     string
+		idleTTL     time.Duration
+		maxCached   int
+		wantIdleTTL time.Duration
+		wantMax     int
+	}{
+		{name: "single_tenant_tenancy_unset", cfg: singleTenantFixture, wantIdleTTL: time.Hour, wantMax: 50},
+		{name: "single_tenant_shared", cfg: singleTenantFixture, tenancy: TenancyShared, wantIdleTTL: time.Hour, wantMax: 50},
+		{name: "multi_tenant_shared_unset", cfg: staticMultitenantFixture, tenancy: TenancyShared, wantIdleTTL: time.Hour, wantMax: 50},
+		{
+			name: "multi_tenant_shared_explicit_kept", cfg: staticMultitenantFixture, tenancy: TenancyShared,
+			idleTTL: 10 * time.Minute, maxCached: 2, wantIdleTTL: 10 * time.Minute, wantMax: 2,
+		},
+		{name: "multi_tenant_shared_explicit_zero", cfg: staticMultitenantFixture, tenancy: TenancyShared, wantIdleTTL: time.Hour, wantMax: 50},
+		{name: "multi_tenant_per_tenant", cfg: staticMultitenantFixture, tenancy: TenancyPerTenant, wantIdleTTL: 10 * time.Minute, wantMax: 0},
+		{name: "multi_tenant_tenancy_unset", cfg: staticMultitenantFixture, wantIdleTTL: 10 * time.Minute, wantMax: 0},
+		{name: "dynamic_source_shared", cfg: dynamicMultitenant, tenancy: TenancyShared, wantIdleTTL: time.Hour, wantMax: 50},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg()
+			cfg.Messaging.Tenancy = tt.tenancy
+			cfg.Messaging.Publisher.IdleTTL = tt.idleTTL
+			cfg.Messaging.Publisher.MaxCached = tt.maxCached
+
+			for pass := 1; pass <= 2; pass++ {
+				require.NoError(t, Validate(cfg), "pass %d", pass)
+				assert.Equal(t, tt.wantIdleTTL, cfg.Messaging.Publisher.IdleTTL, "idlettl, pass %d", pass)
+				assert.Equal(t, tt.wantMax, cfg.Messaging.Publisher.MaxCached, "maxcached, pass %d", pass)
+			}
+		})
+	}
+}

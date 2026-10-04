@@ -3,6 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -947,4 +951,184 @@ func TestResourceManagerFactoryCreateCacheManagerWiresTheLogger(t *testing.T) {
 	require.Len(t, warns, 1, "the cache manager's advisory must reach the app logger")
 	assert.Contains(t, warns[0].msg, "cache.manager.cleanupinterval is >= cache.manager.idlettl")
 	assert.Equal(t, 5*time.Minute, warns[0].dur["cleanupinterval"])
+}
+
+const poolBelowTenantsMsg = "Resource pool max size is below the number of configured tenants"
+
+// poolWarnLogger records the resource field of every pool-below-tenant-count WARN.
+type poolWarnLogger struct {
+	mu        sync.Mutex
+	resources []string
+}
+
+func (l *poolWarnLogger) warnedFor(resource string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Contains(l.resources, resource)
+}
+
+func (l *poolWarnLogger) Warn() logger.LogEvent                   { return &poolWarnEvent{sink: l} }
+func (l *poolWarnLogger) Info() logger.LogEvent                   { return &poolWarnEvent{} }
+func (l *poolWarnLogger) Error() logger.LogEvent                  { return &poolWarnEvent{} }
+func (l *poolWarnLogger) Debug() logger.LogEvent                  { return &poolWarnEvent{} }
+func (l *poolWarnLogger) Fatal() logger.LogEvent                  { return &poolWarnEvent{} }
+func (l *poolWarnLogger) WithContext(any) logger.Logger           { return l }
+func (l *poolWarnLogger) WithFields(map[string]any) logger.Logger { return l }
+
+type poolWarnEvent struct {
+	sink     *poolWarnLogger
+	resource string
+}
+
+func (e *poolWarnEvent) Str(key, value string) logger.LogEvent {
+	if key == "resource" {
+		e.resource = value
+	}
+	return e
+}
+
+func (e *poolWarnEvent) Msg(msg string) {
+	if e.sink != nil && strings.HasPrefix(msg, poolBelowTenantsMsg) {
+		e.sink.mu.Lock()
+		defer e.sink.mu.Unlock()
+		e.sink.resources = append(e.sink.resources, e.resource)
+	}
+}
+func (e *poolWarnEvent) Msgf(string, ...any)                       {}
+func (e *poolWarnEvent) Err(error) logger.LogEvent                 { return e }
+func (e *poolWarnEvent) Int(string, int) logger.LogEvent           { return e }
+func (e *poolWarnEvent) Int64(string, int64) logger.LogEvent       { return e }
+func (e *poolWarnEvent) Uint64(string, uint64) logger.LogEvent     { return e }
+func (e *poolWarnEvent) Dur(string, time.Duration) logger.LogEvent { return e }
+func (e *poolWarnEvent) Interface(string, any) logger.LogEvent     { return e }
+func (e *poolWarnEvent) Bytes(string, []byte) logger.LogEvent      { return e }
+func (e *poolWarnEvent) Bool(string, bool) logger.LogEvent         { return e }
+func (e *poolWarnEvent) Enabled() bool                             { return true }
+
+// tenantCountConfig loads a validated multi-tenant config with `tenants` statically-listed
+// tenants and every pool cap set to poolCap (0 leaves the key unset).
+func tenantCountConfig(t *testing.T, sourceType, tenancy string, tenants, poolCap int) *config.Config {
+	t.Helper()
+	var b strings.Builder
+	fmt.Fprintf(&b, `
+app:
+  name: test-app
+  version: 1.0.0
+  env: development
+server:
+  host: localhost
+  port: 8080
+log:
+  level: info
+source:
+  type: %s
+multitenant:
+  enabled: true
+  resolver:
+    type: header
+  limits:
+    tenants: 100
+  tenants:
+`, sourceType)
+	for i := range tenants {
+		fmt.Fprintf(&b, `    t%d:
+      database:
+        type: postgresql
+        host: localhost
+        port: 5432
+        database: testdb
+        username: testuser
+        password: testpass
+`, i)
+	}
+	fmt.Fprintf(&b, "messaging:\n  tenancy: %s\n", tenancy)
+	if poolCap > 0 {
+		fmt.Fprintf(&b, "  publisher:\n    maxcached: %d\ndatabase:\n  manager:\n    maxsize: %d\ncache:\n  manager:\n    maxsize: %d\n", poolCap, poolCap, poolCap)
+	}
+	return loadConfigFromYAML(t, b.String())
+}
+
+// buildAllManagers runs the three factory constructors that carry the tenant-count WARN.
+func buildAllManagers(t *testing.T, cfg *config.Config, plan resourcePlan, log logger.Logger) *messaging.Manager {
+	t.Helper()
+	factory := NewResourceManagerFactory(createTestFactoryResolver(t), newManagerConfigBuilderFromConfig(cfg, plan), log)
+	store := config.NewTenantStore(cfg)
+	dbManager := factory.CreateDatabaseManager(store)
+	t.Cleanup(func() { _ = dbManager.Close() })
+	cacheManager, err := factory.CreateCacheManager(store)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cacheManager.Close() })
+	msgManager := factory.CreateMessagingManager(store)
+	t.Cleanup(func() { _ = msgManager.Close() })
+	return msgManager
+}
+
+// TestTenantCountWarnSkipsSharedMessaging pins that a shared messaging kind, which only
+// ever pools the control-plane key, never emits the messaging tenant-count WARN, while
+// per-tenant messaging and the database pool keep warning on the same sizes.
+func TestTenantCountWarnSkipsSharedMessaging(t *testing.T) {
+	tests := []struct {
+		name          string
+		tenancy       string
+		wantMessaging bool
+	}{
+		{name: "shared_skips_messaging", tenancy: config.TenancyShared},
+		{name: "per_tenant_warns_messaging", tenancy: config.TenancyPerTenant, wantMessaging: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tenantCountConfig(t, config.SourceTypeStatic, tt.tenancy, 3, 2)
+			log := &poolWarnLogger{}
+
+			buildAllManagers(t, cfg, fixturePlan(cfg), log)
+
+			assert.Equal(t, tt.wantMessaging, log.warnedFor("messaging"))
+			assert.True(t, log.warnedFor("database"), "the database WARN is unchanged")
+		})
+	}
+}
+
+// TestSharedMessagingTakesSingleTenantPublisherDefaults pins both halves together: with more
+// static tenants than the flat publisher cap, shared messaging reports the flat defaults and
+// emits no messaging WARN.
+func TestSharedMessagingTakesSingleTenantPublisherDefaults(t *testing.T) {
+	cfg := tenantCountConfig(t, config.SourceTypeStatic, config.TenancyShared, 51, 0)
+	log := &poolWarnLogger{}
+
+	stats := buildAllManagers(t, cfg, fixturePlan(cfg), log).Stats()
+
+	assert.False(t, log.warnedFor("messaging"))
+	assert.Equal(t, 50, stats["max_publishers"])
+	assert.Equal(t, 3600, stats["idle_ttl_seconds"])
+}
+
+// TestTenantCountWarnIgnoresLeftoverTenantsUnderDynamicSource pins that only a static
+// tenant source contributes a tenant count: a leftover multitenant.tenants map under
+// source.type: dynamic warns for no pool, while the same map under static warns for all.
+func TestTenantCountWarnIgnoresLeftoverTenantsUnderDynamicSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceType string
+		wantCount  int
+		wantWarn   bool
+	}{
+		{name: "dynamic_source_ignores_map", sourceType: config.SourceTypeDynamic},
+		{name: "static_source_counts_map", sourceType: config.SourceTypeStatic, wantCount: 3, wantWarn: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tenantCountConfig(t, tt.sourceType, config.TenancyPerTenant, 3, 2)
+			plan := resourcePlan{}
+			log := &poolWarnLogger{}
+
+			assert.Equal(t, tt.wantCount, newManagerConfigBuilderFromConfig(cfg, plan).StaticTenantCount())
+			buildAllManagers(t, cfg, plan, log)
+
+			for _, resource := range []string{"database", "cache", "messaging"} {
+				assert.Equal(t, tt.wantWarn, log.warnedFor(resource), resource)
+			}
+		})
+	}
 }

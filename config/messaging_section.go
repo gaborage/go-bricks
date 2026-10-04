@@ -20,7 +20,7 @@ import (
 var sealGenerationPattern = regexp.MustCompile(`^v[1-9]\d*$`)
 
 // normalizeMessaging shapes messaging configuration: reconnect/publisher pool
-// defaults (multitenant selects the deployment-mode-dependent Publisher.IdleTTL
+// defaults (multitenant and the messaging tenancy select the Publisher.IdleTTL
 // and Publisher.MaxCached defaults — see applyMessagingDefaults) and the
 // streams offset-store defaults.
 //
@@ -225,15 +225,17 @@ func applyStreamsDefaults(cfg *StreamsConfig) error {
 //   - Reconnect.ConnectionTimeout: if 0, sets to 30s; if negative, returns an error.
 //   - Reconnect.ReadyTimeout: if 0, sets to 5s; if negative, returns an error.
 //   - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
-//   - Publisher.MaxCached: if 0, sets to 50 when multitenant is false; in
-//     multi-tenant mode zero is preserved so app.ManagerConfigBuilder scales the
+//   - Tenancy: if empty, sets to "per-tenant" — settled first, the two publisher
+//     defaults below read it.
+//   - Publisher.MaxCached: if 0, sets to 50, except multi-tenant with per-tenant
+//     tenancy, where zero is preserved so app.ManagerConfigBuilder scales the
 //     publisher pool to the tenant limit; if negative, returns an error.
-//   - Publisher.IdleTTL: if 0, sets to 1h when multitenant is false, 10m when true
-//     (mode-dependent — a shorter multi-tenant default bounds per-tenant publisher
-//     churn); if negative, returns an error.
+//   - Publisher.IdleTTL: if 0, sets to 1h, except multi-tenant with per-tenant
+//     tenancy, where it sets 10m (a shorter default bounds per-tenant publisher
+//     churn); if negative, returns an error. Shared tenancy pools only "", so it
+//     takes the single-tenant values.
 //   - Publisher.CleanupInterval: if 0, sets to 2m; if negative, returns an error.
 //   - Reconnect.MaxPublishAttempts: if 0, sets to 5; if negative, returns an error.
-//   - Tenancy: if empty, sets to "per-tenant".
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
@@ -258,8 +260,17 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		}
 	}
 
+	// Settled before the publisher defaults read it: an unset tenancy is per-tenant.
+	if cfg.Tenancy == "" {
+		cfg.Tenancy = TenancyPerTenant
+	}
+	// A shared messaging kind pools only the control-plane key "", so it takes the
+	// single-tenant publisher defaults (ADR-087 amendment). Only the exact value
+	// shared selects them; an unknown value is rejected by checkMessaging.
+	perTenantPools := multitenant && cfg.Tenancy != TenancyShared
+
 	idleTTLDefault := defaultPublisherIdleTTL
-	if multitenant {
+	if perTenantPools {
 		idleTTLDefault = defaultPublisherIdleTTLMultiTenant
 	}
 	if err := applyNonNegativeDefault(&cfg.Publisher.IdleTTL, idleTTLDefault, "messaging.publisher.idlettl"); err != nil {
@@ -270,11 +281,7 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		return err
 	}
 
-	if cfg.Tenancy == "" {
-		cfg.Tenancy = TenancyPerTenant
-	}
-
-	return applyModeAwarePoolDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached", multitenant)
+	return applyModeAwarePoolDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached", perTenantPools)
 }
 
 // IsMessagingConfigured determines if messaging is intentionally configured.

@@ -781,14 +781,16 @@ cross-field validators like the outbox `publishtimeout` guards read these effect
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
 | `messaging.publishtimeout` | unset (unbounded) | Aggregate bound on one whole publish — pre-flight plus the entire retry loop (see below). Spelled in full because it is the one key here that is NOT under `reconnect.` |
-| `publisher.maxcached` | 50 single-tenant / unset multi-tenant (pool scales to `multitenant.limits.tenants`) | Maximum cached publisher channels |
-| `publisher.idlettl` | 1h single-tenant / 10m multi-tenant | TTL for idle publisher channels |
+| `publisher.maxcached` | 50 single-tenant and multi-tenant `tenancy: shared` / unset multi-tenant `tenancy: per-tenant` (pool scales to `multitenant.limits.tenants`) | Maximum cached publisher channels, one cap across all keys |
+| `publisher.idlettl` | 1h single-tenant and multi-tenant `tenancy: shared` / 10m multi-tenant `tenancy: per-tenant` | TTL for idle publisher channels |
 | `publisher.cleanupinterval` | 2m | How often the idle-publisher cleanup goroutine runs |
 
-The `publisher.idlettl` default is deployment-mode-dependent: `multitenant.enabled: false` gets 1h,
-`multitenant.enabled: true` gets a shorter 10m to bound per-tenant publisher churn (see
-config/validation.go: `applyMessagingDefaults`). An explicit `publisher.idlettl` always overrides
-both defaults, in either mode.
+The `publisher.idlettl` and `publisher.maxcached` defaults follow whether the publisher pool is
+keyed per tenant: only `multitenant.enabled: true` with `messaging.tenancy: per-tenant` (or tenancy
+unset) gets the shorter 10m TTL, to bound per-tenant publisher churn, and a cap that scales to the
+tenant limit. Single-tenant and multi-tenant `tenancy: shared`, whose pool only ever holds the
+control-plane key `""`, get 1h and 50 (see config/messaging_section.go: `applyMessagingDefaults`).
+An explicit value always overrides either default.
 
 **Override defaults** in `config.yaml`:
 
@@ -799,7 +801,7 @@ messaging:
     maxdelay: 120s       # Higher backoff cap
   publisher:
     maxcached: 100       # More cached publishers for high-throughput
-    idlettl: 2h          # Keep publishers longer than the default (1h single-tenant / 10m multi-tenant)
+    idlettl: 2h          # Keep publishers longer than the default (1h, or 10m under multi-tenant per-tenant tenancy)
 ```
 
 ### Bounded publish retries (`reconnect.maxpublishattempts`)
@@ -1081,9 +1083,9 @@ never on `/ready`, before turning it on. See
 
 ### Sizing the publisher pool for multi-tenant deployments
 
-`publisher.maxcached` is the LRU cap on cached publisher clients (in multi-tenant mode, it falls back to `multitenant.limits.tenants` when unset), not a per-tenant guarantee. When more tenants publish than the cap allows, every publish for a not-currently-cached tenant evicts the least-recently-used publisher and creates a fresh one — **eviction thrash** that silently degrades latency (each miss reopens a broker connection) without an error.
+`publisher.maxcached` is the LRU cap on cached publisher clients (under `messaging.tenancy: per-tenant`, it falls back to `multitenant.limits.tenants` when unset), not a per-tenant guarantee. Under `messaging.tenancy: shared` the pool only ever holds the control-plane key `""`, so it takes the flat cap of 50 and none of this sizing applies: no messaging tenant-count WARN is emitted. When more tenants publish than the cap allows, every publish for a not-currently-cached tenant evicts the least-recently-used publisher and creates a fresh one — **eviction thrash** that silently degrades latency (each miss reopens a broker connection) without an error.
 
-Size the cap to hold every concurrently-publishing tenant. For **statically-configured** tenants (`multitenant.tenants`) the framework counts them at startup and emits a **WARN** when the publisher pool's max size is below the configured tenant count. For **dynamic** tenant sources the count is unknown at startup, so no warning can be emitted — size the cap against your expected fleet manually.
+Size the cap to hold every concurrently-publishing tenant. For **statically-configured** tenants (`multitenant.tenants` under `source.type: static`) the framework counts them at startup and emits a **WARN** when the publisher pool's max size is below the configured tenant count. For **dynamic** tenant sources the count is unknown at startup, so no warning is emitted, even when a leftover `multitenant.tenants` map is still in the config — size the cap against your expected fleet manually.
 
 Idle-TTL eviction is sweep-driven: publishers are only checked when the cleanup goroutine wakes every `publisher.cleanupinterval` (default 2m), so an idle publisher can outlive its `publisher.idlettl` by up to one full sweep interval — keep `cleanupinterval` well below `idlettl`. The sweep starts when the manager is constructed and stops in `Manager.Close()`; calling `StartCleanup` yourself is not required, and a second call while a loop is already running is a no-op.
 

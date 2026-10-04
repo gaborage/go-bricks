@@ -25,6 +25,11 @@ type ManagerConfigBuilder struct {
 	// tenant stamp only under multitenant.enabled + messaging.tenancy: shared. Set by
 	// bootstrap.
 	tenantStamps bool
+	// sharedMessaging is the resource plan's verdict that the messaging row is shared
+	// (multitenant.enabled + messaging.tenancy: shared): the publisher pool only ever
+	// holds the control-plane key "", so it skips the tenant-count WARN. Set by bootstrap
+	// from the same plan predicate as tenantStamps.
+	sharedMessaging bool
 	// connectionTimeout is the per-publish AMQP broker confirmation timeout,
 	// sourced from messaging.reconnect.connectiontimeout and set by bootstrap.
 	connectionTimeout time.Duration
@@ -68,7 +73,8 @@ func NewManagerConfigBuilder(multiTenantEnabled bool, tenantLimit int) *ManagerC
 
 // resolveMaxSize returns the operator's validated value, or — multi-tenant
 // only — scales a deliberately-preserved zero to the tenant limit (#661).
-// Single-tenant zeros cannot reach here: config.Validate stamps the default.
+// Single-tenant zeros, and the publisher cap under messaging.tenancy shared,
+// cannot reach here: config.Validate stamps the flat default.
 func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue int) int {
 	if operatorValue > 0 {
 		return operatorValue
@@ -234,7 +240,9 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 	msgOptions := f.configBuilder.BuildMessagingOptions()
 	clientFactory := f.factoryResolver.MessagingClientFactoryWithOptions(messagingClientFactoryOptions(&msgOptions))
 
-	f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)
+	if !f.configBuilder.sharedMessaging {
+		f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)
+	}
 
 	return messaging.NewMessagingManager(resourceSource, f.logger, msgOptions, clientFactory)
 }

@@ -57,17 +57,21 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config, plan resourcePlan) *M
 	configBuilder.resendDelay = cfg.Messaging.Reconnect.ResendDelay
 	configBuilder.appName = cfg.App.Name
 	configBuilder.tenantStamps = plan.tenantStamps()
+	configBuilder.sharedMessaging = plan.tenantStamps()
 	configBuilder.publisherConfig = cfg.Messaging.Publisher
 	configBuilder.cacheConfig = cfg.Cache.Manager
 	configBuilder.dbConfig = cfg.Database.Manager
-	// Only count statically-configured tenants when multitenancy is enabled. Koanf
-	// populates Multitenant.Tenants from YAML regardless of the enabled flag, but
-	// those entries are meaningless in single-tenant mode (mirrors the guard in
-	// config/tenant_store.go). Without this gate, leftover/shared tenants entries
-	// would trip a spurious pool-below-tenant-count WARN even though single-tenant
-	// pools are never per-tenant keyed — and would contradict StaticTenantCount's
-	// documented "0 for single-tenant" contract.
-	if cfg.Multitenant.Enabled {
+	// Only count statically-configured tenants when multitenancy is enabled AND the
+	// effective tenant source is static — the gate config uses for its own tenant map.
+	// Koanf populates Multitenant.Tenants from YAML whatever the mode or source, so a
+	// leftover map would otherwise trip a spurious pool-below-tenant-count WARN and
+	// contradict StaticTenantCount's "0 for single-tenant or dynamic" contract. An
+	// empty source.type normalizes to static (ADR-125).
+	sourceType := cfg.Source.Type
+	if sourceType == "" {
+		sourceType = config.SourceTypeStatic
+	}
+	if cfg.Multitenant.Enabled && sourceType == config.SourceTypeStatic {
 		configBuilder.staticTenantCount = len(cfg.Multitenant.Tenants)
 	}
 	return configBuilder
