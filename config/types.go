@@ -709,18 +709,20 @@ type ReconnectConfig struct {
 
 // PublisherPoolConfig holds publisher cache/pool settings.
 // Production-safe defaults are applied automatically:
-//   - MaxCached: 50 (maximum publisher clients in cache)
-//   - IdleTTL: 1h single-tenant / 10m multi-tenant (time before idle publishers are evicted)
+//   - MaxCached: 50, or 0 kept for tenant-limit scaling under multi-tenant per-tenant tenancy
+//   - IdleTTL: 1h, or 10m under multi-tenant per-tenant tenancy (time before idle publishers are evicted)
 //   - CleanupInterval: 2m (cleanup goroutine frequency)
 type PublisherPoolConfig struct {
-	// MaxCached is the maximum number of publisher clients to keep in the cache.
-	// Default: 50. Set higher for applications with many tenants.
+	// MaxCached is the maximum number of publisher clients to keep in the cache, one
+	// cap across all keys. Default: 50, except under multitenant.enabled with
+	// messaging.tenancy per-tenant, where zero is kept so the pool scales to
+	// multitenant.limits.tenants. Set higher for applications with many tenants.
 	MaxCached int `koanf:"maxcached" json:"maxcached" yaml:"maxcached" toml:"maxcached" mapstructure:"maxcached"`
 
 	// IdleTTL is the time after which idle publisher clients are evicted.
-	// Default: 1h when multitenant.enabled is false, 10m when true (see
-	// config/messaging_section.go: applyMessagingDefaults). Set lower for
-	// memory-constrained environments.
+	// Default: 10m under multitenant.enabled with messaging.tenancy per-tenant, 1h
+	// otherwise, including tenancy shared (see config/messaging_section.go:
+	// applyMessagingDefaults). Set lower for memory-constrained environments.
 	IdleTTL time.Duration `koanf:"idlettl" json:"idlettl" yaml:"idlettl" toml:"idlettl" mapstructure:"idlettl"`
 
 	// CleanupInterval is how often the publisher-pool cleanup goroutine runs.

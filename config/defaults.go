@@ -75,12 +75,14 @@ const (
 	defaultMaxReconnectDelay = 60 * time.Second // Maximum delay for exponential backoff cap
 	defaultMaxPublishers     = 50               // Maximum publisher clients in cache
 	defaultPublisherIdleTTL  = 1 * time.Hour    // Time before idle publishers are evicted (single-tenant)
-	// defaultPublisherIdleTTLMultiTenant is the multi-tenant idle-eviction default. It is
-	// deliberately shorter than the single-tenant default to bound per-tenant publisher
-	// churn, and matches the value multi-tenant deployments actually received before
-	// applyMessagingDefaults became mode-aware (app/managers.go's BuildMessagingOptions
-	// multi-tenant fallback — previously unreachable on the production path once this
-	// function unconditionally applied the single-tenant default here first).
+	// defaultPublisherIdleTTLMultiTenant is the idle-eviction default for a publisher pool
+	// keyed per tenant (multi-tenant with messaging.tenancy per-tenant). It is deliberately
+	// shorter than the single-tenant default to bound per-tenant publisher churn; a shared
+	// messaging kind pools only "" and keeps the single-tenant default. The value matches
+	// what multi-tenant deployments actually received before applyMessagingDefaults became
+	// mode-aware (app/managers.go's BuildMessagingOptions multi-tenant fallback — previously
+	// unreachable on the production path once this function unconditionally applied the
+	// single-tenant default here first).
 	defaultPublisherIdleTTLMultiTenant = 10 * time.Minute
 	defaultMaxPublishAttempts          = 5 // Bounded publish retry attempts before giving up
 )
@@ -344,14 +346,15 @@ func normalizeIANATimezone(field, value string) (string, error) {
 	return value, nil
 }
 
-// applyModeAwarePoolDefault handles pool-size keys whose multi-tenant default is
-// dynamic (the builder scales the pool to the tenant limit when the key is unset):
-// zero is preserved in multi-tenant mode so that scaling can happen, negative is
-// always rejected, and single-tenant zero gets the flat default. Stamping the flat
-// default in multi-tenant mode would silently cap the pool below the tenant limit
-// (#661). Shared by the messaging, cache, and database manager appliers.
-func applyModeAwarePoolDefault(field *int, def int, name string, multitenant bool) error {
-	if multitenant {
+// applyModeAwarePoolDefault handles pool-size keys whose default is dynamic when the
+// pool is keyed per tenant (the builder scales it to the tenant limit when the key is
+// unset): zero is preserved for a per-tenant pool so that scaling can happen, negative
+// is always rejected, and any other pool's zero gets the flat default. Stamping the flat
+// default on a per-tenant pool would silently cap it below the tenant limit (#661).
+// perTenantPools is the deployment mode for the cache and database appliers, and
+// multi-tenant with per-tenant messaging tenancy for the messaging applier.
+func applyModeAwarePoolDefault(field *int, def int, name string, perTenantPools bool) error {
+	if perTenantPools {
 		if *field < 0 {
 			return NewValidationError(name, errMustBeNonNegative)
 		}

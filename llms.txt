@@ -3178,8 +3178,8 @@ messaging:
     maxpublishattempts: 5                 # Bounded publish retries before ErrPublishRetriesExhausted
   publishtimeout: 40s                     # OPTIONAL aggregate bound on one whole publish (pre-flight + retry loop), under any tighter caller deadline; unset = unbounded. Must be >= readytimeout + connectiontimeout; a value below maxpublishattempts x connectiontimeout lowers the effective retry count on purpose
   publisher:
-    maxcached: 50                         # Cached publisher channels (per tenant)
-    idlettl: 1h                           # Explicit override; unset default is 1h single-tenant / 10m multi-tenant
+    maxcached: 50                         # Cached publisher channels, one cap across all keys (unset: 50, or the tenant limit under multi-tenant per-tenant tenancy)
+    idlettl: 1h                           # Explicit override; unset default is 1h (single-tenant or tenancy: shared) / 10m (multi-tenant per-tenant)
 ```
 
 Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured — but only once some module actually declared something. For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`.

@@ -2668,6 +2668,8 @@ refusing a malformed one. The accepted cost is stated plainly: the stamp is iden
 authorization, so under shared tenancy **the shared queue's publish ACL is the tenant-isolation
 boundary**.
 
+Amended 2026-10-04 (#1854): shared messaging takes the single-tenant publisher-pool defaults (`idlettl` 1h, `maxcached` 50) and skips the messaging tenant-count WARN; the static tenant count is taken only under `source.type: static`. See [migrations.md](migrations.md) `[C72.15]`.
+
 ### [ADR-086: The Sensitive-Data Filter Masks Inside Opaque Payloads](adr_086_mask_inside_opaque_payloads.md)
 
 **Date:** 2026-08-28 | **Status:** Accepted | **Breaking:** a masked payload is re-encoded (key order, whitespace); an unreadable JSON-looking payload renders as the mask value
