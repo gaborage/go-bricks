@@ -38,7 +38,7 @@ func NewDocumentSpec(signLogical, encryptLogical, subjectPath string) (*Spec, er
 //
 // doc is refused with SEAL_DOCUMENT_INVALID when it is not a single JSON object, carries
 // trailing content, lacks the Subject member, carries it twice, or carries a top-level
-// member whose name case-folds to the Subject's without equalling it (the ADR-097 case-fold
+// member whose name case-folds to the Subject's without equaling it (the ADR-097 case-fold
 // rule, which encoding/json's case-insensitive decode would otherwise let a consumer read
 // instead of the sealed member; every opener door refuses the same twin at rule 10).
 // Nothing of the document's bytes reaches the error.

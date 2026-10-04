@@ -166,7 +166,7 @@
 > **Amended (2026-09-04, #1408):** a second door, `jose/sealed.SealDocument` with
 > `NewDocumentSpec`, seals an already-serialized document for tooling (`cmd/seal-event`) and
 > JSON-fixture tests — same envelope, same invariants, the caller's bytes signed verbatim
-> except the Subject value. The typed door stays the production path. The G9 case-fold twin
+> except the Subject value. The typed door stays the production path. The case-fold twin
 > rule now runs on the serialized bytes for BOTH doors, closing the gap where a custom
 > `MarshalJSON` emitted a clear twin the struct scan never saw (`[C63.5]`, breaking).
 
