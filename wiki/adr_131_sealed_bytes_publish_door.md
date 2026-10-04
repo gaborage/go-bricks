@@ -31,7 +31,7 @@ generation, or one absent from the index, is refused before any broker I/O with
 `SEAL_KID_UNKNOWN_GENERATION` with `Recoverable` true and no `layer` detail. `errors.As` reaches
 a `*jose/sealed.OpenError` with `Rule` 4 (the sign-kid provisioning rule this check tightens on
 the producer), the wire sign kid, and a static message, distinct from the absent-entry one, that
-says the generation is held without its private key; `err.Error()` renders only the code. The
+says the generation is held without its private key; `err.Error()` never carries that message. The
 rule runs after `Verify`, so every existing refusal keeps its code and order: a tampered body
 under a public-only generation is still `SEAL_SIGNATURE_INVALID`. `NewVerifier` never fails for
 it and keeps tagging generations with `keystore.RoleTagSeal`, bytes sealed under `v<N>` before
@@ -126,7 +126,8 @@ verification every error is the client's own, returned as `Publish` returns it.
 
 Wire kids resolve by entry name with no activation filter. Stored `v<N>` bytes keep verifying
 after `messaging.seal.active` flips to `v<N+1>`, until rotation step 5 removes `v<N>` from the
-producer's keystore or, for the sign family, the producer's `v<N>` private key is gone first. The producer role-tags every provisioned RSA generation of both families
+producer's keystore or, for the sign family, the producer's `v<N>` private key is gone first.
+The producer role-tags every provisioned RSA generation of both families
 (`keystore.RoleTagSeal`) at declaration, as the opener does. `SealedEventPublisher[T]` (`Seal` +
 `PublishSealed`) is the injection seam for a module that persists sealed bytes; `*Publisher[T]`
 satisfies it, and `EventPublisher[T]` is unchanged, so consumer-written fakes keep compiling.
@@ -190,7 +191,8 @@ never seals, verifies or reaches a broker.
   and, per the #1898 amendment, a runtime refusal rather than a compile break: `[C73.2]`.
 - A republish is deduplicated by the consumer only within `inbox.retentionperiod` (7 days by
   default), and only while the bytes' sign and encrypt generations are still provisioned there.
-  After step 5, or once the producer's sign private key is gone, the producer refuses them, and recovery is a fresh `Seal` with a new `jti`: the
+  After step 5, or once the producer's sign private key is gone, the producer refuses them, and
+  recovery is a fresh `Seal` with a new `jti`: the
   one residual kept.
 - Neither this door nor `Mandatory` signals queue capacity. A queue length limit with
   `x-overflow: reject-publish` (or `reject-publish-dlx`) makes the broker NACK, and the caller

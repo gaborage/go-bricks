@@ -194,7 +194,8 @@ The roles invert, so the order does too (G3):
 4. Drain gate (above).
 5. Remove `v<N>` from producer and consumers. Removing the producer's entry is load-bearing
    here: the producer holds every encrypt generation public-only, the active one included, so
-   `PublishSealed` keeps admitting `v<N>` bytes until the entry is gone. Destroy the retired privates — until the last one is gone, captured and persisted
+   `PublishSealed` keeps admitting `v<N>` bytes until the entry is gone. Destroy the retired
+   privates — until the last one is gone, captured and persisted
    ciphertext stays readable (no forward secrecy, no revocation).
 
 ### Provisioning a consumer N+1
