@@ -40,6 +40,7 @@ type CommonFlags struct {
 	migratorIdentity *migration.MigratorIdentity
 
 	// Behavior.
+	SharedMigrator  bool
 	ContinueOnError bool
 	Parallel        int
 	Tenant          string
