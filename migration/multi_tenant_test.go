@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -279,7 +280,7 @@ func TestMigrateAllParallel(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		id := "tenant-" + string(rune('a'+i))
 		ids = append(ids, id)
-		cfgs[id] = &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Database: "d", Username: "u", Password: "pw-tenant-x"}
+		cfgs[id] = &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Database: "d-" + id, Username: "u", Password: "pw-tenant-x"}
 	}
 	provider := newFakeConfigProvider(cfgs)
 
@@ -1094,4 +1095,202 @@ func TestMigrateAllMigratorIdentityPasswordStaysOutOfLogsAndErrors(t *testing.T)
 	assert.NotContains(t, output, migratorPassword)
 	assert.NotContains(t, err.Error(), migratorPassword)
 	assert.NotContains(t, fmt.Sprintf("%+v", res), migratorPassword)
+}
+
+// createRecordingFlywayStub is a vendor-agnostic Flyway stand-in that appends one line per
+// invocation to the returned log, so a test can count the runs a MigrateAll call started.
+func createRecordingFlywayStub(t *testing.T) (stub, runLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	runLog = filepath.Join(dir, "runs.log")
+	stub = filepath.Join(dir, "flyway-recording.sh")
+	content := "#!/bin/sh\necho \"${DB_NAME}${ORACLE_PDB}\" >> '" + runLog + "'\necho '" + minimalMigrateSuccessJSON + "'\nexit 0\n"
+	require.NoError(t, os.WriteFile(stub, []byte(content), 0o755))
+	return stub, runLog
+}
+
+func flywayRuns(t *testing.T, runLog string) int {
+	t.Helper()
+	raw, err := os.ReadFile(runLog)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	require.NoError(t, err)
+	return strings.Count(string(raw), "\n")
+}
+
+func pgTenant(host string, port int, dbName, schema, username string) *config.DatabaseConfig {
+	db := pgConfig(host, port, dbName, schema, username)
+	db.Password = "migration-password-" + username
+	return db
+}
+
+// oracleTenant is a tenant in PDB1 on ora:1521 connecting as username.
+func oracleTenant(username string) *config.DatabaseConfig {
+	db := oracleConfig("ora", 1521, "PDB1", username)
+	db.Password = "migration-password-" + username
+	return db
+}
+
+var sharedMigrator = &MigratorIdentity{Username: "fleet_migrator", Password: "pw-fleet"}
+
+// runDuplicateTargetFleet runs MigrateAll sequentially with ContinueOnError over ids, so
+// every tenant's result is visible, and returns it with the number of Flyway runs started.
+func runDuplicateTargetFleet(t *testing.T, ids []string, cfgs map[string]*config.DatabaseConfig, identity *MigratorIdentity, action Action) (res *MigrateAllResult, runs int) {
+	t.Helper()
+	requireShellStubs(t)
+	stub, runLog := createRecordingFlywayStub(t)
+	res, err := MigrateAll(context.Background(), newFlywayMigratorForTest(t), &fakeLister{ids: ids}, newFakeConfigProvider(cfgs), action,
+		MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), ContinueOnError: true, MigratorIdentity: identity})
+	require.NoError(t, err)
+	runs = flywayRuns(t, runLog)
+	return res, runs
+}
+
+func TestMigrateAllRefusesTenantSharingAnEarlierTenantsTarget(t *testing.T) {
+	cases := []struct {
+		name     string
+		t1, t2   *config.DatabaseConfig
+		identity *MigratorIdentity
+	}{
+		{name: "pg_empty_schema_shared_identity", t1: pgTenant("db", 5432, "app", "", "t1"), t2: pgTenant("db", 5432, "app", "", "t2"), identity: sharedMigrator},
+		{name: "pg_explicit_schema_distinct_users", t1: pgTenant("db", 5432, "app", "tenant", "t1"), t2: pgTenant("db", 5432, "app", "tenant", "t2")},
+		{name: "oracle_same_user", t1: oracleTenant("app"), t2: oracleTenant("app")},
+		{name: "host_case", t1: pgTenant("DB", 5432, "app", "s", "t1"), t2: pgTenant("db", 5432, "app", "s", "t2")},
+		{name: "ipv6_brackets", t1: pgTenant("[::1]", 5432, "app", "s", "t1"), t2: pgTenant("::1", 5432, "app", "s", "t2")},
+		{name: "port_zero_is_5432", t1: pgTenant("db", 0, "app", "s", "t1"), t2: pgTenant("db", 5432, "app", "s", "t2")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, runs := runDuplicateTargetFleet(t, []string{"t1", "t2"}, map[string]*config.DatabaseConfig{"t1": tc.t1, "t2": tc.t2}, tc.identity, ActionMigrate)
+			require.Len(t, res.Results, 2)
+			require.NoError(t, res.Results[0].Err)
+			require.ErrorIs(t, res.Results[1].Err, ErrDuplicateMigrationTarget)
+			assert.Contains(t, res.Results[1].Err.Error(), `tenant "t2" resolves to the same migration target as tenant "t1"`)
+			assert.Equal(t, 1, runs, "the refused tenant starts no Flyway process")
+			require.ErrorIs(t, res.Verdict(), ErrFleetSplit)
+		})
+	}
+}
+
+func TestMigrateAllAdmitsTenantsWithDistinctTargets(t *testing.T) {
+	dsn := func(username string) *config.DatabaseConfig {
+		db := pgTenant("db", 5432, "app", "", username)
+		db.ConnectionString = "postgres://db:5432/app"
+		return db
+	}
+	cases := []struct {
+		name     string
+		t1, t2   *config.DatabaseConfig
+		identity *MigratorIdentity
+	}{
+		{name: "database_per_tenant_shared_identity", t1: pgTenant("db", 5432, "t1", "", "u"), t2: pgTenant("db", 5432, "t2", "", "u"), identity: sharedMigrator},
+		{name: "per_tenant_migrator_roles", t1: pgTenant("db", 5432, "app", "", "t1_migrator"), t2: pgTenant("db", 5432, "app", "", "t2_migrator")},
+		{name: "oracle_distinct_users_one_pdb", t1: oracleTenant("t1"), t2: oracleTenant("t2")},
+		{name: "usernames_differ_only_in_case", t1: pgTenant("db", 5432, "app", "", "Migrator"), t2: pgTenant("db", 5432, "app", "", "migrator")},
+		{name: "connection_string_tenants", t1: dsn("u"), t2: dsn("u"), identity: sharedMigrator},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, runs := runDuplicateTargetFleet(t, []string{"t1", "t2"}, map[string]*config.DatabaseConfig{"t1": tc.t1, "t2": tc.t2}, tc.identity, ActionMigrate)
+			assert.Empty(t, res.Failed())
+			assert.Equal(t, 2, runs)
+			require.NoError(t, res.Verdict())
+		})
+	}
+}
+
+func TestMigrateAllNeverKeysATypeLessTenant(t *testing.T) {
+	requireShellStubs(t)
+	stub, runLog := createRecordingFlywayStub(t)
+	fm := NewFlywayMigrator(&config.Config{App: config.AppConfig{Env: "test"}}, logger.New("disabled", true))
+	typeLess := &config.DatabaseConfig{Host: "db", Port: 5432, Database: "app", Username: "u", Password: "migration-password-u"}
+	_, err := MigrateAll(context.Background(), fm, &fakeLister{ids: []string{"t1", "t2"}},
+		newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": typeLess, "t2": typeLess}), ActionMigrate,
+		MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), ContinueOnError: true})
+	require.NotErrorIs(t, err, ErrDuplicateMigrationTarget)
+	assert.Equal(t, 2, flywayRuns(t, runLog), "both type-less tenants reach Flyway")
+}
+
+func TestMigrateAllRefusesARepeatedTenantID(t *testing.T) {
+	res, runs := runDuplicateTargetFleet(t, []string{"t1", "t1"}, map[string]*config.DatabaseConfig{"t1": pgTenant("db", 5432, "app", "s", "u")}, nil, ActionMigrate)
+	require.Len(t, res.Results, 2)
+	require.ErrorIs(t, res.Results[1].Err, ErrDuplicateMigrationTarget)
+	assert.Contains(t, res.Results[1].Err.Error(), `tenant "t1" is listed more than once`)
+	assert.Equal(t, 1, runs)
+	assert.Equal(t, 2, res.Listed(), "the listing is not deduplicated")
+}
+
+func TestMigrateAllRefusesDuplicateTargetForEveryAction(t *testing.T) {
+	for _, action := range []Action{ActionMigrate, ActionValidate, ActionInfo} {
+		t.Run(action.String(), func(t *testing.T) {
+			cfgs := map[string]*config.DatabaseConfig{"t1": pgTenant("db", 5432, "app", "s", "t1"), "t2": pgTenant("db", 5432, "app", "s", "t2")}
+			res, runs := runDuplicateTargetFleet(t, []string{"t1", "t2"}, cfgs, nil, action)
+			require.ErrorIs(t, res.Results[1].Err, ErrDuplicateMigrationTarget)
+			assert.Equal(t, 1, runs)
+		})
+	}
+}
+
+func TestMigrateAllFailFastReturnsTheDuplicateTargetRefusal(t *testing.T) {
+	requireShellStubs(t)
+	stub, runLog := createRecordingFlywayStub(t)
+	same := pgTenant("db", 5432, "app", "s", "u")
+	res, err := MigrateAll(context.Background(), newFlywayMigratorForTest(t), &fakeLister{ids: []string{"t1", "t2", "t3"}},
+		newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": same, "t2": same, "t3": pgTenant("db", 5432, "other", "s", "u")}), ActionMigrate,
+		MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub)})
+	require.ErrorIs(t, err, ErrDuplicateMigrationTarget)
+	assert.Equal(t, []string{"t3"}, res.NeverDispatched)
+	assert.Equal(t, 1, flywayRuns(t, runLog))
+	require.ErrorIs(t, res.Verdict(), ErrFleetSplit)
+}
+
+func TestMigrateAllParallelRefusesEveryLaterSameTargetTenant(t *testing.T) {
+	for _, tenants := range []int{2, 3} {
+		t.Run(strconv.Itoa(tenants)+"_tenants", func(t *testing.T) {
+			requireShellStubs(t)
+			stub, runLog := createRecordingFlywayStub(t)
+			ids := make([]string, 0, tenants)
+			cfgs := map[string]*config.DatabaseConfig{}
+			for i := range tenants {
+				id := "t" + strconv.Itoa(i)
+				ids = append(ids, id)
+				cfgs[id] = pgTenant("db", 5432, "app", "", id)
+			}
+			res, err := MigrateAll(context.Background(), newFlywayMigratorForTest(t), &fakeLister{ids: ids}, newFakeConfigProvider(cfgs), ActionMigrate,
+				MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), Parallelism: 4, ContinueOnError: true, MigratorIdentity: sharedMigrator})
+			require.NoError(t, err)
+			refused := 0
+			for _, r := range res.Results {
+				if errors.Is(r.Err, ErrDuplicateMigrationTarget) {
+					refused++
+				}
+			}
+			assert.Equal(t, tenants-1, refused)
+			assert.Equal(t, 1, flywayRuns(t, runLog))
+			require.ErrorIs(t, res.Verdict(), ErrFleetSplit)
+		})
+	}
+}
+
+func TestMigrateAllDuplicateTargetErrorCarriesNoTargetOrCredential(t *testing.T) {
+	cfgs := map[string]*config.DatabaseConfig{
+		"t1": pgTenant("secret-host.internal", 5432, "app", "", "t1"),
+		"t2": pgTenant("secret-host.internal", 5432, "app", "", "t2"),
+	}
+	res, _ := runDuplicateTargetFleet(t, []string{"t1", "t2"}, cfgs, sharedMigrator, ActionMigrate)
+	msg := res.Results[1].Err.Error()
+	for _, leaked := range []string{"secret-host", sharedMigrator.Username, sharedMigrator.Password, "app"} {
+		assert.NotContains(t, msg, leaked)
+	}
+}
+
+func TestMigrateAllScopesTargetClaimsToOneCall(t *testing.T) {
+	same := pgTenant("db", 5432, "app", "s", "u")
+	cfgs := map[string]*config.DatabaseConfig{"t1": same, "t2": same}
+	for _, id := range []string{"t1", "t2"} {
+		res, runs := runDuplicateTargetFleet(t, []string{id}, cfgs, nil, ActionMigrate)
+		require.NoError(t, res.Verdict(), "tenant %s", id)
+		assert.Equal(t, 1, runs)
+	}
 }

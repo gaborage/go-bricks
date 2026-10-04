@@ -191,9 +191,9 @@ func TestMigrateCommandFailFastStopsAfterFirstFailure(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		secretName("t1"): canonicalTenantSecret("h", "d", "u"),
-		secretName("t2"): canonicalTenantSecret("h", "d", "u"),
-		secretName("t3"): canonicalTenantSecret("h", "d", "u"),
+		secretName("t1"): canonicalTenantSecret("h", "d-t1", "u"),
+		secretName("t2"): canonicalTenantSecret("h", "d-t2", "u"),
+		secretName("t3"): canonicalTenantSecret("h", "d-t3", "u"),
 	})
 	defer smSrv.Close()
 
@@ -236,8 +236,8 @@ func TestMigrateCommandContinueOnErrorListsAllFailures(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		secretName("t1"): canonicalTenantSecret("h", "d", "u"),
-		secretName("t2"): canonicalTenantSecret("h", "d", "u"),
+		secretName("t1"): canonicalTenantSecret("h", "d-t1", "u"),
+		secretName("t2"): canonicalTenantSecret("h", "d-t2", "u"),
 	})
 	defer smSrv.Close()
 
@@ -369,7 +369,7 @@ func fakeFleet(t *testing.T, ids ...string) (listURL, smURL string) {
 	t.Helper()
 	secrets := make(map[string]string, len(ids))
 	for _, id := range ids {
-		secrets[secretName(id)] = canonicalTenantSecret("h", "d", "u")
+		secrets[secretName(id)] = canonicalTenantSecret("h", "d-"+id, "u")
 	}
 	listSrv := tenantListServer(ids...)
 	smSrv := fakeSecretsManager(t, secrets)

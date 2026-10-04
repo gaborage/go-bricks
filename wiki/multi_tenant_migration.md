@@ -169,7 +169,8 @@ Its pair is [`WithSharedMigrator`](#schema-targeting-postgresql). Setting
 with one migrator role across every database and the target schema (typically
 `public`) in each is a legitimate deployment where the role-level `search_path`
 is correct everywhere, so inferring the requirement here would break real
-setups.
+setups. Two tenants the overlay leaves on one target are refused anyway: see
+[Duplicate targets](#duplicate-targets).
 
 The overlay presents one credential with DDL rights on every tenant schema to
 every tenant's host, so a tenant document naming a wrong or hostile host exposes
@@ -240,7 +241,60 @@ Schema names must match `^[A-Za-z_][A-Za-z0-9_$]*$` within 63 bytes; an invalid 
 fast with `ErrInvalidPGIdentifier` before Flyway runs (the value is formatted
 into subprocess argv, and `-schemas` is comma-separated, so an unvalidated name
 could smuggle a second schema). Oracle is not applicable — its schema is the
-connecting user, which is already per-tenant.
+connecting user. That is per-tenant only without a `MigratorIdentity` overlay:
+under one, every Oracle tenant in one PDB connects as the same user, hence the
+same schema, and `MigrateAll` refuses every tenant after the first (see
+[Duplicate targets](#duplicate-targets)).
+
+### Duplicate targets
+
+Within one `MigrateAll` call, a tenant whose migration target an earlier tenant
+of the same call already claimed is refused before any Flyway process starts,
+for `migrate`, `validate` and `info` alike
+([ADR-143](adr_143_duplicate_migration_target_refusal.md)). Without the check,
+the second tenant's run finds the shared history at head and reports success
+while its real schema is never migrated — a false green. Its
+`TenantResult.Err` wraps `migration.ErrDuplicateMigrationTarget` and names both
+tenant IDs (`tenant "t2" resolves to the same migration target as tenant "t1"`,
+or `tenant "t1" is listed more than once`), never the host, username or
+password.
+
+The key is read from the effective config, after the `MigratorIdentity`
+overlay:
+
+- **PostgreSQL with a framework-built URL** (discrete host and database, no
+  `connectionstring`): host, port, database and `postgresql.schema`; with the
+  schema empty, host, port, database and the effective username, because the
+  connecting role's `search_path` then picks the schema. Distinct per-tenant
+  migrator roles in one database therefore keep passing.
+- **Oracle:** host, port, PDB and the effective username.
+
+The host compares lowercased and without IPv6 brackets, a PostgreSQL port of 0
+equals 5432, and database, schema and username compare byte-exact.
+
+Blind spots: a conf-owned target (a `connectionstring`, or no host or database)
+and a tenant whose vendor resolves to neither are not keyed and run as today;
+DNS aliases (a CNAME, or an IP against a name), an Oracle port of 0 against
+1521, Oracle's case-insensitive unquoted user and service names (`app` against
+`APP`), distinct PostgreSQL roles with no role-level `search_path` (all land in
+`public`), and two separate `MigrateAll` calls, which rely on Flyway's own lock,
+are missed. A type-less tenant under a typed runner is keyed by its own
+username, which Flyway may not connect as: a possible false negative, or a
+refusal fixed by setting the tenant's `type`. In the shared-migrator
+empty-schema case the first tenant is a false green too, and only
+[`WithSharedMigrator`](#schema-targeting-postgresql) catches it. A tenant that
+claims a target and then fails its own run still holds the claim.
+
+The refusal is per tenant and classified like any failure under
+[ADR-115](adr_115_fleet_migration_run_verdict.md): the refused tenant was
+dispatched and failed, so `res.Verdict()` is `ErrFleetSplit`. Fail-fast returns
+the refusal, and under `Parallelism > 1` it usually cancels the in-flight
+claimant; with `ContinueOnError` every later collider is refused. Sequentially
+the claimant is the first tenant in listing order; in parallel it is whichever
+tenant claims first. The refused tenant's schema is untouched. The remedy is
+configuration, not a re-run, which collides again: give each tenant a distinct
+`postgresql.schema` or migrator role, or de-list the alias or repeated ID.
+`go-bricks-migrate` gets the check at its routine go-bricks pin bump.
 
 ## Installing the CLI
 
@@ -662,7 +716,7 @@ the whole run ([ADR-115](adr_115_fleet_migration_run_verdict.md)):
 | Verdict | When | Schema state | Operator action |
 | --- | --- | --- | --- |
 | `nil` (clean) | At least one tenant listed, every listed tenant dispatched, none failed | The action succeeded on every tenant (for a non-dry-run `ActionMigrate`, the fleet is at head) | Proceed |
-| `migration.ErrFleetSplit` | At least one tenant dispatched, and at least one failed or was never dispatched | Mixed versions possible; a failed tenant's state may be unknown | Repair the failed tenants, then re-run; the never-dispatched IDs still need the new SQL |
+| `migration.ErrFleetSplit` | At least one tenant dispatched, and at least one failed or was never dispatched | Mixed versions possible; a failed tenant's state may be unknown | Repair the failed tenants, then re-run; the never-dispatched IDs still need the new SQL. A tenant refused with `ErrDuplicateMigrationTarget` is untouched and needs a configuration fix, not a re-run ([Duplicate targets](#duplicate-targets)) |
 | `migration.ErrNothingAttempted` | No tenant dispatched: empty listing, listing failure (nil result), context done or quiesce set before the first dispatch | Untouched | Fix the cause outside the database, then re-run |
 
 A dispatched tenant that ends in `ErrFlywayTimeout` or `ErrFlywayCanceled` is a failure, not a
@@ -674,7 +728,7 @@ The `go-bricks-migrate` CLI exits on the same three classes:
 | Exit | Verdict | Meaning |
 | --- | --- | --- |
 | `0` | clean | Every listed tenant was dispatched and succeeded |
-| `1` | `ErrFleetSplit`, or any run error | At least one tenant was dispatched and at least one failed or was never reached — or the run itself errored while the fleet stayed consistent |
+| `1` | `ErrFleetSplit`, or any run error | At least one tenant was dispatched and at least one failed or was never reached — or the run itself errored while the fleet stayed consistent. A tenant refused with `ErrDuplicateMigrationTarget` (once the CLI's go-bricks pin includes the check) is an exit-1 cause fixed by configuration, not a re-run |
 | `2` | `ErrNothingAttempted` | No tenant was dispatched — empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, an unparseable `GOBRICKS_MIGRATE_SHARED_MIGRATOR`, or a misuse (unknown flag, stray argument, flag combination that does not resolve). No schema was touched |
 
 Exit `1` is reserved for a split fleet so a pipeline can trust it: every misuse exits `2`, because a
