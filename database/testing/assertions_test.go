@@ -59,6 +59,7 @@ func TestAssertAllExpectationsMetPassesWhenEverythingWasMet(t *testing.T) {
 	require.NoError(t, err)
 	tx, err := db.Begin(ctx)
 	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
 	_, err = tx.Exec(ctx, "UPDATE orders SET paid = true")
 	require.NoError(t, err)
 	s, err := db.Session(ctx)
@@ -67,6 +68,7 @@ func TestAssertAllExpectationsMetPassesWhenEverythingWasMet(t *testing.T) {
 	require.NoError(t, err)
 	stx, err := s.Begin(ctx)
 	require.NoError(t, err)
+	defer func() { _ = stx.Rollback(ctx) }()
 	require.NoError(t, stx.QueryRow(ctx, "SELECT total FROM t").Scan(new(int)))
 
 	assert.Empty(t, unmetExpectations(db))
@@ -147,6 +149,7 @@ func TestAssertAllExpectationsMetReportsEachUnmetItem(t *testing.T) {
 					ExpectQuery("SELECT total").WillReturnRows(NewRowSet("total"))
 				tx, err := db.Begin(ctx)
 				require.NoError(t, err)
+				defer func() { _ = tx.Rollback(ctx) }()
 				_, err = tx.Exec(ctx, "INSERT INTO orders VALUES (1)")
 				require.NoError(t, err)
 			},
@@ -213,6 +216,7 @@ func TestAssertAllExpectationsMetCountsErrorsAsMet(t *testing.T) {
 	require.ErrorIs(t, err, boom)
 	tx, err := db.Begin(ctx)
 	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
 	_, err = tx.Exec(ctx, "INSERT INTO t VALUES (1)")
 	require.ErrorIs(t, err, boom)
 	require.ErrorIs(t, queryErr(t, tx, "SELECT total FROM t"), boom)
@@ -231,12 +235,10 @@ func TestAssertAllExpectationsMetSkipsFailedBegin(t *testing.T) {
 	db.ExpectTransaction().WillFailBegin(sentinel).ExpectExec("INSERT pool")
 	db.ExpectSession().ExpectTransaction().WillFailBegin(sentinel).ExpectExec("INSERT session")
 
-	_, err := db.Begin(ctx)
-	require.ErrorIs(t, err, sentinel)
+	require.ErrorIs(t, beginErr(ctx, db.Begin), sentinel)
 	s, err := db.Session(ctx)
 	require.NoError(t, err)
-	_, err = s.BeginTx(ctx, nil)
-	require.ErrorIs(t, err, sentinel)
+	require.ErrorIs(t, beginErr(ctx, func(ctx context.Context) (dbtypes.Tx, error) { return s.BeginTx(ctx, nil) }), sentinel)
 
 	assert.Empty(t, unmetExpectations(db))
 	recorder := &testing.T{}
@@ -277,6 +279,16 @@ func queryErr(t *testing.T, q interface {
 	rows, err := q.Query(t.Context(), query)
 	if rows != nil {
 		defer rows.Close()
+	}
+	return err
+}
+
+// beginErr begins a transaction expected to fail, rolls back any it did get, and
+// reports only the error.
+func beginErr(ctx context.Context, begin func(context.Context) (dbtypes.Tx, error)) error {
+	tx, err := begin(ctx)
+	if tx != nil {
+		defer func() { _ = tx.Rollback(ctx) }()
 	}
 	return err
 }
