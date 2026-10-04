@@ -91,3 +91,62 @@ publishes, size the deadline against the real AMQP call bound —
 wait. A raised `reconnect.resenddelay` can stretch the publish-error path;
 see [context_deadlines.md](context_deadlines.md) and
 [messaging.md](messaging.md#bounded-publish-retries-reconnectmaxpublishattempts).
+
+## Multi-tenant jobs
+
+A job runs with no tenant in its context. Under per-tenant tenancy,
+`JobContext.DB()` and `JobContext.Messaging()` therefore resolve no tenant:
+they return nil and log an ERROR. A job that works on tenants names each one.
+
+The scheduler installs one lease scope per job run ([ADR-032](adr_032_lease_refcount_tenant_handles.md)).
+A sweep that borrows on the job context, `deps.DB(multitenant.SetTenant(jobCtx, id))`
+(or `deps.Cache`/`deps.Messaging`), registers every tenant's lease in that one
+scope, and none is released until the job returns. Releasing a lease does not
+close a cached handle, so this matters only when the sweep covers more tenants
+than the manager's max size (`database.manager.maxsize`, `cache.manager.maxsize`,
+`messaging.publisher.maxcached`): the managers never refuse a borrow, so every
+leased handle the LRU displaces stays open, with its connections, until the job
+returns.
+
+`multitenant.ForEachTenant` runs a callback once per tenant, each inside that
+tenant's own lease scope, drained when the callback returns or panics. The job
+then holds about one tenant's handles at a time. Take the tenant list from
+`Config.PerTenantJobKeys()` for static tenants (`[""]` in single-tenant mode, so
+the callback runs once with no tenant), or supply your own for a dynamic source:
+
+```go
+type SweepJob struct {
+    db func(context.Context) (database.Interface, error) // deps.DB, captured in Init
+}
+
+func (j *SweepJob) Execute(jobCtx scheduler.JobContext) error {
+    tenants := jobCtx.Config().PerTenantJobKeys()
+    return multitenant.ForEachTenant(jobCtx, tenants, func(ctx context.Context, tenantID string) error {
+        db, err := j.db(ctx) // borrow on ctx, never on jobCtx
+        if err != nil {
+            return fmt.Errorf("tenant %q: %w", tenantID, err)
+        }
+        if _, err := db.Exec(ctx, "DELETE FROM sessions WHERE expires_at < now()"); err != nil {
+            return fmt.Errorf("tenant %q: %w", tenantID, err)
+        }
+        return nil
+    })
+}
+```
+
+Tenants run in order. Errors from the callback are joined unwrapped and the
+sweep continues; once the context is done no further tenant starts and
+`ctx.Err()` joins the result. A panic is not recovered: it propagates after that
+tenant's scope has drained, and the scheduler's job-level recovery reports it.
+
+Escape rules:
+
+- Borrow inside the callback only through its `ctx` or a context derived from
+  it. A borrow on the outer job context lands in the job scope and is not
+  bounded.
+- Do not use a handle, `database.Session` or transaction obtained inside the
+  callback after it returns.
+- The bound matters only when the sweep covers more tenants than the manager's
+  max size; at or below it every handle stays cached either way.
+- The caller supplies the tenant list: `Config.PerTenantJobKeys()` for static
+  tenants, or its own list for dynamic sources.

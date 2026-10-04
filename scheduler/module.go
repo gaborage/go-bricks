@@ -613,9 +613,9 @@ func (m *Module) runJobBody(entry *jobEntry, triggerType string) {
 	defer cancel()
 
 	// Install the per-job lease scope (ADR-032): per-tenant handles the job borrows via
-	// JobContext.DB()/Messaging() — including the per-tenant fan-out in outbox relay and
-	// inbox cleanup, whose SetTenant children inherit this scope — are released when the
-	// job run completes, so a handle evicted mid-job is not closed under it.
+	// JobContext.DB()/Messaging() are released when the job run completes, so a handle
+	// evicted mid-job is not closed under it. The outbox relay, inbox cleanup and
+	// multitenant.ForEachTenant install their own per-tenant scope, which shadows this one.
 	ctx, scope := leasescope.Install(ctx)
 	defer scope.ReleaseAll()
 

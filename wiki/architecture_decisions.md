@@ -414,8 +414,8 @@ The managers now **reference-count** each entry: `Get()`/`Publisher()` return `(
 eviction/idle-cleanup **detach** an entry immediately but **defer its `Close()` until the last lease is
 released**, and a brand-new entry carries a **seed lease** so concurrent eviction/`Remove` can only detach
 (never close) it during the acquisition window. A private `internal/leasescope` package carries a per-unit
-lease scope in `context.Context`; the framework installs it at three seams (HTTP `RequestEnrich`, AMQP
-`processMessage`, scheduler `executeJob`) covering six unit-of-work types via context inheritance, and the
+lease scope in `context.Context`; the framework installs it at three seams (HTTP `RequestEnrich`, message
+`delivery.Run`, scheduler `runJobBody`), its fan-out jobs install their own per-tenant scope, and the
 per-tenant accessors register each lease there — so **`deps.DB/Cache/Messaging` and `ResourceProvider` are
 unchanged and applications do not change**.
 
@@ -423,6 +423,9 @@ unchanged and applications do not change**.
 Direct callers must capture and invoke it; unscoped contexts release immediately (non-leaking, unprotected).
 
 **Key Benefits:** An in-use handle is never closed — the M3 race is closed on every concurrent multi-tenant path (HTTP, consumers, jobs, outbox relay, inbox); no application-facing API change; robust under heavy eviction/`Remove` churn via the seed-lease hand-off
+
+Amended 2026-10-04 (#1866): `multitenant.ForEachTenant` runs a tenant-sweeping job's work in one fresh
+scope per tenant; the scope itself stays private.
 
 ---
 
