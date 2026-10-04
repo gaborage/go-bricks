@@ -1285,6 +1285,10 @@ instance, and the operator-script path `PGRoleProvisioningSQL` has no server bac
 before any caller `IdentifierPolicy`, which therefore cannot waive it. Also **breaking**: rename such
 a schema or role before upgrading. See [migrations.md](migrations.md) `[C65.4]`.
 
+**Amended (2026-10-04, #1704):** opt-in `PGPasswordSCRAMSHA256` mode also requires printable-ASCII
+passwords (`ErrPGRolePasswordNotSCRAMSafe`), the only range where PostgreSQL's SASLprep and pgx's
+normalization agree.
+
 ### [ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)](adr_062_database_tls_fail_closed.md)
 
 **Date:** 2026-08-14 | **Status:** Accepted

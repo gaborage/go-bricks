@@ -1600,3 +1600,82 @@ func requireRuntimeRoleSeparation(ctx context.Context, t *testing.T, migratorDB,
 		assert.True(t, isPermissionDenied(err), "want permission denied for %s, got: %v", stmt, err)
 	}
 }
+
+// TestPGRolesSCRAMModeStoresTheVerifier provisions SCRAM-mode roles through
+// both Go doors and proves PostgreSQL stored the computed verifier as-is: the
+// stored value recomputes from the plaintext and its own salt, the plaintext
+// logs in, and a wrong password is refused (so the login was password-checked).
+// The server hashes plaintext as md5, so a plaintext-mode emission could not
+// pass the recompute; a plaintext-mode control proves the setting took effect.
+func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	admin := env.adminDB(t)
+	_, err := admin.ExecContext(ctx, `ALTER SYSTEM SET password_encryption = 'md5'`)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx, `SELECT pg_reload_conf()`)
+	require.NoError(t, err)
+
+	plainSpec := &PGRoleSpec{
+		Schema:          "tenant_scram_plain",
+		MigratorRole:    "mig_scram_plain",
+		RuntimeRole:     "rt_scram_plain",
+		RuntimePassword: testconsts.FakePassword("rt-scram-plain"),
+	}
+	require.NoError(t, ProvisionPGRoles(ctx, env.adminDB(t), plainSpec))
+	var plainStored string
+	require.NoError(t, admin.QueryRowContext(ctx,
+		`SELECT rolpassword FROM pg_authid WHERE rolname = $1`, plainSpec.RuntimeRole).Scan(&plainStored))
+	require.True(t, strings.HasPrefix(plainStored, "md5"),
+		"premise: the server must hash a plaintext password as md5 (stored len %d)", len(plainStored))
+
+	sqlDBSpec := &PGRoleSpec{
+		Schema:           "tenant_scram_db",
+		MigratorRole:     "mig_scram_db",
+		MigratorPassword: testconsts.FakePassword("mig-scram-db"),
+		RuntimeRole:      "rt_scram_db",
+		RuntimePassword:  testconsts.FakePassword("rt-scram-db"),
+		PasswordFormat:   PGPasswordSCRAMSHA256,
+	}
+	require.NoError(t, ProvisionPGRoles(ctx, admin, sqlDBSpec))
+
+	txSpec := &PGRoleSpec{
+		Schema:           "tenant_scram_tx",
+		MigratorRole:     "mig_scram_tx",
+		MigratorPassword: testconsts.FakePassword("mig-scram-tx"),
+		RuntimeRole:      "rt_scram_tx",
+		RuntimePassword:  testconsts.FakePassword("rt-scram-tx"),
+		PasswordFormat:   PGPasswordSCRAMSHA256,
+	}
+	require.NoError(t, database.WithTx(ctx, env.adminConn(t), func(ctx context.Context, tx database.Tx) error {
+		return ProvisionPGRolesTx(ctx, tx, txSpec)
+	}))
+
+	for _, spec := range []*PGRoleSpec{sqlDBSpec, txSpec} {
+		for role, password := range map[string]string{
+			spec.MigratorRole: spec.MigratorPassword,
+			spec.RuntimeRole:  spec.RuntimePassword,
+		} {
+			var stored string
+			require.NoError(t, admin.QueryRowContext(ctx,
+				`SELECT rolpassword FROM pg_authid WHERE rolname = $1`, role).Scan(&stored))
+			requireSCRAMVerifierOf(t, password, stored)
+
+			env.openAsRole(t, role, password)
+			requireSQLState(t, pingAsRole(ctx, t, env, role, testconsts.FakePassword("wrong")), "28P01")
+		}
+	}
+}
+
+// pingAsRole opens and pings a connection as role, returning the ping error
+// rather than failing, for the wrong-password control.
+func pingAsRole(ctx context.Context, t *testing.T, env *integrationEnv, role, password string) error {
+	t.Helper()
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		role, password, env.host, env.port, env.defaultDB)
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	return db.PingContext(ctx)
+}

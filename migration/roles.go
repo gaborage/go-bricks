@@ -2,6 +2,7 @@ package migration
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -40,7 +41,8 @@ type PGRoleSpec struct {
 	// PASSWORD on every call. Useful for the one-time bootstrap and for
 	// secret rotation. Leave empty when credentials are managed externally
 	// (e.g., the role is created out-of-band and password set via a
-	// privileged migration pipeline).
+	// privileged migration pipeline). PasswordFormat decides whether the
+	// statement carries it in plaintext or as a SCRAM-SHA-256 verifier.
 	MigratorPassword string
 
 	// RuntimeRole is the per-tenant DML-only role consumed by the running
@@ -49,7 +51,7 @@ type PGRoleSpec struct {
 
 	// RuntimePassword is optionally assigned to RuntimeRole. Same semantics
 	// as MigratorPassword — passing it on every call makes secret rotation a
-	// no-op rerun.
+	// no-op rerun — and the same PasswordFormat.
 	RuntimePassword string
 
 	// SkipMigratorRole leaves MigratorRole untouched: no CREATE ROLE, attribute
@@ -67,6 +69,12 @@ type PGRoleSpec struct {
 	// CREATEROLE-only role ALTER only NOCREATEROLE.
 	SkipFloorReassert bool
 
+	// PasswordFormat selects how MigratorPassword and RuntimePassword reach
+	// ALTER ROLE ... PASSWORD. The zero value, PGPasswordPlaintext, sends each
+	// password as given; PGPasswordSCRAMSHA256 sends a SCRAM-SHA-256 verifier
+	// computed in process, so the server never receives the plaintext.
+	PasswordFormat PGPasswordFormat
+
 	// IdentifierPolicy optionally tightens the identifier rule Validate
 	// applies to Schema, MigratorRole and RuntimeRole; nil means the floor alone.
 	// Leave the field unset for that — storing a typed nil
@@ -74,6 +82,26 @@ type PGRoleSpec struct {
 	// holding a PGIdentifierCheckerFunc is not comparable; see that type.
 	IdentifierPolicy PGIdentifierChecker
 }
+
+// PGPasswordFormat selects how PGRoleSpec passwords are sent to PostgreSQL.
+type PGPasswordFormat int
+
+const (
+	// PGPasswordPlaintext sends each password as a plaintext literal; the
+	// server hashes it under its own password_encryption setting.
+	PGPasswordPlaintext PGPasswordFormat = iota
+
+	// PGPasswordSCRAMSHA256 sends each password as a SCRAM-SHA-256 verifier
+	// (RFC 5802, RFC 7677) with a fresh 16-byte random salt and 4096
+	// iterations, which PostgreSQL stores as-is. Validate then also requires
+	// every non-empty password to be printable ASCII.
+	PGPasswordSCRAMSHA256
+)
+
+const (
+	pgSCRAMIterations = 4096
+	pgSCRAMSaltLen    = 16
+)
 
 // PGIdentifierChecker is a caller-supplied check layered on top of the
 // identifier floor (database/identifier.Validate for PostgreSQL). Validate
@@ -179,6 +207,18 @@ var ErrReservedPGIdentifier = errors.New("migration: identifier is reserved by P
 // subprocess environment.
 var ErrPGRolePasswordHasControlChar = errors.New("migration: role password contains forbidden control character (CR/LF/NUL)")
 
+// ErrPGRolePasswordNotSCRAMSafe is returned by Validate in PGPasswordSCRAMSHA256
+// mode when a non-empty role password holds a byte outside printable ASCII
+// (0x20-0x7E). Only in that range do PostgreSQL's SASLprep and the client
+// drivers' normalization agree, so a verifier computed here is guaranteed to
+// match what a client derives at login. CR, LF and NUL are still reported as
+// ErrPGRolePasswordHasControlChar, which is checked first.
+var ErrPGRolePasswordNotSCRAMSafe = errors.New("migration: role password must be printable ASCII in SCRAM-SHA-256 mode")
+
+// ErrUnknownPGPasswordFormat is returned by Validate when PasswordFormat holds
+// a value other than PGPasswordPlaintext or PGPasswordSCRAMSHA256.
+var ErrUnknownPGPasswordFormat = errors.New("migration: unknown PGRoleSpec.PasswordFormat")
+
 // ErrPGRoleSkippedMigratorHasPassword is returned by Validate when
 // SkipMigratorRole is set together with a non-empty MigratorPassword, so a
 // leftover password can never alter a migrator role managed out of band.
@@ -186,7 +226,7 @@ var ErrPGRoleSkippedMigratorHasPassword = errors.New("migration: MigratorPasswor
 
 // Field name constants used in Validate error messages — the identifier
 // fields via ErrInvalidPGIdentifier, the password fields via
-// ErrPGRolePasswordHasControlChar — so callers (including tests) can assert
+// ErrPGRolePasswordHasControlChar or ErrPGRolePasswordNotSCRAMSafe — so callers (including tests) can assert
 // which field failed without coupling to the literal string.
 const (
 	pgRoleFieldSchema           = "Schema"
@@ -215,6 +255,10 @@ const (
 // never the value — for a password failure, or
 // ErrPGRoleSkippedMigratorHasPassword when SkipMigratorRole is set with a
 // non-empty MigratorPassword.
+// PasswordFormat must be PGPasswordPlaintext or PGPasswordSCRAMSHA256, else
+// ErrUnknownPGPasswordFormat. In SCRAM-SHA-256 mode, after the CR/LF/NUL check
+// has passed for both passwords, each non-empty one must also be printable
+// ASCII, else ErrPGRolePasswordNotSCRAMSafe wrapped with the field name.
 func (s *PGRoleSpec) Validate() error {
 	for _, f := range []struct{ name, value string }{
 		{pgRoleFieldSchema, s.Schema},
@@ -231,12 +275,29 @@ func (s *PGRoleSpec) Validate() error {
 	if s.SkipMigratorRole && s.MigratorPassword != "" {
 		return ErrPGRoleSkippedMigratorHasPassword
 	}
-	for _, f := range []struct{ name, value string }{
+	return s.validatePasswords()
+}
+
+// validatePasswords applies the PasswordFormat check, then the CR/LF/NUL rule to both
+// passwords, then, in SCRAM-SHA-256 mode, the printable-ASCII rule.
+func (s *PGRoleSpec) validatePasswords() error {
+	if s.PasswordFormat != PGPasswordPlaintext && s.PasswordFormat != PGPasswordSCRAMSHA256 {
+		return fmt.Errorf("%w: %d", ErrUnknownPGPasswordFormat, s.PasswordFormat)
+	}
+	passwords := []struct{ name, value string }{
 		{pgRoleFieldMigratorPassword, s.MigratorPassword},
 		{pgRoleFieldRuntimePassword, s.RuntimePassword},
-	} {
+	}
+	for _, f := range passwords {
 		if strings.ContainsAny(f.value, "\r\n\x00") {
 			return fmt.Errorf("%w: %s", ErrPGRolePasswordHasControlChar, f.name)
+		}
+	}
+	if s.PasswordFormat == PGPasswordSCRAMSHA256 {
+		for _, f := range passwords {
+			if !isSCRAMSafePassword(f.value) {
+				return fmt.Errorf("%w: %s", ErrPGRolePasswordNotSCRAMSafe, f.name)
+			}
 		}
 	}
 	return nil
@@ -344,7 +405,10 @@ func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx contex
 		return err
 	}
 
-	stmts := buildPGRoleStatements(spec)
+	stmts, err := buildPGRoleStatements(spec)
+	if err != nil {
+		return err
+	}
 	for i, stmt := range stmts {
 		if err := run(ctx, stmt); err != nil {
 			return fmt.Errorf("migration: provisioning step %d (%s) failed: %w",
@@ -361,16 +425,21 @@ func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx contex
 // executing role needs the privileges listed on ProvisionPGRoles.
 //
 // Returns Validate's error when spec fails it — ErrInvalidPGIdentifier,
-// ErrPGRolePasswordHasControlChar or ErrPGRoleSkippedMigratorHasPassword. The
-// returned slice does not include trailing semicolons; callers concatenating
+// ErrPGRolePasswordHasControlChar, ErrPGRolePasswordNotSCRAMSafe,
+// ErrUnknownPGPasswordFormat or ErrPGRoleSkippedMigratorHasPassword — or an
+// error when a SCRAM-SHA-256 verifier cannot be computed. The returned slice does not include trailing semicolons; callers concatenating
 // them into a single script should add separators themselves.
 //
 // SECURITY: when spec.MigratorPassword or spec.RuntimePassword is non-empty,
-// the returned statements include the password as an in-clear SQL literal
-// (`ALTER ROLE "..." PASSWORD '<secret>'`). Treat the returned slice as a
-// sensitive value: do not echo it to logs, CI build artifacts, or anywhere
-// the original credential wouldn't be acceptable. Callers preparing scripts
-// for review should redact the literal before persisting to disk.
+// the returned statements include a credential literal
+// (`ALTER ROLE "..." PASSWORD '<secret>'`): the password in clear in plaintext
+// mode, its SCRAM-SHA-256 verifier in PGPasswordSCRAMSHA256 mode. A verifier is
+// still a credential — it allows offline password guessing and impersonating
+// the server to a client. Treat the returned slice as a sensitive value: do not
+// echo it to logs, CI build artifacts, or anywhere the original credential
+// wouldn't be acceptable. Callers preparing scripts for review should redact
+// the literal before persisting to disk. In SCRAM-SHA-256 mode each call salts
+// afresh, so the verifier text differs between calls for the same spec.
 func PGRoleProvisioningSQL(spec *PGRoleSpec) ([]string, error) {
 	if spec == nil {
 		return nil, errors.New("migration: PGRoleProvisioningSQL requires a non-nil *PGRoleSpec")
@@ -378,12 +447,13 @@ func PGRoleProvisioningSQL(spec *PGRoleSpec) ([]string, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	return buildPGRoleStatements(spec), nil
+	return buildPGRoleStatements(spec)
 }
 
 // buildPGRoleStatements composes the ordered statement list. Spec is assumed
-// to be non-nil and Validate()-clean.
-func buildPGRoleStatements(spec *PGRoleSpec) []string {
+// to be non-nil and Validate()-clean. The only error is a failure to render a
+// SCRAM-SHA-256 verifier; a password is never emitted in plaintext instead.
+func buildPGRoleStatements(spec *PGRoleSpec) ([]string, error) {
 	schema := quotePGIdent(spec.Schema)
 	migrator := quotePGIdent(spec.MigratorRole)
 	runtime := quotePGIdent(spec.RuntimeRole)
@@ -407,9 +477,13 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 			stmts = append(stmts, buildRoleCreateAndLockdown(r.quotedIdent)...)
 		}
 		if r.password != "" {
+			literal, err := passwordLiteral(spec.PasswordFormat, r.password)
+			if err != nil {
+				return nil, err
+			}
 			stmts = append(stmts, fmt.Sprintf(
 				`ALTER ROLE %s PASSWORD %s`,
-				r.quotedIdent, quotePGStringLiteral(r.password),
+				r.quotedIdent, quotePGStringLiteral(literal),
 			))
 		}
 	}
@@ -436,7 +510,29 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 	for _, r := range roles {
 		stmts = append(stmts, fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, r.quotedIdent, schema))
 	}
-	return stmts
+	return stmts, nil
+}
+
+// passwordLiteral returns what ALTER ROLE ... PASSWORD carries for password:
+// the password itself in plaintext mode, or in SCRAM-SHA-256 mode its verifier
+// under a fresh random salt, so every call yields a different string.
+func passwordLiteral(format PGPasswordFormat, password string) (string, error) {
+	if format == PGPasswordSCRAMSHA256 {
+		return scramPasswordLiteral(password)
+	}
+	return password, nil
+}
+
+func scramPasswordLiteral(password string) (string, error) {
+	salt := make([]byte, pgSCRAMSaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("migration: generating a SCRAM salt: %w", err)
+	}
+	verifier, err := scramSHA256Verifier(password, salt, pgSCRAMIterations)
+	if err != nil {
+		return "", fmt.Errorf("migration: computing a SCRAM verifier: %w", err)
+	}
+	return verifier, nil
 }
 
 // buildRoleCreateAndLockdown returns the two-statement idempotent template

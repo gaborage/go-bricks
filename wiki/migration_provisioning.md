@@ -301,7 +301,9 @@ make it an upsert if you want the rerun to converge. Reach for
 `PGRoleProvisioningSQL` instead of `ProvisionPGRolesTx` only when you need
 the statements themselves (to inspect, log-redact, or hand to another
 runner) — its doc carries a `SECURITY` note that they can include a
-password literal in clear text, so don't log the slice.
+credential literal: the password in clear text by default, or its
+SCRAM-SHA-256 verifier with `PasswordFormat: migration.PGPasswordSCRAMSHA256`,
+which is still sensitive. Either way, don't log the slice.
 
 **Why the `ProvisionPGRoles` partial-progress caveat doesn't apply here.**
 `ProvisionPGRoles`'s doc comment (`migration/roles.go`) warns that a

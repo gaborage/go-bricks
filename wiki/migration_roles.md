@@ -380,6 +380,38 @@ deployment. Treat its credentials accordingly:
 For the AWS Secrets Manager naming convention used by `go-bricks-migrate`,
 see [multi_tenant_migration.md](multi_tenant_migration.md#aws-secrets-manager-convention).
 
+### SCRAM-SHA-256 password format
+
+By default, `ALTER ROLE ... PASSWORD` carries the plaintext password, and
+PostgreSQL itself can expose it: `pg_stat_statements` records the statement,
+`log_statement = ddl` logs it, and under default settings a failing
+`ALTER ROLE ... PASSWORD` is written to the server log with its full
+statement. Set `PasswordFormat: migration.PGPasswordSCRAMSHA256` on the spec to
+send a SCRAM-SHA-256 verifier computed in process instead, so the plaintext
+never reaches the server. It applies to both `MigratorPassword` and
+`RuntimePassword`.
+
+- **The verifier is still sensitive.** It allows offline password guessing and
+  impersonating the server to a client, so the redaction and the `SECURITY`
+  note on `PGRoleProvisioningSQL` still apply.
+- **Output varies per call.** Each password gets a fresh 16-byte random salt
+  (4096 iterations), so `PGRoleProvisioningSQL` returns different verifier
+  text every time. Reruns still converge: PostgreSQL re-salts a plaintext
+  password on every rerun too.
+- **Server and hba settings.** PostgreSQL stores a precomputed verifier as-is,
+  even under `password_encryption = md5`, and a SCRAM-stored role
+  authenticates through SCRAM even over an `md5` hba rule. Only clients with no
+  SCRAM support fail: libpq before PostgreSQL 10 and old JDBC drivers.
+- **No server-side password checks.** `passwordcheck` and any
+  `check_password_hook` cannot inspect a pre-hashed password, so enforce your
+  password policy before provisioning.
+- **Printable ASCII only.** In this mode `Validate` refuses a non-empty
+  password with any byte outside 0x20-0x7E (tab, DEL, `é`, ...) with
+  `ErrPGRolePasswordNotSCRAMSafe`, naming the field. That is the range where
+  PostgreSQL's SASLprep and client normalization agree, so the verifier
+  matches what every client derives at login. CR/LF/NUL still return
+  `ErrPGRolePasswordHasControlChar` first.
+
 ## Provisioning flow
 
 ```text
