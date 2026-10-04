@@ -69,7 +69,8 @@ const (
 //	    },
 //	}
 //
-// For assertion helpers, see the AssertQueryExecuted, AssertExecExecuted functions.
+// For assertion helpers, see AssertQueryExecuted, AssertExecExecuted and
+// AssertAllExpectationsMet, which reports every expectation left unmet.
 type TestDB struct {
 	vendor              string
 	queries             []*QueryExpectation
@@ -82,6 +83,9 @@ type TestDB struct {
 	txExpectations      []*TxExpectation
 	startedTransactions []*TxExpectation
 	sessionExpectations []*TestSession
+	openedSessions      []*TestSession
+	txCount             int
+	sessionCount        int
 	mu                  sync.RWMutex
 }
 
@@ -105,6 +109,7 @@ type QueryExpectation struct {
 	sql  string
 	rows *RowSet
 	err  error
+	met  bool
 }
 
 // ExecExpectation defines what should happen when Exec is executed.
@@ -112,6 +117,7 @@ type ExecExpectation struct {
 	sql          string
 	rowsAffected int64
 	err          error
+	met          bool
 }
 
 // TxExpectation is TestDB's internal bookkeeping for one queued transaction.
@@ -119,6 +125,8 @@ type ExecExpectation struct {
 type TxExpectation struct {
 	parent *TestDB
 	tx     *TestTx
+	seq    int
+	scope  string
 }
 
 // NewTestDB creates a new in-memory fake database for the specified vendor.
@@ -197,9 +205,12 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 	tx := newTestTx(db)
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	db.txCount++
 	txExp := &TxExpectation{
 		parent: db,
 		tx:     tx,
+		seq:    db.txCount,
+		scope:  fmt.Sprintf("transaction #%d", db.txCount),
 	}
 	db.txExpectations = append(db.txExpectations, txExp)
 	return tx
@@ -218,6 +229,8 @@ func (db *TestDB) ExpectSession() *TestSession {
 	sess := newTestSession(db)
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	db.sessionCount++
+	sess.label = fmt.Sprintf("session #%d", db.sessionCount)
 	db.sessionExpectations = append(db.sessionExpectations, sess)
 	return sess
 }
@@ -247,30 +260,32 @@ func (db *TestDB) matchSQL(expected, actual string) bool {
 	return strings.Contains(actual, expected)
 }
 
-// findQueryExpectation searches for a matching query expectation.
-// Returns the first matching expectation in insertion order (first-match wins).
-// Returns nil if no match found.
-func (db *TestDB) findQueryExpectation(actualSQL string) *QueryExpectation {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+// resolveQuery logs the call and returns the first query expectation it matches
+// in insertion order (first-match wins), marking it met; nil if none matches.
+func (db *TestDB) resolveQuery(query string, args []any) *QueryExpectation {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
+	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})
 	for _, exp := range db.queries {
-		if db.matchSQL(exp.sql, actualSQL) {
+		if db.matchSQL(exp.sql, query) {
+			exp.met = true
 			return exp
 		}
 	}
 	return nil
 }
 
-// findExecExpectation searches for a matching exec expectation.
-// Returns the first matching expectation in insertion order (first-match wins).
-// Returns nil if no match found.
-func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+// resolveExec logs the call and returns the first exec expectation it matches
+// in insertion order (first-match wins), marking it met; nil if none matches.
+func (db *TestDB) resolveExec(query string, args []any) *ExecExpectation {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
+	db.execLog = append(db.execLog, ExecCall{SQL: query, Args: args})
 	for _, exp := range db.execs {
-		if db.matchSQL(exp.sql, actualSQL) {
+		if db.matchSQL(exp.sql, query) {
+			exp.met = true
 			return exp
 		}
 	}
@@ -295,11 +310,7 @@ func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
 //	    // ... scan rows
 //	}
 func (db *TestDB) Query(_ context.Context, query string, args ...any) (*sql.Rows, error) {
-	db.mu.Lock()
-	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})
-	db.mu.Unlock()
-
-	exp := db.findQueryExpectation(query)
+	exp := db.resolveQuery(query, args)
 	if exp == nil {
 		return nil, fmt.Errorf("unexpected query: %s (no matching expectation)", query)
 	}
@@ -317,11 +328,7 @@ func (db *TestDB) Query(_ context.Context, query string, args ...any) (*sql.Rows
 
 // QueryRow implements dbtypes.Querier.QueryRow.
 func (db *TestDB) QueryRow(_ context.Context, query string, args ...any) dbtypes.Row {
-	db.mu.Lock()
-	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})
-	db.mu.Unlock()
-
-	exp := db.findQueryExpectation(query)
+	exp := db.resolveQuery(query, args)
 	if exp == nil {
 		return &testRow{err: fmt.Errorf("unexpected query: %s (no matching expectation)", query)}
 	}
@@ -350,11 +357,7 @@ func (db *TestDB) QueryRow(_ context.Context, query string, args ...any) dbtypes
 
 // Exec implements dbtypes.Querier.Exec.
 func (db *TestDB) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
-	db.mu.Lock()
-	db.execLog = append(db.execLog, ExecCall{SQL: query, Args: args})
-	db.mu.Unlock()
-
-	exp := db.findExecExpectation(query)
+	exp := db.resolveExec(query, args)
 	if exp == nil {
 		return nil, fmt.Errorf("unexpected exec: %s (no matching expectation)", query)
 	}
@@ -430,6 +433,7 @@ func (db *TestDB) Session(_ context.Context) (dbtypes.Session, error) {
 
 	sess := db.sessionExpectations[0]
 	db.sessionExpectations = db.sessionExpectations[1:]
+	db.openedSessions = append(db.openedSessions, sess)
 
 	return sess, nil
 }

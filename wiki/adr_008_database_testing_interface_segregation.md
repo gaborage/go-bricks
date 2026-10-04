@@ -5,6 +5,8 @@
 Accepted (2025-01-10)
 
 > **Note (2026-05-12):** Code examples in this ADR were updated to reflect the S8179 rename (`GetDB` → `DB` field on `ModuleDeps`). The decision, rationale, and test-helper API surface are unchanged. The full rename table lives in [wiki/migrations.md](migrations.md).
+>
+> **Note (2026-10-04, #1652):** The "Duplication over abstraction" trade-off and the rejected alternative 4 ("Extract Shared Code to Helper Function") are superseded. Since #1650, `TestTx` and `TestSession` share one expectation machinery (`expectationSet`) that keeps each scope's own error text, and #1652 builds `AssertAllExpectationsMet` on it.
 
 ## Context
 

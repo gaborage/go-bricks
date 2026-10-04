@@ -83,8 +83,8 @@ func TestExpectationScopeNamesTheMissingRowSet(t *testing.T) {
 	// mistake, and each scope says so in its own words.
 	want := map[string]string{
 		"db":          `query expectation for "SELECT name FROM users" has no rows configured (use WillReturnRows)`,
-		"transaction": `transaction query expectation for "SELECT name FROM users" has no rows configured`,
-		"session":     `session query expectation for "SELECT name FROM users" has no rows configured`,
+		"transaction": `transaction query expectation for "SELECT name FROM users" has no rows configured (use WillReturnRows)`,
+		"session":     `session query expectation for "SELECT name FROM users" has no rows configured (use WillReturnRows)`,
 	}
 	expect := map[string]func(db *TestDB) scopedQuerier{
 		"db": func(db *TestDB) scopedQuerier {
