@@ -79,7 +79,7 @@ func requireNotSignable(t *testing.T, err error, kid string) {
 	assert.Nil(t, oe.Details)
 	assert.Equal(t, josesealed.CodeKidUnknownGeneration, oe.Err.Code)
 	assert.Equal(t, kid, oe.Err.Kid)
-	assert.NoError(t, oe.Err.Cause)
+	require.NoError(t, oe.Err.Cause)
 	assert.NotEmpty(t, oe.Err.Message)
 	assert.NotEqual(t, absentSignGenerationMessage, oe.Err.Message, "held without its private key is not absent")
 }
