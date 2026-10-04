@@ -23,6 +23,18 @@ func TestScramSHA256VerifierMatchesRFC7677(t *testing.T) {
 		got)
 }
 
+// TestScramSHA256VerifierUsesStandardBase64 pins the padded standard alphabet: a URL-safe or
+// unpadded encoding would render this salt as -_-_… and PostgreSQL would refuse the verifier.
+func TestScramSHA256VerifierUsesStandardBase64(t *testing.T) {
+	salt := []byte{
+		0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb,
+	}
+	got, err := scramSHA256Verifier("pencil", salt, 4096)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(got, scramSHA256Prefix+"4096:+/+/+/+/+/+/+/+/+/+/+w==$"),
+		"verifier length %d", len(got))
+}
+
 func TestScramSHA256VerifierIterationBound(t *testing.T) {
 	_, err := scramSHA256Verifier("pencil", []byte("0123456789abcdef"), 0)
 	require.ErrorIs(t, err, errSCRAMIterations, "a non-positive iteration count cannot derive a key")
