@@ -163,7 +163,9 @@ throughout because each message names the generation that sealed it. The drain g
 same for both families: **queue depth AND the outbox retention window AND DLQ replay policy
 AND inbox parks AND every producer-owned sealed-bytes store** — old-generation rows replay
 byte-identical for the full retention window, and stored sealed bytes republish through
-`PublishSealed` until step 5 below, so gating on queue depth alone strands them unopenable.
+`PublishSealed` until step 5 below removes the producer's entry or, for the sign family, until
+the producer no longer holds that generation's private key, whichever comes first, so gating on
+queue depth alone strands them unopenable.
 The consumers-before-flip gate is human-enforced until #769; getting it wrong shows up as a
 DLQ spike of `SEAL_KID_UNKNOWN_GENERATION`.
 
@@ -177,8 +179,9 @@ DLQ spike of `SEAL_KID_UNKNOWN_GENERATION`.
 4. Drain gate (above).
 5. Remove the `v<N>` entries from every consumer AND from the producer's keystore (the accept
    set and the producer's sealed-bytes door both shrink); destroy the retired private.
-   Destroying the private alone is not enough: a public-only `v<N>` entry on the producer still
-   resolves, so `PublishSealed` would keep admitting `v<N>` bytes every consumer now refuses.
+   Destroying the producer's private already closes `PublishSealed` for `v<N>`: the door admits
+   only a sign generation the producer holds with its private key. Removing the entries stays
+   the runbook.
 
 ### Encrypt family (`encrypt=<logical>`)
 
@@ -189,8 +192,9 @@ The roles invert, so the order does too (G3):
 2. Provision the `v<N+1>` **PUBLIC** to the producer.
 3. Flip `messaging.seal.active.<logical>: v<N+1>` on the producer and redeploy.
 4. Drain gate (above).
-5. Remove `v<N>` from producer and consumers (the producer too, as the sign family's step 5
-   explains); destroy the retired privates — until the last one is gone, captured and persisted
+5. Remove `v<N>` from producer and consumers. Removing the producer's entry is load-bearing
+   here: the producer holds every encrypt generation public-only, the active one included, so
+   `PublishSealed` keeps admitting `v<N>` bytes until the entry is gone. Destroy the retired privates — until the last one is gone, captured and persisted
    ciphertext stays readable (no forward secrecy, no revocation).
 
 ### Provisioning a consumer N+1
@@ -227,7 +231,9 @@ no clock is read.
 
 Producer side: `jose/sealed.Verify` runs rules 1–9 and rule 10 up to the encrypt-family pin,
 resolving the inner `kid` as a PUBLIC key, and stops before the decrypt; every refusal carries
-`Open`'s code. The sealed-bytes door below runs it.
+`Open`'s code. The sealed-bytes door below runs it, then admits the sign kid only when the
+producer holds that generation's private key, and otherwise refuses with
+`SEAL_KID_UNKNOWN_GENERATION`.
 
 Wiring mistakes (no `Spec`, no `KeyResolver`, empty `EventType`, wrong `out` type) are
 `SEAL_OPTIONS_INVALID` / `SEAL_TYPE_MISMATCH` as rule 0 — the same error type, never a
@@ -345,8 +351,12 @@ err = h.PublishSealed(ctx, client, data)
 **Checks.** Verification is `jose/sealed.Verify`, the
 [producer side of the rule order](#opening-rule-order): the opener's rules 1–9 unchanged, then
 rule 10 up to the decrypt. It resolves no private key, decrypts nothing and decodes nothing.
-Kids resolve by entry name, with no activation filter. Bytes sealed under `v<N>` keep publishing
-after `messaging.seal.active` flips to `v<N+1>`, until [rotation step 5](#rotation-runbooks).
+Kids resolve by entry name, with no activation filter. After `Verify` succeeds, the door admits
+the sign kid only if the producer's keystore indexes that generation as `keystore.RolePrivate`
+(it reads the index role, never the key); a public-only or absent generation is refused with
+`SEAL_KID_UNKNOWN_GENERATION`, `Recoverable` true. Bytes sealed under `v<N>` keep publishing
+after `messaging.seal.active` flips to `v<N+1>`, until [rotation step 5](#rotation-runbooks) or,
+for the sign family, until the producer no longer holds `v<N>`'s private key.
 
 **Tenant rule.** The signed `tid` must equal the tenant `Publish` would stamp for the same `ctx`
 and client: the context's tenant, else the client's pool key. An absent `tid` counts as no
@@ -374,7 +384,8 @@ the go-bricks inbox stores `<SignFamily>:<jti>`. A retry is therefore deduplicat
 `inbox.retentionperiod` (7 days by default), and only while the bytes' sign and encrypt
 generations are still provisioned on the consumer. After [rotation step 5](#rotation-runbooks),
 recovery is a fresh `Seal`, which mints a new `jti`. On the producer, a `SealOpenRefusedError`
-with `Recoverable` true after step 5 is final: do not retry the stored bytes.
+with `Recoverable` true after step 5, or for a sign generation whose private key the producer
+no longer holds, is final: do not retry the stored bytes.
 
 **Residual.** A body signed by this producer's own sign family but encrypted to the wrong key
 under the right `kid`, or whose document does not decode into `T`, passes the door. The consumer
@@ -534,8 +545,9 @@ stay uncapped.
   the last old private is destroyed. The decrypt private is audience-held.
 - The consumers-before-flip gate is human-enforced until #769.
 - One producing service per sealed event type; one sealed event type per queue.
-- `SEAL_KID_UNKNOWN_GENERATION` fires before verification: unauthenticated and spammable to
-  muddy the rotation-lag signal — inherent to kid-before-verify.
+- On the consumer, `SEAL_KID_UNKNOWN_GENERATION` for an absent entry fires before verification:
+  unauthenticated and spammable to muddy the rotation-lag signal — inherent to kid-before-verify.
+  On the producer door, the public-only refusal fires after verification.
 - `inbox.retentionperiod` is the replay window; producer and consumer retention live in
   different processes, so only a documented rule and a same-process WARN exist.
 - The ledger has no consumer dimension: two consumers in one service on one event collide

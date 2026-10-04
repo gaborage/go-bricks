@@ -10,6 +10,40 @@
 > `messaging/sealed` is the only codec.
 > `SealOpenRefusedError` stays. The body below keeps the old names as history.
 
+## Amendment (2026-10-03, #1898): the door republishes only what this producer could have signed
+
+`Verify` resolves the wire sign kid through `PublicKey` by entry name, so the door admitted
+every provisioned RSA sign generation, public-only ones included. A producer that destroyed sign
+`v<N>`'s private key but kept the entry republished stored `v<N>` bytes that every consumer then
+refused into the DLQ as `SEAL_KID_UNKNOWN_GENERATION`, and the door's one promise, a failed
+publish reported at once, broke silently. An attacker holding a compromised `v<N>` private key
+and write access to the sealed-bytes store could also publish under the producer's identity for
+as long as a public-only `v<N>` entry remained. Only sign-family step 5 of the rotation runbook
+closed either gap.
+
+After `jose/sealed.Verify` succeeds, the codec's verifier now admits the body only if the
+verified sign kid names a generation of the declaration's sign Logical kid that the producer's
+keystore indexes as `keystore.RolePrivate`. It reads the generation index through the
+`keystore.FamilyEnumerator` it already binds, per message, and reads the role only: it resolves
+no private key, so `Verify` and the door still touch no private material. A public-only
+generation, or one absent from the index, is refused before any broker I/O with
+`ErrSealedBytesRejected`, whose `*messaging.SealOpenRefusedError` carries
+`SEAL_KID_UNKNOWN_GENERATION` with `Recoverable` true and no `layer` detail. `errors.As` reaches
+a `*jose/sealed.OpenError` with `Rule` 4 (the sign-kid provisioning rule this check tightens on
+the producer), the wire sign kid, and a static message, distinct from the absent-entry one, that
+says the generation is held without its private key; `err.Error()` renders only the code. The
+rule runs after `Verify`, so every existing refusal keeps its code and order: a tampered body
+under a public-only generation is still `SEAL_SIGNATURE_INVALID`. `NewVerifier` never fails for
+it and keeps tagging generations with `keystore.RoleTagSeal`, bytes sealed under `v<N>` before
+an activation flip keep publishing while the producer still holds `v<N>`'s private key, and there
+is no opt-out (ADR-133). `jose/sealed.Verify` is unchanged.
+
+One setup stops working: destroying sign `v<N>`'s private key early and keeping its `public:`
+entry to drain stored `v<N>` bytes through the door. Keep the pair until the backlog drains, or
+re-`Seal` from the source record. Encrypt-family generations are out of reach of the rule, since
+the producer holds all of them public-only, the active one included, so their step 5 removal
+stays load-bearing. See [migrations.md](migrations.md) `[C73.2]`.
+
 ## Context
 
 ADR-096 removed every exported byte publish method. A module reaches the broker through
@@ -72,9 +106,9 @@ valid only on a seal-tagged handle. Before any broker I/O it:
    key, and refuses a disagreement with `ErrTenantStampConflict`;
 3. copies `data` once, verifies the copy and publishes the copy, so the bytes on the wire are
    exactly the bytes verified;
-4. verifies through the seal-runtime seam: `messaging.SealVerifierProvider`, optional on the
-   codec like `messaging.SealOpenerProvider`, is built at declaration and runs
-   `jose/sealed.Verify` with the zero `TenantExpectation`. A failure is
+4. verifies through the seal-runtime seam: the codec's verifier, built at declaration, runs
+   `jose/sealed.Verify` with the zero `TenantExpectation`, then admits the sign kid only if the
+   producer's keystore indexes that generation with its private key (amended, #1898). A failure is
    `ErrSealedBytesRejected`, whose chain carries a `*messaging.SealOpenRefusedError` (the code
    without a jose import) whose cause is the
    `*jose/sealed.OpenError`;
@@ -92,7 +126,7 @@ verification every error is the client's own, returned as `Publish` returns it.
 
 Wire kids resolve by entry name with no activation filter. Stored `v<N>` bytes keep verifying
 after `messaging.seal.active` flips to `v<N+1>`, until rotation step 5 removes `v<N>` from the
-producer's keystore. The producer role-tags every provisioned RSA generation of both families
+producer's keystore or, for the sign family, the producer's `v<N>` private key is gone first. The producer role-tags every provisioned RSA generation of both families
 (`keystore.RoleTagSeal`) at declaration, as the opener does. `SealedEventPublisher[T]` (`Seal` +
 `PublishSealed`) is the injection seam for a module that persists sealed bytes; `*Publisher[T]`
 satisfies it, and `EventPublisher[T]` is unchanged, so consumer-written fakes keep compiling.
@@ -106,13 +140,14 @@ never seals, verifies or reaches a broker.
   would pass a forged header over a plaintext Subject and put plaintext on the broker. The door
   verifies the signature, the slots, the manifest, the inner JWE header, `iss`, the encrypt
   family and both keys before any broker I/O. A body that is not a sealed JWS is `NOT_SEALED`.
-- **Retired generation.** The door admits exactly what the producer's keystore holds. Step 5
-  removes the entry, and destroying only the private key is not enough: a public-only entry
-  still resolves, and the door would admit bytes every consumer refuses. Once step 5 has run,
-  the door refuses the stored row with `SEAL_KID_UNKNOWN_GENERATION`, and
+- **Retired generation.** The door admits a sign generation only while the producer holds its
+  private key, so destroying that key, or removing the entry at step 5, closes the door for it.
+  An encrypt-family generation is held public-only even while active, so it still needs its
+  entry removed. Once either has happened, the door refuses the stored row with
+  `SEAL_KID_UNKNOWN_GENERATION`, and
   `SealOpenRefusedError.Recoverable` is true as on the consumer, because it names the
   key-provisioning class. The producer still treats a retired generation as final:
-  re-provisioning `v<N>` on the producer alone would admit bytes every consumer refuses.
+  re-provisioning `v<N>`'s private key on the producer alone would admit bytes every consumer refuses.
 - **Cross-tenant replay.** Strict `tid` equality means the signed tenant and the stamp cannot
   diverge.
 - **Ciphertext at rest.** A sealed-bytes store is storage. CVV/CVC, full track data and PIN
@@ -131,7 +166,8 @@ never seals, verifies or reaches a broker.
   member (`"card"` sealed, `"Card"` cleartext) is refused by neither side today: `Open` and
   `Verify` accept it, only the sealer refuses twins, and `Seal`/`SealDocument` never produce
   one. A follow-up issue tracks it. Only a holder of the producer's sign private key can mint
-  any of these, and the residual is accepted.
+  any of these, and since the door admits only a sign generation the producer holds with its
+  private key (#1898), that holds; the residual is accepted.
 
 ## Alternatives considered
 
@@ -150,10 +186,11 @@ never seals, verifies or reaches a broker.
 
 ## Consequences
 
-- Breaking at compile time (`fix(messaging)!:`): see [migrations.md](migrations.md) `[C70.15]`.
+- Breaking at compile time (`fix(messaging)!:`): see [migrations.md](migrations.md) `[C70.15]`;
+  and, per the #1898 amendment, a runtime refusal rather than a compile break: `[C73.2]`.
 - A republish is deduplicated by the consumer only within `inbox.retentionperiod` (7 days by
   default), and only while the bytes' sign and encrypt generations are still provisioned there.
-  After step 5 the producer refuses them, and recovery is a fresh `Seal` with a new `jti`: the
+  After step 5, or once the producer's sign private key is gone, the producer refuses them, and recovery is a fresh `Seal` with a new `jti`: the
   one residual kept.
 - Neither this door nor `Mandatory` signals queue capacity. A queue length limit with
   `x-overflow: reject-publish` (or `reject-publish-dlx`) makes the broker NACK, and the caller

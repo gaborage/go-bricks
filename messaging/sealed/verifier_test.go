@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/sealruntime"
+	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	"github.com/gaborage/go-bricks/keystore"
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
 	"github.com/gaborage/go-bricks/messaging/sealed"
@@ -32,10 +33,55 @@ func configureStore(t *testing.T, store *kstest.MockKeyStore, active map[string]
 	sealruntime.Configure(&sealruntime.Runtime{KeyStore: store, Active: active, Tenancy: sealruntime.TenancyDisabled})
 }
 
-// vectorProducerStore is the vector keys as a producer verifies them: every generation PUBLIC.
+// vectorProducerStore is the vector keys as the producer holds them: sign v1 PUBLIC, sign v2 (the
+// generation every accepted vector is signed under) as a pair, encrypt v1 PUBLIC.
 func vectorProducerStore(t *testing.T) *kstest.MockKeyStore {
 	t.Helper()
-	return withPublic(vectorSignStore(t), encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey)
+	store := withPublic(kstest.NewMockKeyStore(), signFamily, "v1", &vectorKey(t, vecSignKidV1).PublicKey)
+	store = withPair(store, signFamily, "v2", vectorKey(t, vecSignKid))
+	return withPublic(store, encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey)
+}
+
+// publicOnlySignStore holds the canonical producer's sign v1 without its private key.
+func publicOnlySignStore(t *testing.T) *kstest.MockKeyStore {
+	t.Helper()
+	keys(t)
+	store := withPublic(kstest.NewMockKeyStore(), signFamily, "v1", &signPriv.PublicKey)
+	return withPublic(store, encFamily, "v1", &encPriv.PublicKey)
+}
+
+// sealOnPair seals one event under the canonical pair store's sign v1.
+func sealOnPair(t *testing.T) []byte {
+	t.Helper()
+	configureStore(t, pairStore(t), nil)
+	data, _, err := declare(t).Seal(context.Background(), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
+	require.NoError(t, err)
+	return data
+}
+
+// absentSignGenerationMessage is the refusal text for a sign kid with no entry in the producer's key set.
+const absentSignGenerationMessage = "sign kid generation is not provisioned in this key set"
+
+// requireNotSignable asserts the refusal of an authentic body under a sign generation the producer
+// holds without its private key: the unknown-generation class on the outer layer, with its own text.
+func requireNotSignable(t *testing.T, err error, kid string) {
+	t.Helper()
+	require.ErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
+	require.NotErrorIs(t, err, sealed.ErrRoleMismatch)
+	var refused *sealruntime.OpenRefusedError
+	require.ErrorAs(t, err, &refused)
+	assert.Equal(t, josesealed.CodeKidUnknownGeneration, refused.Code)
+	assert.True(t, refused.Recoverable)
+	assert.Empty(t, refused.Details, "the refusal is on the outer layer")
+	var oe *josesealed.OpenError
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, 4, oe.Rule)
+	assert.Nil(t, oe.Details)
+	assert.Equal(t, josesealed.CodeKidUnknownGeneration, oe.Err.Code)
+	assert.Equal(t, kid, oe.Err.Kid)
+	assert.NoError(t, oe.Err.Cause)
+	assert.NotEmpty(t, oe.Err.Message)
+	assert.NotEqual(t, absentSignGenerationMessage, oe.Err.Message, "held without its private key is not absent")
 }
 
 func verifierProvider(t *testing.T) sealruntime.VerifierProvider {
@@ -93,6 +139,46 @@ func TestNewVerifierTagsEveryProvisionedGenerationAsSeal(t *testing.T) {
 	assert.ElementsMatch(t, [][2]string{
 		{signFamily + "-v1", keystore.RoleTagSeal}, {signFamily + "-v2", keystore.RoleTagSeal}, {encFamily + "-v1", keystore.RoleTagSeal},
 	}, store.Recorded()[before:], "every RSA generation, active or not; never a secret")
+}
+
+// TestVerifierAdmitsOnlyASignGenerationHeldWithItsPrivateKey builds two stores and two verifiers
+// for the same bytes: the producer could have signed them only where it holds sign v1's private key.
+func TestVerifierAdmitsOnlyASignGenerationHeldWithItsPrivateKey(t *testing.T) {
+	data := sealOnPair(t)
+
+	env, err := newVerifier(t, publicOnlySignStore(t)).Verify(t.Context(), data)
+	assert.Zero(t, env)
+	requireNotSignable(t, err, signFamily+"-v1")
+
+	env, err = newVerifier(t, pairStore(t)).Verify(t.Context(), data)
+	require.NoError(t, err)
+	assert.Equal(t, signFamily+"-v1", env.SignKid)
+}
+
+// TestVerifierAdmitsByIndexRoleNotPrivateMaterial indexes sign v1 as RolePrivate while serving only
+// its public key: admission reads the role and never resolves a private key.
+func TestVerifierAdmitsByIndexRoleNotPrivateMaterial(t *testing.T) {
+	data := sealOnPair(t)
+	store := kstest.NewMockKeyStore().
+		WithPublicKey(signFamily+"-v1", &signPriv.PublicKey).WithGeneration(signFamily, "v1", keystore.RolePrivate)
+	store = withPublic(store, encFamily, "v1", &encPriv.PublicKey)
+	_, privErr := store.PrivateKey(signFamily + "-v1")
+	require.Error(t, privErr, "the store serves no private material for sign v1")
+
+	env, err := newVerifier(t, store).Verify(t.Context(), data)
+	require.NoError(t, err)
+	assert.Equal(t, signFamily+"-v1", env.SignKid)
+}
+
+// TestVerifierRefusesASignGenerationMissingFromTheIndex serves sign v1's public key by entry name with
+// no generation index entry: the verification passes, and the role rule fails closed.
+func TestVerifierRefusesASignGenerationMissingFromTheIndex(t *testing.T) {
+	data := sealOnPair(t)
+	store := withPublic(kstest.NewMockKeyStore().WithPublicKey(signFamily+"-v1", &signPriv.PublicKey), encFamily, "v1", &encPriv.PublicKey)
+
+	env, err := newVerifier(t, store).Verify(t.Context(), data)
+	assert.Zero(t, env)
+	requireNotSignable(t, err, signFamily+"-v1")
 }
 
 func TestVerifierAcceptsWhatTheSealerProduced(t *testing.T) {

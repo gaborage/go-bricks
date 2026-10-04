@@ -433,8 +433,9 @@ The one module-facing path that takes bytes rather than a Go value: a
 seal-tagged typed handle republishing bytes its own seal produced, after
 verifying them against the handle's declaration without decrypting. It exists
 for producers that persist sealed bytes and must learn at once that a publish
-failed; it admits nothing a plain handle, a forged header or a removed
-generation could put on the wire.
+failed; it admits nothing a plain handle, a forged header or a generation
+this producer could not have signed (no private key held) could put on the
+wire.
 _Avoid_: raw publish, bytes publish, escape hatch (it verifies), replay door
 
 **Accept-unsealed**:

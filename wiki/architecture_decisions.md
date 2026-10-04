@@ -2162,20 +2162,28 @@ shape.
 
 ### [ADR-131: A Verified Door Republishes Stored Sealed Bytes, and `Seal` Returns Its `jti`](adr_131_sealed_bytes_publish_door.md)
 
-**Date:** 2026-09-30 | **Status:** Accepted | **Breaking:** `Publisher[T].Seal`, `jose/sealed.Seal`, `jose/sealed.SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`
+**Date:** 2026-09-30 (amended 2026-10-03, #1898) | **Status:** Accepted | **Breaking:** `Publisher[T].Seal`, `jose/sealed.Seal`, `jose/sealed.SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`; and per the amendment, `PublishSealed` refuses at runtime an authentic body under a sign generation the producer holds without its private key
 
 A producer that persists sealed bytes could not publish them itself. ADR-096 left no exported
 bytes door, the outbox relay publishes without `Mandatory` and reports nothing back, and every
 caller-side `Publish` retry minted a new `jti`. `Seal` now returns the `jti` it signed.
 `Publisher[T].PublishSealed` republishes bytes the handle's own `Seal` produced, through the same
-internal door as `Publish`, after two checks: `jose/sealed.Verify` (the opener's rules 1–9 and
-rule 10 up to the decrypt, keys resolved as PUBLIC by entry name), and a strict equality check
-on the signed `tid`. Amends ADR-096 and ADR-097. See [migrations.md](migrations.md) `[C70.15]`.
+internal door as `Publish`, after three checks: `jose/sealed.Verify` (the opener's rules 1–9 and
+rule 10 up to the decrypt, keys resolved as PUBLIC by entry name), that the verified sign
+generation is held with its private key, and a strict equality check on the signed `tid`. Amends ADR-096 and ADR-097. See [migrations.md](migrations.md) `[C70.15]`.
 
 **Key Benefits:** a batch producer learns synchronously that a publish failed, and a retry of
 stored bytes keeps its `jti`, so the consumer's ledger dedups it.
 Amended by ADR-139: `messaging.Sealer`, `RegisterSealCodec` and the verifier/opener provider
 aliases are deleted; the seam is root `internal/sealruntime`, see `[C72.9]`.
+
+**Amendment (2026-10-03, #1898):** after `jose/sealed.Verify` succeeds, `PublishSealed` admits the
+body only if the producer's keystore indexes the verified sign kid's generation as
+`keystore.RolePrivate`, reading the role and never the key. A public-only or absent generation is
+`ErrSealedBytesRejected` with `SEAL_KID_UNKNOWN_GENERATION`, `Recoverable` true, before any broker
+I/O; every earlier refusal keeps its code, and there is no opt-out. Destroying a sign private key
+before the stored backlog drains now stops those republishes. See [migrations.md](migrations.md)
+`[C72.10]`.
 
 ---
 
