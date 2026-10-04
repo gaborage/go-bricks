@@ -17,7 +17,7 @@ type subjectSpan struct {
 	value      json.RawMessage
 	start, end int
 	// memberStart is the first byte of the WHOLE member — its leading comma when it has one,
-	// otherwise its key quote — for removeMember. walkToSubject computes it on every walk,
+	// otherwise its key quote — for removeMember. locateSubject computes it on every walk,
 	// sealer and opener alike, since it falls out of the same tokenizer pass at no extra cost.
 	memberStart int
 }
@@ -37,32 +37,17 @@ var (
 	errRenderSubjectInvalid = errors.New("sealed: Render subject is not a valid JSON value")
 )
 
-// pinSubject is the SEALER's view of a document: locateSubject's rules plus the G9 case-fold
-// rule enforced on the serialized bytes. ScanType applies G9 to a struct's declared fields,
-// which a custom MarshalJSON can bypass and a raw document never went through at all, so the
-// rule lives here where both doors meet. This is the only call site that asks for the rule;
-// the opener goes through locateSubject, so its rule table is untouched.
-func pinSubject(doc []byte, path string) (subjectSpan, error) {
-	return walkToSubject(doc, path, true)
-}
-
-// locateSubject is the OPENER's door onto the same walk (rule 10); it judges nothing beyond
-// the rules below.
-func locateSubject(doc []byte, path string) (subjectSpan, error) {
-	return walkToSubject(doc, path, false)
-}
-
-// walkToSubject walks the top-level members of doc and returns the span of the member named
-// path. The walk is token-level: values are consumed as json.RawMessage, which the decoder
-// copies verbatim from the input, so end-start == len(value) exactly.
+// locateSubject walks the top-level members of doc and returns the span of the member named
+// path: rule 10's walk, shared by the sealer and every opener door. The walk is token-level:
+// values are consumed as json.RawMessage, which the decoder copies verbatim from the input, so
+// end-start == len(value) exactly.
 //
-// refuseCaseFoldTwin adds the sealer's G9 rule: a top-level member whose name case-folds to
-// path without equalling it is refused, because encoding/json matches members
-// case-insensitively on decode and a consumer would read the clear twin instead of the sealed
-// member. The first such member ends the walk, so on a document that breaks another rule as
-// well the refusal is whichever the walk reaches first — all of them are SEAL_DOCUMENT_INVALID
-// at the door. The opener passes false and never reaches that branch.
-func walkToSubject(doc []byte, path string, refuseCaseFoldTwin bool) (subjectSpan, error) {
+// A top-level member whose name case-folds to path without equalling it is refused, because
+// encoding/json matches members under Unicode simple case folding on decode and a consumer
+// would read the clear twin instead of the sealed member. The first such member ends the walk,
+// so on a document that breaks another rule as well the refusal is whichever the walk reaches
+// first; each door maps every walk refusal to its own single code.
+func locateSubject(doc []byte, path string) (subjectSpan, error) {
 	dec := json.NewDecoder(bytes.NewReader(doc))
 	if err := expectDelim(dec, '{'); err != nil {
 		return subjectSpan{}, err
@@ -83,7 +68,7 @@ func walkToSubject(doc []byte, path string, refuseCaseFoldTwin bool) (subjectSpa
 				return subjectSpan{}, errSubjectDuplicate
 			}
 			found = &subjectSpan{value: raw, start: end - len(raw), end: end, memberStart: leadStart}
-		case refuseCaseFoldTwin && strings.EqualFold(key, path):
+		case strings.EqualFold(key, path):
 			return subjectSpan{}, errSubjectCaseFoldTwin
 		}
 	}

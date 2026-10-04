@@ -218,6 +218,14 @@ func TestPublishSealedRefusesBeforeAnyPublish(t *testing.T) {
 		}, check: func(t *testing.T, err error) {
 			assert.Equal(t, 10, openErrorOf(t, err).Rule)
 		}},
+		{name: "subject_case_fold_twin", code: josesealed.CodePayloadUndecodable, arrange: func(t *testing.T) doorCall {
+			store := withPair(kstest.NewMockKeyStore(), signFamily, "v2", vectorKey(t, vecSignKid))
+			configureStore(t, withPublic(store, encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey), nil)
+			return callOn(declare(t), vecTenant, publishedVector(t, "subject_case_fold_twin"))
+		}, check: func(t *testing.T, err error) {
+			assert.Equal(t, 10, openErrorOf(t, err).Rule)
+			assert.NotContains(t, err.Error(), "5555555555554444", "the clear twin never reaches the error")
+		}},
 		{name: "sign_generation_removed", code: josesealed.CodeKidUnknownGeneration, arrange: func(t *testing.T) doorCall {
 			b := withPublic(withPair(kstest.NewMockKeyStore(), signFamily, "v2", sign2), encFamily, "v1", &encPriv.PublicKey)
 			return sealThenSwap(t, rotatingSignStore(t), map[string]string{signFamily: "v1"}, b, nil)

@@ -246,12 +246,27 @@ func tamperAmount(d string) string { return strings.Replace(d, `"amount":1250`, 
 // del is the outer-header mutation that drops one param.
 func del(key string) func(map[string]any) { return func(h map[string]any) { delete(h, key) } }
 
+// twinPAN is the clear twin's test PAN in subject_case_fold_twin, distinct from the sealed one.
+const twinPAN = "5555555555554444"
+
+// addCardTwin inserts a clear top-level "Card" member right after the sealed "card".
+func addCardTwin(d string) string {
+	return strings.Replace(d, `,"amount":1250`, `,"Card":{"pan":"`+twinPAN+`","exp":"01/30"},"amount":1250`, 1)
+}
+
 // negativeVectors is the published set, in rule order. Every entry differs from the
 // positive in exactly one header field or one payload member unless Diffs says otherwise.
-func (k *vectorKeys) negativeVectors(t *testing.T) []vector {
+// A name present in stored keeps its stored body; only the missing ones are built.
+func (k *vectorKeys) negativeVectors(t *testing.T, stored map[string]string) []vector {
 	t.Helper()
+	body := func(name string, m mutation) string {
+		if b, ok := stored[name]; ok {
+			return b
+		}
+		return k.build(t, m)
+	}
 	v := func(name, code string, rule, diffs int, m mutation) vector {
-		return vector{Name: name, Code: code, Rule: rule, Diffs: diffs, Body: k.build(t, m)}
+		return vector{Name: name, Code: code, Rule: rule, Diffs: diffs, Body: body(name, m)}
 	}
 	slot := func(name, slot string, m mutation) vector {
 		out := v(name, sealed.CodeHeaderSlotInvalid, 6, 1, m)
@@ -307,6 +322,7 @@ func (k *vectorKeys) negativeVectors(t *testing.T) []vector {
 		// Rule 10 — the payload document and the inner JWE.
 		v("subject_not_a_string", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: func(string) string { return `{"orderId":"ord-1","card":{"pan":"x"},"amount":1250}` }}),
 		v("subject_not_a_jwe", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: func(string) string { return `{"orderId":"ord-1","card":"a.b.c","amount":1250}` }}),
+		v("subject_case_fold_twin", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: addCardTwin}),
 		jwe("inner_alg_rsa1_5", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.alg = jose.RSA1_5 }}),
 		jwe("inner_enc_a128gcm", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.cenc = jose.A128GCM }}),
 		jwe("inner_cty_wrong", sealed.CodeCtyInvalid, mutation{inner: func(o *innerOpts) { o.cty = "text/plain" }}),
@@ -325,18 +341,34 @@ func (k *vectorKeys) negativeVectors(t *testing.T) []vector {
 			mutation{outer: set("kid", "svc-payments-sign-v9"), staleSign: true, doc: tamperAmount}),
 		{
 			Name: "order_bad_slot_and_wrong_etyp", Code: sealed.CodeHeaderSlotInvalid, Rule: 6, Slot: "jti", Diffs: 2,
-			Body: k.build(t, mutation{outer: func(h map[string]any) { delete(h, "jti"); h["etyp"] = "payment.voided" }}),
+			Body: body("order_bad_slot_and_wrong_etyp", mutation{outer: func(h map[string]any) { delete(h, "jti"); h["etyp"] = "payment.voided" }}),
 		},
 		v("order_wrong_etyp_and_wrong_sp", sealed.CodeEventTypeMismatch, 7, 2, mutation{outer: func(h map[string]any) { h["etyp"] = "payment.voided"; h["sp"] = []string{"orderId"} }}),
 		absent,
 	}
 }
 
-// loadVectors reads testdata/vectors.json, regenerating it first under -update.
+// loadVectors reads testdata/vectors.json, extending it first under -update: published bodies
+// are kept by name and only missing vectors are built, against the stored positive's Subject
+// JWE. A full rebuild is a deliberate act: delete the file, then run -update.
 func loadVectors(t *testing.T, k *vectorKeys) *vectorFile {
 	t.Helper()
 	if *update {
-		vf := &vectorFile{Note: fixtureNote, Positive: k.build(t, mutation{}), Vectors: k.negativeVectors(t)}
+		vf := &vectorFile{Note: fixtureNote}
+		stored := map[string]string{}
+		if raw, err := os.ReadFile(vectorsFile); err == nil {
+			var old vectorFile
+			require.NoError(t, json.Unmarshal(raw, &old))
+			vf.Positive = old.Positive
+			k.inner = parseVector(t, old.Positive).jwe
+			for _, v := range old.Vectors {
+				stored[v.Name] = v.Body
+			}
+		} else {
+			require.ErrorIs(t, err, os.ErrNotExist)
+			vf.Positive = k.build(t, mutation{})
+		}
+		vf.Vectors = k.negativeVectors(t, stored)
 		raw, err := json.MarshalIndent(vf, "", "  ")
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(vectorsFile, append(raw, '\n'), 0o600))
@@ -417,7 +449,7 @@ func requireVectorRefusal(t *testing.T, err error, tc *vector) {
 	require.ErrorAs(t, err, &je, "*bricksjose.Error-compatible")
 	assert.Equal(t, tc.Code, je.Code)
 	// The leak check precedes the require-based sentinel switch so a sentinel regression cannot skip it.
-	for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon"} {
+	for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon", "Card", twinPAN} {
 		assert.NotContains(t, err.Error(), secret)
 	}
 	switch tc.Code {
@@ -477,6 +509,51 @@ func TestOpenNegativeVectors(t *testing.T) {
 			assert.Nil(t, env)
 			assert.Zero(t, evt, "nothing decodes on a refused message")
 			requireVectorRefusal(t, err, &tc)
+		})
+	}
+}
+
+// TestDoorsRefuseSubjectCaseFoldTwin pins that Open, OpenDocument and Verify refuse a correctly
+// signed body carrying a clear case-fold twin of the Subject identically, in either position and
+// any spelling, while an exact-duplicate Subject still refuses as before.
+func TestDoorsRefuseSubjectCaseFoldTwin(t *testing.T) {
+	k := loadVectorKeys(t)
+	loadVectors(t, k)
+	twin := func(member string, before bool) func(string) string {
+		clearMember := `"` + member + `":{"pan":"` + twinPAN + `"}`
+		if before {
+			return func(d string) string { return strings.Replace(d, `"card":`, clearMember+`,"card":`, 1) }
+		}
+		return func(d string) string { return strings.Replace(d, `,"amount":`, `,`+clearMember+`,"amount":`, 1) }
+	}
+	cases := []struct {
+		name string
+		doc  func(string) string
+	}{
+		{name: "twin_before_the_subject", doc: twin("Card", true)},
+		{name: "twin_after_the_subject", doc: twin("Card", false)},
+		{name: "upper_case_twin", doc: twin("CARD", false)},
+		{name: "exact_duplicate_subject", doc: twin("card", false)},
+	}
+	want := &vector{Code: sealed.CodePayloadUndecodable, Rule: 10}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(k.build(t, mutation{doc: tc.doc}))
+			opts := vectorOptions(k, nil)
+
+			var evt paymentAuthorized
+			env, err := sealed.Open(body, testSpec(t), opts, &evt)
+			assert.Nil(t, env)
+			assert.Zero(t, evt)
+			requireVectorRefusal(t, err, want)
+
+			opened, err := sealed.OpenDocument(body, documentSpec(t), opts)
+			assert.Nil(t, opened)
+			requireVectorRefusal(t, err, want)
+
+			env, err = sealed.Verify(body, testSpec(t), verifyOptions(t, k, nil))
+			assert.Nil(t, env)
+			requireVectorRefusal(t, err, want)
 		})
 	}
 }

@@ -226,7 +226,7 @@ no clock is read.
 | 7 | `etyp` equals the declared `EventType` | `SEAL_EVENT_TYPE_MISMATCH` |
 | 8 | `tid` satisfies the tenancy expectation | `SEAL_TENANT_MISMATCH` |
 | 9 | `sp` equals the declared sealed set | `SEAL_MANIFEST_MISMATCH` |
-| 10 | payload is an object, the Subject member is a compact JWE, inner header passes rule 2 (detail `layer: jwe`), `iss` equals the outer `kid`, inner `kid` is a Generation of the encrypt family that resolves to a PRIVATE key, decrypt | `SEAL_PAYLOAD_UNDECODABLE` / the rule-2–4 codes with `layer: jwe` / `SEAL_AUTHORSHIP_MISMATCH` / `SEAL_DECRYPT_FAILED` |
+| 10 | payload is an object, the Subject member appears once with no clear case-fold twin (`strings.EqualFold`, the fold `encoding/json` decodes with) and is a compact JWE, inner header passes rule 2 (detail `layer: jwe`), `iss` equals the outer `kid`, inner `kid` is a Generation of the encrypt family that resolves to a PRIVATE key, decrypt | `SEAL_PAYLOAD_UNDECODABLE` / the rule-2–4 codes with `layer: jwe` / `SEAL_AUTHORSHIP_MISMATCH` / `SEAL_DECRYPT_FAILED` |
 | 11 | splice the plaintext back and unmarshal into the event type | `SEAL_PAYLOAD_UNDECODABLE` |
 | 12 | build the `Envelope` | — |
 
@@ -392,8 +392,12 @@ no longer holds, is final: do not retry the stored bytes.
 under the right `kid`, or whose document does not decode into `T`, passes the door. The consumer
 refuses those decrypt and decode failures (`SEAL_DECRYPT_FAILED`, `SEAL_PAYLOAD_UNDECODABLE`)
 into the DLQ. A body the producer's own sign key signed with a cleartext case-fold twin of the
-Subject member is refused by neither side today (`Seal`/`SealDocument` never produce it); a
-follow-up issue tracks it.
+Subject member (`Seal`/`SealDocument` never produce it) is refused by the door as
+`SEAL_PAYLOAD_UNDECODABLE` rule 10, non-recoverable, and is not published. The consumer refuses
+it the same way, but only after the cleartext has crossed the broker: the refused body lands in
+the DLQ in the clear, so a twin refusal there is cleartext cardholder data at rest to scrub,
+never to replay. A clear copy under a name that does not case-fold to the Subject, or nested
+below the top level, is not caught.
 
 **At rest.** A sealed-bytes store is storage, whatever the encryption. Keep CVV/CVC, full track
 data and PIN blocks out of any sealed event whose bytes are persisted, the same rule as the
