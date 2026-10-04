@@ -2344,6 +2344,23 @@ loudly instead of falling through to a caller-written tenant header.
 
 ---
 
+### [ADR-141: Delta Temporality Keeps UpDownCounters and Gauges Cumulative](adr_141_delta_temporality_per_kind.md)
+
+**Date:** 2026-10-03 | **Status:** Accepted | **Breaking:** under `observability.metrics.temporality: delta`, UpDownCounters, ObservableUpDownCounters and gauges export as Cumulative on OTLP endpoints, where every kind exported as Delta
+
+The delta selector returned Delta for every instrument kind, so non-monotonic sums exported
+their change per interval: constants such as `db.client.connection.max` read `0` after the first
+export, and New Relic rejects delta non-monotonic sums as not meaningful. Both OTLP exporters now
+take `sdkmetric.DeltaTemporalitySelector`, the OTel spec's delta preference: counters and
+histograms export as Delta, the other kinds as Cumulative. The cumulative path still passes no
+selector, so `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` keeps working there. See
+[migrations.md](migrations.md) `[C72.12]`.
+
+**Key Benefits:** levels export as levels, and `delta` matches the mapping every OTLP backend
+expects from the spec preference.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3136,7 +3153,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-140) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-141) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

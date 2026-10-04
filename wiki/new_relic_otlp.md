@@ -103,7 +103,7 @@ trace:
 | Option | Values | Default | New Relic Recommendation |
 | -------- | -------- | --------- | -------------------------- |
 | `compression` | `gzip`, `none` | `gzip` | **gzip** (~70% bandwidth reduction) |
-| `temporality` | `delta`, `cumulative` | `cumulative` | **delta** (lower memory, better performance) |
+| `temporality` | `delta`, `cumulative` | `cumulative` | **delta** for monotonic counters and histograms (lower memory); UpDownCounters and gauges stay cumulative (New Relic gauges) |
 | `histogramaggregation` | `exponential`, `explicit` | `explicit` | **exponential** (better precision, ~10x lower memory) |
 | `protocol` | `http`, `grpc` | `http` | **grpc** (lower latency, better performance) |
 
@@ -120,7 +120,7 @@ New Relic enforces attribute limits on its ingest side, but be aware of:
 | Feature | Bandwidth Savings | Memory Savings | Notes |
 | --------- | ------------------- | ---------------- | ------- |
 | gzip compression | ~70% | N/A | CPU overhead ~1-2ms per batch |
-| Delta temporality | N/A | ~50% | Resets counters after each export |
+| Delta temporality | N/A | ~50% | Resets monotonic counters and histograms after each export; UpDownCounters and gauges stay cumulative (New Relic gauges) |
 | Exponential histograms | ~30% | ~90% | MaxSize=160, MaxScale=20 (auto-configured) |
 
 ## Endpoint Format Rules (CRITICAL)

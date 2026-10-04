@@ -490,52 +490,68 @@ func (e *inMemoryMetricExporter) GetMetrics() []metricdata.ResourceMetrics {
 	return e.metrics
 }
 
-// TestDeltaTemporalitySelector verifies that delta temporality is returned for all instrument kinds
-func TestDeltaTemporalitySelector(t *testing.T) {
-	tests := []struct {
-		name                string
-		instrumentKind      sdkmetric.InstrumentKind
-		expectedTemporality metricdata.Temporality
+const otlpMetricsTemporalityPreferenceEnv = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"
+
+// TestCreateMetricExporterTemporalityPerKind pins the temporality each OTLP exporter
+// reports per instrument kind, as built through the provider's construction path.
+func TestCreateMetricExporterTemporalityPerKind(t *testing.T) {
+	const (
+		delta      = metricdata.DeltaTemporality
+		cumulative = metricdata.CumulativeTemporality
+	)
+	deltaPreference := map[sdkmetric.InstrumentKind]metricdata.Temporality{
+		sdkmetric.InstrumentKindCounter:                 delta,
+		sdkmetric.InstrumentKindHistogram:               delta,
+		sdkmetric.InstrumentKindObservableCounter:       delta,
+		sdkmetric.InstrumentKindUpDownCounter:           cumulative,
+		sdkmetric.InstrumentKindObservableUpDownCounter: cumulative,
+		sdkmetric.InstrumentKindObservableGauge:         cumulative,
+		sdkmetric.InstrumentKindGauge:                   cumulative,
+	}
+	require.Len(t, deltaPreference, 7, "every sdkmetric.InstrumentKind must be pinned")
+	allCumulative := make(map[sdkmetric.InstrumentKind]metricdata.Temporality, len(deltaPreference))
+	for kind := range deltaPreference {
+		allCumulative[kind] = cumulative
+	}
+	protocols := []struct {
+		protocol string
+		endpoint string
 	}{
-		{
-			name:                "counter_returns_delta",
-			instrumentKind:      sdkmetric.InstrumentKindCounter,
-			expectedTemporality: metricdata.DeltaTemporality,
-		},
-		{
-			name:                "updowncounter_returns_delta",
-			instrumentKind:      sdkmetric.InstrumentKindUpDownCounter,
-			expectedTemporality: metricdata.DeltaTemporality,
-		},
-		{
-			name:                "histogram_returns_delta",
-			instrumentKind:      sdkmetric.InstrumentKindHistogram,
-			expectedTemporality: metricdata.DeltaTemporality,
-		},
-		{
-			name:                "observable_counter_returns_delta",
-			instrumentKind:      sdkmetric.InstrumentKindObservableCounter,
-			expectedTemporality: metricdata.DeltaTemporality,
-		},
-		{
-			name:                "observable_updowncounter_returns_delta",
-			instrumentKind:      sdkmetric.InstrumentKindObservableUpDownCounter,
-			expectedTemporality: metricdata.DeltaTemporality,
-		},
-		{
-			name:                "observable_gauge_returns_delta",
-			instrumentKind:      sdkmetric.InstrumentKindObservableGauge,
-			expectedTemporality: metricdata.DeltaTemporality,
-		},
+		{protocol: ProtocolGRPC, endpoint: "localhost:4317"},
+		{protocol: ProtocolHTTP, endpoint: "http://localhost:4318"},
+	}
+	tests := []struct {
+		name          string
+		temporality   string
+		envPreference string
+		want          map[sdkmetric.InstrumentKind]metricdata.Temporality
+	}{
+		{name: "delta", temporality: TemporalityDelta, want: deltaPreference},
+		{name: "cumulative", temporality: TemporalityCumulative, want: allCumulative},
+		{name: "cumulative_honors_env_preference", temporality: TemporalityCumulative, envPreference: "delta", want: deltaPreference},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &provider{}
-			temporality := p.deltaTemporalitySelector(tt.instrumentKind)
-			assert.Equal(t, tt.expectedTemporality, temporality,
-				"Expected delta temporality for all instrument kinds")
-		})
+		for _, pc := range protocols {
+			t.Run(tt.name+"_"+pc.protocol, func(t *testing.T) {
+				t.Setenv(otlpMetricsTemporalityPreferenceEnv, tt.envPreference)
+				p := &provider{config: Config{Metrics: MetricsConfig{
+					Endpoint:    pc.endpoint,
+					Protocol:    pc.protocol,
+					Insecure:    BoolPtr(true),
+					Compression: CompressionNone,
+					Temporality: tt.temporality,
+				}}}
+
+				exporter, err := p.createMetricExporter(context.Background())
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = exporter.Shutdown(context.Background()) })
+
+				for kind, want := range tt.want {
+					assert.Equal(t, want, exporter.Temporality(kind), "temporality for %s", kind)
+				}
+			})
+		}
 	}
 }
 
@@ -551,8 +567,45 @@ func TestCreateExponentialHistogramView(t *testing.T) {
 	// but we can verify it doesn't panic when created
 }
 
-// TestInitMeterProviderWithDeltaTemporality verifies meter provider initialization with delta temporality
+// sumTemporalityExporter delegates Temporality and Aggregation to a real exporter
+// and records each exported int64 Sum's temporality by metric name.
+type sumTemporalityExporter struct {
+	sdkmetric.Exporter
+	mu     sync.Mutex
+	byName map[string]metricdata.Temporality
+}
+
+func (e *sumTemporalityExporter) Export(_ context.Context, rm *metricdata.ResourceMetrics) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if sum, ok := m.Data.(metricdata.Sum[int64]); ok {
+				e.byName[m.Name] = sum.Temporality
+			}
+		}
+	}
+	return nil
+}
+
+func (e *sumTemporalityExporter) temporality(name string) (metricdata.Temporality, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	temporality, ok := e.byName[name]
+	return temporality, ok
+}
+
+// TestInitMeterProviderWithDeltaTemporality verifies that an OTLP pipeline under
+// delta exports a Counter as Delta and an UpDownCounter as Cumulative.
 func TestInitMeterProviderWithDeltaTemporality(t *testing.T) {
+	exporter := &sumTemporalityExporter{byName: map[string]metricdata.Temporality{}}
+	originalWrapper := getMetricExporterWrapper()
+	setMetricExporterWrapper(func(inner sdkmetric.Exporter) sdkmetric.Exporter {
+		exporter.Exporter = inner
+		return exporter
+	})
+	t.Cleanup(func() { setMetricExporterWrapper(originalWrapper) })
+
 	p := &provider{
 		config: Config{
 			Service: ServiceConfig{
@@ -562,8 +615,10 @@ func TestInitMeterProviderWithDeltaTemporality(t *testing.T) {
 			Environment: "test",
 			Metrics: MetricsConfig{
 				Enabled:              BoolPtr(true),
-				Endpoint:             EndpointStdout,
-				Interval:             10 * time.Second,
+				Endpoint:             "localhost:4317",
+				Protocol:             ProtocolGRPC,
+				Insecure:             BoolPtr(true),
+				Interval:             time.Hour,
 				Temporality:          TemporalityDelta,
 				HistogramAggregation: HistogramAggregationExplicit,
 				Export: MetricsExportConfig{
@@ -573,22 +628,25 @@ func TestInitMeterProviderWithDeltaTemporality(t *testing.T) {
 		},
 	}
 
-	err := p.initMeterProvider(context.Background())
-	require.NoError(t, err)
-	assert.NotNil(t, p.meterProvider)
+	require.NoError(t, p.initMeterProvider(context.Background()))
+	t.Cleanup(func() { _ = p.meterProvider.Shutdown(context.Background()) })
 
-	// Verify meter provider can create meters
-	meter := p.meterProvider.Meter("test-meter")
-	assert.NotNil(t, meter)
-
-	// Create a counter to verify pipeline works
+	meter := p.meterProvider.Meter(testMeterName)
 	counter, err := meter.Int64Counter("test.counter")
 	require.NoError(t, err)
 	counter.Add(context.Background(), 1)
+	upDownCounter, err := meter.Int64UpDownCounter("test.updowncounter")
+	require.NoError(t, err)
+	upDownCounter.Add(context.Background(), 1)
 
-	// Cleanup
-	err = p.meterProvider.Shutdown(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, p.meterProvider.ForceFlush(context.Background()))
+
+	counterTemporality, ok := exporter.temporality("test.counter")
+	require.True(t, ok, "counter was not exported")
+	assert.Equal(t, metricdata.DeltaTemporality, counterTemporality)
+	upDownTemporality, ok := exporter.temporality("test.updowncounter")
+	require.True(t, ok, "updowncounter was not exported")
+	assert.Equal(t, metricdata.CumulativeTemporality, upDownTemporality)
 }
 
 // TestInitMeterProviderWithExponentialHistogram verifies meter provider initialization with exponential histogram
