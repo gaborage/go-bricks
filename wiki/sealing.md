@@ -563,6 +563,9 @@ stay uncapped.
   entry. Two ids per outbox-lane event (`record.ID` and `jti`), correlated by `traceparent`.
 - `PublishSealed` passes some bodies the consumer refuses, and a stored body's `jti` dedups for a
   bounded window: its [Residual and Dedup notes](#republishing-stored-sealed-bytes-publishsealed).
+- A clear case-fold twin of the Subject from a foreign producer is refused, not prevented, on the
+  consume path: the refused body sits in the DLQ in the clear, so scrub it rather than replay it
+  (`[C73.3]`). Clear copies under other names, and nested members, are not detected.
 
 ## Migration pointers
 

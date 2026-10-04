@@ -42,7 +42,7 @@ var (
 // values are consumed as json.RawMessage, which the decoder copies verbatim from the input, so
 // end-start == len(value) exactly.
 //
-// A top-level member whose name case-folds to path without equalling it is refused, because
+// A top-level member whose name case-folds to path without equaling it is refused, because
 // encoding/json matches members under Unicode simple case folding on decode and a consumer
 // would read the clear twin instead of the sealed member. The first such member ends the walk,
 // so on a document that breaks another rule as well the refusal is whichever the walk reaches

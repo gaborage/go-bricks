@@ -453,7 +453,7 @@ func requireVectorRefusal(t *testing.T, err error, tc *vector) {
 	require.ErrorAs(t, err, &je, "*bricksjose.Error-compatible")
 	assert.Equal(t, tc.Code, je.Code)
 	// The leak check precedes the require-based sentinel switch so a sentinel regression cannot skip it.
-	for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon", "Card", twinPAN} {
+	for _, secret := range []string{vecJTI, eventType, vecTenant, "payment.voided", "tenant-b", "has:colon", "Card", "CARD", twinPAN} {
 		assert.NotContains(t, err.Error(), secret)
 	}
 	switch tc.Code {

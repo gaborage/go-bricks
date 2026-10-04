@@ -27,8 +27,8 @@
 > `cannot pin subject member "<path>"` — the declared subject path only, never the twin's name
 > or any document byte. That is the code and rule the opener already returned for an
 > exact-duplicate Subject, so callers matching `Err.Code` need no change and the open-failure
-> metric gains no label value. The sealer (`Seal`, `SealDocument`, `ScanType`) is unchanged and
-> still refuses with `SEAL_DOCUMENT_INVALID`. Downstream, the sealed AMQP consumer treats the
+> metric gains no label value. The sealer is unchanged: `Seal`/`SealDocument` still refuse with
+> `SEAL_DOCUMENT_INVALID`; `ScanType` refuses a declared namesake with `SEAL_TAG_SUBJECT_INVALID`. Downstream, the sealed AMQP consumer treats the
 > refusal as non-recoverable (nack without requeue, into the DLQ), `Publisher[T].PublishSealed`
 > returns a non-recoverable `messaging.SealOpenRefusedError` and does not publish, and
 > `cmd/open-event` refuses with the code. On the consume path this detects and does not
