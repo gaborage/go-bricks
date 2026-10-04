@@ -7,11 +7,10 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/jose"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	"github.com/gaborage/go-bricks/keystore"
-	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 )
 
@@ -25,7 +24,7 @@ var ErrRoleMismatch = errors.New("messaging/sealed: active generation lacks the 
 // codec adapts jose/sealed to the messaging seam.
 type codec struct{}
 
-var _ messaging.SealCodec = codec{}
+var _ sealruntime.Codec = codec{}
 
 // spec wraps the scanned declaration; messaging sees only the two Logical kids.
 type spec struct{ inner *josesealed.Spec }

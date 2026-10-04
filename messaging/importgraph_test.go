@@ -27,8 +27,9 @@ func isForbiddenJose(importPath string) bool {
 	})
 }
 
-// TestMessagingStaysJoseFree checks that no non-test code in messaging outside messaging/sealed imports
-// go-jose or go-bricks/jose, transitively per go list and directly in every source file whatever its build constraints.
+// TestMessagingStaysJoseFree checks that no non-test code in messaging outside messaging/sealed,
+// nor in the seal-runtime seam, imports go-jose or go-bricks/jose, transitively per go list and
+// directly in every source file whatever its build constraints.
 func TestMessagingStaysJoseFree(t *testing.T) {
 	hits := append(transitiveJoseHits(t), directJoseImportHits(t)...)
 	require.Empty(t, hits, "messaging packages or source files other than messaging/sealed link or import jose:\n%s", strings.Join(hits, "\n"))
@@ -53,10 +54,18 @@ func transitiveJoseHits(t *testing.T) []string {
 	return hits
 }
 
+// sealRuntimeDir is the seal-runtime seam messaging imports from the module's root internal tree.
+const sealRuntimeDir = "../internal/sealruntime"
+
 func directJoseImportHits(t *testing.T) []string {
 	t.Helper()
+	return append(directJoseImportHitsUnder(t, "."), directJoseImportHitsUnder(t, sealRuntimeDir)...)
+}
+
+func directJoseImportHitsUnder(t *testing.T, root string) []string {
+	t.Helper()
 	var hits []string
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

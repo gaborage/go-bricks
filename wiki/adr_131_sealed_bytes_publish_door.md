@@ -4,6 +4,12 @@
 **Date:** 2026-09-30
 **Amends:** [ADR-096](adr_096_typed_publish_door.md) (a second, narrow exported path to the wire), [ADR-097](adr_097_sealed_amqp_messages.md) (the caller-side-retry residual, and the rotation drain gate and sign-family step 5 in [sealing.md's rotation runbooks](sealing.md#rotation-runbooks))
 
+> **Amended (2026-10-03, [ADR-139](adr_139_sealing_seam_framework_only.md)):** the seam is
+> root `internal/sealruntime` and the exported codec registration hook and codec aliases are
+> deleted, so no exported symbol can install a replacement sealer: the blank import of
+> `messaging/sealed` is the only codec.
+> `SealOpenRefusedError` stays. The body below keeps the old names as history.
+
 ## Context
 
 ADR-096 removed every exported byte publish method. A module reaches the broker through

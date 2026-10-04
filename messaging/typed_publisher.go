@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	"github.com/gaborage/go-bricks/internal/publishdoor"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -37,13 +38,13 @@ type Publisher[T any] struct {
 	// sealer is set when T carries seal tags: Publish then seals instead of marshaling,
 	// so a plaintext publish of a sealed type is unrepresentable (ADR-097). nil for a
 	// plain T.
-	sealer Sealer
+	sealer sealruntime.Sealer
 	// sealErr is why a seal-tagged T could not get its sealer. Validate reports it at
 	// startup; the handle keeps it too, so a caller that publishes before or despite that
 	// report gets the error rather than plaintext.
 	sealErr error
 	// verifyErr is kept off Validate: only PublishSealed needs the verifier.
-	verifier  SealVerifier
+	verifier  sealruntime.Verifier
 	verifyErr error
 }
 

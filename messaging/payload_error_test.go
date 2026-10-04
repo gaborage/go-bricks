@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/saferender"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/internal/validation"
 	"github.com/gaborage/go-bricks/messaging/internal/payloaderr"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 )
 
 const (

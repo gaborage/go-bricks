@@ -4,9 +4,9 @@
 // ADR-091 opt-in-at-the-build-graph pattern).
 package sealed
 
-import "github.com/gaborage/go-bricks/messaging"
+import "github.com/gaborage/go-bricks/internal/sealruntime"
 
 //nolint:gochecknoinits // link-time registration is the whole point of this package (ADR-091 pattern)
 func init() {
-	messaging.RegisterSealCodec(codec{})
+	sealruntime.Register(codec{})
 }

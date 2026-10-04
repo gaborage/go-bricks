@@ -1,6 +1,6 @@
 package app
 
-import "github.com/gaborage/go-bricks/messaging"
+import "github.com/gaborage/go-bricks/internal/sealruntime"
 
 // configureSealing hands the sealing seam the facts only the app knows — the
 // registered key store, the messaging.seal.active selector, the deployment's
@@ -13,7 +13,7 @@ import "github.com/gaborage/go-bricks/messaging"
 // dynamic-config and per-tenant deployments read the same facts (#1306: per-tenant
 // keys are forbidden in v1).
 func (a *App) configureSealing() {
-	rt := messaging.SealRuntime{Tenancy: a.plan.sealTenancy()}
+	rt := sealruntime.Runtime{Tenancy: a.plan.sealTenancy()}
 	if a.cfg != nil {
 		rt.Active = a.cfg.Messaging.Seal.Active
 	}
@@ -23,5 +23,5 @@ func (a *App) configureSealing() {
 		}
 		rt.Meter = a.registry.deps.MeterProvider
 	}
-	messaging.ConfigureSealing(&rt)
+	sealruntime.Configure(&rt)
 }

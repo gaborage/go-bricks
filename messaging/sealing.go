@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 )
 
 // Payload sealing is opt-in at the build graph (ADR-097, on the ADR-091 pattern): the
@@ -30,41 +30,6 @@ var ErrSealedBytesRejected = errors.New("messaging: sealed bytes failed verifica
 // ErrSealedTenantMismatch is returned by PublishSealed when the signed tid is not the tenant this
 // publish would stamp; an absent tid counts as no tenant.
 var ErrSealedTenantMismatch = errors.New("messaging: sealed bytes carry a tenant other than the one this publish would stamp")
-
-// Aliases of the seam types, so messaging/sealed and the app name them from here.
-type (
-	// SealCodec is what messaging/sealed registers.
-	SealCodec = sealruntime.Codec
-	// SealRuntime is what the app configures at bootstrap.
-	SealRuntime = sealruntime.Runtime
-	// SealTenancy is the tenancy fact the opener's tid rule reads.
-	SealTenancy = sealruntime.Tenancy
-	// SealKeyStore is the app.KeyStore subset sealing needs.
-	SealKeyStore = sealruntime.KeyStore
-	// Sealer turns one event into its sealed wire bytes and the jti it signed.
-	Sealer = sealruntime.Sealer
-	// SealVerifierProvider is the OPTIONAL producer-side verification of a SealCodec.
-	SealVerifierProvider = sealruntime.VerifierProvider
-	// SealVerifier checks stored sealed bytes against a declaration without decrypting them.
-	SealVerifier = sealruntime.Verifier
-)
-
-const (
-	SealTenancyDisabled  = sealruntime.TenancyDisabled
-	SealTenancyShared    = sealruntime.TenancyShared
-	SealTenancyPerTenant = sealruntime.TenancyPerTenant
-)
-
-// RegisterSealCodec installs the sealing codec. A blank import of messaging/sealed does
-// this from init; a second registration panics.
-func RegisterSealCodec(c SealCodec) { sealruntime.Register(c) }
-
-// ConfigureSealing records the runtime facts sealing needs. The app calls it once before
-// collecting declarations; a seal-tagged declaration collected before it fails Validate.
-func ConfigureSealing(rt *SealRuntime) { sealruntime.Configure(rt) }
-
-// SealingRuntime returns the facts ConfigureSealing recorded, or nil before it ran.
-func SealingRuntime() *SealRuntime { return sealruntime.Configured() }
 
 // SealTagName is the struct-tag key of the sealing family. Spelled here rather than
 // imported from jose/sealed: the probe must not pull the codec into every build, and
@@ -193,7 +158,7 @@ func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[se
 // declaration, a producer that cannot resolve its Activation, or a codec that returns no
 // sealer. Every error is recorded on the Declarations and surfaces from Validate as a
 // startup failure.
-func newSealer(t reflect.Type, eventType string) (sealer Sealer, spec SealSpec, err error) {
+func newSealer(t reflect.Type, eventType string) (sealer sealruntime.Sealer, spec sealruntime.Spec, err error) {
 	codec := sealruntime.Registered()
 	if codec == nil {
 		return nil, nil, fmt.Errorf("%w (event type %q, Go type %v)", ErrSealingNotLinked, eventType, t)
@@ -224,7 +189,7 @@ func newSealer(t reflect.Type, eventType string) (sealer Sealer, spec SealSpec, 
 
 // newVerifier builds the handle's producer-side verification; its error stays on the handle for
 // PublishSealed alone, so a service that never republishes stored bytes still starts.
-func newVerifier(spec SealSpec, eventType string) (SealVerifier, error) {
+func newVerifier(spec sealruntime.Spec, eventType string) (sealruntime.Verifier, error) {
 	provider, ok := sealruntime.Registered().(sealruntime.VerifierProvider)
 	if !ok {
 		return nil, fmt.Errorf("%w: the registered codec has no producer-side verification (event type %q)", ErrSealingNotLinked, eventType)

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/jose"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	"github.com/gaborage/go-bricks/keystore"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 )
 
 // ErrFamilyUnprovisioned fires at consumer startup when a Logical kid the

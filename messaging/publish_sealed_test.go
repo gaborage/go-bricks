@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/publishdoor"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -23,13 +23,13 @@ import (
 // scribbles over that slice mid-call, as a caller mutating its own buffer would.
 type fakeVerifier struct {
 	mu        sync.Mutex
-	env       SealEnvelope
+	env       sealruntime.Envelope
 	err       error
 	seen      [][]byte
 	overwrite []byte
 }
 
-func (v *fakeVerifier) Verify(_ context.Context, body []byte) (SealEnvelope, error) {
+func (v *fakeVerifier) Verify(_ context.Context, body []byte) (sealruntime.Envelope, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.overwrite != nil {
@@ -185,7 +185,7 @@ func TestPublishSealedTenantRule(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := &fakeVerifier{env: SealEnvelope{TenantID: tc.signedTid}}
+			v := &fakeVerifier{env: sealruntime.Envelope{TenantID: tc.signedTid}}
 			h := declareVerifying(t, sealedOpts(), v)
 			rec, client, ctx := tenantCase(t, tc.poolKey, tc.ctxTenant)
 			err := h.PublishSealed(ctx, client, []byte("eyJ.stored.bytes"))
@@ -243,7 +243,7 @@ func TestPublishSealedPublishesTheBytesItVerified(t *testing.T) {
 }
 
 func TestPublishSealedStampsLikePublishWithFreshMessageIDs(t *testing.T) {
-	h := declareVerifying(t, sealedOpts(), &fakeVerifier{env: SealEnvelope{TenantID: "tenant-a"}})
+	h := declareVerifying(t, sealedOpts(), &fakeVerifier{env: sealruntime.Envelope{TenantID: "tenant-a"}})
 	ch := &fakeChannel{}
 	c := returnTestClient(t, ch)
 	ackRetries(ch)
