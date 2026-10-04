@@ -2293,6 +2293,22 @@ whether this service records.
 
 ---
 
+### [ADR-140: `X-Forwarded-Host` Counts Only From a Trusted Peer](adr_140_forwarded_host_peer_gate.md)
+
+**Date:** 2026-10-03 | **Status:** Accepted | **Breaking:** with `multitenant.resolver.proxies: true`, `X-Forwarded-Host` from a peer outside loopback, link-local, private, unix-socket and `server.trustedproxies` fails the request with 400, and the tenant host is the header's last entry instead of its first
+
+`SubdomainResolver` believed `X-Forwarded-Host` from any peer and took its first entry,
+which behind an appending proxy is the caller's. It now applies the peer rule echo uses for
+`X-Forwarded-Proto`, rebuilt from the same vetted `server.trustedproxies` list, and reads the
+last entry of the last line. An untrusted peer that sends the header gets
+`ErrUntrustedForwardedHost`, which `CompositeResolver` treats as terminal. Amends ADR-039
+obligation 1 and extends ADR-057's trust. See [migrations.md](migrations.md) `[C73.4]`.
+
+**Key Benefits:** one trust rule for every forwarded header, and an unlisted proxy fails
+loudly instead of falling through to a caller-written tenant header.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
@@ -3072,7 +3088,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-138) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-140) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

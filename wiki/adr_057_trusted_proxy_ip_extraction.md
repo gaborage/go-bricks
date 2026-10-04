@@ -4,12 +4,17 @@
 - **Date**: 2026-08-10
 - **Related**: [ADR-015](adr_015_echo_v5_migration.md) (recorded this follow-up), [ADR-043](adr_043_forwarded_client_cert.md) (named the anti-pattern), [migrations.md](migrations.md) `[C59.1]`
 
+> **Amended (2026-10-03, by [ADR-140](adr_140_forwarded_host_peer_gate.md)):** the same trust
+> now gates `X-Forwarded-Host` for the subdomain tenant resolver when
+> `multitenant.resolver.proxies` is `true`, so `server.trustedproxies` governs all three
+> forwarded headers. The resolver rebuilds the rule from the same vetted list.
+>
 > **Amended (2026-10-01, echo v5.4.0 — the same trust now decides the scheme):** echo v5.4.0
 > (GHSA-2ffq-g2xg-c22p) makes `Context.Scheme()` believe `X-Forwarded-Proto` only from a
 > loopback, link-local or private peer, and its Secure middleware now sends HSTS only when
 > `Scheme()` is `https`. `server.New` hands the trust options it builds for the IP walk to
 > `echo.ExtractSchemeFromHeaders` as well, on both the application and the probe engine, so
-> `server.trustedproxies` governs both headers. Behind a proxy on a public address, HSTS
+> `server.trustedproxies` governs both headers (and, since ADR-140, `X-Forwarded-Host`). Behind a proxy on a public address, HSTS
 > needs that proxy listed, exactly as the client IP does (`[C70.16]`). No new key, and no
 > legacy extractor is offered.
 >

@@ -2,6 +2,8 @@ package multitenant
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -39,10 +41,15 @@ func (r *HeaderResolver) ResolveTenant(ctx context.Context, req *http.Request) (
 	return tenantID, nil
 }
 
+const forwardedHostHeader = "X-Forwarded-Host"
+
 // SubdomainResolver extracts the tenant identifier from the request host.
 type SubdomainResolver struct {
 	RootDomain   string
 	TrustProxies bool
+	// TrustedProxies adds peer ranges trusted to send X-Forwarded-Host, on top of
+	// loopback, link-local, private and unix-socket peers.
+	TrustedProxies []*net.IPNet
 }
 
 // ResolveTenant implements TenantResolver.
@@ -56,16 +63,9 @@ func (r *SubdomainResolver) ResolveTenant(ctx context.Context, req *http.Request
 		return "", ErrTenantResolutionFailed
 	}
 
-	// Derive canonical host (optionally trust proxies)
-	host := req.Host
-	if r.TrustProxies {
-		if fwd := req.Header.Get("X-Forwarded-Host"); fwd != "" {
-			// Use the first value if comma-separated
-			if idx := strings.Index(fwd, ","); idx >= 0 {
-				fwd = fwd[:idx]
-			}
-			host = strings.TrimSpace(fwd)
-		}
+	host, err := r.requestHost(req)
+	if err != nil {
+		return "", err
 	}
 	// Strip port safely (best-effort): handle host:port and leave IPv6 literals intact
 	if i := strings.LastIndex(host, ":"); i > 0 && !strings.Contains(host[:i], ":") {
@@ -87,7 +87,56 @@ func (r *SubdomainResolver) ResolveTenant(ctx context.Context, req *http.Request
 	return tenantPart, nil
 }
 
-// CompositeResolver tries multiple resolvers until one succeeds.
+// requestHost returns Host, or with TrustProxies the last X-Forwarded-Host entry from a
+// trusted peer: the nearest proxy wrote it, while earlier entries may be caller-authored.
+func (r *SubdomainResolver) requestHost(req *http.Request) (string, error) {
+	if !r.TrustProxies {
+		return req.Host, nil
+	}
+	values := req.Header.Values(forwardedHostHeader)
+	if len(values) == 0 {
+		return req.Host, nil
+	}
+	if !r.trustedPeer(req.RemoteAddr) {
+		return "", ErrUntrustedForwardedHost
+	}
+	last := values[len(values)-1]
+	if i := strings.LastIndexByte(last, ','); i >= 0 {
+		last = last[i+1:]
+	}
+	return strings.TrimSpace(last), nil
+}
+
+// trustedPeer applies the peer rule echo's ExtractSchemeFromHeaders uses for
+// X-Forwarded-Proto: unix-socket, loopback, link-local and private peers, plus TrustedProxies.
+func (r *SubdomainResolver) trustedPeer(remoteAddr string) bool {
+	if remoteAddr == "" || remoteAddr[0] == '@' || remoteAddr[0] == '/' {
+		return true
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	if i := strings.IndexByte(host, '%'); i != -1 {
+		host = host[:i]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsPrivate() {
+		return true
+	}
+	for _, trusted := range r.TrustedProxies {
+		if trusted != nil && trusted.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// CompositeResolver tries multiple resolvers until one succeeds. ErrUntrustedForwardedHost
+// is terminal: it is returned at once and no later resolver is tried.
 type CompositeResolver struct {
 	Resolvers   []TenantResolver
 	TenantRegex *regexp.Regexp // Optional validation pattern
@@ -103,6 +152,9 @@ func (r *CompositeResolver) ResolveTenant(ctx context.Context, req *http.Request
 			continue
 		}
 		tenantID, err := resolver.ResolveTenant(ctx, req)
+		if errors.Is(err, ErrUntrustedForwardedHost) {
+			return "", err
+		}
 		if err == nil && tenantID != "" {
 			// Validate tenant ID against pattern if configured
 			if r.TenantRegex != nil && !r.TenantRegex.MatchString(tenantID) {
