@@ -275,14 +275,11 @@ func TestMigrateAllParallel(t *testing.T) {
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, stub)
 
-	cfgs := map[string]*config.DatabaseConfig{}
 	ids := make([]string, 0, 10)
 	for i := 0; i < 10; i++ {
-		id := "tenant-" + string(rune('a'+i))
-		ids = append(ids, id)
-		cfgs[id] = &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Database: "d-" + id, Username: "u", Password: "pw-tenant-x"}
+		ids = append(ids, "tenant-"+string(rune('a'+i)))
 	}
-	provider := newFakeConfigProvider(cfgs)
+	provider := newFakeConfigProvider(stubTenantConfigs(ids...))
 
 	var hookMu sync.Mutex
 	hooked := []string{}
@@ -1097,18 +1094,6 @@ func TestMigrateAllMigratorIdentityPasswordStaysOutOfLogsAndErrors(t *testing.T)
 	assert.NotContains(t, fmt.Sprintf("%+v", res), migratorPassword)
 }
 
-// createRecordingFlywayStub is a vendor-agnostic Flyway stand-in that appends one line per
-// invocation to the returned log, so a test can count the runs a MigrateAll call started.
-func createRecordingFlywayStub(t *testing.T) (stub, runLog string) {
-	t.Helper()
-	dir := t.TempDir()
-	runLog = filepath.Join(dir, "runs.log")
-	stub = filepath.Join(dir, "flyway-recording.sh")
-	content := "#!/bin/sh\necho \"${DB_NAME}${ORACLE_PDB}\" >> '" + runLog + "'\necho '" + minimalMigrateSuccessJSON + "'\nexit 0\n"
-	require.NoError(t, os.WriteFile(stub, []byte(content), 0o755))
-	return stub, runLog
-}
-
 func flywayRuns(t *testing.T, runLog string) int {
 	t.Helper()
 	raw, err := os.ReadFile(runLog)
@@ -1139,7 +1124,7 @@ var sharedMigrator = &MigratorIdentity{Username: "fleet_migrator", Password: "pw
 func runDuplicateTargetFleet(t *testing.T, ids []string, cfgs map[string]*config.DatabaseConfig, identity *MigratorIdentity, action Action) (res *MigrateAllResult, runs int) {
 	t.Helper()
 	requireShellStubs(t)
-	stub, runLog := createRecordingFlywayStub(t)
+	stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 	res, err := MigrateAll(context.Background(), newFlywayMigratorForTest(t), &fakeLister{ids: ids}, newFakeConfigProvider(cfgs), action,
 		MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), ContinueOnError: true, MigratorIdentity: identity})
 	require.NoError(t, err)
@@ -1202,13 +1187,14 @@ func TestMigrateAllAdmitsTenantsWithDistinctTargets(t *testing.T) {
 
 func TestMigrateAllNeverKeysATypeLessTenant(t *testing.T) {
 	requireShellStubs(t)
-	stub, runLog := createRecordingFlywayStub(t)
+	stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 	fm := NewFlywayMigrator(&config.Config{App: config.AppConfig{Env: "test"}}, logger.New("disabled", true))
 	typeLess := &config.DatabaseConfig{Host: "db", Port: 5432, Database: "app", Username: "u", Password: "migration-password-u"}
-	_, err := MigrateAll(context.Background(), fm, &fakeLister{ids: []string{"t1", "t2"}},
+	res, err := MigrateAll(context.Background(), fm, &fakeLister{ids: []string{"t1", "t2"}},
 		newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": typeLess, "t2": typeLess}), ActionMigrate,
 		MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), ContinueOnError: true})
-	require.NotErrorIs(t, err, ErrDuplicateMigrationTarget)
+	require.NoError(t, err)
+	assert.Empty(t, res.Failed())
 	assert.Equal(t, 2, flywayRuns(t, runLog), "both type-less tenants reach Flyway")
 }
 
@@ -1234,7 +1220,7 @@ func TestMigrateAllRefusesDuplicateTargetForEveryAction(t *testing.T) {
 
 func TestMigrateAllFailFastReturnsTheDuplicateTargetRefusal(t *testing.T) {
 	requireShellStubs(t)
-	stub, runLog := createRecordingFlywayStub(t)
+	stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 	same := pgTenant("db", 5432, "app", "s", "u")
 	res, err := MigrateAll(context.Background(), newFlywayMigratorForTest(t), &fakeLister{ids: []string{"t1", "t2", "t3"}},
 		newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": same, "t2": same, "t3": pgTenant("db", 5432, "other", "s", "u")}), ActionMigrate,
@@ -1249,7 +1235,7 @@ func TestMigrateAllParallelRefusesEveryLaterSameTargetTenant(t *testing.T) {
 	for _, tenants := range []int{2, 3} {
 		t.Run(strconv.Itoa(tenants)+"_tenants", func(t *testing.T) {
 			requireShellStubs(t)
-			stub, runLog := createRecordingFlywayStub(t)
+			stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 			ids := make([]string, 0, tenants)
 			cfgs := map[string]*config.DatabaseConfig{}
 			for i := range tenants {
