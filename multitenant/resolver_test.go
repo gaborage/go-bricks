@@ -2,6 +2,7 @@ package multitenant
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"regexp"
 	"testing"
@@ -372,7 +373,7 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 			resolver: &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
 			host:     testHost,
 			headers:  map[string]string{xForwardedHostHeader: "tenant5.example.com, tenant6.example.com"},
-			expected: "tenant5",
+			expected: "tenant6",
 		},
 		{
 			name:        "root domain same as host",
@@ -669,4 +670,169 @@ func TestCompositeResolverWithPathSubresolver(t *testing.T) {
 		assert.Equal(t, ErrTenantResolutionFailed, err)
 		assert.Empty(t, tenantID)
 	})
+}
+
+// forwardedHostRequest builds a request from remoteAddr whose Host is a non-tenant
+// host, carrying one X-Forwarded-Host line per entry of lines.
+func forwardedHostRequest(remoteAddr string, lines ...string) *http.Request {
+	req := setupTestRequest(testHost, nil)
+	req.RemoteAddr = remoteAddr
+	for _, line := range lines {
+		req.Header.Add(xForwardedHostHeader, line)
+	}
+	return req
+}
+
+func TestSubdomainResolverForwardedHostPeerGate(t *testing.T) {
+	_, listed, err := net.ParseCIDR("203.0.113.0/24")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		trusted    []*net.IPNet
+		wantTenant string
+		wantErr    error
+	}{
+		{name: "public_unlisted_peer", remoteAddr: "198.51.100.7:443", wantErr: ErrUntrustedForwardedHost},
+		{name: "public_peer_without_port", remoteAddr: "198.51.100.7", wantErr: ErrUntrustedForwardedHost},
+		{name: "unparseable_peer", remoteAddr: "not-an-address:1", wantErr: ErrUntrustedForwardedHost},
+		{name: "ipv4_mapped_public_peer", remoteAddr: "[::ffff:198.51.100.7]:443", wantErr: ErrUntrustedForwardedHost},
+		{name: "public_peer_outside_listed_range", remoteAddr: "198.51.100.7:443", trusted: []*net.IPNet{listed}, wantErr: ErrUntrustedForwardedHost},
+		{name: "rfc1918_peer", remoteAddr: "10.1.2.3:443", wantTenant: "alpha"},
+		{name: "private_peer_without_port", remoteAddr: "192.168.1.5", wantTenant: "alpha"},
+		{name: "loopback_peer", remoteAddr: "127.0.0.1:5000", wantTenant: "alpha"},
+		{name: "ipv6_loopback_peer", remoteAddr: "[::1]:5000", wantTenant: "alpha"},
+		{name: "link_local_peer", remoteAddr: "169.254.10.20:80", wantTenant: "alpha"},
+		{name: "ipv6_zone_link_local_peer", remoteAddr: "[fe80::1%eth0]:80", wantTenant: "alpha"},
+		{name: "ipv6_unique_local_peer", remoteAddr: "[fd00::1]:80", wantTenant: "alpha"},
+		{name: "ipv4_mapped_private_peer", remoteAddr: "[::ffff:10.0.0.1]:80", wantTenant: "alpha"},
+		{name: "unix_socket_empty_peer", remoteAddr: "", wantTenant: "alpha"},
+		{name: "unix_socket_abstract_peer", remoteAddr: "@", wantTenant: "alpha"},
+		{name: "unix_socket_path_peer", remoteAddr: "/run/app.sock", wantTenant: "alpha"},
+		{name: "listed_public_peer", remoteAddr: "203.0.113.9:443", trusted: []*net.IPNet{listed}, wantTenant: "alpha"},
+		{name: "nil_listed_range_skipped", remoteAddr: "203.0.113.9:443", trusted: []*net.IPNet{nil, listed}, wantTenant: "alpha"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := &SubdomainResolver{RootDomain: testDomain, TrustProxies: true, TrustedProxies: tt.trusted}
+			tenantID, err := resolver.ResolveTenant(context.Background(), forwardedHostRequest(tt.remoteAddr, "alpha.example.com"))
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Empty(t, tenantID)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantTenant, tenantID)
+		})
+	}
+}
+
+func TestSubdomainResolverForwardedHostUntouchedPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver *SubdomainResolver
+		req      *http.Request
+	}{
+		{
+			name:     "untrusted_peer_without_forwarded_host_resolves_host",
+			resolver: &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+			req:      forwardedHostRequest("198.51.100.7:443"),
+		},
+		{
+			name:     "proxies_disabled_ignores_forwarded_host_from_untrusted_peer",
+			resolver: &SubdomainResolver{RootDomain: testDomain},
+			req:      forwardedHostRequest("198.51.100.7:443", "bravo.example.com"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.req.Host = "alpha.example.com"
+			tenantID, err := tt.resolver.ResolveTenant(context.Background(), tt.req)
+			require.NoError(t, err)
+			assert.Equal(t, "alpha", tenantID)
+		})
+	}
+}
+
+func TestSubdomainResolverForwardedHostLastEntry(t *testing.T) {
+	tests := []struct {
+		name       string
+		lines      []string
+		wantTenant string
+	}{
+		{name: "comma_list_takes_last_entry", lines: []string{"bravo.example.com, alpha.example.com"}, wantTenant: "alpha"},
+		{name: "three_entry_list_takes_last_entry", lines: []string{"charlie.example.com, bravo.example.com, alpha.example.com"}, wantTenant: "alpha"},
+		{name: "two_lines_take_last_line", lines: []string{"bravo.example.com", "alpha.example.com"}, wantTenant: "alpha"},
+		{name: "last_line_comma_list_takes_its_last_entry", lines: []string{"charlie.example.com", "bravo.example.com,alpha.example.com"}, wantTenant: "alpha"},
+		{name: "empty_last_entry_is_no_match", lines: []string{"bravo.example.com, "}},
+		{name: "empty_last_line_is_no_match", lines: []string{"bravo.example.com", ""}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := &SubdomainResolver{RootDomain: testDomain, TrustProxies: true}
+			tenantID, err := resolver.ResolveTenant(context.Background(), forwardedHostRequest("10.0.0.1:443", tt.lines...))
+			if tt.wantTenant == "" {
+				require.ErrorIs(t, err, ErrTenantResolutionFailed)
+				assert.Empty(t, tenantID)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantTenant, tenantID)
+		})
+	}
+}
+
+// countingResolver records how often it is consulted.
+type countingResolver struct {
+	calls    int
+	tenantID string
+}
+
+func (r *countingResolver) ResolveTenant(context.Context, *http.Request) (string, error) {
+	r.calls++
+	return r.tenantID, nil
+}
+
+func TestCompositeResolverStopsOnUntrustedForwardedHost(t *testing.T) {
+	next := &countingResolver{tenantID: validTenantID}
+	composite := &CompositeResolver{Resolvers: []TenantResolver{
+		&SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+		next,
+	}}
+
+	tenantID, err := composite.ResolveTenant(context.Background(), forwardedHostRequest("198.51.100.7:443", "alpha.example.com"))
+
+	require.ErrorIs(t, err, ErrUntrustedForwardedHost)
+	assert.Empty(t, tenantID)
+	assert.Zero(t, next.calls, "a sub-resolver after the untrusted forwarded host must not be consulted")
+}
+
+func TestCompositeResolverFallsThroughOrdinaryFailure(t *testing.T) {
+	next := &countingResolver{tenantID: validTenantID}
+	composite := &CompositeResolver{Resolvers: []TenantResolver{
+		&SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+		next,
+	}}
+
+	tenantID, err := composite.ResolveTenant(context.Background(), forwardedHostRequest("198.51.100.7:443"))
+
+	require.NoError(t, err)
+	assert.Equal(t, validTenantID, tenantID)
+	assert.Equal(t, 1, next.calls)
+}
+
+func TestValidatingResolverPassesUntrustedForwardedHostThrough(t *testing.T) {
+	validating := &ValidatingResolver{
+		Resolver:    &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+		TenantRegex: regexp.MustCompile(tenantIDRegex),
+	}
+
+	_, err := validating.ResolveTenant(context.Background(), forwardedHostRequest("198.51.100.7:443", "alpha.example.com"))
+
+	require.ErrorIs(t, err, ErrUntrustedForwardedHost)
+	assert.NotErrorIs(t, err, ErrTenantResolutionFailed, "the untrusted-peer sentinel stays distinct from an ordinary miss")
 }

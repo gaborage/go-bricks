@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-07-14
 
+> **Amended (2026-10-03, by [ADR-140](adr_140_forwarded_host_peer_gate.md)):** with
+> `proxies: true`, `SubdomainResolver` believes `X-Forwarded-Host` only from a trusted
+> immediate peer, takes its last entry, and fails the request terminally when an untrusted
+> peer sends it. Obligation 1 below is reworded to match.
+
 ## Context
 
 The composite tenant resolver (`multitenant.resolver.type: composite`) tries a
@@ -217,8 +222,13 @@ sub-resolver you did not list does not apply to you.
 1. **If `subdomain` participates in the order, the ingress MUST validate `Host`
    against the tenant's own DNS name.** `Host` is a request header; on a permissive
    wildcard vhost a caller can send `Host: other-tenant.api.example.com` and
-   `SubdomainResolver` will read `other-tenant`. With `proxies: true`, the ingress
-   MUST additionally ensure only the trusted proxy can set `X-Forwarded-Host`.
+   `SubdomainResolver` will read `other-tenant`. With `proxies: true`, the proxy
+   MUST be a trusted peer (loopback, link-local, private, unix socket, or listed in
+   `server.trustedproxies`) and MUST overwrite or append `X-Forwarded-Host`; the
+   resolver reads the last entry and rejects the header from any other peer
+   ([ADR-140](adr_140_forwarded_host_peer_gate.md)). A proxy that passes the client's
+   header through untouched is indistinguishable from the client, so the ingress MUST
+   still ensure only the trusted proxy sets it.
 2. **If `path` participates in the order, the tenant segment MUST be authorized
    against the authenticated principal.** The path is caller-authored. **The path
    segment is not an authorization boundary, and this ADR does not make it one.**
