@@ -29,7 +29,7 @@ func TestScramSHA256VerifierUsesStandardBase64(t *testing.T) {
 	salt := []byte{
 		0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb, 0xff, 0xbf, 0xfb,
 	}
-	got, err := scramSHA256Verifier("pencil", salt, 4096)
+	got, err := scramSHA256Verifier("correct horse battery staple", salt, 4096)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(got, scramSHA256Prefix+"4096:+/+/+/+/+/+/+/+/+/+/+w==$"),
 		"verifier length %d", len(got))
