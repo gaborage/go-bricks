@@ -2314,7 +2314,7 @@ loudly instead of falling through to a caller-written tenant header.
 
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
-**Date:** 2026-09-08 | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type
+**Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
 
 `Declarations.DeclareQueueWithDLQ` invents a parking queue whose whole purpose is retaining a
 message nobody could handle, but it set no `x-queue-type` on either queue it touches, so both
@@ -2336,6 +2336,17 @@ deployed against is quorum-capable (maintainer, triage 2026-09-08); CI declares 
 parking queue (`ParkingQueue` when the spec sets it, else `<queue>.dlq`), cannot be redeclared as
 quorum, so set `QueueType: messaging.QueueTypeClassic` to keep today's topology or delete/migrate
 the queue. See [migrations.md](migrations.md) `[C64.12]`.
+
+**Amendment (2026-10-04, #1568):** `DeadLetterSpec.DeadLetterStrategy` set to
+`messaging.DeadLetterStrategyAtLeastOnce` writes `x-dead-letter-strategy=at-least-once` and
+`x-overflow=reject-publish` on the PRIMARY only — an exception to one field, both queues, since
+both are source-queue properties. Empty writes nothing and keeps the at-most-once default, and
+any other value, `"at-most-once"` included, fails `Validate`. An opted-in primary is judged on
+its final declaration and refused by queue and key, never value, when it is not quorum or its
+`x-overflow` is anything but exactly `reject-publish` — an exception to an existing value wins,
+because the broker accepts those shapes and silently falls back to at-most-once. Additive, no
+atom; opting in on an existing primary meets `406 PRECONDITION_FAILED` until it is drained and
+recreated or the strategy is applied as an operator policy instead.
 
 ---
 

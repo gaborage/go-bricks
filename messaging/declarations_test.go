@@ -2565,3 +2565,84 @@ func TestValidateAcceptsDirectExchangeReferences(t *testing.T) {
 
 	assert.NoError(t, d.Validate())
 }
+
+func TestValidateRefusesAnAtLeastOnceShapeTheBrokerWouldDowngrade(t *testing.T) {
+	const secret = "drop-head"
+	cases := []struct {
+		name    string
+		arrange func(d *Declarations)
+		key     string
+		value   string
+	}{
+		{name: "unknown_strategy", key: argDeadLetterStrategy, value: "at-least-twice", arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: "at-least-twice"})
+		}},
+		{name: "explicit_at_most_once", key: argDeadLetterStrategy, value: "at-most-once", arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: "at-most-once"})
+		}},
+		{name: "classic_queue_type", key: argQueueType, value: QueueTypeClassic, arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{QueueType: QueueTypeClassic, DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+		}},
+		{name: "classic_pre_registered_through_args", key: argQueueType, value: QueueTypeClassic, arrange: func(d *Declarations) {
+			primary := NewQueue(dlqPrimaryQueue)
+			primary.Args[argQueueType] = QueueTypeClassic
+			d.RegisterQueue(primary)
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+		}},
+		{name: "overflow_changed_to_drop_head", key: argOverflow, value: secret, arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			d.Queues[dlqPrimaryQueue].Args[argOverflow] = secret
+		}},
+		{name: "overflow_changed_to_reject_publish_dlx", key: argOverflow, value: "reject-publish-dlx", arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			d.Queues[dlqPrimaryQueue].Args[argOverflow] = "reject-publish-dlx"
+		}},
+		{name: "strategy_replaced", key: argDeadLetterStrategy, value: "at-most-once", arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			d.Queues[dlqPrimaryQueue].Args[argDeadLetterStrategy] = "at-most-once"
+		}},
+		{name: "strategy_deleted", key: argDeadLetterStrategy, arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			delete(d.Queues[dlqPrimaryQueue].Args, argDeadLetterStrategy)
+		}},
+		{name: "overflow_deleted", key: argOverflow, arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			delete(d.Queues[dlqPrimaryQueue].Args, argOverflow)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDeclarations()
+			tc.arrange(d)
+			err := d.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), strconv.Quote(dlqPrimaryQueue))
+			assert.Contains(t, err.Error(), tc.key)
+			if tc.value != "" {
+				assert.NotContains(t, err.Error(), tc.value, "the argument's value is never named")
+			}
+		})
+	}
+}
+
+// TestCloneCarriesTheAtLeastOnceOptIn pins that a clone judges the opt-in as its source does.
+func TestCloneCarriesTheAtLeastOnceOptIn(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+	delete(d.Queues[dlqPrimaryQueue].Args, argOverflow)
+	require.Error(t, d.Validate())
+
+	err := d.Clone().Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), argOverflow)
+}
+
+// TestValidateSkipsAnOptedInQueueRemovedFromTheSet pins that an opt-in whose queue was deleted from
+// d.Queues after registration neither panics nor refuses.
+func TestValidateSkipsAnOptedInQueueRemovedFromTheSet(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+	delete(d.Queues, dlqPrimaryQueue)
+
+	require.NotPanics(t, func() { require.NoError(t, d.Validate()) })
+}

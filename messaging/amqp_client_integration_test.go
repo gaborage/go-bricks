@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -372,6 +373,45 @@ func TestDeclarativeDLQDeclaresQuorumQueues(t *testing.T) {
 			Durable: declared.Durable,
 			Args:    declared.Args,
 		}), "%s must already be a quorum queue on the broker", name)
+	}
+}
+
+// TestDeclarativeDLQAtLeastOnceArgumentsReachTheBroker proves only that the opt-in's two arguments
+// reached the broker on the primary, through RabbitMQ's declare-equivalence check: redeclaring with
+// the registered Args succeeds, and redeclaring without x-overflow is refused as inequivalent. It
+// does NOT prove dead-lettering is loss-resistant: the broker accepts the downgraded shapes too.
+func TestDeclarativeDLQAtLeastOnceArgumentsReachTheBroker(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+
+	client := NewAMQPClient(brokerURL, log)
+	defer client.Close()
+
+	require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+
+	workQueueName := uniqueName(t, "alodlq-queue")
+	decls := NewDeclarations()
+	decls.DeclareQueueWithDLQ(workQueueName, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+	require.NoError(t, decls.Validate())
+
+	reg := NewRegistry(client, log)
+	require.NoError(t, decls.ReplayToRegistry(reg))
+	require.NoError(t, reg.DeclareInfrastructure(t.Context()))
+
+	declared := decls.Queues[workQueueName]
+	require.NotNil(t, declared)
+	require.NoError(t, client.DeclareQueue(t.Context(), &QueueDeclaration{
+		Name: workQueueName, Durable: declared.Durable, Args: declared.Args,
+	}), "the registered arguments are already on the broker's queue")
+
+	for _, key := range []string{argOverflow, argDeadLetterStrategy} {
+		without := maps.Clone(declared.Args)
+		delete(without, key)
+		err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: workQueueName, Durable: declared.Durable, Args: without})
+		var amqpErr *amqp.Error
+		require.ErrorAs(t, err, &amqpErr, "%s reached the broker, so a redeclare without it is refused", key)
+		assert.Equal(t, amqp.PreconditionFailed, amqpErr.Code, "%s: inequivalent arg", key)
+		require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 	}
 }
 

@@ -4,6 +4,50 @@
 **Date:** 2026-09-08
 **Issue:** #1548
 
+## Amendment (2026-10-04, #1568): at-least-once dead-lettering is an opt-in on the primary
+
+`DeadLetterSpec` gains `DeadLetterStrategy string`. Its one accepted non-empty value is
+`messaging.DeadLetterStrategyAtLeastOnce` (`"at-least-once"`), which makes the helper write
+`x-dead-letter-strategy=at-least-once` and `x-overflow=reject-publish` on the primary, so the
+broker re-publishes a dead-lettered message with internal confirms and keeps it in the primary
+until the parking queue confirms it. Empty — the `nil` spec and `&DeadLetterSpec{}` included —
+writes neither argument, so every existing declaration and its `Hash()` are unchanged and the
+default stays at-most-once: flipping it would redeclare every existing primary with new `Args`
+and fail startup fleet-wide. Any other value, the literal `"at-most-once"` included, is a
+`Validate` error rather than a synonym for empty, because the broker treats an explicit
+at-most-once argument and an absent one as inequivalent. A string, not a bool, for the reason
+Alternative B gives for `QueueType`. Three decisions depart from the rules below:
+
+- **Primary only — an exception to "one field, both queues".** Both arguments are properties
+  of the queue a message is dead-lettered FROM, so writing them on the parking queue would
+  change nothing about the hop into it. When several primaries share one dead-letter exchange or parking queue, each carries
+  its own strategy; a primary re-declared without the opt-in merges under the usual rule
+  (absent keys do not conflict) and keeps both arguments.
+- **Any `x-overflow` other than exactly `reject-publish` is refused — an exception to "an
+  existing value wins".** The broker accepts a quorum queue carrying the strategy with no
+  `x-overflow`, with `drop-head`, or with `reject-publish-dlx` (which quorum queues do not
+  support), and silently falls back to at-most-once with only a broker-log warning; it never
+  refuses those shapes. So for an opted-in primary the framework does not defer to a value
+  already in `Args`: `Validate` judges the FINAL registered declaration — after any
+  `d.Queues[name].Args` edit the helper's godoc invites — and refuses every other overflow
+  shape, absent included, by queue name and argument key, never the value.
+- **Quorum only.** An opted-in primary whose resolved `x-queue-type` is not quorum —
+  `QueueType: QueueTypeClassic`, or a classic type already in its `Args`, which the helper
+  never overwrites — is refused at `Validate`. The broker refuses the strategy on a classic
+  queue and an unknown strategy value itself, but only mid-startup and once per tenant;
+  refusing both by name in the validate-once path is the fail-fast pattern below.
+
+These refusals are aggregated with the queue-type and quorum-shape errors, and per-tenant
+replay is unchanged. Not a break: nothing changes for a caller who does not opt in, so there
+is no migrations atom. Opting in on an EXISTING primary is a topology migration — the broker
+refuses the new arguments with `406 PRECONDITION_FAILED` (inequivalent arg) until the queue is
+drained and recreated, or the strategy is applied as an operator policy instead
+(`dead-letter-strategy=at-least-once`, `overflow=reject-publish` on quorum queues). The
+prerequisite is RabbitMQ ≥ 3.10 with a quorum primary; the `stream_queue` feature flag is
+Required from 3.11.0, so it matters only on a 3.10.x broker. Costs and the remedies are in
+[wiki/messaging.md](messaging.md#dead-lettering). Retry queues (#1549) and a general rule
+judging hand-set `x-dead-letter-strategy` in raw `Args` (#1732) are out of scope.
+
 ## Context
 
 `Declarations.DeclareQueueWithDLQ` (`messaging/helpers.go`) is the one-call form of
@@ -26,8 +70,8 @@ dead-letter hop from the primary to the DLX keeps RabbitMQ's default
 `dead-letter-strategy=at-most-once`, which re-publishes without internal confirms, so a
 message can still be lost in transit between the two queues on a target or node failure.
 Loss-resistant dead-lettering additionally needs `x-dead-letter-strategy=at-least-once`
-with `x-overflow=reject-publish` and the broker's `stream_queue` feature flag — a
-separate opt-in, tracked in #1568, that this decision does not make.
+with `x-overflow=reject-publish` on a quorum primary — a separate opt-in that this
+decision does not make; the 2026-10-04 amendment above adds it.
 
 ADR-040 already named the escape hatch and already named the target:
 `Args["x-queue-type"] = "quorum"` reaches the broker, and that ADR calls quorum
@@ -60,7 +104,8 @@ queues the helper touches, and an empty value resolves to quorum.**
   durability guarantees is not a posture anyone asked for: the primary decides whether
   the message survives long enough to be dead-lettered, the parking queue decides whether
   it survives after parking, and a single knob cannot express half a route. Neither half
-  makes the HOP between them reliable — that is the at-most-once strategy above, #1568. A caller who genuinely wants
+  makes the HOP between them reliable — that is the at-most-once strategy above, which the
+  2026-10-04 amendment lets a primary opt out of. A caller who genuinely wants
   the two sides to differ writes the odd side by hand through the passthrough below.
 - **An existing `x-queue-type` wins.** The helper sets `x-queue-type` only on a queue
   that does not already carry one. So the ADR-040 passthrough — a `NewQueue` registered

@@ -3281,12 +3281,25 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 Dead-letter failed messages (handler errors/panics nack without requeue) by declaring
 the queue with `DeclareQueueWithDLQ` **instead of** `DeclareQueue` (v0.53.0) — it
 auto-derives a `<queue>.dlx` fanout exchange, a `<queue>.dlq` parking queue, and the
-binding, and is idempotent across queues sharing a DLX. Declare each queue exactly once:
+binding, and is idempotent across queues sharing a DLX. Declare each queue exactly once.
+Both queues are **quorum** by default (ADR-106); `QueueType: messaging.QueueTypeClassic`
+declares both classic, and a queue already carrying `x-queue-type` in its `Args` keeps it.
+The hop between the two queues is RabbitMQ's default **at-most-once**: a message can be lost
+in transit on a target or node failure. `DeadLetterStrategy: messaging.DeadLetterStrategyAtLeastOnce`
+opts a quorum primary into at-least-once (`x-dead-letter-strategy=at-least-once` +
+`x-overflow=reject-publish`, primary only; RabbitMQ ≥ 3.10). `Validate` refuses it on a
+non-quorum primary or one whose final `x-overflow` is not exactly `reject-publish`, and
+turning it on for an existing primary fails startup with `406 PRECONDITION_FAILED` until the
+queue is recreated (see [wiki/messaging.md](wiki/messaging.md#dead-lettering)):
 
 ```go
 // In DeclareMessaging above, swap `decls.DeclareQueue("orders.processing")` for this —
 // DeclareQueueWithDLQ registers the queue itself, so don't also call DeclareQueue for it:
 queue := decls.DeclareQueueWithDLQ("orders.processing", &messaging.DeadLetterSpec{})
+
+// Or classic on both sides, or a quorum primary dead-lettering at-least-once:
+//   &messaging.DeadLetterSpec{QueueType: messaging.QueueTypeClassic}
+//   &messaging.DeadLetterSpec{DeadLetterStrategy: messaging.DeadLetterStrategyAtLeastOnce}
 ```
 
 For custom DLX/parking-queue names or bespoke topology, declare a plain queue (again

@@ -64,6 +64,10 @@ const (
 	argDeadLetterRoutingKey = "x-dead-letter-routing-key"
 	argMaxPriority          = "x-max-priority"
 	argQueueMode            = "x-queue-mode"
+	argDeadLetterStrategy   = "x-dead-letter-strategy"
+	argOverflow             = "x-overflow"
+
+	overflowRejectPublish = "reject-publish"
 
 	queueTypeStream = "stream"
 
