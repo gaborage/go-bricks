@@ -773,6 +773,7 @@ func TestSubdomainResolverForwardedHostLastEntry(t *testing.T) {
 		{name: "three_entry_list_takes_last_entry", lines: []string{"charlie.example.com, bravo.example.com, alpha.example.com"}, wantTenant: "alpha"},
 		{name: "two_lines_take_last_line", lines: []string{"bravo.example.com", "alpha.example.com"}, wantTenant: "alpha"},
 		{name: "last_line_comma_list_takes_its_last_entry", lines: []string{"charlie.example.com", "bravo.example.com,alpha.example.com"}, wantTenant: "alpha"},
+		{name: "comma_at_line_start_takes_entry_after_it", lines: []string{",alpha.example.com"}, wantTenant: "alpha"},
 		{name: "empty_last_entry_is_no_match", lines: []string{"bravo.example.com, "}},
 		{name: "empty_last_line_is_no_match", lines: []string{"bravo.example.com", ""}},
 	}
