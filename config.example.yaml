@@ -278,9 +278,9 @@ multitenant:
     type: header                 # Options: header, subdomain, path, composite
     header: X-Tenant-ID          # Header name for header-based resolution
     domain: api.example.com      # Root domain (leading dot optional)
-    proxies: false               # Subdomain resolver reads X-Forwarded-Host (last entry), only from
-    #                              # loopback/link-local/private/unix peers or server.trustedproxies;
-    #                              # any other peer sending it gets 400 (ADR-140)
+    proxies: false               # When true, the subdomain resolver reads X-Forwarded-Host (last entry),
+    #                              # only from loopback/link-local/private/unix peers or server.trustedproxies;
+    #                              # any other peer sending it gets 400 (ADR-140). False ignores the header.
     # order: [subdomain, path, header]  # REQUIRED for `type: composite` (rejected on any other
     #                                    # type, so it stays commented out here). No default:
     #                                    # a composite resolver without it fails at startup.
