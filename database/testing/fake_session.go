@@ -127,8 +127,14 @@ func (s *TestSession) DatabaseType() string {
 }
 
 // Begin implements dbtypes.Transactor.Begin, popping the session's own queued
-// transactions in declaration order.
+// transactions in declaration order. The returned *TestTx records nil options.
 func (s *TestSession) Begin(_ context.Context) (dbtypes.Tx, error) {
+	return s.begin(nil)
+}
+
+// begin pops the session's next queued transaction for Begin and BeginTx; a closed
+// session pops nothing.
+func (s *TestSession) begin(opts *sql.TxOptions) (dbtypes.Tx, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -141,15 +147,16 @@ func (s *TestSession) Begin(_ context.Context) (dbtypes.Tx, error) {
 
 	txExp := s.txs[0]
 	s.txs = s.txs[1:]
-	s.parent.registerStartedTransaction(txExp)
 
-	return txExp.tx, nil
+	return s.parent.start(txExp, opts)
 }
 
-// BeginTx implements dbtypes.Transactor.BeginTx.
-func (s *TestSession) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, error) {
-	// For test purposes, delegate to Begin (ignore opts)
-	return s.Begin(ctx)
+// BeginTx implements dbtypes.Transactor.BeginTx. It pops the same queue as Begin, and
+// the returned *TestTx records opts as a driver would receive them (nil stays nil, a
+// zero value stays non-nil). On a closed session it returns sql.ErrConnDone and records
+// nothing.
+func (s *TestSession) BeginTx(_ context.Context, opts *sql.TxOptions) (dbtypes.Tx, error) {
+	return s.begin(opts)
 }
 
 // Close implements dbtypes.Session.Close. It is not idempotent: a second Close

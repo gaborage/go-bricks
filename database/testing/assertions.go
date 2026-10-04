@@ -1,6 +1,7 @@
 package testing
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -292,4 +293,25 @@ func formatExecLog(log []ExecCall) string {
 		}
 	}
 	return sb.String()
+}
+
+// AssertTxOptions fails when the options tx was begun with differ from want: a nil vs
+// non-nil mismatch, or a different Isolation or ReadOnly.
+//
+// Example:
+//
+//	AssertTxOptions(t, tx, &sql.TxOptions{ReadOnly: true})
+func AssertTxOptions(t *testing.T, tx *TestTx, want *sql.TxOptions) {
+	t.Helper()
+	got := tx.Options()
+	if (got == nil) != (want == nil) {
+		t.Errorf("transaction options: got %+v, want %+v", got, want)
+		return
+	}
+	if got == nil {
+		return
+	}
+	if got.Isolation != want.Isolation || got.ReadOnly != want.ReadOnly {
+		t.Errorf("transaction options: got %+v, want %+v", *got, *want)
+	}
 }

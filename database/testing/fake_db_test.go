@@ -2,6 +2,7 @@ package testing
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -689,4 +690,80 @@ func TestTestTxWillReturnErrorNoOpWhenEmpty(t *testing.T) {
 	db := NewTestDB(dbtypes.PostgreSQL)
 	tx := db.ExpectTransaction().WillReturnError(errors.New("ignored"))
 	assert.NotNil(t, tx)
+}
+
+// txBeginner is the Begin/BeginTx surface TestDB and TestSession share.
+type txBeginner interface {
+	Begin(ctx context.Context) (dbtypes.Tx, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (dbtypes.Tx, error)
+}
+
+// beginCases are the four ways a transaction can begin, each with the options a driver
+// would receive.
+var beginCases = []struct {
+	name  string
+	begin func(ctx context.Context, b txBeginner) (dbtypes.Tx, error)
+	want  *sql.TxOptions
+}{
+	{name: "begin_records_nil", begin: func(ctx context.Context, b txBeginner) (dbtypes.Tx, error) { return b.Begin(ctx) }},
+	{name: "begin_tx_nil_records_nil", begin: func(ctx context.Context, b txBeginner) (dbtypes.Tx, error) { return b.BeginTx(ctx, nil) }},
+	{
+		name:  "begin_tx_zero_records_non_nil",
+		begin: func(ctx context.Context, b txBeginner) (dbtypes.Tx, error) { return b.BeginTx(ctx, &sql.TxOptions{}) },
+		want:  &sql.TxOptions{},
+	},
+	{
+		name: "begin_tx_records_values",
+		begin: func(ctx context.Context, b txBeginner) (dbtypes.Tx, error) {
+			return b.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelSerializable})
+		},
+		want: &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelSerializable},
+	},
+}
+
+func TestTestDBBeginTxRecordsOptions(t *testing.T) {
+	for _, tc := range beginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := NewTestDB(dbtypes.PostgreSQL)
+			db.ExpectTransaction()
+
+			tx, err := tc.begin(t.Context(), db)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, tx.(*TestTx).Options())
+		})
+	}
+}
+
+func TestTestTxOptionsReturnsACopy(t *testing.T) {
+	db := NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectTransaction()
+	tx, err := db.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(t.Context()) }()
+
+	tx.(*TestTx).Options().ReadOnly = false
+
+	assert.True(t, tx.(*TestTx).Options().ReadOnly, "mutating the returned options must not change the record")
+}
+
+func TestTestDBWillFailBegin(t *testing.T) {
+	errSentinel := errors.New("begin refused")
+	for _, tc := range beginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := NewTestDB(dbtypes.PostgreSQL)
+			db.ExpectTransaction().WillFailBegin(errSentinel)
+			next := db.ExpectTransaction()
+
+			tx, err := tc.begin(t.Context(), db)
+			require.ErrorIs(t, err, errSentinel)
+			assert.Nil(t, tx)
+			AssertNoTransaction(t, db)
+
+			got, err := db.Begin(t.Context())
+			require.NoError(t, err)
+			defer func() { _ = got.Rollback(t.Context()) }()
+			assert.Same(t, next, got, "the failed entry is consumed; the next Begin pops the next transaction")
+		})
+	}
 }

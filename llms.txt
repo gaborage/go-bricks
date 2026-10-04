@@ -2079,6 +2079,10 @@ dbtesting.AssertQueryCount(t, db, "SELECT", 2)
 dbtesting.AssertExecExecuted(t, db, "INSERT")
 dbtesting.AssertTransactionCommitted(t, db)
 dbtesting.AssertTransactionRolledBack(t, db)
+dbtesting.AssertTxOptions(t, tx, &sql.TxOptions{ReadOnly: true}) // options BeginTx received (nil for Begin)
+
+// Fail the Begin itself: the entry is consumed, never registered as started
+db.ExpectTransaction().WillFailBegin(errConnRefused)
 ```
 
 See [database/testing](database/testing/) package for full API documentation.

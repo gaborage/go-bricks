@@ -31,6 +31,40 @@ type TestTx struct {
 	expectationSet
 	committed  bool
 	rolledBack bool
+	// opts and beginErr are guarded by parent.mu (the TestDB lock), not by the
+	// expectationSet's mu.
+	opts     *sql.TxOptions
+	beginErr error
+}
+
+// WillFailBegin makes the Begin or BeginTx that pops this transaction return err (and a
+// nil Tx) instead. The queue entry is consumed and the transaction is never registered
+// as started, so AssertNoTransaction stays green on code that handles the error.
+// Unlike WillReturnError, it targets the Begin itself.
+func (tx *TestTx) WillFailBegin(err error) *TestTx {
+	tx.parent.mu.Lock()
+	defer tx.parent.mu.Unlock()
+	tx.beginErr = err
+	return tx
+}
+
+// Options returns a copy of the *sql.TxOptions this transaction was begun with: nil for
+// Begin or BeginTx(nil), and non-nil for any options passed to BeginTx, the zero value
+// included. It is also nil before any Begin pops the transaction and after a Begin that
+// failed through WillFailBegin, so AssertTxOptions(t, tx, nil) passes then too.
+func (tx *TestTx) Options() *sql.TxOptions {
+	tx.parent.mu.RLock()
+	defer tx.parent.mu.RUnlock()
+	return cloneTxOptions(tx.opts)
+}
+
+// cloneTxOptions copies opts so a caller can neither alias nor mutate a recorded value.
+func cloneTxOptions(opts *sql.TxOptions) *sql.TxOptions {
+	if opts == nil {
+		return nil
+	}
+	c := *opts
+	return &c
 }
 
 // newTestTx builds a transaction fake whose expectations belong to parent.
