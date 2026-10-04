@@ -104,9 +104,11 @@ func TestForEachTenantStopsWhenTheContextIsDone(t *testing.T) {
 }
 
 func TestForEachTenantReleasesTheLeaseBeforeAPanicPropagates(t *testing.T) {
+	outer, enclosing := leasescope.Install(context.Background())
+	defer enclosing.ReleaseAll()
 	leases := &leaseLog{}
 	assert.PanicsWithValue(t, "boom", func() {
-		_ = ForEachTenant(context.Background(), []string{"a", "b"}, func(ctx context.Context, tenantID string) error {
+		_ = ForEachTenant(outer, []string{"a", "b"}, func(ctx context.Context, tenantID string) error {
 			leases.borrow(ctx, tenantID)
 			panic("boom")
 		})

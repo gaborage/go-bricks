@@ -7,7 +7,7 @@
 >
 > **Amended (2026-10-02):** The Decision section's "Seed lease" bullet held for the first claimant only. One seed covered one of a shared create's waiters; the rest claimed after delivery with nothing holding the entry open, so a detached entry closed at the first claimant's release, and a waiter that found it closed retried until "failed to acquire after 4 attempts (pool churn)". The pool now coalesces creates itself (`pendingCreate`, replacing singleflight) and the install reserves one seed per waiter (`refs == seeds == waiters`), so evict, `Remove` and idle cleanup can only detach a fresh entry until every waiter has claimed. Close still discounts unclaimed seeds. The bounded retry and its churn error are gone. See `internal/resourcepool/resourcepool.go` (`installCreated`, `claimSeed`).
 >
-> **Amended (2026-10-04, #1866):** The Decision section's activation-layer seam list named functions that no longer exist and said the outbox relay and inbox cleanup per-tenant children inherit the job scope; each installs its own per-tenant scope that shadows it, and the list now says so. A public callback door, `multitenant.ForEachTenant`, runs caller work once per tenant inside a fresh per-tenant scope drained when the callback returns or panics, so a tenant-sweeping consumer job holds about one tenant's leases at a time. The scope type and its install/register functions stay private in `internal/leasescope`; returning a lease object to apps remains rejected. See `multitenant/foreach_tenant.go`.
+> **Amended (2026-10-04, #1866):** The Decision section's activation-layer seam list named functions that no longer install the scope and said the outbox relay and inbox cleanup per-tenant children inherit the job scope; each installs its own per-tenant scope that shadows it, and the list now says so. A public callback door, `multitenant.ForEachTenant`, runs caller work once per tenant inside a fresh per-tenant scope drained when the callback returns or panics, so a tenant-sweeping consumer job holds about one tenant's leases at a time. The scope type and its install/register functions stay private in `internal/leasescope`; returning a lease object to apps remains rejected. See `multitenant/foreach_tenant.go`.
 
 ## Context
 
@@ -75,8 +75,8 @@ the active scope.
   bare handle — **accessor and `ResourceProvider` signatures are unchanged, so applications do
   not change.**
 - Scopes are installed at three unit-of-work seams, with `context.WithValue` inheritance carrying
-  each into the work beneath it: **HTTP** (folded into `RequestEnrich`'s existing context clone — zero extra
-  per-request allocation), **message deliveries** (`delivery.Run` in
+  each into the work beneath it: **HTTP** (folded into `RequestEnrich`'s existing context clone —
+  zero extra per-request allocation), **message deliveries** (`delivery.Run` in
   `messaging/internal/delivery`, which also covers inbox `ProcessOnce`), and **scheduler jobs**
   (`Module.runJobBody`). The outbox relay (`relayTenant`) and inbox cleanup (through
   `multitenant.FanOutRetentionCleanup`) install their own per-tenant scope, which shadows the job
