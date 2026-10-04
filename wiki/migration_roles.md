@@ -22,6 +22,15 @@ On `go-bricks-migrate`, the `WithSharedMigrator` guard described below is the
 opt-in `--shared-migrator` flag (env `GOBRICKS_MIGRATE_SHARED_MIGRATOR`), which
 also refuses a tenant whose database type go-bricks does not support.
 
+The `MigrateAll` check that needs no flag at all is the
+[duplicate-target refusal](multi_tenant_migration.md#duplicate-targets)
+(`migration.ErrDuplicateMigrationTarget`); the CLI gets it at its routine
+go-bricks pin bump. It is narrower than the guard: it refuses the second and
+later tenants that a shared migrator with an empty schema puts on one database,
+but the first tenant's run still lands in the shared default schema and
+reports success, a false green it cannot flag, and database-per-tenant fleets
+never collide.
+
 Every role the helper creates starts at the same locked-down attribute floor:
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. By default
 the attribute lockdown is reapplied on every provisioning call so a

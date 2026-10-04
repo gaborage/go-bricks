@@ -158,7 +158,8 @@ type MigrateAllOptions struct {
 	// MigratorIdentity, when set, replaces the username and password on a copy of
 	// every tenant's resolved database config before Flyway runs; host, port,
 	// database, schema targeting and TLS stay the tenant's. Nil keeps the
-	// provider's credentials.
+	// provider's credentials. Two tenants it leaves on one target are refused with
+	// ErrDuplicateMigrationTarget.
 	MigratorIdentity *MigratorIdentity
 }
 
@@ -175,6 +176,32 @@ type MigratorIdentity struct {
 	Username string
 	Password string
 }
+
+// ErrDuplicateMigrationTarget is a tenant's TenantResult.Err when an earlier tenant of the same
+// MigrateAll call already claimed the migration target it resolves to; the refused tenant
+// starts no Flyway process, for migrate, validate and info alike. The fix is configuration —
+// give each tenant a distinct postgresql.schema or migrator role, or de-list the alias — since
+// a re-run collides again. The message names both tenant IDs and never the host, username or
+// password.
+//
+// The target is read from the effective config, after the MigratorIdentity overlay. A
+// PostgreSQL tenant with a framework-built URL is keyed by host, port, database and
+// postgresql.schema, or by host, port, database and username when the schema is empty, since
+// the connecting role's search_path then picks the schema. An Oracle tenant is keyed by host,
+// port, PDB and username. The host is compared lowercased and without IPv6 brackets, and a
+// PostgreSQL port of 0 equals 5432; database, schema and username compare byte-exact.
+//
+// Blind spots: a conf-owned target (a connectionstring, or no host or database) or a tenant whose
+// vendor resolves to neither, even when its ID is listed twice (the claim is per target), DNS
+// aliases (a CNAME, or an IP against a name), an Oracle port of 0 against 1521, Oracle's
+// case-insensitive unquoted user and service names (app against APP), distinct PostgreSQL roles
+// with no role-level search_path (all land in public), and two separate MigrateAll calls, which
+// rely on Flyway's own lock. A type-less tenant under a typed runner gets none of its connection
+// variables delivered, so its key may not be the target Flyway connects to: a possible false
+// negative; on a refusal, set the tenant's type so Flyway connects as the keyed user, and a
+// refusal that survives that is a real collision. A tenant that claims a target and then fails
+// its own run still holds the claim.
+var ErrDuplicateMigrationTarget = errors.New("migration: tenant resolves to a migration target another tenant of this run claimed")
 
 // ErrNoLister is returned when MigrateAll is called without a TenantLister.
 var ErrNoLister = errors.New("migration: TenantLister is nil")
@@ -233,15 +260,27 @@ func MigrateAll(
 			Str("action", action.String())
 	}, "Starting multi-tenant migration")
 
+	claims := newTargetClaims()
 	var out *MigrateAllResult
 	if opts.Parallelism <= 1 {
-		out, err = runSequential(ctx, migrator, configs, action, tenantIDs, opts)
+		out, err = runSequential(ctx, migrator, configs, action, tenantIDs, opts, claims)
 	} else {
-		out, err = runParallel(ctx, migrator, configs, action, tenantIDs, opts)
+		out, err = runParallel(ctx, migrator, configs, action, tenantIDs, opts, claims)
 	}
 	// Both paths dispatch in listing order, so the undispatched tenants are the tail.
 	out.NeverDispatched = slices.Clone(tenantIDs[len(out.Results):])
 	return out, err
+}
+
+// duplicateTargetError names the two tenant IDs only: a host can carry a whole DSN and the
+// overlay credential is fleet-wide.
+func duplicateTargetError(tenantID, owner string) error {
+	if tenantID == owner {
+		return fmt.Errorf("%w: tenant %q is listed more than once; de-list the repeat (a re-run collides again)",
+			ErrDuplicateMigrationTarget, tenantID)
+	}
+	return fmt.Errorf("%w: tenant %q resolves to the same migration target as tenant %q; give each tenant a distinct "+
+		"postgresql.schema or migrator role, or de-list the alias; a re-run collides again", ErrDuplicateMigrationTarget, tenantID, owner)
 }
 
 func validateMigratorIdentity(identity *MigratorIdentity) error {
@@ -267,13 +306,14 @@ func runSequential(
 	action Action,
 	tenantIDs []string,
 	opts MigrateAllOptions,
+	claims *targetClaims,
 ) (*MigrateAllResult, error) {
 	out := &MigrateAllResult{Action: action, Results: make([]TenantResult, 0, len(tenantIDs))}
 	for _, id := range tenantIDs {
 		if err := dispatchBlocked(ctx, opts); err != nil {
 			return out, err
 		}
-		res := runOne(ctx, migrator, configs, action, id, &opts)
+		res := runOne(ctx, migrator, configs, action, id, &opts, claims)
 		out.Results = append(out.Results, res)
 
 		if opts.Hook != nil {
@@ -294,6 +334,7 @@ func runParallel(
 	action Action,
 	tenantIDs []string,
 	opts MigrateAllOptions,
+	claims *targetClaims,
 ) (*MigrateAllResult, error) {
 	parallelism := opts.Parallelism
 	if parallelism > maxParallelism {
@@ -318,6 +359,7 @@ func runParallel(
 		configs:  configs,
 		action:   action,
 		opts:     opts,
+		claims:   claims,
 	}
 	dispatched, stopErr := state.dispatch(runCtx, tenantIDs, parallelism)
 	state.wg.Wait()
@@ -360,6 +402,7 @@ type parallelState struct {
 	configs  database.DBConfigProvider
 	action   Action
 	opts     MigrateAllOptions
+	claims   *targetClaims
 	wg       sync.WaitGroup
 	hookMu   sync.Mutex
 	errMu    sync.Mutex
@@ -400,7 +443,7 @@ func (s *parallelState) dispatch(ctx context.Context, tenantIDs []string, parall
 }
 
 func (s *parallelState) runWorker(ctx context.Context, idx int, tenantID string) {
-	res := runOne(ctx, s.migrator, s.configs, s.action, tenantID, &s.opts)
+	res := runOne(ctx, s.migrator, s.configs, s.action, tenantID, &s.opts, s.claims)
 	s.out.Results[idx] = res
 
 	if s.opts.Hook != nil {
@@ -430,6 +473,7 @@ func runOne(
 	action Action,
 	tenantID string,
 	opts *MigrateAllOptions,
+	claims *targetClaims,
 ) TenantResult {
 	start := time.Now()
 	res := TenantResult{TenantID: tenantID}
@@ -451,6 +495,13 @@ func runOne(
 		overlaid.Username = identity.Username
 		overlaid.Password = identity.Password
 		dbCfg = &overlaid
+	}
+	if target, keyed := migrationTargetFor(dbCfg, migrator.config.Database.Type); keyed {
+		if owner, claimed := claims.claim(&target, tenantID); !claimed {
+			res.Err = duplicateTargetError(tenantID, owner)
+			res.Duration = time.Since(start)
+			return res
+		}
 	}
 
 	defaults := migrator.DefaultMigrationConfigForVendor(dbCfg.Type)

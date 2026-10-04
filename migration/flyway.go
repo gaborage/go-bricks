@@ -174,7 +174,10 @@ func (fm *FlywayMigrator) WithAuditRecorder(sink AuditRecorder) *FlywayMigrator 
 // runner's own database.* config, not just per-tenant ones: Migrate, Validate
 // and Info gate on it too, so RunMigrationsAtStartup on a runner built with
 // this flag and an empty database.postgresql.schema fails startup. Oracle is
-// unaffected: its schema is the connecting user, which is already per-tenant.
+// unaffected: its schema is the connecting user, which a MigratorIdentity
+// overlay makes the same for every tenant in one PDB. MigrateAll refuses any
+// tenant whose target an earlier tenant of the run claimed, with or without
+// this flag (ErrDuplicateMigrationTarget).
 //
 // A migrator role shared across tenants is the motivating case — it is
 // provisioned with PGRoleSpec.SkipMigratorRole, so it gets no role-level
@@ -541,11 +544,10 @@ func dbVendor(db *config.DatabaseConfig, fallback string) string {
 
 // schemaArgs returns the explicit Flyway schema-targeting flags for the
 // supplied database, or nil when no schema is configured. Only PostgreSQL
-// participates: Oracle's schema is the connecting user, which is already
-// per-tenant. The schema name must pass database/identifier.Validate, the
-// same check as role provisioning — it is formatted into
-// subprocess argv, and -schemas is comma-separated, so an unvalidated value
-// could smuggle a second schema.
+// participates: Oracle's schema is the connecting user. The schema name must
+// pass database/identifier.Validate, the same check as role provisioning — it
+// is formatted into subprocess argv, and -schemas is comma-separated, so an
+// unvalidated value could smuggle a second schema.
 //
 // requireExplicitSchema (set by FlywayMigrator.WithSharedMigrator) turns the
 // empty-schema case into ErrSharedMigratorSchemaRequired.

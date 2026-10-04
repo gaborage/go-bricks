@@ -56,8 +56,7 @@ func normalizeTargetHost(host string) string {
 	return strings.ToLower(unbracket(host))
 }
 
-// targetClaims is the claim set one MigrateAll run will hold (wired in by the run path):
-// which tenant claimed each target first.
+// targetClaims is one MigrateAll call's claim set: which tenant claimed each target first.
 type targetClaims struct {
 	mu     sync.Mutex
 	owners map[migrationTarget]string
