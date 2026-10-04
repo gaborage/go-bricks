@@ -37,7 +37,7 @@
 > never to replay. Publication is prevented only at the `PublishSealed` gate. A clear copy under
 > a name that does not case-fold to the Subject, or nested below the top level, is not covered.
 > This narrows `[C63.5]`'s "`Open` is untouched": a message carrying a twin no longer opens.
-> This amendment's change is `[C73.3]`, breaking.
+> This amendment's change is `[C72.11]`, breaking.
 >
 > **Amended (2026-10-03, [ADR-139](adr_139_sealing_seam_framework_only.md)):** the seam moves
 > to root `internal/sealruntime`, and the three exported sealing hooks and their alias family are
