@@ -45,6 +45,10 @@ const (
 	// username is logged beside it; the password never is.
 	migratorOverlayLogMsg = "Migrator identity overlay active"
 
+	// sharedMigratorArmedLogMsg records that every tenant must carry a supported
+	// type and, on PostgreSQL, an explicit postgresql.schema.
+	sharedMigratorArmedLogMsg = "Shared migrator guard armed"
+
 	jsonKeyTenants = "tenants"
 
 	// migrateCLIAppName is reported as the built JDBC URL's application_name, so a
@@ -459,6 +463,9 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		// it reports like every other pre-dispatch failure.
 		return nothingAttempted(out, action, flags.JSON, err)
 	}
+	if err := resolveSharedMigrator(cmd, flags); err != nil {
+		return nothingAttempted(out, action, flags.JSON, err)
+	}
 
 	ctx := cmd.Context()
 	if ctx == nil {
@@ -485,6 +492,12 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 		// The username is safe to log and tells an operator which role Flyway ran
 		// as; the password is never logged, in any form.
 		log.Info().Str("migrator_user", identity.Username).Msg(migratorOverlayLogMsg)
+	}
+	if flags.SharedMigrator {
+		// Wrapped here, not in buildConfigProvider, which quiesce shares.
+		migrator = migrator.WithSharedMigrator()
+		provider = &sharedMigratorProvider{inner: provider}
+		log.Info().Msg(sharedMigratorArmedLogMsg)
 	}
 
 	hook := makeHook(out, flags.JSON)

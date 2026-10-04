@@ -342,3 +342,32 @@ func TestQuiesceIgnoresMigratorIdentity(t *testing.T) {
 
 	require.NoError(t, cmd.Execute(), "a half-set identity must not stop a path that never uses it")
 }
+
+// TestQuiesceIgnoresSharedMigrator pins the same boundary for --shared-migrator:
+// quiesce accepts the flag and never reads the env var, so not even an
+// unparseable value changes what it does.
+func TestQuiesceIgnoresSharedMigrator(t *testing.T) {
+	injectController(t, migration.NewMemoryQuiesceController())
+
+	run := func(t *testing.T, env *string, extra ...string) string {
+		t.Helper()
+		unsetSharedMigratorEnv(t)
+		if env != nil {
+			t.Setenv(envSharedMigrator, *env)
+		}
+		cmd := NewQuiesceCommand()
+		cmd.SetArgs(append([]string{"status", "--tenant", "cp", "--json"}, extra...))
+		cmd.SetContext(t.Context())
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		require.NoError(t, cmd.Execute(), out.String())
+		return out.String()
+	}
+
+	baseline := run(t, nil)
+	assert.Equal(t, baseline, run(t, nil, sharedArmedFlag))
+	assert.Equal(t, baseline, run(t, new("true")))
+	assert.Equal(t, baseline, run(t, new(sharedUnparseable), sharedArmedFlag))
+	assert.Equal(t, baseline, run(t, new(sharedUnparseable)))
+}
