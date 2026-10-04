@@ -81,4 +81,4 @@ the same mapping the exporters apply for
   `TestInitMeterProviderWithDeltaTemporality`
 - OpenTelemetry metrics SDK exporter spec, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
 - gaborage/go-bricks#1874
-- See [migrations.md](migrations.md) `[C73.5]`.
+- See [migrations.md](migrations.md) `[C72.12]`.
