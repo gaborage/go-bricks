@@ -404,14 +404,17 @@ func TestDeclarativeDLQAtLeastOnceArgumentsReachTheBroker(t *testing.T) {
 		Name: workQueueName, Durable: declared.Durable, Args: declared.Args,
 	}), "the registered arguments are already on the broker's queue")
 
+	// A refused declare closes the channel it ran on, so each key is probed on a client of its own.
 	for _, key := range []string{argOverflow, argDeadLetterStrategy} {
+		probe := NewAMQPClient(brokerURL, log)
+		t.Cleanup(func() { _ = probe.Close() })
+		require.Eventually(t, probe.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 		without := maps.Clone(declared.Args)
 		delete(without, key)
-		err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: workQueueName, Durable: declared.Durable, Args: without})
+		err := probe.DeclareQueue(t.Context(), &QueueDeclaration{Name: workQueueName, Durable: declared.Durable, Args: without})
 		var amqpErr *amqp.Error
 		require.ErrorAs(t, err, &amqpErr, "%s reached the broker, so a redeclare without it is refused", key)
 		assert.Equal(t, amqp.PreconditionFailed, amqpErr.Code, "%s: inequivalent arg", key)
-		require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
 	}
 }
 
