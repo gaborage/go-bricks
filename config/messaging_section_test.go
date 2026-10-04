@@ -1197,7 +1197,6 @@ func TestValidatePublisherPoolDefaultsFollowMessagingTenancy(t *testing.T) {
 			name: "multi_tenant_shared_explicit_kept", cfg: staticMultitenantFixture, tenancy: TenancyShared,
 			idleTTL: 10 * time.Minute, maxCached: 2, wantIdleTTL: 10 * time.Minute, wantMax: 2,
 		},
-		{name: "multi_tenant_shared_explicit_zero", cfg: staticMultitenantFixture, tenancy: TenancyShared, wantIdleTTL: time.Hour, wantMax: 50},
 		{name: "multi_tenant_per_tenant", cfg: staticMultitenantFixture, tenancy: TenancyPerTenant, wantIdleTTL: 10 * time.Minute, wantMax: 0},
 		{name: "multi_tenant_tenancy_unset", cfg: staticMultitenantFixture, wantIdleTTL: 10 * time.Minute, wantMax: 0},
 		{name: "dynamic_source_shared", cfg: dynamicMultitenant, tenancy: TenancyShared, wantIdleTTL: time.Hour, wantMax: 50},

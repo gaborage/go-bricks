@@ -241,7 +241,8 @@ func applyStreamsDefaults(cfg *StreamsConfig) error {
 func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 	// Each field follows the same "zero applies the default, negative is invalid" rule,
 	// factored into applyNonNegativeDefault to keep the policy in one place. Publisher.IdleTTL
-	// is handled separately below because its default depends on the deployment mode.
+	// is handled separately below because its default depends on the deployment mode and the
+	// messaging tenancy.
 	for _, d := range []struct {
 		field *time.Duration
 		def   time.Duration
