@@ -65,7 +65,7 @@ type Declarations struct {
 	exchangeConflicts []exchangeConflict                   // Incompatible exchange re-declarations, reported by Validate
 	externalConflicts []string                             // Exchange names declared locally AND marked external, reported by Validate
 	queueConflicts    []queueConflict                      // Incompatible queue re-declarations, reported by Validate
-	queueTypeErrs     []error                              // Queue types a declaration helper refused, reported by Validate
+	queueTypeErrs     []error                              // Queue types or dead-letter strategies a declaration helper refused, reported by Validate
 	atLeastOnceQueues map[string]struct{}                  // Primaries DeclareQueueWithDLQ opted into at-least-once dead-lettering, judged by Validate
 	sealErr           error                                // First seal-tagged declaration that cannot seal, reported by Validate
 }
