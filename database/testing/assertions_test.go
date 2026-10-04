@@ -32,6 +32,7 @@ func TestAssertTxOptions(t *testing.T) {
 			db.ExpectTransaction()
 			tx, err := db.BeginTx(t.Context(), tt.recorded)
 			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(t.Context()) }()
 
 			recorder := &testing.T{}
 			AssertTxOptions(recorder, tx.(*TestTx), tt.want)

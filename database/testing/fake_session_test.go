@@ -271,6 +271,7 @@ func TestTestSessionWillFailBegin(t *testing.T) {
 
 			got, err := sess.Begin(t.Context())
 			require.NoError(t, err)
+			defer func() { _ = got.Rollback(t.Context()) }()
 			assert.Same(t, next, got)
 		})
 	}

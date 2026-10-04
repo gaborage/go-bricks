@@ -740,6 +740,7 @@ func TestTestTxOptionsReturnsACopy(t *testing.T) {
 	db.ExpectTransaction()
 	tx, err := db.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
 	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(t.Context()) }()
 
 	tx.(*TestTx).Options().ReadOnly = false
 
@@ -761,6 +762,7 @@ func TestTestDBWillFailBegin(t *testing.T) {
 
 			got, err := db.Begin(t.Context())
 			require.NoError(t, err)
+			defer func() { _ = got.Rollback(t.Context()) }()
 			assert.Same(t, next, got, "the failed entry is consumed; the next Begin pops the next transaction")
 		})
 	}
