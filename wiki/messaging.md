@@ -424,8 +424,9 @@ The broker accepts a quorum queue with the strategy but no `x-overflow`, or with
 `reject-publish-dlx` (which quorum queues do not support), and silently falls back to
 at-most-once with only a warning in its log. So `Validate` judges each opted-in primary
 on its FINAL declaration, after any `d.Queues[name].Args` edit, and refuses it by queue
-name and argument key when it is not quorum (`QueueTypeClassic`, or a classic type
-already in its `Args`) or when its `x-overflow` is anything other than exactly
+name and argument key when its `x-dead-letter-strategy` is no longer `at-least-once`,
+when it is not quorum (`QueueTypeClassic`, or a classic type already in its `Args`), or
+when its `x-overflow` is anything other than exactly
 `reject-publish` — absent, `drop-head` or `reject-publish-dlx`.
 
 - **Prerequisite:** RabbitMQ ≥ 3.10 with a quorum primary. The `stream_queue` feature

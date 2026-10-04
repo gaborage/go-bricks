@@ -2597,6 +2597,14 @@ func TestValidateRefusesAnAtLeastOnceShapeTheBrokerWouldDowngrade(t *testing.T) 
 			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
 			d.Queues[dlqPrimaryQueue].Args[argOverflow] = "reject-publish-dlx"
 		}},
+		{name: "strategy_replaced", key: argDeadLetterStrategy, value: "at-most-once", arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			d.Queues[dlqPrimaryQueue].Args[argDeadLetterStrategy] = "at-most-once"
+		}},
+		{name: "strategy_deleted", key: argDeadLetterStrategy, arrange: func(d *Declarations) {
+			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			delete(d.Queues[dlqPrimaryQueue].Args, argDeadLetterStrategy)
+		}},
 		{name: "overflow_deleted", key: argOverflow, arrange: func(d *Declarations) {
 			d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
 			delete(d.Queues[dlqPrimaryQueue].Args, argOverflow)

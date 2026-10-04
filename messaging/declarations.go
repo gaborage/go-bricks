@@ -739,7 +739,8 @@ func (d *Declarations) validateQuorumQueueShape() []error {
 
 // validateAtLeastOnceDeadLettering reports, in sorted order, every primary that opted into
 // at-least-once dead-lettering in a shape the broker accepts but silently downgrades to
-// at-most-once: not a quorum queue, or a final x-overflow other than reject-publish. Only queues
+// at-most-once: a final strategy other than at-least-once, not a quorum queue, or a final
+// x-overflow other than reject-publish. Only queues
 // that opted in through DeadLetterSpec.DeadLetterStrategy are judged, on their final declaration.
 // The key is named, never its value.
 func (d *Declarations) validateAtLeastOnceDeadLettering() []error {
@@ -748,6 +749,11 @@ func (d *Declarations) validateAtLeastOnceDeadLettering() []error {
 		q, exists := d.Queues[name]
 		if !exists {
 			continue
+		}
+		if q.Args[argDeadLetterStrategy] != DeadLetterStrategyAtLeastOnce {
+			errs = append(errs, fmt.Errorf(
+				"queue %q opts into at-least-once dead-lettering, but its final %s is not %s: leave the argument the helper wrote",
+				name, argDeadLetterStrategy, DeadLetterStrategyAtLeastOnce))
 		}
 		if !isQuorumQueue(q) {
 			errs = append(errs, fmt.Errorf(
