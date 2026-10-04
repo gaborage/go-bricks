@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1605,8 +1606,9 @@ func requireRuntimeRoleSeparation(ctx context.Context, t *testing.T, migratorDB,
 // both Go doors and proves PostgreSQL stored the computed verifier as-is: the
 // stored value recomputes from the plaintext and its own salt, the plaintext
 // logs in, and a wrong password is refused (so the login was password-checked).
-// The server hashes plaintext as md5, so a plaintext-mode emission could not
-// pass the recompute; a plaintext-mode control proves the setting took effect.
+// Each door's own session is shown to hash plaintext as md5 right before it
+// provisions, so a plaintext-mode emission could not pass the recompute; a
+// plaintext-mode control on the same session proves the setting took effect.
 func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 	env := newIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
@@ -1617,13 +1619,23 @@ func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 	_, err = admin.ExecContext(ctx, `SELECT pg_reload_conf()`)
 	require.NoError(t, err)
 
+	// One connection, so the session proven md5 is the one the door runs on.
+	md5DB := env.adminDB(t)
+	md5DB.SetMaxOpenConns(1)
+	showOnDB := func(ctx context.Context) (string, error) {
+		var v string
+		err := md5DB.QueryRowContext(ctx, `SHOW password_encryption`).Scan(&v)
+		return v, err
+	}
+
 	plainSpec := &PGRoleSpec{
 		Schema:          "tenant_scram_plain",
 		MigratorRole:    "mig_scram_plain",
 		RuntimeRole:     "rt_scram_plain",
 		RuntimePassword: testconsts.FakePassword("rt-scram-plain"),
 	}
-	require.NoError(t, ProvisionPGRoles(ctx, env.adminDB(t), plainSpec))
+	awaitMD5PasswordEncryption(ctx, t, showOnDB)
+	require.NoError(t, ProvisionPGRoles(ctx, md5DB, plainSpec))
 	var plainStored string
 	require.NoError(t, admin.QueryRowContext(ctx,
 		`SELECT rolpassword FROM pg_authid WHERE rolname = $1`, plainSpec.RuntimeRole).Scan(&plainStored))
@@ -1638,7 +1650,8 @@ func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 		RuntimePassword:  testconsts.FakePassword("rt-scram-db"),
 		PasswordFormat:   PGPasswordSCRAMSHA256,
 	}
-	require.NoError(t, ProvisionPGRoles(ctx, admin, sqlDBSpec))
+	awaitMD5PasswordEncryption(ctx, t, showOnDB)
+	require.NoError(t, ProvisionPGRoles(ctx, md5DB, sqlDBSpec))
 
 	txSpec := &PGRoleSpec{
 		Schema:           "tenant_scram_tx",
@@ -1649,6 +1662,11 @@ func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 		PasswordFormat:   PGPasswordSCRAMSHA256,
 	}
 	require.NoError(t, database.WithTx(ctx, env.adminConn(t), func(ctx context.Context, tx database.Tx) error {
+		awaitMD5PasswordEncryption(ctx, t, func(ctx context.Context) (string, error) {
+			var v string
+			err := tx.QueryRow(ctx, `SHOW password_encryption`).Scan(&v)
+			return v, err
+		})
 		return ProvisionPGRolesTx(ctx, tx, txSpec)
 	}))
 
@@ -1672,10 +1690,29 @@ func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 // rather than failing, for the wrong-password control.
 func pingAsRole(ctx context.Context, t *testing.T, env *integrationEnv, role, password string) error {
 	t.Helper()
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-		role, password, env.host, env.port, env.defaultDB)
-	db, err := sql.Open("pgx", dsn)
+	db, err := sql.Open("pgx", env.roleDSN(role, password))
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	return db.PingContext(ctx)
+}
+
+// awaitMD5PasswordEncryption polls show until the session behind it reports
+// password_encryption = md5, failing after a bounded wait: ALTER SYSTEM plus
+// pg_reload_conf reaches a live session asynchronously.
+func awaitMD5PasswordEncryption(ctx context.Context, t *testing.T, show func(context.Context) (string, error)) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := show(ctx)
+		require.NoError(t, err)
+		if got == "md5" {
+			return
+		}
+		require.True(t, time.Now().Before(deadline), "password_encryption is still %q on this session", got)
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }

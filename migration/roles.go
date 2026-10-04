@@ -49,9 +49,9 @@ type PGRoleSpec struct {
 	// service. Must differ from MigratorRole.
 	RuntimeRole string
 
-	// RuntimePassword is optionally assigned to RuntimeRole. Same semantics
-	// as MigratorPassword — passing it on every call makes secret rotation a
-	// no-op rerun — and the same PasswordFormat.
+	// RuntimePassword is optionally assigned to RuntimeRole, with the same
+	// semantics and PasswordFormat as MigratorPassword. Passing it on every
+	// call makes secret rotation a no-op rerun.
 	RuntimePassword string
 
 	// SkipMigratorRole leaves MigratorRole untouched: no CREATE ROLE, attribute
@@ -226,8 +226,9 @@ var ErrPGRoleSkippedMigratorHasPassword = errors.New("migration: MigratorPasswor
 
 // Field name constants used in Validate error messages — the identifier
 // fields via ErrInvalidPGIdentifier, the password fields via
-// ErrPGRolePasswordHasControlChar or ErrPGRolePasswordNotSCRAMSafe — so callers (including tests) can assert
-// which field failed without coupling to the literal string.
+// ErrPGRolePasswordHasControlChar or ErrPGRolePasswordNotSCRAMSafe — so
+// callers (including tests) can assert which field failed without coupling to
+// the literal string.
 const (
 	pgRoleFieldSchema           = "Schema"
 	pgRoleFieldMigratorRole     = "MigratorRole"
@@ -427,8 +428,9 @@ func provisionPGRoles(ctx context.Context, spec *PGRoleSpec, run func(ctx contex
 // Returns Validate's error when spec fails it — ErrInvalidPGIdentifier,
 // ErrPGRolePasswordHasControlChar, ErrPGRolePasswordNotSCRAMSafe,
 // ErrUnknownPGPasswordFormat or ErrPGRoleSkippedMigratorHasPassword — or an
-// error when a SCRAM-SHA-256 verifier cannot be computed. The returned slice does not include trailing semicolons; callers concatenating
-// them into a single script should add separators themselves.
+// error when a SCRAM-SHA-256 verifier cannot be computed. The returned slice
+// does not include trailing semicolons; callers concatenating them into a
+// single script should add separators themselves.
 //
 // SECURITY: when spec.MigratorPassword or spec.RuntimePassword is non-empty,
 // the returned statements include a credential literal
@@ -525,9 +527,7 @@ func passwordLiteral(format PGPasswordFormat, password string) (string, error) {
 
 func scramPasswordLiteral(password string) (string, error) {
 	salt := make([]byte, pgSCRAMSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("migration: generating a SCRAM salt: %w", err)
-	}
+	rand.Read(salt) // never returns an error since Go 1.24: it crashes the program instead
 	verifier, err := scramSHA256Verifier(password, salt, pgSCRAMIterations)
 	if err != nil {
 		return "", fmt.Errorf("migration: computing a SCRAM verifier: %w", err)
