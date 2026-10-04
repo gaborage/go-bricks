@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,6 +57,11 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 	}{
 		{name: "empty_tenant", resolver: &fixedTenantResolver{tenantID: "", err: nil}, reason: `reason="empty tenant"`},
 		{name: "resolver_error", resolver: &fixedTenantResolver{tenantID: "tenant-canary", err: errors.New("boom")}, reason: `reason="resolver error"`},
+		{
+			name:     "untrusted_forwarded_host",
+			resolver: &fixedTenantResolver{err: fmt.Errorf("wrapped: %w", multitenant.ErrUntrustedForwardedHost)},
+			reason:   `reason="X-Forwarded-Host from a peer outside server.trustedproxies"`,
+		},
 	}
 
 	for _, tc := range tests {

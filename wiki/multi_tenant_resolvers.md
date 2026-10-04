@@ -49,10 +49,12 @@ multitenant:
   resolver:
     type: subdomain
     domain: api.example.com   # leading dot optional
-    proxies: true             # trust X-Forwarded-Host
+    proxies: true             # read X-Forwarded-Host from a trusted peer
 ```
 
-Extracts the part before `.<domain>` from the request `Host`. Use `proxies: true` only behind a trusted reverse proxy that sets `X-Forwarded-Host`; otherwise an attacker can forge it. Ports are stripped from the host; IPv6 literals are preserved correctly.
+Extracts the part before `.<domain>` from the request `Host`. Ports are stripped from the host; IPv6 literals are preserved correctly.
+
+With `proxies: true` the resolver reads `X-Forwarded-Host` instead, but only when the immediate peer is trusted by the rule the server applies to `X-Forwarded-For` and `X-Forwarded-Proto`: loopback, link-local, private and unix-socket peers, plus the vetted `server.trustedproxies` ranges ([ADR-140](adr_140_forwarded_host_peer_gate.md)). It takes the last comma-separated entry of the last header line, the one the nearest proxy wrote; an empty last entry is no match. When any other peer sends the header, the request is rejected with 400 `Invalid tenant` (a composite order stops there), and the WARN reason reads `X-Forwarded-Host from a peer outside server.trustedproxies` without logging the header. A proxy on a public or `100.64.0.0/10` address therefore needs its CIDRs in `server.trustedproxies`, the same entry the client IP and HSTS already need. A request without the header resolves from `Host`, and `proxies: false` (the default) ignores the header.
 
 ## Path resolver
 
@@ -129,7 +131,7 @@ The resolver extracts an identifier and puts it in `context.Context`. It perform
 
 > **Deployment obligations (normative).** A composite deployment that does not meet these does not have tenant isolation, whatever order it declares. Each is scoped to the order you actually declare — an obligation about a sub-resolver you did not list does not apply to you.
 >
-> 1. If `subdomain` participates in the order, the ingress **must** validate `Host` against the tenant's own DNS name. On a permissive wildcard vhost, a caller can send `Host: other-tenant.api.example.com` and the subdomain resolver reads `other-tenant`. With `proxies: true`, the ingress **must** also ensure only the trusted proxy can set `X-Forwarded-Host`.
+> 1. If `subdomain` participates in the order, the ingress **must** validate `Host` against the tenant's own DNS name. On a permissive wildcard vhost, a caller can send `Host: other-tenant.api.example.com` and the subdomain resolver reads `other-tenant`. With `proxies: true`, the proxy **must** be a trusted peer (default ranges or `server.trustedproxies`) and **must** overwrite or append `X-Forwarded-Host`; the resolver reads its last entry and rejects the header from any other peer (ADR-140). A proxy that passes the client's header through untouched is indistinguishable from the client, so the ingress **must** still ensure only the trusted proxy sets it.
 > 2. If `path` participates in the order, the tenant segment **must** be authorized against the authenticated principal. **The path segment is not an authorization boundary and this ordering does not make it one.**
 > 3. If `header` participates in the order, the gateway **must** strip or overwrite inbound `X-Tenant-ID`.
 > 4. Conversely, if your gateway **owns** `X-Tenant-ID`, you **must** pin a header-first order — otherwise a caller-controlled `Host`/path outranks it. This one is unconditional: it is a statement about your edge, not about your order.

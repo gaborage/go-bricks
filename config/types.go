@@ -101,8 +101,10 @@ type ServerConfig struct {
 
 	// TrustedProxies holds CIDR ranges of reverse proxies whose
 	// X-Forwarded-For entries are believed when deriving the client IP for
-	// rate limiting and request logging, and whose X-Forwarded-Proto decides
-	// the request scheme (and so whether the HSTS header is sent). Loopback,
+	// rate limiting and request logging, whose X-Forwarded-Proto decides
+	// the request scheme (and so whether the HSTS header is sent), and whose
+	// X-Forwarded-Host the subdomain tenant resolver believes when
+	// multitenant.resolver.proxies is true (ADR-140). Loopback,
 	// link-local and RFC1918 ranges are trusted by default, so a service
 	// behind an in-VPC load balancer needs no entry here; add one only when a
 	// proxy sits on a public address. An invalid entry fails startup rather
@@ -760,11 +762,14 @@ type TenantMessagingConfig struct {
 
 // ResolverConfig holds tenant resolution strategy settings.
 type ResolverConfig struct {
-	Type    string             `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"`                // header, subdomain, path, composite
-	Header  string             `koanf:"header" json:"header" yaml:"header" toml:"header" mapstructure:"header"`      // default: X-Tenant-ID
-	Domain  string             `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"`      // e.g., api.example.com or .api.example.com (leading dot optional)
-	Proxies bool               `koanf:"proxies" json:"proxies" yaml:"proxies" toml:"proxies" mapstructure:"proxies"` // trust X-Forwarded-Host
-	Path    PathResolverConfig `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`                // path-segment resolver settings
+	Type   string `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"`           // header, subdomain, path, composite
+	Header string `koanf:"header" json:"header" yaml:"header" toml:"header" mapstructure:"header"` // default: X-Tenant-ID
+	Domain string `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"` // e.g., api.example.com or .api.example.com (leading dot optional)
+	// Proxies lets the subdomain resolver read X-Forwarded-Host, only from a trusted
+	// immediate peer (loopback, link-local, private, unix socket, or server.trustedproxies),
+	// taking the header's last entry. An untrusted peer that sends it gets 400 (ADR-140).
+	Proxies bool               `koanf:"proxies" json:"proxies" yaml:"proxies" toml:"proxies" mapstructure:"proxies"`
+	Path    PathResolverConfig `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"` // path-segment resolver settings
 	// Order controls composite sub-resolver precedence (type: composite only) and
 	// is REQUIRED when type is composite — there is no implicit default; a
 	// composite config with an empty Order fails validation. Valid entries:

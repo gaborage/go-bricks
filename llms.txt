@@ -4746,7 +4746,7 @@ multitenant:
   resolver:
     type: subdomain
     domain: api.example.com  # leading dot optional
-    proxies: true            # trust X-Forwarded-Host (only behind a trusted proxy)
+    proxies: true            # read X-Forwarded-Host (last entry) only from a trusted peer: loopback/link-local/private/unix or server.trustedproxies; any other peer sending it gets 400
 ```
 
 **Path (for `/<service>/{tenantID}/...` URLs — e.g. payment-tokenization APIs):**

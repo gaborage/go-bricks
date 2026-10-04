@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -71,7 +72,9 @@ func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkip
 // the stdlib log package, mirroring corsWarnf in cors.go.
 func logTenantRejection(l logger.Logger, c *echo.Context, resolveErr error) {
 	reason := "empty tenant"
-	if resolveErr != nil {
+	if errors.Is(resolveErr, multitenant.ErrUntrustedForwardedHost) {
+		reason = "X-Forwarded-Host from a peer outside server.trustedproxies"
+	} else if resolveErr != nil {
 		reason = "resolver error"
 	}
 	req := c.Request()
