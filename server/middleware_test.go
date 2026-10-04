@@ -1051,9 +1051,12 @@ func TestSubdomainForwardedHostTrustMatchesSchemeExtractor(t *testing.T) {
 		{name: "listed_public_range", trustedProxies: []string{"203.0.113.0/24"}},
 		{name: "invalid_entry_beside_listed_range", trustedProxies: []string{"not-a-cidr", "203.0.113.0/24"}},
 		{name: "entries_covering_all_ipv4", trustedProxies: []string{"0.0.0.0/1", "128.0.0.0/1"}},
+		{name: "ipv4_default_route_beside_listed_range", trustedProxies: []string{"0.0.0.0/0", "203.0.113.0/24"}},
+		{name: "ipv6_default_route_beside_listed_range", trustedProxies: []string{"::/0", "203.0.113.0/24"}},
 	}
 	peers := []struct{ name, addr string }{
 		{"public_unlisted", "198.51.100.7:443"},
+		{"public_ipv6", "[2001:db8::1]:443"},
 		{"public_in_listed_range", "203.0.113.9:443"},
 		{"rfc1918_10", "10.1.2.3:443"},
 		{"rfc1918_172", "172.16.0.9:443"},
