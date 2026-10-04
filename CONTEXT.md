@@ -115,9 +115,10 @@ not an edit in every place that enumerates kinds. There is one slot per kind
 _Avoid_: resource kind (that is what fills a slot), manager wrapper, component
 
 **Import gate**:
-A capability that engages only when its package is linked into the build. The
-linked package's own registration is the only way in. Configuration that needs
-the capability while it isn't linked fails startup.
+A capability that engages only when its registration is linked into the build.
+For payload sealing, `messaging/sealed` registers the codec from `init`; a
+seal-tagged messaging declaration without that registration fails validation at
+startup.
 
 **Probe description**:
 What a slot hands readiness so its kind can be judged: a fixed component name,
