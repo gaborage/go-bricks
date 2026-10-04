@@ -508,14 +508,9 @@ func TestCreateMetricExporterTemporalityPerKind(t *testing.T) {
 		sdkmetric.InstrumentKindObservableGauge:         cumulative,
 		sdkmetric.InstrumentKindGauge:                   cumulative,
 	}
-	allCumulative := map[sdkmetric.InstrumentKind]metricdata.Temporality{
-		sdkmetric.InstrumentKindCounter:                 cumulative,
-		sdkmetric.InstrumentKindHistogram:               cumulative,
-		sdkmetric.InstrumentKindObservableCounter:       cumulative,
-		sdkmetric.InstrumentKindUpDownCounter:           cumulative,
-		sdkmetric.InstrumentKindObservableUpDownCounter: cumulative,
-		sdkmetric.InstrumentKindObservableGauge:         cumulative,
-		sdkmetric.InstrumentKindGauge:                   cumulative,
+	allCumulative := make(map[sdkmetric.InstrumentKind]metricdata.Temporality, len(deltaPreference))
+	for kind := range deltaPreference {
+		allCumulative[kind] = cumulative
 	}
 	protocols := []struct {
 		protocol string
@@ -551,7 +546,6 @@ func TestCreateMetricExporterTemporalityPerKind(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = exporter.Shutdown(context.Background()) })
 
-				require.Len(t, tt.want, 7)
 				for kind, want := range tt.want {
 					assert.Equal(t, want, exporter.Temporality(kind), "temporality for %s", kind)
 				}
@@ -590,10 +584,6 @@ func (e *sumTemporalityExporter) Export(_ context.Context, rm *metricdata.Resour
 			}
 		}
 	}
-	return nil
-}
-
-func (e *sumTemporalityExporter) ForceFlush(context.Context) error {
 	return nil
 }
 

@@ -120,7 +120,7 @@ New Relic enforces attribute limits on its ingest side, but be aware of:
 | Feature | Bandwidth Savings | Memory Savings | Notes |
 | --------- | ------------------- | ---------------- | ------- |
 | gzip compression | ~70% | N/A | CPU overhead ~1-2ms per batch |
-| Delta temporality | N/A | ~50% | Resets monotonic counters and histograms after each export; UpDownCounters stay cumulative (New Relic gauges) |
+| Delta temporality | N/A | ~50% | Resets monotonic counters and histograms after each export; UpDownCounters and gauges stay cumulative (New Relic gauges) |
 | Exponential histograms | ~30% | ~90% | MaxSize=160, MaxScale=20 (auto-configured) |
 
 ## Endpoint Format Rules (CRITICAL)

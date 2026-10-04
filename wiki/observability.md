@@ -431,7 +431,7 @@ For complete configuration examples, security best practices, and vendor-specifi
 
 ## New Relic OTLP Integration (Optimized)
 
-GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandwidth reduction), delta temporality for monotonic counters and histograms (~50% memory savings; UpDownCounters stay cumulative), and exponential histograms (~90% memory savings).
+GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandwidth reduction), delta temporality for monotonic counters and histograms (~50% memory savings; UpDownCounters and gauges stay cumulative), and exponential histograms (~90% memory savings).
 
 **Endpoint Format Rules (CRITICAL):**
 

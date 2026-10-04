@@ -129,6 +129,13 @@ func (p *provider) createMetricExporter(ctx context.Context) (sdkmetric.Exporter
 	}
 }
 
+// Temporality debug messages. The cumulative path passes no selector on purpose, so
+// OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE still applies there.
+const (
+	deltaTemporalityLog   = "Configured delta temporality preference for metrics (UpDownCounters and gauges stay cumulative)"
+	defaultTemporalityLog = "Using exporter default temporality for metrics (cumulative unless OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is set)"
+)
+
 // createOTLPHTTPMetricExporter creates an OTLP HTTP metric exporter.
 func (p *provider) createOTLPHTTPMetricExporter(ctx context.Context, useInsecure bool, headers map[string]string) (sdkmetric.Exporter, error) {
 	debugLogger.Printf("Creating OTLP HTTP metric exporter: endpoint=%s, insecure=%v, compression=%s, temporality=%s, headers_count=%d",
@@ -150,12 +157,11 @@ func (p *provider) createOTLPHTTPMetricExporter(ctx context.Context, useInsecure
 		opts = append(opts, otlpmetrichttp.WithCompression(otlpmetrichttp.NoCompression))
 	}
 
-	// Delta preference per the OTel spec; cumulative passes no selector so the env preference still applies
 	if p.config.Metrics.Temporality == TemporalityDelta {
 		opts = append(opts, otlpmetrichttp.WithTemporalitySelector(sdkmetric.DeltaTemporalitySelector))
-		debugLogger.Println("Configured delta temporality preference for metrics (UpDownCounters and gauges stay cumulative)")
+		debugLogger.Println(deltaTemporalityLog)
 	} else {
-		debugLogger.Println("Using exporter default temporality for metrics (cumulative unless OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is set)")
+		debugLogger.Println(defaultTemporalityLog)
 	}
 
 	// Add custom headers (e.g., for authentication)
@@ -186,12 +192,11 @@ func (p *provider) createOTLPGRPCMetricExporter(ctx context.Context, useInsecure
 		debugLogger.Println("Enabled gzip compression for metric export")
 	}
 
-	// Delta preference per the OTel spec; cumulative passes no selector so the env preference still applies
 	if p.config.Metrics.Temporality == TemporalityDelta {
 		opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(sdkmetric.DeltaTemporalitySelector))
-		debugLogger.Println("Configured delta temporality preference for metrics (UpDownCounters and gauges stay cumulative)")
+		debugLogger.Println(deltaTemporalityLog)
 	} else {
-		debugLogger.Println("Using exporter default temporality for metrics (cumulative unless OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is set)")
+		debugLogger.Println(defaultTemporalityLog)
 	}
 
 	// Configure TLS/insecure connection
