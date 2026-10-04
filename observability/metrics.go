@@ -10,7 +10,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -151,12 +150,12 @@ func (p *provider) createOTLPHTTPMetricExporter(ctx context.Context, useInsecure
 		opts = append(opts, otlpmetrichttp.WithCompression(otlpmetrichttp.NoCompression))
 	}
 
-	// Configure temporality (New Relic recommends delta)
+	// Delta preference per the OTel spec; cumulative passes no selector so the env preference still applies
 	if p.config.Metrics.Temporality == TemporalityDelta {
-		opts = append(opts, otlpmetrichttp.WithTemporalitySelector(p.deltaTemporalitySelector))
-		debugLogger.Println("Configured delta temporality for metrics (New Relic recommendation)")
+		opts = append(opts, otlpmetrichttp.WithTemporalitySelector(sdkmetric.DeltaTemporalitySelector))
+		debugLogger.Println("Configured delta temporality preference for metrics (UpDownCounters and gauges stay cumulative)")
 	} else {
-		debugLogger.Println("Using cumulative temporality for metrics (OTEL SDK default)")
+		debugLogger.Println("Using exporter default temporality for metrics (cumulative unless OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is set)")
 	}
 
 	// Add custom headers (e.g., for authentication)
@@ -187,12 +186,12 @@ func (p *provider) createOTLPGRPCMetricExporter(ctx context.Context, useInsecure
 		debugLogger.Println("Enabled gzip compression for metric export")
 	}
 
-	// Configure temporality (New Relic recommends delta)
+	// Delta preference per the OTel spec; cumulative passes no selector so the env preference still applies
 	if p.config.Metrics.Temporality == TemporalityDelta {
-		opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(p.deltaTemporalitySelector))
-		debugLogger.Println("Configured delta temporality for metrics (New Relic recommendation)")
+		opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(sdkmetric.DeltaTemporalitySelector))
+		debugLogger.Println("Configured delta temporality preference for metrics (UpDownCounters and gauges stay cumulative)")
 	} else {
-		debugLogger.Println("Using cumulative temporality for metrics (OTEL SDK default)")
+		debugLogger.Println("Using exporter default temporality for metrics (cumulative unless OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE is set)")
 	}
 
 	// Configure TLS/insecure connection
@@ -312,12 +311,6 @@ func (p *provider) metricsTransportSettings() (protocol string, useInsecure bool
 	}
 
 	return protocol, useInsecure, headers
-}
-
-// deltaTemporalitySelector returns delta temporality for all instrument kinds.
-// This is recommended by New Relic for better performance and lower memory usage.
-func (p *provider) deltaTemporalitySelector(_ sdkmetric.InstrumentKind) metricdata.Temporality {
-	return metricdata.DeltaTemporality
 }
 
 // createExponentialHistogramView creates a view that uses exponential histogram aggregation.

@@ -23,8 +23,10 @@ const (
 	// CompressionNone specifies no compression for OTLP export.
 	CompressionNone = "none"
 
-	// TemporalityDelta specifies delta temporality for metrics (recommended by New Relic).
-	// Delta temporality reports the change in value since the last export.
+	// TemporalityDelta selects the OTel spec's delta temporality preference (recommended by New Relic):
+	// Counter, ObservableCounter and Histogram export as Delta, while UpDownCounter,
+	// ObservableUpDownCounter, Gauge and ObservableGauge stay Cumulative.
+	// It applies to OTLP endpoints only; the stdout exporter ignores it.
 	TemporalityDelta = "delta"
 
 	// TemporalityCumulative specifies cumulative temporality for metrics.
@@ -475,10 +477,14 @@ type MetricsConfig struct {
 	// Default: "gzip" (recommended by New Relic for bandwidth reduction).
 	Compression string `mapstructure:"compression"`
 
-	// Temporality specifies the aggregation temporality for metrics.
+	// Temporality specifies the aggregation temporality for metrics on OTLP endpoints;
+	// the stdout exporter ignores it.
 	// Supported values: "delta", "cumulative".
-	// Default: "cumulative" (OTEL SDK default).
-	// New Relic recommends "delta" for better performance and lower memory usage.
+	// Default: "cumulative" (OTEL SDK default), which leaves
+	// OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE in effect.
+	// "delta" follows the OTel spec's delta preference: Counter, ObservableCounter and
+	// Histogram export as Delta; UpDownCounter, ObservableUpDownCounter, Gauge and
+	// ObservableGauge stay Cumulative. It overrides the environment preference.
 	Temporality string `mapstructure:"temporality"`
 
 	// HistogramAggregation specifies the histogram aggregation method.
@@ -502,8 +508,8 @@ type MetricsConfig struct {
 
 	// CardinalityLimit caps the attribute sets each instrument keeps per reader: a limit
 	// of L keeps L-1 sets plus one otel.metric.overflow=true series. For synchronous
-	// instruments under cumulative temporality that is a lifetime cap; under delta it
-	// applies per cycle.
+	// instruments exported as Cumulative that is a lifetime cap; for those exported as
+	// Delta (counters and histograms under "delta") it applies per cycle.
 	// nil (the default) passes no option, so OTEL_GO_X_CARDINALITY_LIMIT or the SDK
 	// default of 2000 applies — a deliberate exception to the explicit-default posture.
 	// Values of zero or less are rejected.
