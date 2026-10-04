@@ -68,7 +68,7 @@ func newTargetClaims() *targetClaims {
 
 // claim records tenantID as target's claimant and reports true, or reports false with the
 // tenant that claimed target first.
-func (c *targetClaims) claim(target *migrationTarget, tenantID string) (owner string, claimed bool) {
+func (c *targetClaims) claim(target *migrationTarget, tenantID string) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if owner, taken := c.owners[*target]; taken {

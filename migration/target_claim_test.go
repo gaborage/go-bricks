@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"strconv"
 	"sync"
 	"testing"
 
@@ -10,13 +11,13 @@ import (
 	"github.com/gaborage/go-bricks/config"
 )
 
-func pgTarget(host string, port int, database, schema, username string) *config.DatabaseConfig {
+func pgConfig(host string, port int, database, schema, username string) *config.DatabaseConfig {
 	db := &config.DatabaseConfig{Type: config.PostgreSQL, Host: host, Port: port, Database: database, Username: username}
 	db.PostgreSQL.Schema = schema
 	return db
 }
 
-func oracleTarget(host string, port int, pdb, username string) *config.DatabaseConfig {
+func oracleConfig(host string, port int, pdb, username string) *config.DatabaseConfig {
 	return &config.DatabaseConfig{Type: config.Oracle, Host: host, Port: port, Database: pdb, Username: username}
 }
 
@@ -27,25 +28,25 @@ func TestMigrationTargetForKeysTwoTenantsTogether(t *testing.T) {
 		fallback string
 		same     bool
 	}{
-		{name: "pg_empty_schema_shared_user", a: pgTarget("db", 5432, "app", "", "migrator"), b: pgTarget("db", 5432, "app", "", "migrator"), same: true},
-		{name: "pg_empty_schema_distinct_users", a: pgTarget("db", 5432, "app", "", "t1_migrator"), b: pgTarget("db", 5432, "app", "", "t2_migrator")},
-		{name: "pg_explicit_schema_distinct_users", a: pgTarget("db", 5432, "app", "tenant", "u1"), b: pgTarget("db", 5432, "app", "tenant", "u2"), same: true},
-		{name: "pg_distinct_schemas", a: pgTarget("db", 5432, "app", "t1", "u"), b: pgTarget("db", 5432, "app", "t2", "u")},
-		{name: "pg_distinct_databases", a: pgTarget("db", 5432, "t1", "", "u"), b: pgTarget("db", 5432, "t2", "", "u")},
-		{name: "pg_distinct_ports", a: pgTarget("db", 5432, "app", "", "u"), b: pgTarget("db", 5433, "app", "", "u")},
-		{name: "pg_distinct_hosts", a: pgTarget("db1", 5432, "app", "", "u"), b: pgTarget("db2", 5432, "app", "", "u")},
-		{name: "pg_host_case", a: pgTarget("DB.example", 5432, "app", "", "u"), b: pgTarget("db.example", 5432, "app", "", "u"), same: true},
-		{name: "pg_ipv6_brackets", a: pgTarget("[::1]", 5432, "app", "", "u"), b: pgTarget("::1", 5432, "app", "", "u"), same: true},
-		{name: "pg_port_zero_is_5432", a: pgTarget("db", 0, "app", "", "u"), b: pgTarget("db", 5432, "app", "", "u"), same: true},
-		{name: "pg_username_case_distinct", a: pgTarget("db", 5432, "app", "", "Migrator"), b: pgTarget("db", 5432, "app", "", "migrator")},
-		{name: "pg_database_case_distinct", a: pgTarget("db", 5432, "App", "", "u"), b: pgTarget("db", 5432, "app", "", "u")},
-		{name: "pg_schema_case_distinct", a: pgTarget("db", 5432, "app", "Tenant", "u"), b: pgTarget("db", 5432, "app", "tenant", "u")},
-		{name: "pg_empty_schema_never_matches_explicit", a: pgTarget("db", 5432, "app", "", "public"), b: pgTarget("db", 5432, "app", "public", "public")},
-		{name: "oracle_same_user", a: oracleTarget("ora", 1521, "PDB1", "app"), b: oracleTarget("ORA", 1521, "PDB1", "app"), same: true},
-		{name: "oracle_distinct_users", a: oracleTarget("ora", 1521, "PDB1", "t1"), b: oracleTarget("ora", 1521, "PDB1", "t2")},
-		{name: "oracle_port_zero_not_defaulted", a: oracleTarget("ora", 0, "PDB1", "app"), b: oracleTarget("ora", 1521, "PDB1", "app")},
-		{name: "vendor_from_fallback", a: &config.DatabaseConfig{Host: "db", Port: 5432, Database: "app", Username: "u"}, b: pgTarget("db", 5432, "app", "", "u"), fallback: config.PostgreSQL, same: true},
-		{name: "vendors_differ", a: pgTarget("db", 1521, "app", "", "u"), b: oracleTarget("db", 1521, "app", "u")},
+		{name: "pg_empty_schema_shared_user", a: pgConfig("db", 5432, "app", "", "migrator"), b: pgConfig("db", 5432, "app", "", "migrator"), same: true},
+		{name: "pg_empty_schema_distinct_users", a: pgConfig("db", 5432, "app", "", "t1_migrator"), b: pgConfig("db", 5432, "app", "", "t2_migrator")},
+		{name: "pg_explicit_schema_distinct_users", a: pgConfig("db", 5432, "app", "tenant", "u1"), b: pgConfig("db", 5432, "app", "tenant", "u2"), same: true},
+		{name: "pg_distinct_schemas", a: pgConfig("db", 5432, "app", "t1", "u"), b: pgConfig("db", 5432, "app", "t2", "u")},
+		{name: "pg_distinct_databases", a: pgConfig("db", 5432, "t1", "", "u"), b: pgConfig("db", 5432, "t2", "", "u")},
+		{name: "pg_distinct_ports", a: pgConfig("db", 5432, "app", "", "u"), b: pgConfig("db", 5433, "app", "", "u")},
+		{name: "pg_distinct_hosts", a: pgConfig("db1", 5432, "app", "", "u"), b: pgConfig("db2", 5432, "app", "", "u")},
+		{name: "pg_host_case", a: pgConfig("DB.example", 5432, "app", "", "u"), b: pgConfig("db.example", 5432, "app", "", "u"), same: true},
+		{name: "pg_ipv6_brackets", a: pgConfig("[::1]", 5432, "app", "", "u"), b: pgConfig("::1", 5432, "app", "", "u"), same: true},
+		{name: "pg_port_zero_is_5432", a: pgConfig("db", 0, "app", "", "u"), b: pgConfig("db", 5432, "app", "", "u"), same: true},
+		{name: "pg_username_case_distinct", a: pgConfig("db", 5432, "app", "", "Migrator"), b: pgConfig("db", 5432, "app", "", "migrator")},
+		{name: "pg_database_case_distinct", a: pgConfig("db", 5432, "App", "", "u"), b: pgConfig("db", 5432, "app", "", "u")},
+		{name: "pg_schema_case_distinct", a: pgConfig("db", 5432, "app", "Tenant", "u"), b: pgConfig("db", 5432, "app", "tenant", "u")},
+		{name: "pg_empty_schema_never_matches_explicit", a: pgConfig("db", 5432, "app", "", "public"), b: pgConfig("db", 5432, "app", "public", "public")},
+		{name: "oracle_same_user", a: oracleConfig("ora", 1521, "PDB1", "app"), b: oracleConfig("ORA", 1521, "PDB1", "app"), same: true},
+		{name: "oracle_distinct_users", a: oracleConfig("ora", 1521, "PDB1", "t1"), b: oracleConfig("ora", 1521, "PDB1", "t2")},
+		{name: "oracle_port_zero_not_defaulted", a: oracleConfig("ora", 0, "PDB1", "app"), b: oracleConfig("ora", 1521, "PDB1", "app")},
+		{name: "vendor_from_fallback", a: &config.DatabaseConfig{Host: "db", Port: 5432, Database: "app", Username: "u"}, b: pgConfig("db", 5432, "app", "", "u"), fallback: config.PostgreSQL, same: true},
+		{name: "vendors_differ", a: pgConfig("db", 1521, "app", "", "u"), b: oracleConfig("db", 1521, "app", "u")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,7 +60,7 @@ func TestMigrationTargetForKeysTwoTenantsTogether(t *testing.T) {
 }
 
 func TestMigrationTargetForLeavesConfOwnedTargetsUnkeyed(t *testing.T) {
-	dsn := pgTarget("db", 5432, "app", "", "u")
+	dsn := pgConfig("db", 5432, "app", "", "u")
 	dsn.ConnectionString = "postgres://u@db:5432/app"
 	cases := []struct {
 		name     string
@@ -69,10 +70,10 @@ func TestMigrationTargetForLeavesConfOwnedTargetsUnkeyed(t *testing.T) {
 		{name: "nil_config", db: nil, fallback: config.PostgreSQL},
 		{name: "nil_config_oracle_fallback", db: nil, fallback: config.Oracle},
 		{name: "pg_connection_string", db: dsn, fallback: config.PostgreSQL},
-		{name: "pg_no_host", db: pgTarget("", 5432, "app", "", "u")},
-		{name: "pg_no_database", db: pgTarget("db", 5432, "", "", "u")},
-		{name: "oracle_no_host", db: oracleTarget("", 1521, "PDB1", "u")},
-		{name: "oracle_no_pdb", db: oracleTarget("ora", 1521, "", "u")},
+		{name: "pg_no_host", db: pgConfig("", 5432, "app", "", "u")},
+		{name: "pg_no_database", db: pgConfig("db", 5432, "", "", "u")},
+		{name: "oracle_no_host", db: oracleConfig("", 1521, "PDB1", "u")},
+		{name: "oracle_no_pdb", db: oracleConfig("ora", 1521, "", "u")},
 		{name: "type_less_without_fallback", db: &config.DatabaseConfig{Host: "db", Port: 5432, Database: "app", Username: "u"}},
 	}
 	for _, tc := range cases {
@@ -85,9 +86,9 @@ func TestMigrationTargetForLeavesConfOwnedTargetsUnkeyed(t *testing.T) {
 
 func TestTargetClaimsFirstClaimantWins(t *testing.T) {
 	claims := newTargetClaims()
-	key, ok := migrationTargetFor(pgTarget("db", 5432, "app", "", "u"), "")
+	key, ok := migrationTargetFor(pgConfig("db", 5432, "app", "", "u"), "")
 	require.True(t, ok)
-	other, ok := migrationTargetFor(pgTarget("db", 5432, "other", "", "u"), "")
+	other, ok := migrationTargetFor(pgConfig("db", 5432, "other", "", "u"), "")
 	require.True(t, ok)
 
 	owner, claimed := claims.claim(&key, "t1")
@@ -108,7 +109,7 @@ func TestTargetClaimsFirstClaimantWins(t *testing.T) {
 
 func TestTargetClaimsAdmitOneConcurrentClaimant(t *testing.T) {
 	claims := newTargetClaims()
-	key, ok := migrationTargetFor(pgTarget("db", 5432, "app", "", "u"), "")
+	key, ok := migrationTargetFor(pgConfig("db", 5432, "app", "", "u"), "")
 	require.True(t, ok)
 
 	const tenants = 32
@@ -121,7 +122,7 @@ func TestTargetClaimsAdmitOneConcurrentClaimant(t *testing.T) {
 			if _, claimed := claims.claim(&key, id); claimed {
 				won <- id
 			}
-		}(string(rune('a' + i)))
+		}(strconv.Itoa(i))
 	}
 	wg.Wait()
 	close(won)
