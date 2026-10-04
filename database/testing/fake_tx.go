@@ -31,8 +31,10 @@ type TestTx struct {
 	expectationSet
 	committed  bool
 	rolledBack bool
-	opts       *sql.TxOptions
-	beginErr   error
+	// opts and beginErr are guarded by parent.mu (the TestDB lock), not by the
+	// expectationSet's mu.
+	opts     *sql.TxOptions
+	beginErr error
 }
 
 // WillFailBegin makes the Begin or BeginTx that pops this transaction return err (and a
@@ -48,7 +50,8 @@ func (tx *TestTx) WillFailBegin(err error) *TestTx {
 
 // Options returns a copy of the *sql.TxOptions this transaction was begun with: nil for
 // Begin or BeginTx(nil), and non-nil for any options passed to BeginTx, the zero value
-// included.
+// included. It is also nil before any Begin pops the transaction and after a Begin that
+// failed through WillFailBegin, so AssertTxOptions(t, tx, nil) passes then too.
 func (tx *TestTx) Options() *sql.TxOptions {
 	tx.parent.mu.RLock()
 	defer tx.parent.mu.RUnlock()
