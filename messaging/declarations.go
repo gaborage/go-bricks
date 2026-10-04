@@ -66,6 +66,7 @@ type Declarations struct {
 	externalConflicts []string                             // Exchange names declared locally AND marked external, reported by Validate
 	queueConflicts    []queueConflict                      // Incompatible queue re-declarations, reported by Validate
 	queueTypeErrs     []error                              // Queue types a declaration helper refused, reported by Validate
+	atLeastOnceQueues map[string]struct{}                  // Primaries DeclareQueueWithDLQ opted into at-least-once dead-lettering, judged by Validate
 	sealErr           error                                // First seal-tagged declaration that cannot seal, reported by Validate
 }
 
@@ -664,6 +665,7 @@ func (d *Declarations) validateStreamConsumerRules() []error {
 func (d *Declarations) validateQueueTypeDeclarations() error {
 	errs := slices.Clone(d.queueTypeErrs)
 	errs = append(errs, d.validateQuorumQueueShape()...)
+	errs = append(errs, d.validateAtLeastOnceDeadLettering()...)
 	return errors.Join(errs...)
 }
 
@@ -732,6 +734,32 @@ func (d *Declarations) validateQuorumQueueShape() []error {
 		}
 	}
 
+	return errs
+}
+
+// validateAtLeastOnceDeadLettering reports, in sorted order, every primary that opted into
+// at-least-once dead-lettering in a shape the broker accepts but silently downgrades to
+// at-most-once: not a quorum queue, or a final x-overflow other than reject-publish. Only queues
+// that opted in through DeadLetterSpec.DeadLetterStrategy are judged, on their final declaration.
+// The key is named, never its value.
+func (d *Declarations) validateAtLeastOnceDeadLettering() []error {
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(d.atLeastOnceQueues)) {
+		q, exists := d.Queues[name]
+		if !exists {
+			continue
+		}
+		if !isQuorumQueue(q) {
+			errs = append(errs, fmt.Errorf(
+				"queue %q opts into at-least-once dead-lettering, which needs %s quorum: drop the opt-in or declare it quorum",
+				name, argQueueType))
+		}
+		if q.Args[argOverflow] != overflowRejectPublish {
+			errs = append(errs, fmt.Errorf(
+				"queue %q opts into at-least-once dead-lettering, which needs %s exactly %s; any other value, or none, makes the broker fall back to at-most-once",
+				name, argOverflow, overflowRejectPublish))
+		}
+	}
 	return errs
 }
 
@@ -945,6 +973,7 @@ func (d *Declarations) Clone() *Declarations {
 	clone.externalConflicts = slices.Clone(d.externalConflicts)
 	clone.queueConflicts = slices.Clone(d.queueConflicts)
 	clone.queueTypeErrs = slices.Clone(d.queueTypeErrs)
+	clone.atLeastOnceQueues = maps.Clone(d.atLeastOnceQueues)
 	clone.sealErr = d.sealErr
 
 	// Clone bindings

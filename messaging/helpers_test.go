@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -1286,4 +1288,81 @@ func TestDeclareQueueWithDLQUnknownQueueTypeFailsValidate(t *testing.T) {
 			assert.False(t, applied, "an unrecognized type must never reach the declaration")
 		})
 	}
+}
+
+func TestDeclareQueueWithDLQWritesNoDeadLetterStrategyUnlessOptedIn(t *testing.T) {
+	cases := []struct {
+		name        string
+		spec        *DeadLetterSpec
+		primaryKeys []string
+	}{
+		{name: "nil_spec", spec: nil, primaryKeys: []string{argDeadLetterExchange, argQueueType}},
+		{name: "empty_spec", spec: &DeadLetterSpec{}, primaryKeys: []string{argDeadLetterExchange, argQueueType}},
+		{
+			name:        "existing_fields_only",
+			spec:        &DeadLetterSpec{Exchange: "custom.dlx", ParkingQueue: dlqParkingQueue, RoutingKey: "dead.orders", QueueType: QueueTypeClassic},
+			primaryKeys: []string{argDeadLetterExchange, argDeadLetterRoutingKey, argQueueType},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			decls.DeclareQueueWithDLQ(dlqPrimaryQueue, tc.spec)
+
+			assert.ElementsMatch(t, tc.primaryKeys, slices.Collect(maps.Keys(decls.Queues[dlqPrimaryQueue].Args)))
+			assert.ElementsMatch(t, []string{argQueueType}, slices.Collect(maps.Keys(decls.Queues[dlqParkingQueue].Args)))
+			require.NoError(t, decls.Validate())
+		})
+	}
+}
+
+func TestDeclareQueueWithDLQAtLeastOnceWritesThePrimaryOnly(t *testing.T) {
+	decls := NewDeclarations()
+	shared := &DeadLetterSpec{Exchange: "shared.dlx", ParkingQueue: "shared.dlq"}
+	optIn := *shared
+	optIn.DeadLetterStrategy = DeadLetterStrategyAtLeastOnce
+	decls.DeclareQueueWithDLQ("orders.queue", &optIn)
+	decls.DeclareQueueWithDLQ("payments.queue", shared)
+
+	orders := decls.Queues["orders.queue"].Args
+	assert.Equal(t, DeadLetterStrategyAtLeastOnce, orders[argDeadLetterStrategy])
+	assert.Equal(t, overflowRejectPublish, orders[argOverflow])
+	for _, name := range []string{"payments.queue", "shared.dlq"} {
+		assert.NotContains(t, decls.Queues[name].Args, argDeadLetterStrategy, name)
+		assert.NotContains(t, decls.Queues[name].Args, argOverflow, name)
+	}
+	require.NoError(t, decls.Validate())
+}
+
+func TestDeclareQueueWithDLQAtLeastOnceSurvivesARedeclareWithoutTheOptIn(t *testing.T) {
+	for _, redeclare := range []struct {
+		name string
+		fn   func(d *Declarations)
+	}{
+		{name: "declare_queue", fn: func(d *Declarations) { d.DeclareQueue(dlqPrimaryQueue) }},
+		{name: "declare_queue_with_dlq", fn: func(d *Declarations) { d.DeclareQueueWithDLQ(dlqPrimaryQueue, nil) }},
+	} {
+		t.Run(redeclare.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			decls.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+			redeclare.fn(decls)
+
+			require.NoError(t, decls.Validate())
+			assert.Equal(t, DeadLetterStrategyAtLeastOnce, decls.Queues[dlqPrimaryQueue].Args[argDeadLetterStrategy])
+			assert.Equal(t, overflowRejectPublish, decls.Queues[dlqPrimaryQueue].Args[argOverflow])
+		})
+	}
+}
+
+func TestDeclareQueueWithDLQAtLeastOnceConflictsWithAPreRegisteredOverflow(t *testing.T) {
+	decls := NewDeclarations()
+	primary := NewQueue(dlqPrimaryQueue)
+	primary.Args[argOverflow] = "drop-head"
+	decls.RegisterQueue(primary)
+	decls.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+
+	err := decls.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), dlqPrimaryQueue)
+	assert.Contains(t, err.Error(), argOverflow)
 }

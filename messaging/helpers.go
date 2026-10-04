@@ -248,7 +248,19 @@ type DeadLetterSpec struct {
 	// or QueueTypeClassic. Any other value fails Validate. A type already set
 	// on either queue's Args wins — the helper never overwrites one.
 	QueueType string
+
+	// DeadLetterStrategy, when DeadLetterStrategyAtLeastOnce, makes the quorum
+	// primary dead-letter at-least-once: x-dead-letter-strategy=at-least-once
+	// and x-overflow=reject-publish on the primary only. Empty keeps the
+	// broker's at-most-once default and writes no argument; any other value,
+	// "at-most-once" included, fails Validate, as does an opted-in primary that
+	// is not quorum or whose final x-overflow is not reject-publish.
+	DeadLetterStrategy string
 }
+
+// DeadLetterStrategyAtLeastOnce is the one DeadLetterSpec.DeadLetterStrategy
+// value accepted.
+const DeadLetterStrategyAtLeastOnce = "at-least-once"
 
 // DeclareQueueWithDLQ declares a queue whose failed deliveries are parked
 // instead of dropped: the framework's nack-without-requeue on handler error
@@ -298,6 +310,7 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 	if dl.RoutingKey != "" {
 		queue.Args[argDeadLetterRoutingKey] = dl.RoutingKey
 	}
+	d.applyDeadLetterStrategy(queue, dl.DeadLetterStrategy)
 	d.applyQueueType(queue, queueType)
 	d.RegisterQueue(queue)
 	return queue
@@ -340,6 +353,27 @@ func (d *Declarations) applyQueueType(q *QueueDeclaration, queueType string) {
 	}
 
 	q.Args[argQueueType] = queueType
+}
+
+// applyDeadLetterStrategy writes the at-least-once pair on the primary and records the opt-in, so
+// Validate judges the final declaration; an unrecognized value is recorded for Validate and writes
+// nothing. Both arguments are source-queue properties, so the parking queue is left alone.
+func (d *Declarations) applyDeadLetterStrategy(q *QueueDeclaration, strategy string) {
+	if strategy == "" {
+		return
+	}
+	if strategy != DeadLetterStrategyAtLeastOnce {
+		d.recordQueueTypeError(fmt.Errorf(
+			"dead-letter spec for queue %q has an unknown DeadLetterStrategy for %s: use DeadLetterStrategyAtLeastOnce or leave it empty",
+			q.Name, argDeadLetterStrategy))
+		return
+	}
+	q.Args[argDeadLetterStrategy] = DeadLetterStrategyAtLeastOnce
+	q.Args[argOverflow] = overflowRejectPublish
+	if d.atLeastOnceQueues == nil {
+		d.atLeastOnceQueues = make(map[string]struct{})
+	}
+	d.atLeastOnceQueues[q.Name] = struct{}{}
 }
 
 // hasParkingBinding reports whether a parking->dlx binding (routing key "") is

@@ -394,13 +394,59 @@ failed message survives long enough to be dead-lettered, the parking queue wheth
 survives after parking, and a route with one classic half is bounded by that half.
 Neither half makes the HOP reliable: quorum replicates a queue's contents, but the
 dead-letter republish keeps RabbitMQ's default `at-most-once` strategy, so a message can
-still be lost between the two queues (at-least-once dead-lettering is #1568).
+still be lost between the two queues (opt into at-least-once below).
 
 ```go
 queue := decls.DeclareQueueWithDLQ("orders.queue", &messaging.DeadLetterSpec{
     QueueType: messaging.QueueTypeClassic, // both queues classic; empty means quorum
 })
 ```
+
+**At-least-once dead-lettering — opt-in, quorum primary only (ADR-106 amendment).**
+Setting `DeadLetterStrategy: messaging.DeadLetterStrategyAtLeastOnce` writes
+`x-dead-letter-strategy=at-least-once` and `x-overflow=reject-publish` on the PRIMARY
+only: both are source-queue properties, so the parking queue is left alone, and when
+several primaries share one dead-letter exchange each carries its own strategy. The
+broker then republishes a dead-lettered message with internal publisher confirms and
+keeps it in the primary until the parking queue confirms it. Empty (a `nil` spec and
+`&messaging.DeadLetterSpec{}` included) is the default: no argument is written and the
+hop stays at-most-once. Any other value, the literal `"at-most-once"` included, is a
+`Validate` error, because the broker treats an explicit at-most-once argument and an
+absent one as inequivalent.
+
+```go
+queue := decls.DeclareQueueWithDLQ("orders.queue", &messaging.DeadLetterSpec{
+    DeadLetterStrategy: messaging.DeadLetterStrategyAtLeastOnce, // primary only
+})
+```
+
+The broker accepts a quorum queue with the strategy but no `x-overflow`, or with
+`reject-publish-dlx` (which quorum queues do not support), and silently falls back to
+at-most-once with only a warning in its log. So `Validate` judges each opted-in primary
+on its FINAL declaration, after any `d.Queues[name].Args` edit, and refuses it by queue
+name and argument key when it is not quorum (`QueueTypeClassic`, or a classic type
+already in its `Args`) or when its `x-overflow` is anything other than exactly
+`reject-publish` — absent, `drop-head` or `reject-publish-dlx`.
+
+- **Prerequisite:** RabbitMQ ≥ 3.10 with a quorum primary. The `stream_queue` feature
+  flag is Required from 3.11.0, so it matters only on a 3.10.x broker that never
+  enabled it.
+- **Costs:**
+  - Dead-lettered messages stay in the primary until the parking queue confirms them,
+    and they count toward its limits.
+  - The broker's internal dead-letter consumer keeps message bodies in memory.
+  - The parking queue can receive duplicates.
+  - With a length limit set, `reject-publish` makes the broker NACK publishes to the
+    primary, which framework publishers surface as `ErrPublishNacked`.
+  - With an unroutable dead-letter exchange, messages pile up in the primary instead
+    of being dropped.
+- **Adopting it on an existing primary fails startup.** The framework redeclares the
+  queue on every startup, and the broker refuses the new arguments with
+  `406 PRECONDITION_FAILED` (inequivalent arg). Two remedies: drain and recreate the
+  primary, or leave the field empty and apply an operator policy instead
+  (`dead-letter-strategy=at-least-once`, `overflow=reject-publish`, applied to quorum
+  queues), which takes effect without a redeclare. Pick one door per queue: `Args`
+  added later override the policy and fail the redeclare again.
 
 An `x-queue-type` already on the queue wins — the helper sets the argument only on a
 queue that does not carry one, so the raw-`Args` route below (including
