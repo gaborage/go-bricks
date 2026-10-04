@@ -27,7 +27,8 @@ The `MigrateAll` check that needs no flag at all is the
 (`migration.ErrDuplicateMigrationTarget`); the CLI gets it at its routine
 go-bricks pin bump. It is narrower than the guard: it refuses the second and
 later tenants that a shared migrator with an empty schema puts on one database,
-but the first tenant is still a false green, and database-per-tenant fleets
+but the first tenant's run still lands in the shared default schema and
+reports success, a false green it cannot flag, and database-per-tenant fleets
 never collide.
 
 Every role the helper creates starts at the same locked-down attribute floor:

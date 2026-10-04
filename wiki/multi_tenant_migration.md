@@ -169,7 +169,7 @@ Its pair is [`WithSharedMigrator`](#schema-targeting-postgresql). Setting
 with one migrator role across every database and the target schema (typically
 `public`) in each is a legitimate deployment where the role-level `search_path`
 is correct everywhere, so inferring the requirement here would break real
-setups. Two tenants the overlay leaves on one target are refused anyway: see
+setups. Two tenants the overlay leaves on one keyed target are refused anyway: see
 [Duplicate targets](#duplicate-targets).
 
 The overlay presents one credential with DDL rights on every tenant schema to
@@ -294,7 +294,8 @@ claimant; with `ContinueOnError` every later collider is refused. Sequentially
 the claimant is the first tenant in listing order; in parallel it is whichever
 tenant claims first. The refused tenant's schema is untouched. The remedy is
 configuration, not a re-run, which collides again: give each tenant a distinct
-`postgresql.schema` or migrator role, or de-list the alias or repeated ID.
+`postgresql.schema`, or a migrator role whose role-level `search_path` selects
+that tenant's schema, or de-list the alias or repeated ID.
 `go-bricks-migrate` gets the check at its routine go-bricks pin bump.
 
 ## Installing the CLI
