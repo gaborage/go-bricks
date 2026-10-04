@@ -86,10 +86,9 @@ func (s *TestSession) ExpectTransaction() *TestTx {
 	defer s.mu.Unlock()
 	s.txCount++
 	txExp := &TxExpectation{
-		parent: s.parent,
-		tx:     tx,
-		seq:    s.txCount,
-		scope:  fmt.Sprintf("%s transaction #%d", s.label, s.txCount),
+		tx:    tx,
+		seq:   s.txCount,
+		scope: fmt.Sprintf("%s transaction #%d", s.label, s.txCount),
 	}
 	s.txs = append(s.txs, txExp)
 	return tx

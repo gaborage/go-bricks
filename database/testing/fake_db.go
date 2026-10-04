@@ -123,10 +123,9 @@ type ExecExpectation struct {
 // TxExpectation is TestDB's internal bookkeeping for one queued transaction.
 // Consumers never receive one: ExpectTransaction returns the *TestTx it wraps.
 type TxExpectation struct {
-	parent *TestDB
-	tx     *TestTx
-	seq    int
-	scope  string
+	tx    *TestTx
+	seq   int
+	scope string
 }
 
 // NewTestDB creates a new in-memory fake database for the specified vendor.
@@ -207,10 +206,9 @@ func (db *TestDB) ExpectTransaction() *TestTx {
 	defer db.mu.Unlock()
 	db.txCount++
 	txExp := &TxExpectation{
-		parent: db,
-		tx:     tx,
-		seq:    db.txCount,
-		scope:  fmt.Sprintf("transaction #%d", db.txCount),
+		tx:    tx,
+		seq:   db.txCount,
+		scope: fmt.Sprintf("transaction #%d", db.txCount),
 	}
 	db.txExpectations = append(db.txExpectations, txExp)
 	return tx

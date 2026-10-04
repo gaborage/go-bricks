@@ -321,7 +321,7 @@ func AssertTxOptions(t *testing.T, tx *TestTx, want *sql.TxOptions) {
 // (on the pool, in a begun transaction, or in an opened session), a transaction
 // still queued on the pool or on an opened session, and a session never opened.
 // Resolving to an expectation meets it even when it returned its configured
-// error. Matching is first-match-wins, so a pattern shadowed by an earlier,
+// error or the no-rows error. Matching is first-match-wins, so a pattern shadowed by an earlier,
 // broader one is reported as unmet. A transaction whose Begin failed through
 // WillFailBegin counts as consumed. It is opt-in: call it at the end of a test.
 //
