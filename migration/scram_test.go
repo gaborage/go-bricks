@@ -2,6 +2,7 @@ package migration
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,7 +10,8 @@ import (
 )
 
 // TestScramSHA256VerifierMatchesRFC7677 is the RFC 7677 §3 known answer: password "pencil",
-// the RFC's salt, 4096 iterations.
+// the RFC's salt, 4096 iterations. It is a public test vector, so ADR-102's rule on asserting
+// key material does not apply.
 func TestScramSHA256VerifierMatchesRFC7677(t *testing.T) {
 	salt, err := base64.StdEncoding.DecodeString("W22ZaJ0SNY7soEsUEjb6gQ==")
 	require.NoError(t, err)
@@ -21,9 +23,13 @@ func TestScramSHA256VerifierMatchesRFC7677(t *testing.T) {
 		got)
 }
 
-func TestScramSHA256VerifierRefusesUnusableInputs(t *testing.T) {
-	_, err := scramSHA256Verifier("pencil", []byte("salt"), 0)
-	require.Error(t, err, "a non-positive iteration count cannot derive a key")
+func TestScramSHA256VerifierIterationBound(t *testing.T) {
+	_, err := scramSHA256Verifier("pencil", []byte("0123456789abcdef"), 0)
+	require.ErrorIs(t, err, errSCRAMIterations, "a non-positive iteration count cannot derive a key")
+
+	got, err := scramSHA256Verifier("pencil", []byte("0123456789abcdef"), 1)
+	require.NoError(t, err, "one iteration is the smallest usable count")
+	assert.True(t, strings.HasPrefix(got, scramSHA256Prefix+"1:"), "verifier length %d", len(got))
 }
 
 func TestIsSCRAMSafePassword(t *testing.T) {
