@@ -709,8 +709,8 @@ type ReconnectConfig struct {
 
 // PublisherPoolConfig holds publisher cache/pool settings.
 // Production-safe defaults are applied automatically:
-//   - MaxCached: 50 (maximum publisher clients in cache)
-//   - IdleTTL: 1h single-tenant / 10m multi-tenant (time before idle publishers are evicted)
+//   - MaxCached: 50, or 0 kept for tenant-limit scaling under multi-tenant per-tenant tenancy
+//   - IdleTTL: 1h, or 10m under multi-tenant per-tenant tenancy (time before idle publishers are evicted)
 //   - CleanupInterval: 2m (cleanup goroutine frequency)
 type PublisherPoolConfig struct {
 	// MaxCached is the maximum number of publisher clients to keep in the cache, one

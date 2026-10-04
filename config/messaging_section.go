@@ -260,7 +260,6 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		}
 	}
 
-	// Settled before the publisher defaults read it: an unset tenancy is per-tenant.
 	if cfg.Tenancy == "" {
 		cfg.Tenancy = TenancyPerTenant
 	}

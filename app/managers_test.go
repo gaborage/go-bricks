@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -955,55 +953,15 @@ func TestResourceManagerFactoryCreateCacheManagerWiresTheLogger(t *testing.T) {
 
 const poolBelowTenantsMsg = "Resource pool max size is below the number of configured tenants"
 
-// poolWarnLogger records the resource field of every pool-below-tenant-count WARN.
-type poolWarnLogger struct {
-	mu        sync.Mutex
-	resources []string
-}
-
-func (l *poolWarnLogger) warnedFor(resource string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Contains(l.resources, resource)
-}
-
-func (l *poolWarnLogger) Warn() logger.LogEvent                   { return &poolWarnEvent{sink: l} }
-func (l *poolWarnLogger) Info() logger.LogEvent                   { return &poolWarnEvent{} }
-func (l *poolWarnLogger) Error() logger.LogEvent                  { return &poolWarnEvent{} }
-func (l *poolWarnLogger) Debug() logger.LogEvent                  { return &poolWarnEvent{} }
-func (l *poolWarnLogger) Fatal() logger.LogEvent                  { return &poolWarnEvent{} }
-func (l *poolWarnLogger) WithContext(any) logger.Logger           { return l }
-func (l *poolWarnLogger) WithFields(map[string]any) logger.Logger { return l }
-
-type poolWarnEvent struct {
-	sink     *poolWarnLogger
-	resource string
-}
-
-func (e *poolWarnEvent) Str(key, value string) logger.LogEvent {
-	if key == "resource" {
-		e.resource = value
+// warnedFor reports whether log recorded the pool-below-tenant-count WARN for resource.
+func warnedFor(log *recLogger, resource string) bool {
+	for _, e := range log.linesWith(poolBelowTenantsMsg) {
+		if e.level == "warn" && e.str["resource"] == resource {
+			return true
+		}
 	}
-	return e
+	return false
 }
-
-func (e *poolWarnEvent) Msg(msg string) {
-	if e.sink != nil && strings.HasPrefix(msg, poolBelowTenantsMsg) {
-		e.sink.mu.Lock()
-		defer e.sink.mu.Unlock()
-		e.sink.resources = append(e.sink.resources, e.resource)
-	}
-}
-func (e *poolWarnEvent) Msgf(string, ...any)                       {}
-func (e *poolWarnEvent) Err(error) logger.LogEvent                 { return e }
-func (e *poolWarnEvent) Int(string, int) logger.LogEvent           { return e }
-func (e *poolWarnEvent) Int64(string, int64) logger.LogEvent       { return e }
-func (e *poolWarnEvent) Uint64(string, uint64) logger.LogEvent     { return e }
-func (e *poolWarnEvent) Dur(string, time.Duration) logger.LogEvent { return e }
-func (e *poolWarnEvent) Interface(string, any) logger.LogEvent     { return e }
-func (e *poolWarnEvent) Bytes(string, []byte) logger.LogEvent      { return e }
-func (e *poolWarnEvent) Bool(string, bool) logger.LogEvent         { return e }
-func (e *poolWarnEvent) Enabled() bool                             { return true }
 
 // tenantCountConfig loads a validated multi-tenant config with `tenants` statically-listed
 // tenants and every pool cap set to poolCap (0 leaves the key unset).
@@ -1079,12 +1037,12 @@ func TestTenantCountWarnSkipsSharedMessaging(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tenantCountConfig(t, config.SourceTypeStatic, tt.tenancy, 3, 2)
-			log := &poolWarnLogger{}
+			log := &recLogger{}
 
 			buildAllManagers(t, cfg, fixturePlan(cfg), log)
 
-			assert.Equal(t, tt.wantMessaging, log.warnedFor("messaging"))
-			assert.True(t, log.warnedFor("database"), "the database WARN is unchanged")
+			assert.Equal(t, tt.wantMessaging, warnedFor(log, "messaging"))
+			assert.True(t, warnedFor(log, "database"), "the database WARN is unchanged")
 		})
 	}
 }
@@ -1094,11 +1052,11 @@ func TestTenantCountWarnSkipsSharedMessaging(t *testing.T) {
 // emits no messaging WARN.
 func TestSharedMessagingTakesSingleTenantPublisherDefaults(t *testing.T) {
 	cfg := tenantCountConfig(t, config.SourceTypeStatic, config.TenancyShared, 51, 0)
-	log := &poolWarnLogger{}
+	log := &recLogger{}
 
 	stats := buildAllManagers(t, cfg, fixturePlan(cfg), log).Stats()
 
-	assert.False(t, log.warnedFor("messaging"))
+	assert.False(t, warnedFor(log, "messaging"))
 	assert.Equal(t, 50, stats["max_publishers"])
 	assert.Equal(t, 3600, stats["idle_ttl_seconds"])
 }
@@ -1121,13 +1079,13 @@ func TestTenantCountWarnIgnoresLeftoverTenantsUnderDynamicSource(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tenantCountConfig(t, tt.sourceType, config.TenancyPerTenant, 3, 2)
 			plan := resourcePlan{}
-			log := &poolWarnLogger{}
+			log := &recLogger{}
 
 			assert.Equal(t, tt.wantCount, newManagerConfigBuilderFromConfig(cfg, plan).StaticTenantCount())
 			buildAllManagers(t, cfg, plan, log)
 
 			for _, resource := range []string{"database", "cache", "messaging"} {
-				assert.Equal(t, tt.wantWarn, log.warnedFor(resource), resource)
+				assert.Equal(t, tt.wantWarn, warnedFor(log, resource), resource)
 			}
 		})
 	}

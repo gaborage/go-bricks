@@ -21,15 +21,12 @@ type ManagerConfigBuilder struct {
 	// used only to emit a startup WARN when a resource pool's MaxSize is below the
 	// known tenant count, signaling per-request eviction thrash. Set by bootstrap.
 	staticTenantCount int
-	// tenantStamps mirrors messaging.ManagerOptions.TenantStamps: consumers read the
-	// tenant stamp only under multitenant.enabled + messaging.tenancy: shared. Set by
-	// bootstrap.
+	// tenantStamps is the resource plan's verdict that the messaging row is shared
+	// (multitenant.enabled + messaging.tenancy: shared). It mirrors
+	// messaging.ManagerOptions.TenantStamps — consumers read the tenant stamp — and,
+	// because a shared publisher pool only ever holds the control-plane key "", it also
+	// skips the messaging tenant-count WARN. Set by bootstrap.
 	tenantStamps bool
-	// sharedMessaging is the resource plan's verdict that the messaging row is shared
-	// (multitenant.enabled + messaging.tenancy: shared): the publisher pool only ever
-	// holds the control-plane key "", so it skips the tenant-count WARN. Set by bootstrap
-	// from the same plan predicate as tenantStamps.
-	sharedMessaging bool
 	// connectionTimeout is the per-publish AMQP broker confirmation timeout,
 	// sourced from messaging.reconnect.connectiontimeout and set by bootstrap.
 	connectionTimeout time.Duration
@@ -240,7 +237,7 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 	msgOptions := f.configBuilder.BuildMessagingOptions()
 	clientFactory := f.factoryResolver.MessagingClientFactoryWithOptions(messagingClientFactoryOptions(&msgOptions))
 
-	if !f.configBuilder.sharedMessaging {
+	if !f.configBuilder.tenantStamps {
 		f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)
 	}
 

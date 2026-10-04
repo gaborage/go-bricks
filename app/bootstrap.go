@@ -57,7 +57,6 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config, plan resourcePlan) *M
 	configBuilder.resendDelay = cfg.Messaging.Reconnect.ResendDelay
 	configBuilder.appName = cfg.App.Name
 	configBuilder.tenantStamps = plan.tenantStamps()
-	configBuilder.sharedMessaging = plan.tenantStamps()
 	configBuilder.publisherConfig = cfg.Messaging.Publisher
 	configBuilder.cacheConfig = cfg.Cache.Manager
 	configBuilder.dbConfig = cfg.Database.Manager
