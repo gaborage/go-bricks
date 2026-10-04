@@ -249,9 +249,13 @@ func del(key string) func(map[string]any) { return func(h map[string]any) { dele
 // twinPAN is the clear twin's test PAN in subject_case_fold_twin, distinct from the sealed one.
 const twinPAN = "5555555555554444"
 
-// addCardTwin inserts a clear top-level "Card" member right after the sealed "card".
-func addCardTwin(d string) string {
-	return strings.Replace(d, `,"amount":1250`, `,"Card":{"pan":"`+twinPAN+`","exp":"01/30"},"amount":1250`, 1)
+// addTwin is the doc mutation that inserts a clear top-level member right before or after the sealed "card".
+func addTwin(member string, before bool) func(string) string {
+	clearMember := `"` + member + `":{"pan":"` + twinPAN + `","exp":"01/30"}`
+	if before {
+		return func(d string) string { return strings.Replace(d, `"card":`, clearMember+`,"card":`, 1) }
+	}
+	return func(d string) string { return strings.Replace(d, `,"amount":`, `,`+clearMember+`,"amount":`, 1) }
 }
 
 // negativeVectors is the published set, in rule order. Every entry differs from the
@@ -322,7 +326,7 @@ func (k *vectorKeys) negativeVectors(t *testing.T, stored map[string]string) []v
 		// Rule 10 — the payload document and the inner JWE.
 		v("subject_not_a_string", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: func(string) string { return `{"orderId":"ord-1","card":{"pan":"x"},"amount":1250}` }}),
 		v("subject_not_a_jwe", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: func(string) string { return `{"orderId":"ord-1","card":"a.b.c","amount":1250}` }}),
-		v("subject_case_fold_twin", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: addCardTwin}),
+		v("subject_case_fold_twin", sealed.CodePayloadUndecodable, 10, 1, mutation{doc: addTwin("Card", false)}),
 		jwe("inner_alg_rsa1_5", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.alg = jose.RSA1_5 }}),
 		jwe("inner_enc_a128gcm", sealed.CodeAlgNotAllowed, mutation{inner: func(o *innerOpts) { o.cenc = jose.A128GCM }}),
 		jwe("inner_cty_wrong", sealed.CodeCtyInvalid, mutation{inner: func(o *innerOpts) { o.cty = "text/plain" }}),
@@ -514,26 +518,17 @@ func TestOpenNegativeVectors(t *testing.T) {
 }
 
 // TestDoorsRefuseSubjectCaseFoldTwin pins that Open, OpenDocument and Verify refuse a correctly
-// signed body carrying a clear case-fold twin of the Subject identically, in either position and
-// any spelling, while an exact-duplicate Subject still refuses as before.
+// signed body carrying a clear case-fold twin of the Subject identically, while an exact-duplicate
+// Subject still refuses as before; the twin-after case is the published subject_case_fold_twin vector.
 func TestDoorsRefuseSubjectCaseFoldTwin(t *testing.T) {
 	k := loadVectorKeys(t)
-	loadVectors(t, k)
-	twin := func(member string, before bool) func(string) string {
-		clearMember := `"` + member + `":{"pan":"` + twinPAN + `"}`
-		if before {
-			return func(d string) string { return strings.Replace(d, `"card":`, clearMember+`,"card":`, 1) }
-		}
-		return func(d string) string { return strings.Replace(d, `,"amount":`, `,`+clearMember+`,"amount":`, 1) }
-	}
 	cases := []struct {
 		name string
 		doc  func(string) string
 	}{
-		{name: "twin_before_the_subject", doc: twin("Card", true)},
-		{name: "twin_after_the_subject", doc: twin("Card", false)},
-		{name: "upper_case_twin", doc: twin("CARD", false)},
-		{name: "exact_duplicate_subject", doc: twin("card", false)},
+		{name: "twin_before_the_subject", doc: addTwin("Card", true)},
+		{name: "upper_case_twin", doc: addTwin("CARD", false)},
+		{name: "exact_duplicate_subject", doc: addTwin("card", false)},
 	}
 	want := &vector{Code: sealed.CodePayloadUndecodable, Rule: 10}
 	for _, tc := range cases {
