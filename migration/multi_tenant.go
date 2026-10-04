@@ -191,15 +191,16 @@ type MigratorIdentity struct {
 // port, PDB and username. The host is compared lowercased and without IPv6 brackets, and a
 // PostgreSQL port of 0 equals 5432; database, schema and username compare byte-exact.
 //
-// Blind spots: a conf-owned target (a connectionstring, or no host or database), a tenant whose
-// vendor resolves to neither, DNS aliases (a CNAME, or an IP against a name), an Oracle port of
-// 0 against 1521, Oracle's case-insensitive unquoted user and service names (app against APP),
-// distinct PostgreSQL roles with no role-level search_path (all land in public), and two
-// separate MigrateAll calls, which rely on Flyway's own lock. A type-less tenant under a typed
-// runner gets none of its connection variables delivered, so its key may not be the target
-// Flyway connects to: a possible false negative; on a refusal, set the tenant's type so Flyway
-// connects as the keyed user, and a refusal that survives that is a real collision. A tenant
-// that claims a target and then fails its own run still holds the claim.
+// Blind spots: a conf-owned target (a connectionstring, or no host or database) or a tenant whose
+// vendor resolves to neither, even when its ID is listed twice (the claim is per target), DNS
+// aliases (a CNAME, or an IP against a name), an Oracle port of 0 against 1521, Oracle's
+// case-insensitive unquoted user and service names (app against APP), distinct PostgreSQL roles
+// with no role-level search_path (all land in public), and two separate MigrateAll calls, which
+// rely on Flyway's own lock. A type-less tenant under a typed runner gets none of its connection
+// variables delivered, so its key may not be the target Flyway connects to: a possible false
+// negative; on a refusal, set the tenant's type so Flyway connects as the keyed user, and a
+// refusal that survives that is a real collision. A tenant that claims a target and then fails
+// its own run still holds the claim.
 var ErrDuplicateMigrationTarget = errors.New("migration: tenant resolves to a migration target another tenant of this run claimed")
 
 // ErrNoLister is returned when MigrateAll is called without a TenantLister.

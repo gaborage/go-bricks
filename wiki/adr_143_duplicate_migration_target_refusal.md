@@ -91,7 +91,9 @@ names this.
 
 **Blind spots** (false negatives unless noted):
 
-- conf-owned targets and an unresolvable vendor, as above;
+- conf-owned targets and an unresolvable vendor, as above — including a tenant
+  ID listed twice whose target is one of them: the claim is per target, and
+  the listing is not deduplicated;
 - DNS aliases: a CNAME, or an IP against a name;
 - an Oracle port of 0 against 1521;
 - Oracle's case-insensitive unquoted user and service names (`app` against

@@ -273,7 +273,8 @@ The host compares lowercased and without IPv6 brackets, a PostgreSQL port of 0
 equals 5432, and database, schema and username compare byte-exact.
 
 Blind spots: a conf-owned target (a `connectionstring`, or no host or database)
-and a tenant whose vendor resolves to neither are not keyed and run as today;
+and a tenant whose vendor resolves to neither are not keyed and run as today,
+even when the same tenant ID is listed twice, since the claim is per target;
 DNS aliases (a CNAME, or an IP against a name), an Oracle port of 0 against
 1521, Oracle's case-insensitive unquoted user and service names (`app` against
 `APP`), distinct PostgreSQL roles with no role-level `search_path` (all land in
