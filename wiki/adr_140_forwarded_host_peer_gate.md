@@ -85,4 +85,4 @@ ADR-039 obligation 1 and the ADR-057 echo v5.4.0 amendment are amended to match.
 - `server/middleware.go` — `buildTenantResolver`, `newSubdomainResolver`; `server/server.go` —
   `vetTrustedProxies` (the vetting both the extractors and the resolver use), `trustedProxyOptions`
 - gaborage/go-bricks#1918
-- See [migrations.md](migrations.md) `[C73.4]`.
+- See [migrations.md](migrations.md) `[C72.8]`.

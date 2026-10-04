@@ -2305,7 +2305,7 @@ which behind an appending proxy is the caller's. It now applies the peer rule ec
 `X-Forwarded-Proto`, rebuilt from the same vetted `server.trustedproxies` list, and reads the
 last entry of the last line. An untrusted peer that sends the header gets
 `ErrUntrustedForwardedHost`, which `CompositeResolver` treats as terminal. Amends ADR-039
-obligation 1 and extends ADR-057's trust. See [migrations.md](migrations.md) `[C73.4]`.
+obligation 1 and extends ADR-057's trust. See [migrations.md](migrations.md) `[C72.8]`.
 
 **Key Benefits:** one trust rule for every forwarded header, and an unlisted proxy fails
 loudly instead of falling through to a caller-written tenant header.
