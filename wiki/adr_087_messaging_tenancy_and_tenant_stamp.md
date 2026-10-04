@@ -14,7 +14,7 @@
 > row is shared; it still fires for per-tenant messaging and for database and cache. Separately, the
 > static tenant count behind that WARN is now taken only under `source.type: static`, so a leftover
 > `multitenant.tenants` map under a dynamic source warns for no pool. See [migrations.md](migrations.md)
-> `[C73.8]`.
+> `[C72.15]`.
 
 ## Context
 
