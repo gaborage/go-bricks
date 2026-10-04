@@ -1035,7 +1035,7 @@ func forwardedRequest(remoteAddr string) *http.Request {
 	req.Host = "localhost:8080"
 	req.RemoteAddr = remoteAddr
 	req.Header.Set(HeaderXForwardedHost, "alpha."+testDomain)
-	req.Header.Set(echo.HeaderXForwardedProto, "https")
+	req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
 	return req
 }
 
@@ -1052,22 +1052,30 @@ func TestSubdomainForwardedHostTrustMatchesSchemeExtractor(t *testing.T) {
 		{name: "invalid_entry_beside_listed_range", trustedProxies: []string{"not-a-cidr", "203.0.113.0/24"}},
 		{name: "entries_covering_all_ipv4", trustedProxies: []string{"0.0.0.0/1", "128.0.0.0/1"}},
 	}
-	peers := []string{
-		"198.51.100.7:443", "203.0.113.9:443", "10.1.2.3:443", "172.16.0.9:443", "192.168.1.5:443",
-		"127.0.0.1:443", "169.254.10.20:443", "[fe80::1%eth0]:443", "[::ffff:203.0.113.9]:443",
-		"[::ffff:10.0.0.1]:443", "", "@", "/run/app.sock",
+	peers := []struct{ name, addr string }{
+		{"public_unlisted", "198.51.100.7:443"},
+		{"public_in_listed_range", "203.0.113.9:443"},
+		{"rfc1918_10", "10.1.2.3:443"},
+		{"rfc1918_172", "172.16.0.9:443"},
+		{"rfc1918_192", "192.168.1.5:443"},
+		{"loopback", "127.0.0.1:443"},
+		{"link_local", "169.254.10.20:443"},
+		{"ipv6_zone_link_local", "[fe80::1%eth0]:443"},
+		{"ipv4_mapped_public", "[::ffff:203.0.113.9]:443"},
+		{"ipv4_mapped_private", "[::ffff:10.0.0.1]:443"},
+		{"unix_empty", ""},
+		{"unix_abstract", "@"},
+		{"unix_path", "/run/app.sock"},
 	}
 
 	believedOutcomes := map[bool]int{}
 	for _, setting := range settings {
+		srv := newIPExtractorServer(setting.trustedProxies...)
+		resolver := buildTenantResolver(forwardedHostConfig(config.ResolverTypeSubdomain, setting.trustedProxies...))
 		for _, peer := range peers {
-			t.Run(setting.name+"/"+peer, func(t *testing.T) {
-				cfg := forwardedHostConfig(config.ResolverTypeSubdomain, setting.trustedProxies...)
-				srv := New(cfg, &testLogger{})
-				resolver := buildTenantResolver(cfg)
-
-				schemeBelieved := srv.echo.SchemeExtractor(forwardedRequest(peer)) == "https"
-				tenantID, err := resolver.ResolveTenant(context.Background(), forwardedRequest(peer))
+			t.Run(setting.name+"_"+peer.name, func(t *testing.T) {
+				schemeBelieved := extractScheme(srv, peer.addr) == schemeHTTPS
+				tenantID, err := resolver.ResolveTenant(context.Background(), forwardedRequest(peer.addr))
 				hostBelieved := err == nil && tenantID == "alpha"
 
 				assert.Equal(t, schemeBelieved, hostBelieved, "X-Forwarded-Host trust must match X-Forwarded-Proto trust")

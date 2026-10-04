@@ -94,7 +94,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 
 	// Body limit — configurable via server.bodylimit (bytes). config.normalizeServer
 	// owns the default; this <=0 guard is a backstop for the callers that never run
-	// config.Validate (see trustedProxyOptions for the same rationale). Note which way
+	// config.Validate (see vetTrustedProxies for the same rationale). Note which way
 	// it fails: echo compares `req.ContentLength > LimitBytes`, so BodyLimit(0) rejects
 	// every request carrying a body and a negative rejects even empty ones. An
 	// unvalidated 0 would take the service down, not uncap it — the guard converts that
@@ -371,7 +371,7 @@ func compositeSubResolvers(cfg *config.ResolverConfig, trustedProxies []*net.IPN
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	resolverCfg := &cfg.Multitenant.Resolver
 	tenantRegex := multitenant.DefaultTenantIDPattern()
-	// Silent: newServer's trustedProxyOptions already logged each rejected entry once.
+	// Silent: the server's trustedProxyOptions already logged each rejected entry once.
 	trustedProxies := vetTrustedProxies(cfg.Server.TrustedProxies, nil)
 
 	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
