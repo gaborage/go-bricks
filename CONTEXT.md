@@ -114,6 +114,12 @@ not an edit in every place that enumerates kinds. There is one slot per kind
 (database, messaging, cache, streams).
 _Avoid_: resource kind (that is what fills a slot), manager wrapper, component
 
+**Import gate**:
+A capability that engages only when its registration is linked into the build.
+For payload sealing, `messaging/sealed` registers the codec from `init`; a
+seal-tagged messaging declaration without that registration fails validation at
+startup.
+
 **Probe description**:
 What a slot hands readiness so its kind can be judged: a fixed component name,
 whether the kind is critical, how to lease it, how to check it is live, and
@@ -206,6 +212,21 @@ this property can never stand in for; on an UNSEALED delivery carrying no stamp 
 read as the second source of that key, under the same grammar ([C64.11]).
 _Avoid_: event id (the outbox row's word), correlation id (the trace field),
 dedup key (the composed ledger identity)
+
+**Ledger**:
+A framework-owned table in a store that records message state. The _outbox
+ledger_ holds rows waiting for the relay; the _inbox ledger_ holds the dedup
+keys a consumer has processed. Say which one wherever both could be meant.
+
+**Relay**:
+The scheduled job that drains an outbox ledger to its lanes. Every replica runs
+one; only the leader drains.
+
+**Leader**:
+The one relay instance per outbox ledger that drains on a given tick. A relay
+that isn't the leader does nothing that tick, and that's not a failure.
+Leadership bounds duplicates; delivery stays at-least-once.
+_Avoid_: exactly-once (for leadership)
 
 **Shipper**:
 The relay's per-lane adapter. It reports whether its lane is usable where it has
