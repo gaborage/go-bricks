@@ -5463,7 +5463,11 @@ When `observability.enabled: true`, the framework auto-emits:
 | Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system.name=redis` |
 | Cache manager | `cache.manager.active_caches` | UpDownCounter | — |
 | Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` — manager lifecycle, not probe health (`.errors` counts pool create and close failures only) | Counter | — |
-| Go runtime | `go.memory.used` (attribute `go.memory.type`), `go.memory.limit` (only when a memory limit is set, through `GOMEMLIMIT` or `debug.SetMemoryLimit`), `go.memory.allocated`, `go.memory.allocations`, `go.memory.gc.goal`, `go.goroutine.count`, `go.processor.limit`, `go.config.gogc`, and `go.schedule.duration` from the runtime producer | various | OTel runtime semconv; the `process.runtime.go.*` names appear only with the deprecated opt-in `OTEL_GO_X_DEPRECATED_RUNTIME_METRICS=true` |
+| Go runtime | `go.memory.used` | UpDownCounter (By) | `go.memory.type` (`stack`/`other`) |
+| Go runtime | `go.memory.gc.goal` / `go.goroutine.count` / `go.processor.limit` / `go.config.gogc` | UpDownCounter | — |
+| Go runtime | `go.memory.limit`, emitted only when a Go memory limit is set (`GOMEMLIMIT` or `debug.SetMemoryLimit`) | UpDownCounter (By) | — |
+| Go runtime | `go.memory.allocated` (By) / `go.memory.allocations` | Counter | — |
+| Go runtime | `go.schedule.duration`, which comes from the runtime producer and so stays cumulative with explicit buckets whatever `temporality` and `histogramaggregation` say | Histogram (s) | — |
 | JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method`, `http.route` (omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
 | JOSE | `jose.operation.duration` | Histogram | `operation` |
 
