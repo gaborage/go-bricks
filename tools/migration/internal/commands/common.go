@@ -39,6 +39,8 @@ const (
 	envMigratorUser     = "GOBRICKS_MIGRATE_MIGRATOR_USER"
 	envMigratorPassword = "GOBRICKS_MIGRATE_MIGRATOR_PASSWORD"
 
+	envSharedMigrator = "GOBRICKS_MIGRATE_SHARED_MIGRATOR"
+
 	// migratorOverlayLogMsg records that Flyway will connect as the migrator. The
 	// username is logged beside it; the password never is.
 	migratorOverlayLogMsg = "Migrator identity overlay active"
