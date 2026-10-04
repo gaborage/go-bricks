@@ -18,12 +18,11 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/jose"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	"github.com/gaborage/go-bricks/keystore"
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
-	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/sealed"
 )
 
@@ -147,7 +146,7 @@ func loadVectors(t *testing.T) *vectorFile {
 func configureConsumer(t *testing.T, store sealruntime.KeyStore) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	messaging.ConfigureSealing(&messaging.SealRuntime{
+	sealruntime.Configure(&sealruntime.Runtime{
 		KeyStore: store,
 		Tenancy:  sealruntime.TenancyShared,
 		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)),

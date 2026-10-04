@@ -4,7 +4,9 @@
 // facts once at bootstrap, and messaging reads both without importing jose or the
 // keystore — so a process that never imports messaging/sealed carries no sealing code.
 // The app already links go-jose through HTTP jose; the import gate keeps `messaging`
-// itself jose-free.
+// itself jose-free. It lives in the module's root internal tree because app and messaging
+// both import it, so no code outside go-bricks can register a codec or configure the
+// facts (ADR-139).
 package sealruntime
 
 import (

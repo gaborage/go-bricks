@@ -14,13 +14,13 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/gaborage/go-bricks/internal/publishdoor"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/jose"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/keystore"
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/sealed"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -200,7 +200,7 @@ func TestNewSealerStartupMatrix(t *testing.T) {
 func configure(t *testing.T, tenancy sealruntime.Tenancy) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	messaging.ConfigureSealing(&messaging.SealRuntime{
+	sealruntime.Configure(&sealruntime.Runtime{
 		KeyStore: producerStore(t),
 		Tenancy:  tenancy,
 		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)),

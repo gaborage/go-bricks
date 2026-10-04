@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 )
 
 // Every plan DECISION in this file is written as ==/!= comparisons, never a tagged switch: gremlins
@@ -143,15 +143,15 @@ func (p resourcePlan) tenantStamps() bool { return p.messaging.tenancy == shared
 func (p resourcePlan) refusesStreams() bool { return p.messaging.tenancy == perTenantTenancy }
 
 // sealTenancy maps the messaging row onto ADR-097's three seal tenancies.
-func (p resourcePlan) sealTenancy() messaging.SealTenancy {
+func (p resourcePlan) sealTenancy() sealruntime.Tenancy {
 	// ==, not a tagged switch: a switch yields zero gremlins mutants, hiding this decision from the mutation gate.
 	if p.messaging.tenancy == perTenantTenancy {
-		return messaging.SealTenancyPerTenant
+		return sealruntime.TenancyPerTenant
 	}
 	if p.messaging.tenancy == sharedTenancy {
-		return messaging.SealTenancyShared
+		return sealruntime.TenancyShared
 	}
-	return messaging.SealTenancyDisabled
+	return sealruntime.TenancyDisabled
 }
 
 // planResources plans from a validated cfg, opts (may be nil) and store, the instance

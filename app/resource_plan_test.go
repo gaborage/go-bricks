@@ -12,7 +12,7 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
@@ -335,11 +335,11 @@ func TestResourcePlanDeploymentAnswers(t *testing.T) {
 		tenancy                                           kindTenancy
 		name                                              string
 		controlPlane, multitenant, stamps, refusesStreams bool
-		seal                                              messaging.SealTenancy
+		seal                                              sealruntime.Tenancy
 	}{
-		{tenancy: singleTenant, name: "single-tenant", controlPlane: true, seal: messaging.SealTenancyDisabled},
-		{tenancy: sharedTenancy, name: config.TenancyShared, controlPlane: true, multitenant: true, stamps: true, seal: messaging.SealTenancyShared},
-		{tenancy: perTenantTenancy, name: config.TenancyPerTenant, multitenant: true, refusesStreams: true, seal: messaging.SealTenancyPerTenant},
+		{tenancy: singleTenant, name: "single-tenant", controlPlane: true, seal: sealruntime.TenancyDisabled},
+		{tenancy: sharedTenancy, name: config.TenancyShared, controlPlane: true, multitenant: true, stamps: true, seal: sealruntime.TenancyShared},
+		{tenancy: perTenantTenancy, name: config.TenancyPerTenant, multitenant: true, refusesStreams: true, seal: sealruntime.TenancyPerTenant},
 	}
 	for _, tt := range tests {
 		t.Run(strings.ReplaceAll(tt.name, "-", "_"), func(t *testing.T) {

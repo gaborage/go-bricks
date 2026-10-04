@@ -15,6 +15,12 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-10-03, [ADR-139](adr_139_sealing_seam_framework_only.md)):** the seam moves
+> to root `internal/sealruntime`, and the three exported sealing hooks and their alias family are
+> deleted. `messaging/sealed`'s blank import is the
+> only registration, the app bootstrap configures the runtime, and a module reads the same
+> facts from `ModuleDeps`. The wiring paragraph below is history.
+>
 > **Amended (2026-09-30, [ADR-131](adr_131_sealed_bytes_publish_door.md)):** `Publisher[T].Seal`
 > returns the `jti` it signed (§2's outbox-flow example carries the three-value form), and a
 > producer that persists sealed bytes republishes them through the verified `PublishSealed`

@@ -15,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -381,29 +382,29 @@ const (
 
 type stubOpener struct{}
 
-func (stubOpener) Open(_ context.Context, body []byte, _ messaging.SealTenantRule, out any) (messaging.SealEnvelope, error) {
+func (stubOpener) Open(_ context.Context, body []byte, _ sealruntime.TenantRule, out any) (sealruntime.Envelope, error) {
 	*out.(*sealedEvent) = sealedEvent{Ref: "abc"}
 	jti := sealedTestJTI
 	if len(body) > 0 {
 		jti = string(body)
 	}
-	return messaging.SealEnvelope{JTI: jti, SignFamily: sealedTestFamily}, nil
+	return sealruntime.Envelope{JTI: jti, SignFamily: sealedTestFamily}, nil
 }
 
 type stubCodec struct{}
 
-func (stubCodec) ScanType(t reflect.Type) (messaging.SealSpec, error) {
+func (stubCodec) ScanType(t reflect.Type) (sealruntime.Spec, error) {
 	if t == reflect.TypeOf(sealedEvent{}) {
 		return stubSpec{}, nil
 	}
 	return nil, nil
 }
 
-func (stubCodec) NewSealer(messaging.SealSpec, string, *messaging.SealRuntime) (messaging.Sealer, error) {
+func (stubCodec) NewSealer(sealruntime.Spec, string, *sealruntime.Runtime) (sealruntime.Sealer, error) {
 	return nil, errors.New("producer side not under test")
 }
 
-func (stubCodec) NewOpener(messaging.SealSpec, string, *messaging.SealRuntime) (messaging.SealOpener, error) {
+func (stubCodec) NewOpener(sealruntime.Spec, string, *sealruntime.Runtime) (sealruntime.Opener, error) {
 	return stubOpener{}, nil
 }
 
@@ -421,8 +422,8 @@ func runSealed(t *testing.T, body func(ctx context.Context, key messaging.DedupK
 // distinct sealed keys through the same consume door.
 func runSealedWithJTI(t *testing.T, jti string, body func(ctx context.Context, key messaging.DedupKey) error) error {
 	t.Helper()
-	registerStubCodec.Do(func() { messaging.RegisterSealCodec(stubCodec{}) })
-	messaging.ConfigureSealing(&messaging.SealRuntime{KeyStore: kstest.NewMockKeyStore()})
+	registerStubCodec.Do(func() { sealruntime.Register(stubCodec{}) })
+	sealruntime.Configure(&sealruntime.Runtime{KeyStore: kstest.NewMockKeyStore()})
 
 	decls := messaging.NewDeclarations()
 	decls.DeclareQueue("q")

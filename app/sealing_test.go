@@ -10,7 +10,7 @@ import (
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 )
 
 type fakeKeyStore struct{}
@@ -23,20 +23,20 @@ func TestConfigureSealingMapsTenancyAndFacts(t *testing.T) {
 	cases := []struct {
 		name    string
 		cfg     *config.Config
-		tenancy messaging.SealTenancy
+		tenancy sealruntime.Tenancy
 	}{
-		{name: "nil_config", cfg: nil, tenancy: messaging.SealTenancyDisabled},
-		{name: "multitenant_disabled", cfg: &config.Config{}, tenancy: messaging.SealTenancyDisabled},
-		{name: "multitenant_disabled_shared_is_noop", cfg: &config.Config{Messaging: config.MessagingConfig{Tenancy: config.TenancyShared}}, tenancy: messaging.SealTenancyDisabled},
-		{name: "shared", cfg: &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}, Messaging: config.MessagingConfig{Tenancy: config.TenancyShared}}, tenancy: messaging.SealTenancyShared},
-		{name: "per_tenant", cfg: &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}}, tenancy: messaging.SealTenancyPerTenant},
+		{name: "nil_config", cfg: nil, tenancy: sealruntime.TenancyDisabled},
+		{name: "multitenant_disabled", cfg: &config.Config{}, tenancy: sealruntime.TenancyDisabled},
+		{name: "multitenant_disabled_shared_is_noop", cfg: &config.Config{Messaging: config.MessagingConfig{Tenancy: config.TenancyShared}}, tenancy: sealruntime.TenancyDisabled},
+		{name: "shared", cfg: &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}, Messaging: config.MessagingConfig{Tenancy: config.TenancyShared}}, tenancy: sealruntime.TenancyShared},
+		{name: "per_tenant", cfg: &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}}, tenancy: sealruntime.TenancyPerTenant},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &App{cfg: tc.cfg}
 			a.installSlots(fixturePlan(tc.cfg))
 			a.configureSealing()
-			rt := messaging.SealingRuntime()
+			rt := sealruntime.Configured()
 			require.NotNil(t, rt)
 			assert.Equal(t, tc.tenancy, rt.Tenancy)
 			assert.Nil(t, rt.KeyStore)
@@ -52,18 +52,18 @@ func TestConfigureSealingReadsTheMessagingRow(t *testing.T) {
 		name    string
 		cfg     *config.Config
 		tenancy kindTenancy
-		want    messaging.SealTenancy
+		want    sealruntime.Tenancy
 	}{
-		{name: "single_tenant_config_shared_row", cfg: &config.Config{}, tenancy: sharedTenancy, want: messaging.SealTenancyShared},
-		{name: "single_tenant_config_per_tenant_row", cfg: &config.Config{}, tenancy: perTenantTenancy, want: messaging.SealTenancyPerTenant},
-		{name: "multitenant_config_single_tenant_row", cfg: mtShared, tenancy: singleTenant, want: messaging.SealTenancyDisabled},
+		{name: "single_tenant_config_shared_row", cfg: &config.Config{}, tenancy: sharedTenancy, want: sealruntime.TenancyShared},
+		{name: "single_tenant_config_per_tenant_row", cfg: &config.Config{}, tenancy: perTenantTenancy, want: sealruntime.TenancyPerTenant},
+		{name: "multitenant_config_single_tenant_row", cfg: mtShared, tenancy: singleTenant, want: sealruntime.TenancyDisabled},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &App{cfg: tc.cfg}
 			a.installSlots(resourcePlan{messaging: kindPlan{kind: componentMessaging, tenancy: tc.tenancy}})
 			a.configureSealing()
-			rt := messaging.SealingRuntime()
+			rt := sealruntime.Configured()
 			require.NotNil(t, rt)
 			assert.Equal(t, tc.want, rt.Tenancy)
 		})
@@ -77,7 +77,7 @@ func TestConfigureSealingCarriesKeyStoreActiveAndMeter(t *testing.T) {
 	cfg.Messaging.Seal.Active = map[string]string{"svc-sign": "v3"}
 	a := &App{cfg: cfg, registry: NewModuleRegistry(&ModuleDeps{KeyStore: ks, MeterProvider: mp})}
 	a.configureSealing()
-	rt := messaging.SealingRuntime()
+	rt := sealruntime.Configured()
 	require.NotNil(t, rt)
 	assert.Equal(t, ks, rt.KeyStore)
 	assert.Equal(t, mp, rt.Meter)

@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/jose"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	"github.com/gaborage/go-bricks/keystore"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 )
 
 var _ sealruntime.VerifierProvider = codec{}

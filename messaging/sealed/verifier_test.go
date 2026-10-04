@@ -8,10 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/keystore"
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
-	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/sealed"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -30,7 +29,7 @@ func pairStore(t *testing.T) *kstest.MockKeyStore {
 
 func configureStore(t *testing.T, store *kstest.MockKeyStore, active map[string]string) {
 	t.Helper()
-	messaging.ConfigureSealing(&messaging.SealRuntime{KeyStore: store, Active: active, Tenancy: sealruntime.TenancyDisabled})
+	sealruntime.Configure(&sealruntime.Runtime{KeyStore: store, Active: active, Tenancy: sealruntime.TenancyDisabled})
 }
 
 // vectorProducerStore is the vector keys as a producer verifies them: every generation PUBLIC.

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 )
 
 func TestInitRegistersTheCodec(t *testing.T) {

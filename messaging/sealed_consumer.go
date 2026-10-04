@@ -7,28 +7,15 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/internal/payloaderr"
-	"github.com/gaborage/go-bricks/messaging/internal/sealruntime"
 	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
-// Aliases of the consume-side seam types, so messaging/sealed and a test double
-// name them from here (the producer-side aliases live in sealing.go).
-type (
-	// SealSpec is a codec's scanned declaration as messaging sees it: the two Logical kids.
-	SealSpec = sealruntime.Spec
-	// SealOpenerProvider is the OPTIONAL consume side of a SealCodec.
-	SealOpenerProvider = sealruntime.OpenerProvider
-	// SealOpener opens one sealed delivery.
-	SealOpener = sealruntime.Opener
-	// SealTenantRule is the tid expectation the sealed door derives per delivery.
-	SealTenantRule = sealruntime.TenantRule
-	// SealEnvelope is the seam's envelope; SealedEnvelope is its Metadata twin.
-	SealEnvelope = sealruntime.Envelope
-	// SealOpenRefusedError is the seam's refusal, found in a PayloadError's chain.
-	SealOpenRefusedError = sealruntime.OpenRefusedError
-)
+// SealOpenRefusedError is the seal runtime's refusal, found in a sealed delivery's
+// PayloadError chain and in PublishSealed's ErrSealedBytesRejected chain.
+type SealOpenRefusedError = sealruntime.OpenRefusedError
 
 // sealedHandler is the consume-side mirror of the sealed publisher: the
 // MessageHandler DeclareTypedConsumerWithMeta installs for a seal-tagged T.

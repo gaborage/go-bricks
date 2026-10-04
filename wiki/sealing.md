@@ -12,11 +12,12 @@ doors; import-gated like `messaging/streams`, ADR-091). The gate keeps the `mess
 package free of go-jose and turns a forgotten import into a loud startup error; it does not
 make an app smaller, since HTTP JOSE already links go-jose.
 
-How the adapter is wired: `messaging/sealed`'s `init` calls `messaging.RegisterSealCodec`
-with the codec (the seam lives in `messaging/internal/sealruntime`); `app` calls
-`messaging.ConfigureSealing` with a `messaging.SealRuntime` (key store, the
-`messaging.seal.active` selector, tenancy, meter) before any `DeclareMessaging`, and modules
-reach it through `messaging.SealingRuntime()`. `Declarations.Validate` fails a seal-tagged
+How the adapter is wired: the blank import of `messaging/sealed` registers the codec from
+`init` into the framework-only seam `internal/sealruntime` (ADR-139), and it is the only
+registration. The app's bootstrap configures the runtime (key store, the
+`messaging.seal.active` selector, tenancy, meter) before any `DeclareMessaging`. A module reads
+the same facts from `ModuleDeps`: `KeyStore`, `MeterProvider` and `Config.Messaging.Seal.Active`,
+with tenancy following `multitenant.enabled` and `messaging.tenancy`. `Declarations.Validate` fails a seal-tagged
 declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),
 `ErrNotConfigured` or `ErrKeyStoreMissing`. `messaging.IsSealTagged` (tag key
 `messaging.SealTagName`) is the one predicate every door asks; the lane guards use it to
@@ -24,8 +25,8 @@ refuse a seal-tagged `T` on streams and on the outbox struct door. `Publisher[T]
 seals when `T` is seal-tagged; `Publisher[T].Seal(ctx, evt)` runs the same sealer once and
 returns the body `Publish` would have put on the wire, for the outbox lane or a producer-owned
 store that republishes it through `Publisher[T].PublishSealed`, verified through the codec's
-optional `messaging.SealVerifierProvider` ([ADR-131](adr_131_sealed_bytes_publish_door.md));
-the consumer side opens through the codec's `messaging.SealOpenerProvider` (#1359). Metrics:
+optional verifier ([ADR-131](adr_131_sealed_bytes_publish_door.md));
+the consumer side opens through the codec's opener (#1359). Metrics:
 `seal.operation.duration` with `seal.operation = seal|open`, and
 `seal.open.failures.total` with `seal.error.code`.
 

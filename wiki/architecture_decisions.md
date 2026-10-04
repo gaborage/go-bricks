@@ -2174,6 +2174,8 @@ on the signed `tid`. Amends ADR-096 and ADR-097. See [migrations.md](migrations.
 
 **Key Benefits:** a batch producer learns synchronously that a publish failed, and a retry of
 stored bytes keeps its `jti`, so the consumer's ledger dedups it.
+Amended by ADR-139: `messaging.Sealer`, `RegisterSealCodec` and the verifier/opener provider
+aliases are deleted; the seam is root `internal/sealruntime`, see `[C72.9]`.
 
 ---
 
@@ -2293,6 +2295,24 @@ decision. Re-judging a remote sampled flag neutralizes the httpclient fallback's
 
 **Key Benefits:** traces stay whole across services, and no caller-written flag decides
 whether this service records.
+
+---
+
+### [ADR-139: The Sealing Seam Is Framework-Only](adr_139_sealing_seam_framework_only.md)
+
+**Date:** 2026-10-03 | **Status:** Accepted | **Breaking:** `messaging.RegisterSealCodec`, `ConfigureSealing`, `SealingRuntime`, twelve `Seal*` type aliases and the three `SealTenancy*` constants are removed
+
+The seal-runtime seam lived in `messaging/internal/sealruntime`, which `app` could not import, so
+`messaging` re-exported it, and any package in the build could register a replacement codec or
+re-aim the key store, Activation and `tid` rule for every seal-tagged handle declared after it.
+The seam moves to root `internal/sealruntime` (the ADR-091 placement), `messaging/sealed`'s `init`
+and the app bootstrap call it directly, and every exported door is deleted;
+`SealOpenRefusedError` and `ErrSealingNotLinked` stay. Shared `ModuleDeps` writes and a second
+App's `Run` remain open re-aim paths, tracked in #2010. Amends ADR-097 and ADR-131. See
+[migrations.md](migrations.md) `[C72.9]`.
+
+**Key Benefits:** the blank import of `messaging/sealed` is the only codec, and no exported
+symbol can install a replacement sealer or opener.
 
 ---
 
@@ -2484,6 +2504,8 @@ is greenfield. Deep dive: [sealing.md](sealing.md).
 
 **Key Benefits:** broker confidentiality and producer authenticity from one declaration
 shared by both sides, rotation without touching a tag, and a dedup key no header can forge.
+Amended by ADR-139: `RegisterSealCodec`, `ConfigureSealing` and `SealingRuntime()` are deleted;
+the blank import registers, the app configures, and modules read the facts from `ModuleDeps`.
 
 ---
 
