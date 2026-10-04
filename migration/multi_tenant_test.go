@@ -1106,18 +1106,18 @@ func flywayRuns(t *testing.T, runLog string) int {
 
 func pgTenant(host string, port int, dbName, schema, username string) *config.DatabaseConfig {
 	db := pgConfig(host, port, dbName, schema, username)
-	db.Password = "migration-password-" + username
+	db.Password = testconsts.FakePassword(username)
 	return db
 }
 
 // oracleTenant is a tenant in PDB1 on ora:1521 connecting as username.
 func oracleTenant(username string) *config.DatabaseConfig {
 	db := oracleConfig("ora", 1521, "PDB1", username)
-	db.Password = "migration-password-" + username
+	db.Password = testconsts.FakePassword(username)
 	return db
 }
 
-var sharedMigrator = &MigratorIdentity{Username: "fleet_migrator", Password: "pw-fleet"}
+var sharedMigrator = &MigratorIdentity{Username: "fleet_migrator", Password: testconsts.FakePassword("fleet-migrator")}
 
 // runDuplicateTargetFleet runs MigrateAll sequentially with ContinueOnError over ids, so
 // every tenant's result is visible, and returns it with the number of Flyway runs started.
@@ -1189,7 +1189,7 @@ func TestMigrateAllNeverKeysATypeLessTenant(t *testing.T) {
 	requireShellStubs(t)
 	stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 	fm := NewFlywayMigrator(&config.Config{App: config.AppConfig{Env: "test"}}, logger.New("disabled", true))
-	typeLess := &config.DatabaseConfig{Host: "db", Port: 5432, Database: "app", Username: "u", Password: "migration-password-u"}
+	typeLess := &config.DatabaseConfig{Host: "db", Port: 5432, Database: "app", Username: "u", Password: testconsts.FakePassword("u")}
 	res, err := MigrateAll(context.Background(), fm, &fakeLister{ids: []string{"t1", "t2"}},
 		newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": typeLess, "t2": typeLess}), ActionMigrate,
 		MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), ContinueOnError: true})
