@@ -253,7 +253,7 @@ Recorded on every `migration.applied` audit event. The principal is **never infe
 | `GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | Default `--pipeline-run-id` (e.g. `--pipeline-run-id "$GITHUB_RUN_ID"`). |
 | `GOBRICKS_MIGRATE_MIGRATOR_USER` | Username Flyway connects as, replacing each tenant secret's own. No flag; set together with the password below. |
 | `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` | Password for that user. Exactly one of the two set is a startup error naming the missing variable. |
-| `GOBRICKS_MIGRATE_SHARED_MIGRATOR` | Default `--shared-migrator`, as a Go boolean (`true`, `false`, `1`, `0`, …). An explicit flag still wins; an unparseable value exits `2`. `quiesce` and `list` ignore it. |
+| `GOBRICKS_MIGRATE_SHARED_MIGRATOR` | Default `--shared-migrator`, as a Go boolean (`true`, `false`, `1`, `0`, …). An explicit flag still wins, and with one passed the variable is not read at all; an unparseable value exits `2`. `quiesce` and `list` ignore it. |
 
 The migrator password gets no flag, only an environment variable — a flag value
 is visible in `ps` output and in shell history.

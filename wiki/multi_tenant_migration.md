@@ -332,7 +332,8 @@ tenant secret's own credentials and ignores both variables.
 
 `GOBRICKS_MIGRATE_SHARED_MIGRATOR` takes Go boolean forms (`true`, `false`,
 `1`, `0`, …); an explicit `--shared-migrator` or `--shared-migrator=false` wins
-over it, and an unparseable value exits `2` before any tenant is listed. Each
+over it, and with the flag passed the variable is not read at all. Otherwise an
+unparseable value exits `2` before any tenant is listed. Each
 refused tenant is a per-tenant failure, so a run with one exits `1`. `quiesce`
 and `list` ignore both the flag and the variable. The flag is never inferred
 from the migrator identity: database-per-tenant PostgreSQL with `public` in each
