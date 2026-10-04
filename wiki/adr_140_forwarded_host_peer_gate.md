@@ -32,6 +32,7 @@ posture-based model rather than restoring a broken guarantee.
    - loopback, link-local and private addresses;
    - unix-socket peers (an empty `RemoteAddr`, or one starting with `@` or `/`);
    - the `server.trustedproxies` ranges, after the server's existing vetting.
+
    echo's checker is unexported and its `TrustOption`s are opaque, so the rule is
    rebuilt in `SubdomainResolver` from the same vetted list, and a parity test keeps
    the two aligned. `SubdomainResolver.TrustedProxies` carries the extra ranges.
