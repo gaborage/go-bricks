@@ -508,6 +508,7 @@ func TestCreateMetricExporterTemporalityPerKind(t *testing.T) {
 		sdkmetric.InstrumentKindObservableGauge:         cumulative,
 		sdkmetric.InstrumentKindGauge:                   cumulative,
 	}
+	require.Len(t, deltaPreference, 7, "every sdkmetric.InstrumentKind must be pinned")
 	allCumulative := make(map[sdkmetric.InstrumentKind]metricdata.Temporality, len(deltaPreference))
 	for kind := range deltaPreference {
 		allCumulative[kind] = cumulative
