@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -19,10 +18,8 @@ const flagSharedMigrator = "shared-migrator"
 // applyEnvFallback. It belongs on the runAction path only, so quiesce and list
 // never read it.
 func resolveSharedMigrator(cmd *cobra.Command, flags *CommonFlags) error {
-	if cmd.Flags().Changed(flagSharedMigrator) {
-		return nil
-	}
-	v := os.Getenv(envSharedMigrator)
+	var v string
+	applyEnvFallback(cmd, flagSharedMigrator, envSharedMigrator, &v)
 	if v == "" {
 		return nil
 	}
@@ -39,7 +36,7 @@ func resolveSharedMigrator(cmd *cobra.Command, flags *CommonFlags) error {
 // "postgresql", so an empty or misspelled type would otherwise skip it and let
 // Flyway fall back to whatever flyway.conf targets.
 //
-// It wraps the TLS-validating provider, so it judges the normalized copy: an
+// Wrapped around the TLS-validating provider, it judges the normalized copy: an
 // empty type a recognized connectionstring infers is already filled in. The
 // refusal names the tenant and the type only, never a connection field.
 type sharedMigratorProvider struct {
@@ -48,8 +45,11 @@ type sharedMigratorProvider struct {
 
 func (p *sharedMigratorProvider) DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error) {
 	cfg, err := p.inner.DBConfig(ctx, key)
-	if err != nil || cfg == nil {
-		return cfg, err
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, nil
 	}
 	if err := database.ValidateDatabaseType(cfg.Type); err != nil {
 		return nil, fmt.Errorf("tenant %q: --shared-migrator cannot aim Flyway at it: %w", key, err)

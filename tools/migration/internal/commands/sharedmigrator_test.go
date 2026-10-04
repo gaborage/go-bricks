@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -66,6 +67,11 @@ func TestResolveSharedMigrator(t *testing.T) {
 	}
 }
 
+// refusedTypeConfig is a fully populated config whose type the guard refuses.
+func refusedTypeConfig(dbType string) *config.DatabaseConfig {
+	return &config.DatabaseConfig{Type: dbType, Host: "db.internal", Username: "app", Password: fakePassword("app")}
+}
+
 func TestSharedMigratorProviderJudgesType(t *testing.T) {
 	errInner := errors.New("inner failed")
 	tests := []struct {
@@ -78,11 +84,9 @@ func TestSharedMigratorProviderJudgesType(t *testing.T) {
 		{name: "oracle_passes", inner: &stubProvider{cfg: oracleConfig()}},
 		{name: "inner_error_passes_through", inner: &stubProvider{err: errInner}, wantErr: errInner.Error()},
 		{name: "nil_config_passes_through", inner: &stubProvider{}, wantNil: true},
-		{
-			name:    "unsupported_type_refused",
-			inner:   &stubProvider{cfg: &config.DatabaseConfig{Type: "postgres", Host: "db.internal"}},
-			wantErr: `tenant "tenant-a"`,
-		},
+		{name: "lowercase_alias_refused", inner: &stubProvider{cfg: refusedTypeConfig("postgres")}, wantErr: `tenant "tenant-a"`},
+		{name: "mixed_case_refused", inner: &stubProvider{cfg: refusedTypeConfig("PostgreSQL")}, wantErr: `tenant "tenant-a"`},
+		{name: "empty_type_refused", inner: &stubProvider{cfg: refusedTypeConfig("")}, wantErr: `tenant "tenant-a"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,6 +97,11 @@ func TestSharedMigratorProviderJudgesType(t *testing.T) {
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				assert.Nil(t, cfg)
+				if tt.inner.cfg != nil {
+					require.ErrorContains(t, err, strconv.Quote(tt.inner.cfg.Type), "the refusal names the type")
+					assert.NotContains(t, err.Error(), tt.inner.cfg.Host)
+					assert.NotContains(t, err.Error(), tt.inner.cfg.Password)
+				}
 				return
 			}
 			require.NoError(t, err)
