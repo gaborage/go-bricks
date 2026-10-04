@@ -4,6 +4,30 @@
 - **Date**: 2026-08-14
 - **Related**: [migrations.md](migrations.md) `[C59.5]`, `[C65.4]` · `migration/roles.go`
 
+## Amendment (2026-10-04, #1704): SCRAM-SHA-256 mode refuses passwords outside printable ASCII
+
+`PGRoleSpec.PasswordFormat` gains an opt-in `PGPasswordSCRAMSHA256` mode, in which provisioning sends
+a SCRAM-SHA-256 verifier computed in process instead of the plaintext password. In that mode
+`Validate` adds a second password rule. The CR/LF/NUL check this ADR decided still runs first, over
+both fields, with `ErrPGRolePasswordHasControlChar` unchanged. Then each non-empty password must be
+printable ASCII (0x20-0x7E), or `Validate` returns the new exported `ErrPGRolePasswordNotSCRAMSafe`
+wrapped with the field name, never the value. An unrecognized `PasswordFormat` value is refused with
+`ErrUnknownPGPasswordFormat`. Plaintext mode is untouched: tab and non-ASCII passwords stay valid.
+
+**Why the charset rule.** A client logging in derives its proof from the password after SCRAM
+normalization, so a verifier computed here must start from the same bytes the client will use.
+Printable ASCII is the range where PostgreSQL's SASLprep and pgx's OpaqueString normalization are
+both the identity, so every client derives the same key from the same password. Outside it, a
+password could provision cleanly and then never authenticate.
+
+**Reusing `ErrPGRolePasswordHasControlChar`** was rejected for the reason this ADR already gave for
+`ErrEnvFieldHasControlChar`: its message names CR/LF/NUL, and a tab or an `é` refused under it
+would misname the failure.
+
+**Full SASLprep** was rejected: pgx and PostgreSQL normalize non-ASCII passwords differently, so no
+single in-process normalization matches every client. Refusing the range where they disagree is the
+only rule that cannot produce an unusable credential.
+
 ## Amendment (2026-09-13, #1061): `PGRoleSpec` refuses PostgreSQL's reserved schema AND role names
 
 `Validate` now refuses a reserved name in every identifier field: `public` or anything under the

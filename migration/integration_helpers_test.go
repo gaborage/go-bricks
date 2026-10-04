@@ -250,15 +250,20 @@ func (e *integrationEnv) adminConn(t *testing.T) database.Interface {
 	return conn
 }
 
+// roleDSN returns the DSN that authenticates as role with password against the
+// env's default database.
+func (e *integrationEnv) roleDSN(role, password string) string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		role, password, e.host, e.port, e.defaultDB)
+}
+
 // openAsRole returns a *sql.DB authenticated as the given PostgreSQL role
 // using the env's default database. Used by role-separation tests to verify
 // that DDL is rejected for runtime roles and that DML is permitted for
 // migrator-owned tables via ALTER DEFAULT PRIVILEGES.
 func (e *integrationEnv) openAsRole(t *testing.T, role, password string) *sql.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-		role, password, e.host, e.port, e.defaultDB)
-	db, err := sql.Open("pgx", dsn)
+	db, err := sql.Open("pgx", e.roleDSN(role, password))
 	require.NoError(t, err, "open connection as role %q", role)
 	t.Cleanup(func() { _ = db.Close() })
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1598,5 +1599,125 @@ func requireRuntimeRoleSeparation(ctx context.Context, t *testing.T, migratorDB,
 		_, err = runtimeDB.ExecContext(ctx, stmt)
 		require.Error(t, err, "the runtime role must be refused DDL: %s", stmt)
 		assert.True(t, isPermissionDenied(err), "want permission denied for %s, got: %v", stmt, err)
+	}
+}
+
+// TestPGRolesSCRAMModeStoresTheVerifier provisions SCRAM-mode roles through
+// both Go doors and proves PostgreSQL stored the computed verifier as-is: the
+// stored value recomputes from the plaintext and its own salt, the plaintext
+// logs in, and a wrong password is refused (so the login was password-checked).
+// Each door's own session is shown to hash plaintext as md5 right before it
+// provisions, so a plaintext-mode emission could not pass the recompute; a
+// plaintext-mode control on the same session proves the setting took effect.
+func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
+	env := newIntegrationEnv(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	admin := env.adminDB(t)
+	_, err := admin.ExecContext(ctx, `ALTER SYSTEM SET password_encryption = 'md5'`)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(ctx, `SELECT pg_reload_conf()`)
+	require.NoError(t, err)
+
+	// One connection, so the session proven md5 is the one the door runs on.
+	md5DB := env.adminDB(t)
+	md5DB.SetMaxOpenConns(1)
+	showOnDB := func(ctx context.Context) (string, error) {
+		var v string
+		err := md5DB.QueryRowContext(ctx, `SHOW password_encryption`).Scan(&v)
+		return v, err
+	}
+
+	plainSpec := &PGRoleSpec{
+		Schema:          "tenant_scram_plain",
+		MigratorRole:    "mig_scram_plain",
+		RuntimeRole:     "rt_scram_plain",
+		RuntimePassword: testconsts.FakePassword("rt-scram-plain"),
+	}
+	require.NoError(t, awaitMD5PasswordEncryption(ctx, showOnDB))
+	require.NoError(t, ProvisionPGRoles(ctx, md5DB, plainSpec))
+	var plainStored string
+	require.NoError(t, admin.QueryRowContext(ctx,
+		`SELECT rolpassword FROM pg_authid WHERE rolname = $1`, plainSpec.RuntimeRole).Scan(&plainStored))
+	require.True(t, strings.HasPrefix(plainStored, "md5"),
+		"premise: the server must hash a plaintext password as md5 (stored len %d)", len(plainStored))
+
+	sqlDBSpec := &PGRoleSpec{
+		Schema:           "tenant_scram_db",
+		MigratorRole:     "mig_scram_db",
+		MigratorPassword: testconsts.FakePassword("mig-scram-db"),
+		RuntimeRole:      "rt_scram_db",
+		RuntimePassword:  testconsts.FakePassword("rt-scram-db"),
+		PasswordFormat:   PGPasswordSCRAMSHA256,
+	}
+	require.NoError(t, awaitMD5PasswordEncryption(ctx, showOnDB))
+	require.NoError(t, ProvisionPGRoles(ctx, md5DB, sqlDBSpec))
+
+	txSpec := &PGRoleSpec{
+		Schema:           "tenant_scram_tx",
+		MigratorRole:     "mig_scram_tx",
+		MigratorPassword: testconsts.FakePassword("mig-scram-tx"),
+		RuntimeRole:      "rt_scram_tx",
+		RuntimePassword:  testconsts.FakePassword("rt-scram-tx"),
+		PasswordFormat:   PGPasswordSCRAMSHA256,
+	}
+	require.NoError(t, database.WithTx(ctx, env.adminConn(t), func(ctx context.Context, tx database.Tx) error {
+		if err := awaitMD5PasswordEncryption(ctx, func(ctx context.Context) (string, error) {
+			var v string
+			err := tx.QueryRow(ctx, `SHOW password_encryption`).Scan(&v)
+			return v, err
+		}); err != nil {
+			return err
+		}
+		return ProvisionPGRolesTx(ctx, tx, txSpec)
+	}))
+
+	for _, spec := range []*PGRoleSpec{sqlDBSpec, txSpec} {
+		for role, password := range map[string]string{
+			spec.MigratorRole: spec.MigratorPassword,
+			spec.RuntimeRole:  spec.RuntimePassword,
+		} {
+			var stored string
+			require.NoError(t, admin.QueryRowContext(ctx,
+				`SELECT rolpassword FROM pg_authid WHERE rolname = $1`, role).Scan(&stored))
+			requireSCRAMVerifierOf(t, password, stored)
+
+			env.openAsRole(t, role, password)
+			requireSQLState(t, pingAsRole(ctx, t, env, role, testconsts.FakePassword("wrong")), "28P01")
+		}
+	}
+}
+
+// pingAsRole opens and pings a connection as role, returning the ping error
+// rather than failing, for the wrong-password control.
+func pingAsRole(ctx context.Context, t *testing.T, env *integrationEnv, role, password string) error {
+	t.Helper()
+	db, err := sql.Open("pgx", env.roleDSN(role, password))
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	return db.PingContext(ctx)
+}
+
+// awaitMD5PasswordEncryption polls show until the session behind it reports
+// password_encryption = md5, failing after a bounded wait: ALTER SYSTEM plus
+// pg_reload_conf reaches a live session asynchronously.
+func awaitMD5PasswordEncryption(ctx context.Context, show func(context.Context) (string, error)) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := show(ctx)
+		if err != nil {
+			return err
+		}
+		if got == "md5" {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("password_encryption is still %q on this session", got)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }

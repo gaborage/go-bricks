@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/base64"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/cryptotest"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -1059,18 +1061,28 @@ func TestProvisionPGRolesTxRunsTheSameStatementsAsTheSQLDBDoor(t *testing.T) {
 				s.MigratorPassword = ""
 			},
 		},
+		// A SCRAM verifier is salted afresh per call, so each door call below
+		// reseeds crypto/rand to the same stream to draw the same salts.
+		{name: "scram_mode", apply: func(s *PGRoleSpec) { s.PasswordFormat = PGPasswordSCRAMSHA256 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			spec := txDoorSpec()
 			tt.apply(spec)
+			cryptotest.SetGlobalRandom(t, 1704)
 			want, err := PGRoleProvisioningSQL(spec)
 			require.NoError(t, err)
 			require.NotEmpty(t, want)
+			if spec.PasswordFormat == PGPasswordSCRAMSHA256 {
+				got := passwordStmts(t, want)
+				requireSCRAMVerifierOf(t, spec.MigratorPassword, got[quotePGIdent(spec.MigratorRole)])
+				requireSCRAMVerifierOf(t, spec.RuntimePassword, got[quotePGIdent(spec.RuntimeRole)])
+			}
 
+			cryptotest.SetGlobalRandom(t, 1704)
 			exec := newRecordingRoleExecutor()
 			require.NoError(t, ProvisionPGRolesTx(context.Background(), exec, spec))
-			require.Equal(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
+			requireSameStmts(t, want, exec.stmts, "the tx door must execute the published list verbatim, in order")
 
 			var viaSQLDB []string
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(
@@ -1085,10 +1097,28 @@ func TestProvisionPGRolesTxRunsTheSameStatementsAsTheSQLDBDoor(t *testing.T) {
 				mock.ExpectExec("").WillReturnResult(sqlmock.NewResult(0, 0))
 			}
 
+			cryptotest.SetGlobalRandom(t, 1704)
 			require.NoError(t, ProvisionPGRoles(context.Background(), db, spec))
 			require.NoError(t, mock.ExpectationsWereMet())
-			require.Equal(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
+			requireSameStmts(t, want, viaSQLDB, "the *sql.DB door must execute the same list, in the same order")
 		})
+	}
+}
+
+// requireSameStmts fails unless got is want, verbatim and in order. A list
+// carrying a SCRAM verifier is compared without printing it (ADR-102): the
+// failure names the first differing index and the lengths only.
+func requireSameStmts(t *testing.T, want, got []string, msg string) {
+	t.Helper()
+	if !strings.Contains(strings.Join(want, "\n"), scramSHA256Prefix) {
+		require.Equal(t, want, got, msg)
+		return
+	}
+	require.Len(t, got, len(want), msg)
+	for i := range want {
+		if want[i] != got[i] {
+			t.Fatalf("%s: statement %d differs (want len %d, got len %d)", msg, i, len(want[i]), len(got[i]))
+		}
 	}
 }
 
@@ -1316,4 +1346,219 @@ func TestCheckPGRoleFloorRejectsNilDB(t *testing.T) {
 	err := CheckPGRoleFloor(context.Background(), nil, "rt")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-nil *sql.DB")
+}
+
+// scramSpec is a SCRAM-mode spec whose passwords are long and distinctive, so
+// a leak of either into any statement is unambiguous.
+func scramSpec() *PGRoleSpec {
+	return &PGRoleSpec{
+		Schema:           "tenant_scram",
+		MigratorRole:     "mig_scram",
+		MigratorPassword: "Distinctive-Migrator-Passphrase-0123456789-ZQXJ",
+		RuntimeRole:      "rt_scram",
+		RuntimePassword:  "Distinctive-Runtime-Passphrase-9876543210-KWVY",
+		PasswordFormat:   PGPasswordSCRAMSHA256,
+	}
+}
+
+// passwordStmts maps each quoted role of the ALTER ROLE ... PASSWORD statements
+// in stmts to the literal it carries, quotes stripped.
+func passwordStmts(t *testing.T, stmts []string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, stmt := range stmts {
+		head, literal, found := strings.Cut(stmt, " PASSWORD '")
+		if !found {
+			continue
+		}
+		role, ok := strings.CutPrefix(head, "ALTER ROLE ")
+		require.True(t, ok, "a PASSWORD statement must be an ALTER ROLE")
+		require.True(t, strings.HasSuffix(literal, "'"), "the PASSWORD literal must close the statement")
+		out[role] = strings.TrimSuffix(literal, "'")
+	}
+	return out
+}
+
+// requireSCRAMVerifierOf fails unless verifier is the 4096-iteration SCRAM-SHA-256
+// verifier of password under its own 16-byte salt. Failure messages carry
+// lengths only, never key material (ADR-102).
+func requireSCRAMVerifierOf(t *testing.T, password, verifier string) {
+	t.Helper()
+	rest, ok := strings.CutPrefix(verifier, "SCRAM-SHA-256$4096:")
+	require.True(t, ok, "verifier must start with the SCRAM-SHA-256$4096: header (len %d)", len(verifier))
+	encSalt, _, found := strings.Cut(rest, "$")
+	require.True(t, found, "verifier must carry a salt and keys (len %d)", len(verifier))
+	salt, err := base64.StdEncoding.DecodeString(encSalt)
+	require.NoError(t, err, "salt must be standard base64")
+	require.Len(t, salt, 16, "salt must be 16 bytes")
+
+	want, err := scramSHA256Verifier(password, salt, 4096)
+	require.NoError(t, err)
+	if want != verifier {
+		t.Fatalf("verifier does not recompute from the password and its salt (got len %d, want len %d)", len(verifier), len(want))
+	}
+}
+
+func TestPGRoleProvisioningSQLSCRAMModeEmitsVerifiers(t *testing.T) {
+	spec := scramSpec()
+	first, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	second, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+
+	wantPasswords := map[string]string{
+		quotePGIdent(spec.MigratorRole): spec.MigratorPassword,
+		quotePGIdent(spec.RuntimeRole):  spec.RuntimePassword,
+	}
+	got1 := passwordStmts(t, first)
+	got2 := passwordStmts(t, second)
+	require.Len(t, got1, 2, "both roles must get a PASSWORD statement")
+	require.Len(t, got2, 2, "both roles must get a PASSWORD statement")
+	for role, password := range wantPasswords {
+		requireSCRAMVerifierOf(t, password, got1[role])
+		requireSCRAMVerifierOf(t, password, got2[role])
+		if got1[role] == got2[role] {
+			t.Fatalf("role %s: two calls must salt afresh, got the same verifier twice", role)
+		}
+	}
+	if got1[quotePGIdent(spec.MigratorRole)] == got1[quotePGIdent(spec.RuntimeRole)] {
+		t.Fatal("each password must get its own salt")
+	}
+
+	for i, stmt := range append(first, second...) {
+		if strings.Contains(stmt, spec.MigratorPassword) || strings.Contains(stmt, spec.RuntimePassword) {
+			t.Fatalf("statement %d (len %d) carries the plaintext", i, len(stmt))
+		}
+	}
+
+	plain := scramSpec()
+	plain.PasswordFormat = PGPasswordPlaintext
+	plainStmts, err := PGRoleProvisioningSQL(plain)
+	require.NoError(t, err)
+	require.Len(t, first, len(plainStmts), "SCRAM mode changes the PASSWORD literals only")
+	for i := range plainStmts {
+		if !strings.Contains(plainStmts[i], " PASSWORD '") {
+			assert.Equal(t, plainStmts[i], first[i], "statement %d must not depend on the password format", i)
+		}
+	}
+}
+
+func TestPGRoleProvisioningSQLSCRAMModeOmitsEmptyPasswordALTERs(t *testing.T) {
+	spec := scramSpec()
+	spec.MigratorPassword = ""
+	spec.RuntimePassword = ""
+	require.NoError(t, spec.Validate(), "empty passwords are SCRAM-safe")
+
+	stmts, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+	assert.NotContains(t, strings.Join(stmts, "\n;\n"), "PASSWORD",
+		"empty passwords must not emit ALTER ROLE ... PASSWORD statements")
+}
+
+func TestPGRoleSpecValidateSCRAMModePasswordCharset(t *testing.T) {
+	tests := []struct {
+		name     string
+		format   PGPasswordFormat
+		field    string
+		password string
+		wantErr  error
+	}{
+		{name: "scram_migrator_tab", format: PGPasswordSCRAMSHA256, field: pgRoleFieldMigratorPassword, password: "tab\tsecret-pw", wantErr: ErrPGRolePasswordNotSCRAMSafe},
+		{name: "scram_runtime_tab", format: PGPasswordSCRAMSHA256, field: pgRoleFieldRuntimePassword, password: "tab\tsecret-pw", wantErr: ErrPGRolePasswordNotSCRAMSafe},
+		{name: "scram_migrator_del", format: PGPasswordSCRAMSHA256, field: pgRoleFieldMigratorPassword, password: "del\x7fsecret-pw", wantErr: ErrPGRolePasswordNotSCRAMSafe},
+		{name: "scram_runtime_del", format: PGPasswordSCRAMSHA256, field: pgRoleFieldRuntimePassword, password: "del\x7fsecret-pw", wantErr: ErrPGRolePasswordNotSCRAMSafe},
+		{name: "scram_migrator_e_acute", format: PGPasswordSCRAMSHA256, field: pgRoleFieldMigratorPassword, password: "café-secret-pw", wantErr: ErrPGRolePasswordNotSCRAMSafe},
+		{name: "scram_runtime_e_acute", format: PGPasswordSCRAMSHA256, field: pgRoleFieldRuntimePassword, password: "café-secret-pw", wantErr: ErrPGRolePasswordNotSCRAMSafe},
+		{name: "scram_migrator_lf", format: PGPasswordSCRAMSHA256, field: pgRoleFieldMigratorPassword, password: "lf\nsecret-pw", wantErr: ErrPGRolePasswordHasControlChar},
+		{name: "scram_runtime_cr", format: PGPasswordSCRAMSHA256, field: pgRoleFieldRuntimePassword, password: "cr\rsecret-pw", wantErr: ErrPGRolePasswordHasControlChar},
+		{name: "scram_migrator_nul", format: PGPasswordSCRAMSHA256, field: pgRoleFieldMigratorPassword, password: "nul\x00secret-pw", wantErr: ErrPGRolePasswordHasControlChar},
+		{name: "plaintext_migrator_lf", format: PGPasswordPlaintext, field: pgRoleFieldMigratorPassword, password: "lf\nsecret-pw", wantErr: ErrPGRolePasswordHasControlChar},
+		{name: "plaintext_runtime_cr", format: PGPasswordPlaintext, field: pgRoleFieldRuntimePassword, password: "cr\rsecret-pw", wantErr: ErrPGRolePasswordHasControlChar},
+		{name: "plaintext_runtime_nul", format: PGPasswordPlaintext, field: pgRoleFieldRuntimePassword, password: "nul\x00secret-pw", wantErr: ErrPGRolePasswordHasControlChar},
+		{name: "plaintext_migrator_tab", format: PGPasswordPlaintext, field: pgRoleFieldMigratorPassword, password: "tab\tsecret-pw"},
+		{name: "plaintext_runtime_tab", format: PGPasswordPlaintext, field: pgRoleFieldRuntimePassword, password: "tab\tsecret-pw"},
+		{name: "plaintext_migrator_e_acute", format: PGPasswordPlaintext, field: pgRoleFieldMigratorPassword, password: "café-secret-pw"},
+		{name: "plaintext_runtime_e_acute", format: PGPasswordPlaintext, field: pgRoleFieldRuntimePassword, password: "café-secret-pw"},
+		{name: "scram_printable_ascii", format: PGPasswordSCRAMSHA256, field: pgRoleFieldRuntimePassword, password: " !~Abc-123 secret-pw"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", PasswordFormat: tt.format}
+			if tt.field == pgRoleFieldMigratorPassword {
+				spec.MigratorPassword = tt.password
+			} else {
+				spec.RuntimePassword = tt.password
+			}
+			err := spec.Validate()
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.field)
+			assert.NotContains(t, err.Error(), "secret-pw", "the error must name the field, never the password value")
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+// CR/LF/NUL is checked over both passwords before the SCRAM charset, so it
+// keeps its sentinel even when the other password fails the charset.
+func TestPGRoleSpecValidateSCRAMModeControlCharCheckRunsFirst(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema: "s", MigratorRole: "m", RuntimeRole: "r",
+		MigratorPassword: "tab\tpw", RuntimePassword: "lf\npw",
+		PasswordFormat: PGPasswordSCRAMSHA256,
+	}
+	err := spec.Validate()
+	require.ErrorIs(t, err, ErrPGRolePasswordHasControlChar)
+	assert.Contains(t, err.Error(), pgRoleFieldRuntimePassword)
+	assert.NotErrorIs(t, err, ErrPGRolePasswordNotSCRAMSafe)
+}
+
+func TestPGRoleSpecValidateRejectsUnknownPasswordFormat(t *testing.T) {
+	for _, format := range []PGPasswordFormat{-1, PGPasswordSCRAMSHA256 + 1} {
+		spec := &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", PasswordFormat: format}
+		err := spec.Validate()
+		require.ErrorIs(t, err, ErrUnknownPGPasswordFormat, "format %d", format)
+
+		_, err = PGRoleProvisioningSQL(spec)
+		require.ErrorIs(t, err, ErrUnknownPGPasswordFormat, "format %d", format)
+
+		exec := newRecordingRoleExecutor()
+		require.ErrorIs(t, ProvisionPGRolesTx(context.Background(), exec, spec), ErrUnknownPGPasswordFormat)
+		assert.Empty(t, exec.stmts, "a refused format must reach no statement")
+	}
+	for _, format := range []PGPasswordFormat{PGPasswordPlaintext, PGPasswordSCRAMSHA256} {
+		spec := &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", PasswordFormat: format}
+		require.NoError(t, spec.Validate(), "format %d is known", format)
+	}
+}
+
+// A failing SCRAM-mode PASSWORD statement is redacted in the provisioning error
+// exactly like a plaintext one: no fragment of the verifier survives.
+func TestProvisionPGRolesTxSCRAMWrapRedactsVerifier(t *testing.T) {
+	spec := scramSpec()
+	boom := errors.New("exec blew up")
+	exec := newRecordingRoleExecutor()
+	exec.failAt = 2
+	exec.failErr = boom
+
+	err := ProvisionPGRolesTx(context.Background(), exec, spec)
+	require.ErrorIs(t, err, boom)
+	require.Len(t, exec.stmts, 3, "the loop must stop at the failing statement")
+	verifier := passwordStmts(t, exec.stmts)[quotePGIdent(spec.MigratorRole)]
+	require.True(t, strings.HasPrefix(verifier, "SCRAM-SHA-256$4096:"), "step 2 is the migrator's SCRAM PASSWORD statement (len %d)", len(verifier))
+
+	msg := err.Error()
+	assert.Contains(t, msg, "provisioning step 2 (")
+	assert.Contains(t, msg, `PASSWORD '[REDACTED]'`)
+	if strings.Contains(msg, spec.MigratorPassword) || strings.Contains(msg, "SCRAM-SHA-256") {
+		t.Fatalf("the provisioning error (len %d) carries the plaintext or a verifier fragment", len(msg))
+	}
+	_, keys, _ := strings.Cut(strings.TrimPrefix(verifier, "SCRAM-SHA-256$4096:"), "$")
+	storedKey, serverKey, _ := strings.Cut(keys, ":")
+	if strings.Contains(msg, storedKey) || strings.Contains(msg, serverKey) {
+		t.Fatal("the provisioning error must carry no verifier key")
+	}
 }
