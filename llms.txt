@@ -3841,7 +3841,7 @@ data, jti, err := m.batch.Seal(ctx, evt) // store rec{ID, JTI: jti, Body: data, 
 ctx = multitenant.SetTenant(ctx, rec.Tenant) // the signed tid must equal the stamp
 switch err := m.batch.PublishSealed(ctx, client, rec.Body); {
 case errors.Is(err, messaging.ErrSealedBytesRejected):
-    return fmt.Errorf("record %s no longer verifies (foreign bytes or a removed generation), re-Seal it with a new jti: %w", rec.ID, err)
+    return fmt.Errorf("record %s no longer verifies (foreign bytes, a removed generation, or a sign generation whose private key this producer no longer holds), re-Seal it with a new jti: %w", rec.ID, err)
 case errors.Is(err, messaging.ErrPublishUnroutable):
     return fmt.Errorf("record %s is unroutable, stop the batch: %w", rec.ID, err)
 case err != nil:

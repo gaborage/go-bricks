@@ -78,12 +78,12 @@ func sealFor[T any](t *testing.T, h *messaging.Publisher[T], tenant string, evt 
 	return data
 }
 
-// sealThenSwap seals under store a with active, then declares the handle under test on store b.
-func sealThenSwap(t *testing.T, a *kstest.MockKeyStore, active map[string]string, b *kstest.MockKeyStore) doorCall {
+// sealThenSwap seals under store a with active, then declares the handle under test on store b with bActive.
+func sealThenSwap(t *testing.T, a *kstest.MockKeyStore, active map[string]string, b *kstest.MockKeyStore, bActive map[string]string) doorCall {
 	t.Helper()
 	configureStore(t, a, active)
 	data := sealFor(t, declare(t), "", doorEvent())
-	configureStore(t, b, nil)
+	configureStore(t, b, bActive)
 	return callOn(declare(t), "", data)
 }
 
@@ -220,14 +220,25 @@ func TestPublishSealedRefusesBeforeAnyPublish(t *testing.T) {
 		}},
 		{name: "sign_generation_removed", code: josesealed.CodeKidUnknownGeneration, arrange: func(t *testing.T) doorCall {
 			b := withPublic(withPair(kstest.NewMockKeyStore(), signFamily, "v2", sign2), encFamily, "v1", &encPriv.PublicKey)
-			return sealThenSwap(t, rotatingSignStore(t), map[string]string{signFamily: "v1"}, b)
+			return sealThenSwap(t, rotatingSignStore(t), map[string]string{signFamily: "v1"}, b, nil)
 		}, check: func(t *testing.T, err error) {
 			require.ErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
+			assert.Equal(t, absentSignGenerationMessage, openErrorOf(t, err).Err.Message)
+		}},
+		{name: "sign_generation_held_public_only", code: josesealed.CodeKidUnknownGeneration, arrange: func(t *testing.T) doorCall {
+			b := withPublic(kstest.NewMockKeyStore(), signFamily, "v1", &signPriv.PublicKey)
+			b = withPublic(withPair(b, signFamily, "v2", sign2), encFamily, "v1", &encPriv.PublicKey)
+			return sealThenSwap(t, rotatingSignStore(t), map[string]string{signFamily: "v1"}, b, map[string]string{signFamily: "v2"})
+		}, check: func(t *testing.T, err error) {
+			requireNotSignable(t, err, signFamily+"-v1")
+			assert.Contains(t, err.Error(), "sealed open refused: "+josesealed.CodeKidUnknownGeneration)
+			assert.Contains(t, err.Error(), eventType)
+			assert.NotContains(t, err.Error(), openErrorOf(t, err).Err.Message, "the codec's message reaches only an errors.As caller")
 		}},
 		{name: "encrypt_generation_removed", code: josesealed.CodeKidUnknownGeneration, arrange: func(t *testing.T) doorCall {
 			a := withPublic(pairStore(t), encFamily, "v2", &sign2.PublicKey)
 			b := withPublic(withPair(kstest.NewMockKeyStore(), signFamily, "v1", signPriv), encFamily, "v2", &sign2.PublicKey)
-			return sealThenSwap(t, a, map[string]string{encFamily: "v1"}, b)
+			return sealThenSwap(t, a, map[string]string{encFamily: "v1"}, b, nil)
 		}, check: func(t *testing.T, err error) {
 			assert.Equal(t, "jwe", openErrorOf(t, err).Details[josesealed.DetailLayer])
 		}},
