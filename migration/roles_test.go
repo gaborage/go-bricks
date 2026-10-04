@@ -1425,9 +1425,10 @@ func TestPGRoleProvisioningSQLSCRAMModeEmitsVerifiers(t *testing.T) {
 		t.Fatal("each password must get its own salt")
 	}
 
-	for _, stmt := range append(first, second...) {
-		assert.NotContains(t, stmt, spec.MigratorPassword, "no statement may carry the plaintext")
-		assert.NotContains(t, stmt, spec.RuntimePassword, "no statement may carry the plaintext")
+	for i, stmt := range append(first, second...) {
+		if strings.Contains(stmt, spec.MigratorPassword) || strings.Contains(stmt, spec.RuntimePassword) {
+			t.Fatalf("statement %d (len %d) carries the plaintext", i, len(stmt))
+		}
 	}
 
 	plain := scramSpec()
@@ -1552,8 +1553,9 @@ func TestProvisionPGRolesTxSCRAMWrapRedactsVerifier(t *testing.T) {
 	msg := err.Error()
 	assert.Contains(t, msg, "provisioning step 2 (")
 	assert.Contains(t, msg, `PASSWORD '[REDACTED]'`)
-	assert.NotContains(t, msg, spec.MigratorPassword)
-	assert.NotContains(t, msg, "SCRAM-SHA-256", "no fragment of the verifier may reach the error")
+	if strings.Contains(msg, spec.MigratorPassword) || strings.Contains(msg, "SCRAM-SHA-256") {
+		t.Fatalf("the provisioning error (len %d) carries the plaintext or a verifier fragment", len(msg))
+	}
 	_, keys, _ := strings.Cut(strings.TrimPrefix(verifier, "SCRAM-SHA-256$4096:"), "$")
 	storedKey, serverKey, _ := strings.Cut(keys, ":")
 	if strings.Contains(msg, storedKey) || strings.Contains(msg, serverKey) {

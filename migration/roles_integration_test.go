@@ -1634,7 +1634,7 @@ func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 		RuntimeRole:     "rt_scram_plain",
 		RuntimePassword: testconsts.FakePassword("rt-scram-plain"),
 	}
-	awaitMD5PasswordEncryption(ctx, t, showOnDB)
+	require.NoError(t, awaitMD5PasswordEncryption(ctx, showOnDB))
 	require.NoError(t, ProvisionPGRoles(ctx, md5DB, plainSpec))
 	var plainStored string
 	require.NoError(t, admin.QueryRowContext(ctx,
@@ -1650,7 +1650,7 @@ func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 		RuntimePassword:  testconsts.FakePassword("rt-scram-db"),
 		PasswordFormat:   PGPasswordSCRAMSHA256,
 	}
-	awaitMD5PasswordEncryption(ctx, t, showOnDB)
+	require.NoError(t, awaitMD5PasswordEncryption(ctx, showOnDB))
 	require.NoError(t, ProvisionPGRoles(ctx, md5DB, sqlDBSpec))
 
 	txSpec := &PGRoleSpec{
@@ -1662,11 +1662,13 @@ func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
 		PasswordFormat:   PGPasswordSCRAMSHA256,
 	}
 	require.NoError(t, database.WithTx(ctx, env.adminConn(t), func(ctx context.Context, tx database.Tx) error {
-		awaitMD5PasswordEncryption(ctx, t, func(ctx context.Context) (string, error) {
+		if err := awaitMD5PasswordEncryption(ctx, func(ctx context.Context) (string, error) {
 			var v string
 			err := tx.QueryRow(ctx, `SHOW password_encryption`).Scan(&v)
 			return v, err
-		})
+		}); err != nil {
+			return err
+		}
 		return ProvisionPGRolesTx(ctx, tx, txSpec)
 	}))
 
@@ -1699,19 +1701,22 @@ func pingAsRole(ctx context.Context, t *testing.T, env *integrationEnv, role, pa
 // awaitMD5PasswordEncryption polls show until the session behind it reports
 // password_encryption = md5, failing after a bounded wait: ALTER SYSTEM plus
 // pg_reload_conf reaches a live session asynchronously.
-func awaitMD5PasswordEncryption(ctx context.Context, t *testing.T, show func(context.Context) (string, error)) {
-	t.Helper()
+func awaitMD5PasswordEncryption(ctx context.Context, show func(context.Context) (string, error)) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		got, err := show(ctx)
-		require.NoError(t, err)
-		if got == "md5" {
-			return
+		if err != nil {
+			return err
 		}
-		require.True(t, time.Now().Before(deadline), "password_encryption is still %q on this session", got)
+		if got == "md5" {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("password_encryption is still %q on this session", got)
+		}
 		select {
 		case <-ctx.Done():
-			require.NoError(t, ctx.Err())
+			return ctx.Err()
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
