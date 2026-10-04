@@ -62,15 +62,17 @@ func TestWithTxRollsBackAndRepanics(t *testing.T) {
 
 func TestWithTxReturnsBeginError(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-	// No ExpectTransaction queued -> Begin returns an error.
+	errBegin := errors.New("begin refused")
+	db.ExpectTransaction().WillFailBegin(errBegin)
 
 	called := false
 	err := database.WithTx(t.Context(), db, func(_ context.Context, _ dbtypes.Tx) error {
 		called = true
 		return nil
 	})
-	require.Error(t, err)
+	require.ErrorIs(t, err, errBegin)
 	assert.False(t, called, "fn must not run when Begin fails")
+	dbtesting.AssertNoTransaction(t, db)
 }
 
 // panicRollbackTx wraps a Tx and panics on Rollback, to exercise the case where
@@ -120,4 +122,5 @@ func TestWithTxOptionsCommitsOnSuccess(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, captured.(*dbtesting.TestTx).IsCommitted())
+	dbtesting.AssertTxOptions(t, captured.(*dbtesting.TestTx), opts)
 }

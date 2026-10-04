@@ -236,3 +236,55 @@ func TestAssertSessionClosedReportsOpenSession(t *testing.T) {
 	AssertSessionClosed(recorder, sessExp)
 	assert.True(t, recorder.Failed(), "an open session must fail the assertion")
 }
+
+func TestTestSessionBeginTxRecordsOptions(t *testing.T) {
+	for _, tc := range beginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := NewTestDB(dbtypes.PostgreSQL)
+			db.ExpectSession().ExpectTransaction()
+			sess, err := db.Session(t.Context())
+			require.NoError(t, err)
+
+			tx, err := tc.begin(t.Context(), sess.(*TestSession))
+			require.NoError(t, err)
+
+			AssertTxOptions(t, tx.(*TestTx), tc.want)
+		})
+	}
+}
+
+func TestTestSessionWillFailBegin(t *testing.T) {
+	errSentinel := errors.New("begin refused")
+	for _, tc := range beginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := NewTestDB(dbtypes.PostgreSQL)
+			sessExp := db.ExpectSession()
+			sessExp.ExpectTransaction().WillFailBegin(errSentinel)
+			next := sessExp.ExpectTransaction()
+			sess, err := db.Session(t.Context())
+			require.NoError(t, err)
+
+			tx, err := tc.begin(t.Context(), sess.(*TestSession))
+			require.ErrorIs(t, err, errSentinel)
+			assert.Nil(t, tx)
+			AssertNoTransaction(t, db)
+
+			got, err := sess.Begin(t.Context())
+			require.NoError(t, err)
+			assert.Same(t, next, got)
+		})
+	}
+}
+
+func TestTestSessionClosedBeginTxRecordsNothing(t *testing.T) {
+	db := NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectSession().ExpectTransaction()
+	sess, err := db.Session(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, sess.Close())
+
+	_, err = sess.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	require.ErrorIs(t, err, sql.ErrConnDone)
+
+	assert.Nil(t, tx.Options(), "a closed session records nothing")
+}

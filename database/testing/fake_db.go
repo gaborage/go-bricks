@@ -114,11 +114,11 @@ type ExecExpectation struct {
 	err          error
 }
 
-// TxExpectation tracks expected transaction behavior.
+// TxExpectation is TestDB's internal bookkeeping for one queued transaction.
+// Consumers never receive one: ExpectTransaction returns the *TestTx it wraps.
 type TxExpectation struct {
-	parent    *TestDB
-	tx        *TestTx
-	shouldErr error
+	parent *TestDB
+	tx     *TestTx
 }
 
 // NewTestDB creates a new in-memory fake database for the specified vendor.
@@ -371,8 +371,15 @@ func (db *TestDB) DatabaseType() string {
 	return db.vendor
 }
 
-// Begin implements dbtypes.Transactor.Begin.
+// Begin implements dbtypes.Transactor.Begin. The returned *TestTx records nil options.
 func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
+	return db.begin(nil)
+}
+
+// begin pops the next queued transaction. One carrying WillFailBegin is consumed and
+// its error returned without registering it as started; otherwise the transaction
+// records opts and is registered.
+func (db *TestDB) begin(opts *sql.TxOptions) (dbtypes.Tx, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -383,29 +390,31 @@ func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 	txExp := db.txExpectations[0]
 	db.txExpectations = db.txExpectations[1:]
 
-	db.startedTransactions = append(db.startedTransactions, txExp)
-
-	if txExp.shouldErr != nil {
-		return nil, txExp.shouldErr
+	if err := txExp.tx.beginErr; err != nil {
+		return nil, err
 	}
+	txExp.tx.recordOptions(opts)
+	db.startedTransactions = append(db.startedTransactions, txExp)
 
 	return txExp.tx, nil
 }
 
-// registerStartedTransaction records txExp among the started transactions, so a
-// transaction begun on a pinned TestSession reaches the same bookkeeping the
-// TestDB-level assertions (AssertTransactionCommitted, AssertNoTransaction)
-// read. Callers must not already hold db.mu.
-func (db *TestDB) registerStartedTransaction(txExp *TxExpectation) {
+// registerStartedTransaction records opts on txExp's transaction and txExp among the
+// started transactions, so a transaction begun on a pinned TestSession reaches the same
+// bookkeeping the TestDB-level assertions (AssertTransactionCommitted,
+// AssertNoTransaction) read. Callers must not already hold db.mu.
+func (db *TestDB) registerStartedTransaction(txExp *TxExpectation, opts *sql.TxOptions) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	txExp.tx.recordOptions(opts)
 	db.startedTransactions = append(db.startedTransactions, txExp)
 }
 
-// BeginTx implements dbtypes.Transactor.BeginTx.
-func (db *TestDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, error) {
-	// For test purposes, delegate to Begin (ignore opts)
-	return db.Begin(ctx)
+// BeginTx implements dbtypes.Transactor.BeginTx. It pops the same queue as Begin, and
+// the returned *TestTx records opts as a driver would receive them (nil stays nil, a
+// zero value stays non-nil); read them with TestTx.Options or AssertTxOptions.
+func (db *TestDB) BeginTx(_ context.Context, opts *sql.TxOptions) (dbtypes.Tx, error) {
+	return db.begin(opts)
 }
 
 // Session implements database.Interface.Session, popping the sessions queued by

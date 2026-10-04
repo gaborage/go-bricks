@@ -162,6 +162,8 @@ svc.CreateWithItems(ctx, order, items)
 dbtesting.AssertCommitted(t, tx)
 ```
 
+`BeginTx` records the options it receives on the popped `*TestTx` (`tx.Options()`; nil for `Begin` and `BeginTx(nil)`), so `dbtesting.AssertTxOptions(t, tx, &sql.TxOptions{ReadOnly: true})` catches a read-write transaction begun where read-only was intended. `db.ExpectTransaction().WillFailBegin(err)` makes the `Begin`/`BeginTx` that pops it return `err`; the entry is consumed and never counts as started, so `AssertNoTransaction` stays green on code that handles the error.
+
 **Multi-Tenant Testing:**
 
 ```go
