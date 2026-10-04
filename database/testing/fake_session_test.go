@@ -248,7 +248,7 @@ func TestTestSessionBeginTxRecordsOptions(t *testing.T) {
 			tx, err := tc.begin(t.Context(), sess.(*TestSession))
 			require.NoError(t, err)
 
-			AssertTxOptions(t, tx.(*TestTx), tc.want)
+			assert.Equal(t, tc.want, tx.(*TestTx).Options())
 		})
 	}
 }

@@ -731,7 +731,6 @@ func TestTestDBBeginTxRecordsOptions(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.want, tx.(*TestTx).Options())
-			AssertTxOptions(t, tx.(*TestTx), tc.want)
 		})
 	}
 }

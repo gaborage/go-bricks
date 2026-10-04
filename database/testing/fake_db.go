@@ -376,9 +376,7 @@ func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 	return db.begin(nil)
 }
 
-// begin pops the next queued transaction. One carrying WillFailBegin is consumed and
-// its error returned without registering it as started; otherwise the transaction
-// records opts and is registered.
+// begin pops the next queued transaction for Begin and BeginTx.
 func (db *TestDB) begin(opts *sql.TxOptions) (dbtypes.Tx, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -390,24 +388,27 @@ func (db *TestDB) begin(opts *sql.TxOptions) (dbtypes.Tx, error) {
 	txExp := db.txExpectations[0]
 	db.txExpectations = db.txExpectations[1:]
 
+	return db.startLocked(txExp, opts)
+}
+
+// startLocked fails a popped transaction carrying WillFailBegin without registering it,
+// or records opts on it and registers it as started. Callers hold db.mu.
+func (db *TestDB) startLocked(txExp *TxExpectation, opts *sql.TxOptions) (dbtypes.Tx, error) {
 	if err := txExp.tx.beginErr; err != nil {
 		return nil, err
 	}
-	txExp.tx.recordOptions(opts)
+	txExp.tx.opts = cloneTxOptions(opts)
 	db.startedTransactions = append(db.startedTransactions, txExp)
-
 	return txExp.tx, nil
 }
 
-// registerStartedTransaction records opts on txExp's transaction and txExp among the
-// started transactions, so a transaction begun on a pinned TestSession reaches the same
-// bookkeeping the TestDB-level assertions (AssertTransactionCommitted,
+// start is startLocked for a transaction popped from a pinned TestSession, so it reaches
+// the same bookkeeping the TestDB-level assertions (AssertTransactionCommitted,
 // AssertNoTransaction) read. Callers must not already hold db.mu.
-func (db *TestDB) registerStartedTransaction(txExp *TxExpectation, opts *sql.TxOptions) {
+func (db *TestDB) start(txExp *TxExpectation, opts *sql.TxOptions) (dbtypes.Tx, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	txExp.tx.recordOptions(opts)
-	db.startedTransactions = append(db.startedTransactions, txExp)
+	return db.startLocked(txExp, opts)
 }
 
 // BeginTx implements dbtypes.Transactor.BeginTx. It pops the same queue as Begin, and

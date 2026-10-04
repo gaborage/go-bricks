@@ -40,6 +40,8 @@ type TestTx struct {
 // as started, so AssertNoTransaction stays green on code that handles the error.
 // Unlike WillReturnError, it targets the Begin itself.
 func (tx *TestTx) WillFailBegin(err error) *TestTx {
+	tx.parent.mu.Lock()
+	defer tx.parent.mu.Unlock()
 	tx.beginErr = err
 	return tx
 }
@@ -50,21 +52,16 @@ func (tx *TestTx) WillFailBegin(err error) *TestTx {
 func (tx *TestTx) Options() *sql.TxOptions {
 	tx.parent.mu.RLock()
 	defer tx.parent.mu.RUnlock()
-	if tx.opts == nil {
-		return nil
-	}
-	opts := *tx.opts
-	return &opts
+	return cloneTxOptions(tx.opts)
 }
 
-// recordOptions keeps a copy of opts. Callers hold the parent TestDB's write lock.
-func (tx *TestTx) recordOptions(opts *sql.TxOptions) {
+// cloneTxOptions copies opts so a caller can neither alias nor mutate a recorded value.
+func cloneTxOptions(opts *sql.TxOptions) *sql.TxOptions {
 	if opts == nil {
-		tx.opts = nil
-		return
+		return nil
 	}
 	c := *opts
-	tx.opts = &c
+	return &c
 }
 
 // newTestTx builds a transaction fake whose expectations belong to parent.

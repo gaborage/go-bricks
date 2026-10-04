@@ -132,9 +132,8 @@ func (s *TestSession) Begin(_ context.Context) (dbtypes.Tx, error) {
 	return s.begin(nil)
 }
 
-// begin pops the session's next queued transaction, the way TestDB.begin does: a
-// closed session pops nothing, and one carrying WillFailBegin is consumed and never
-// registered as started.
+// begin pops the session's next queued transaction for Begin and BeginTx; a closed
+// session pops nothing.
 func (s *TestSession) begin(opts *sql.TxOptions) (dbtypes.Tx, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,12 +147,8 @@ func (s *TestSession) begin(opts *sql.TxOptions) (dbtypes.Tx, error) {
 
 	txExp := s.txs[0]
 	s.txs = s.txs[1:]
-	if err := txExp.tx.beginErr; err != nil {
-		return nil, err
-	}
-	s.parent.registerStartedTransaction(txExp, opts)
 
-	return txExp.tx, nil
+	return s.parent.start(txExp, opts)
 }
 
 // BeginTx implements dbtypes.Transactor.BeginTx. It pops the same queue as Begin, and
