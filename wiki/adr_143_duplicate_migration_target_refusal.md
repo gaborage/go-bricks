@@ -161,5 +161,5 @@ interceptor).
 - [ADR-115](adr_115_fleet_migration_run_verdict.md) — the dispatch-based verdict
   the refusal lands in
 - gaborage/go-bricks#1731 · #1737 (`WithSharedMigrator`) · #1730 (CLI exposure)
-- See [migrations.md](migrations.md) `[C73.7]` and
+- See [migrations.md](migrations.md) `[C72.14]` and
   [multi_tenant_migration.md](multi_tenant_migration.md#duplicate-targets).
