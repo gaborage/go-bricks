@@ -2628,3 +2628,13 @@ func TestCloneCarriesTheAtLeastOnceOptIn(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), argOverflow)
 }
+
+// TestValidateSkipsAnOptedInQueueRemovedFromTheSet pins that an opt-in whose queue was deleted from
+// d.Queues after registration neither panics nor refuses.
+func TestValidateSkipsAnOptedInQueueRemovedFromTheSet(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareQueueWithDLQ(dlqPrimaryQueue, &DeadLetterSpec{DeadLetterStrategy: DeadLetterStrategyAtLeastOnce})
+	delete(d.Queues, dlqPrimaryQueue)
+
+	require.NotPanics(t, func() { require.NoError(t, d.Validate()) })
+}

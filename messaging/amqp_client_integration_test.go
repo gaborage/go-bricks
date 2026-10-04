@@ -404,11 +404,15 @@ func TestDeclarativeDLQAtLeastOnceArgumentsReachTheBroker(t *testing.T) {
 		Name: workQueueName, Durable: declared.Durable, Args: declared.Args,
 	}), "the registered arguments are already on the broker's queue")
 
-	withoutOverflow := maps.Clone(declared.Args)
-	delete(withoutOverflow, argOverflow)
-	require.Error(t, client.DeclareQueue(t.Context(), &QueueDeclaration{
-		Name: workQueueName, Durable: declared.Durable, Args: withoutOverflow,
-	}), "x-overflow reached the broker, so a redeclare without it is inequivalent")
+	for _, key := range []string{argOverflow, argDeadLetterStrategy} {
+		without := maps.Clone(declared.Args)
+		delete(without, key)
+		err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: workQueueName, Durable: declared.Durable, Args: without})
+		var amqpErr *amqp.Error
+		require.ErrorAs(t, err, &amqpErr, "%s reached the broker, so a redeclare without it is refused", key)
+		assert.Equal(t, amqp.PreconditionFailed, amqpErr.Code, "%s: inequivalent arg", key)
+		require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+	}
 }
 
 // TestAMQPClientDeclareQueueArgsQuorum pins the "cannot attach to
