@@ -12,13 +12,12 @@ import (
 )
 
 const (
-	tenantIDHeader       = "X-Tenant-ID"
-	emptyResolver        = "nil resolver"
-	testDomain           = "example.com"
-	validTenantID        = "valid-tenant"
-	tenantIDRegex        = `^[a-zA-Z0-9\-]+$`
-	testHost             = "localhost:8080"
-	xForwardedHostHeader = "X-Forwarded-Host"
+	tenantIDHeader = "X-Tenant-ID"
+	emptyResolver  = "nil resolver"
+	testDomain     = "example.com"
+	validTenantID  = "valid-tenant"
+	tenantIDRegex  = `^[a-zA-Z0-9\-]+$`
+	testHost       = "localhost:8080"
 )
 
 // setupTestRequest creates an HTTP request for testing resolvers
@@ -333,6 +332,7 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 		name        string
 		resolver    *SubdomainResolver
 		host        string
+		remoteAddr  string
 		headers     map[string]string
 		expected    string
 		expectError bool
@@ -362,18 +362,20 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 			expectError: true, // IPv6 won't match subdomain pattern
 		},
 		{
-			name:     "success with X-Forwarded-Host",
-			resolver: &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
-			host:     testHost,
-			headers:  map[string]string{xForwardedHostHeader: "tenant4.example.com"},
-			expected: "tenant4",
+			name:       "success with X-Forwarded-Host",
+			resolver:   &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+			host:       testHost,
+			remoteAddr: "10.0.0.1:443",
+			headers:    map[string]string{forwardedHostHeader: "tenant4.example.com"},
+			expected:   "tenant4",
 		},
 		{
-			name:     "success with comma-separated X-Forwarded-Host",
-			resolver: &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
-			host:     testHost,
-			headers:  map[string]string{xForwardedHostHeader: "tenant5.example.com, tenant6.example.com"},
-			expected: "tenant6",
+			name:       "success with comma-separated X-Forwarded-Host",
+			resolver:   &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+			host:       testHost,
+			remoteAddr: "10.0.0.1:443",
+			headers:    map[string]string{forwardedHostHeader: "tenant5.example.com, tenant6.example.com"},
+			expected:   "tenant6",
 		},
 		{
 			name:        "root domain same as host",
@@ -409,7 +411,8 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 			name:        "proxies disabled but X-Forwarded-Host present",
 			resolver:    &SubdomainResolver{RootDomain: testDomain, TrustProxies: false},
 			host:        testHost,
-			headers:     map[string]string{xForwardedHostHeader: "tenant7.example.com"},
+			remoteAddr:  "198.51.100.7:443",
+			headers:     map[string]string{forwardedHostHeader: "tenant7.example.com"},
 			expectError: true,
 		},
 	}
@@ -417,6 +420,7 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := setupTestRequest(tt.host, tt.headers)
+			req.RemoteAddr = tt.remoteAddr
 
 			if tt.name == emptyResolver {
 				req = nil
@@ -678,7 +682,7 @@ func forwardedHostRequest(remoteAddr string, lines ...string) *http.Request {
 	req := setupTestRequest(testHost, nil)
 	req.RemoteAddr = remoteAddr
 	for _, line := range lines {
-		req.Header.Add(xForwardedHostHeader, line)
+		req.Header.Add(forwardedHostHeader, line)
 	}
 	return req
 }
@@ -733,23 +737,26 @@ func TestSubdomainResolverForwardedHostUntouchedPaths(t *testing.T) {
 	tests := []struct {
 		name     string
 		resolver *SubdomainResolver
+		host     string
 		req      *http.Request
 	}{
 		{
 			name:     "untrusted_peer_without_forwarded_host_resolves_host",
 			resolver: &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+			host:     "alpha.example.com",
 			req:      forwardedHostRequest("198.51.100.7:443"),
 		},
 		{
 			name:     "proxies_disabled_ignores_forwarded_host_from_untrusted_peer",
 			resolver: &SubdomainResolver{RootDomain: testDomain},
+			host:     "alpha.example.com",
 			req:      forwardedHostRequest("198.51.100.7:443", "bravo.example.com"),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.req.Host = "alpha.example.com"
+			tt.req.Host = tt.host
 			tenantID, err := tt.resolver.ResolveTenant(context.Background(), tt.req)
 			require.NoError(t, err)
 			assert.Equal(t, "alpha", tenantID)
@@ -763,7 +770,6 @@ func TestSubdomainResolverForwardedHostLastEntry(t *testing.T) {
 		lines      []string
 		wantTenant string
 	}{
-		{name: "comma_list_takes_last_entry", lines: []string{"bravo.example.com, alpha.example.com"}, wantTenant: "alpha"},
 		{name: "three_entry_list_takes_last_entry", lines: []string{"charlie.example.com, bravo.example.com, alpha.example.com"}, wantTenant: "alpha"},
 		{name: "two_lines_take_last_line", lines: []string{"bravo.example.com", "alpha.example.com"}, wantTenant: "alpha"},
 		{name: "last_line_comma_list_takes_its_last_entry", lines: []string{"charlie.example.com", "bravo.example.com,alpha.example.com"}, wantTenant: "alpha"},
@@ -786,43 +792,37 @@ func TestSubdomainResolverForwardedHostLastEntry(t *testing.T) {
 	}
 }
 
-// countingResolver records how often it is consulted.
-type countingResolver struct {
-	calls    int
-	tenantID string
-}
+func TestCompositeResolverUntrustedForwardedHostIsTerminal(t *testing.T) {
+	tests := []struct {
+		name       string
+		lines      []string
+		wantErr    error
+		wantTenant string
+		wantNext   bool
+	}{
+		{name: "untrusted_forwarded_host_stops_the_order", lines: []string{"alpha.example.com"}, wantErr: ErrUntrustedForwardedHost},
+		{name: "ordinary_miss_falls_through", wantTenant: validTenantID, wantNext: true},
+	}
 
-func (r *countingResolver) ResolveTenant(context.Context, *http.Request) (string, error) {
-	r.calls++
-	return r.tenantID, nil
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			next := &stubResolver{tenant: validTenantID}
+			composite := &CompositeResolver{Resolvers: []TenantResolver{
+				&SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
+				next,
+			}}
 
-func TestCompositeResolverStopsOnUntrustedForwardedHost(t *testing.T) {
-	next := &countingResolver{tenantID: validTenantID}
-	composite := &CompositeResolver{Resolvers: []TenantResolver{
-		&SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
-		next,
-	}}
+			tenantID, err := composite.ResolveTenant(context.Background(), forwardedHostRequest("198.51.100.7:443", tt.lines...))
 
-	tenantID, err := composite.ResolveTenant(context.Background(), forwardedHostRequest("198.51.100.7:443", "alpha.example.com"))
-
-	require.ErrorIs(t, err, ErrUntrustedForwardedHost)
-	assert.Empty(t, tenantID)
-	assert.Zero(t, next.calls, "a sub-resolver after the untrusted forwarded host must not be consulted")
-}
-
-func TestCompositeResolverFallsThroughOrdinaryFailure(t *testing.T) {
-	next := &countingResolver{tenantID: validTenantID}
-	composite := &CompositeResolver{Resolvers: []TenantResolver{
-		&SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
-		next,
-	}}
-
-	tenantID, err := composite.ResolveTenant(context.Background(), forwardedHostRequest("198.51.100.7:443"))
-
-	require.NoError(t, err)
-	assert.Equal(t, validTenantID, tenantID)
-	assert.Equal(t, 1, next.calls)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantTenant, tenantID)
+			assert.Equal(t, tt.wantNext, next.called, "whether the sub-resolver after subdomain was consulted")
+		})
+	}
 }
 
 func TestValidatingResolverPassesUntrustedForwardedHostThrough(t *testing.T) {

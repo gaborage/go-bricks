@@ -41,6 +41,8 @@ func (r *HeaderResolver) ResolveTenant(ctx context.Context, req *http.Request) (
 	return tenantID, nil
 }
 
+const forwardedHostHeader = "X-Forwarded-Host"
+
 // SubdomainResolver extracts the tenant identifier from the request host.
 type SubdomainResolver struct {
 	RootDomain   string
@@ -88,8 +90,11 @@ func (r *SubdomainResolver) ResolveTenant(ctx context.Context, req *http.Request
 // requestHost returns Host, or with TrustProxies the last X-Forwarded-Host entry from a
 // trusted peer: the nearest proxy wrote it, while earlier entries may be caller-authored.
 func (r *SubdomainResolver) requestHost(req *http.Request) (string, error) {
-	values := req.Header.Values("X-Forwarded-Host")
-	if !r.TrustProxies || len(values) == 0 {
+	if !r.TrustProxies {
+		return req.Host, nil
+	}
+	values := req.Header.Values(forwardedHostHeader)
+	if len(values) == 0 {
 		return req.Host, nil
 	}
 	if !r.trustedPeer(req.RemoteAddr) {
