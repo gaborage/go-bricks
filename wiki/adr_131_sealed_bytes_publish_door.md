@@ -6,7 +6,7 @@
 
 > **Amended (2026-10-03, [ADR-139](adr_139_sealing_seam_framework_only.md)):** the seam is
 > root `internal/sealruntime` and the exported codec registration hook and codec aliases are
-> deleted, so no sealer can be implemented outside go-bricks: the blank import of
+> deleted, so no exported symbol can install a replacement sealer: the blank import of
 > `messaging/sealed` is the only codec.
 > `SealOpenRefusedError` stays. The body below keeps the old names as history.
 
