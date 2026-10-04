@@ -5284,6 +5284,11 @@ go-bricks-migrate migrate --source-url ... --aws-region us-east-1 --json
 export GOBRICKS_MIGRATE_MIGRATOR_USER=fleet_migrator
 export GOBRICKS_MIGRATE_MIGRATOR_PASSWORD="$(aws secretsmanager get-secret-value --secret-id gobricks/migrate/migrator --query SecretString --output text)"
 go-bricks-migrate migrate --source-url ... --aws-region us-east-1
+
+# Schema-per-tenant PostgreSQL behind that shared migrator: refuse a tenant with no
+# postgresql.schema or an unsupported type before Flyway runs (env:
+# GOBRICKS_MIGRATE_SHARED_MIGRATOR). Pre-flight lists every offender; exit 1 if any.
+go-bricks-migrate validate --source-url ... --aws-region us-east-1 --shared-migrator --continue-on-error
 ```
 
 Default behavior is **sequential, fail-fast**. `--continue-on-error` keeps iterating after a per-tenant failure. `--parallel <N>` (max 32) processes tenants concurrently while preserving fail-fast: on the first per-tenant error, siblings still queued exit immediately and in-flight Flyway processes are cancelled before `MigrateAll` returns. Combine with `--continue-on-error` to keep iterating instead.

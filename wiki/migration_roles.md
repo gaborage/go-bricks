@@ -18,11 +18,9 @@ tenant:
 | **Migrator** (one per deployment, shared across tenants) | Every tenant schema (the `AUTHORIZATION` target of each provisioning call) | DDL on its own schemas | `migration.MigrateAll` via [`MigrateAllOptions.MigratorIdentity`](multi_tenant_migration.md#migrator-identity); the `go-bricks-migrate` CLI via `GOBRICKS_MIGRATE_MIGRATOR_USER` / `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` |
 | **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (connects with the runtime role's credentials via `database.username`/`database.password` in `config.yaml`) |
 
-The `WithSharedMigrator` guard described below is **library-only today**:
-`go-bricks-migrate` builds its runner with a bare `NewFlywayMigrator` and has no
-flag for it, so a CLI-driven shared-migrator fleet still owns the
-`postgresql.schema` requirement itself. Exposing it on the CLI is tracked in
-[#1730](https://github.com/gaborage/go-bricks/issues/1730).
+On `go-bricks-migrate`, the `WithSharedMigrator` guard described below is the
+opt-in `--shared-migrator` flag (env `GOBRICKS_MIGRATE_SHARED_MIGRATOR`), which
+also refuses a tenant whose database type go-bricks does not support.
 
 Every role the helper creates starts at the same locked-down attribute floor:
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. By default

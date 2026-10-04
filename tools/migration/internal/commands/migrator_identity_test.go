@@ -3,11 +3,8 @@ package commands
 import (
 	"bytes"
 	"io"
-	stdhttp "net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -44,17 +41,23 @@ func setMigratorEnv(t *testing.T) {
 	t.Setenv(envMigratorPassword, fakePassword(identityMigrator))
 }
 
-// readCapturedEnv parses the KEY=VALUE dump the stub recorded. An absent file
-// means the stub never ran, which is itself an assertable outcome.
-func readCapturedEnv(t *testing.T, capturePath string) map[string]string {
+// readCaptured returns what the stub recorded at path. An absent file means the
+// stub never ran, which is itself an assertable outcome.
+func readCaptured(t *testing.T, path string) string {
 	t.Helper()
-	raw, err := os.ReadFile(capturePath)
+	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return map[string]string{}
+		return ""
 	}
 	require.NoError(t, err)
+	return string(raw)
+}
+
+// parseEnvDump parses the KEY=VALUE dump the stub recorded; across several runs
+// the last value of a key wins.
+func parseEnvDump(dump string) map[string]string {
 	env := map[string]string{}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range strings.Split(dump, "\n") {
 		if k, v, ok := strings.Cut(line, "="); ok {
 			env[k] = v
 		}
@@ -90,62 +93,14 @@ func captureStdout(t *testing.T, fn func()) string {
 	return <-drained
 }
 
-// identityRun is what one driven command leaves behind: the environment the stub
-// Flyway saw (empty when it never ran), everything the command wrote, its error,
-// and how many times the control plane was asked to list tenants.
-type identityRun struct {
-	env      map[string]string
-	output   string
-	err      error
-	listHits int64
-}
-
-// runIdentityCommand drives cmd against a one-tenant control plane and a fake
-// Secrets Manager serving that tenant's runtime credentials. extraArgs are
-// appended to the fixture's own flags.
-func runIdentityCommand(t *testing.T, cmd *cobra.Command, operation string, extraArgs ...string) identityRun {
+// runIdentityCommand drives cmd against a one-tenant fleet whose secret carries
+// the tenant's runtime credentials. extraArgs are appended to the fixture's own
+// flags.
+func runIdentityCommand(t *testing.T, cmd *cobra.Command, extraArgs ...string) fleetRun {
 	t.Helper()
-
-	var listHits atomic.Int64
-	listSrv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
-		listHits.Add(1)
-		writeEnvelope(w, map[string]any{
-			"tenants":     []map[string]string{{"id": identityTenant}},
-			"next_cursor": "",
-		})
-	}))
-	defer listSrv.Close()
-
-	smSrv := fakeSecretsManager(t, map[string]string{
-		secretName(identityTenant): canonicalTenantSecret(identityHost, identityDatabase, identityRuntime),
-	})
-	defer smSrv.Close()
-
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_REGION", "us-east-1")
-
-	stub, _, envPath := stubFlywayCapturing(t, operation)
-	cmd.SetArgs(append([]string{
-		"--source-url", listSrv.URL, "--allow-insecure-scheme",
-		"--aws-endpoint", smSrv.URL, "--aws-region", "us-east-1",
-		"--flyway-path", stub, "--flyway-config", flywayConfPath(t),
-		"--migrations-dir", makeTempDir(t),
-	}, extraArgs...))
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetContext(t.Context())
-
-	var err error
-	logged := captureStdout(t, func() { err = cmd.Execute() })
-
-	return identityRun{
-		env:      readCapturedEnv(t, envPath),
-		output:   out.String() + logged,
-		err:      err,
-		listHits: listHits.Load(),
-	}
+	return runFleet(t, cmd, map[string]string{
+		identityTenant: canonicalTenantSecret(identityHost, identityDatabase, identityRuntime),
+	}, extraArgs...)
 }
 
 func TestResolveMigratorIdentityEnvPairs(t *testing.T) {
@@ -215,20 +170,19 @@ func TestResolveMigratorIdentityEnvPairs(t *testing.T) {
 
 func TestMigratorIdentityAppliesToEveryAction(t *testing.T) {
 	tests := []struct {
-		name      string
-		operation string
-		newCmd    func() *cobra.Command
+		name   string
+		newCmd func() *cobra.Command
 	}{
-		{name: "migrate", operation: "migrate", newCmd: NewMigrateCommand},
-		{name: "validate", operation: "validate", newCmd: NewValidateCommand},
-		{name: "info", operation: "info", newCmd: NewInfoCommand},
+		{name: "migrate", newCmd: NewMigrateCommand},
+		{name: "validate", newCmd: NewValidateCommand},
+		{name: "info", newCmd: NewInfoCommand},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setMigratorEnv(t)
 
-			run := runIdentityCommand(t, tt.newCmd(), tt.operation)
+			run := runIdentityCommand(t, tt.newCmd())
 			require.NoError(t, run.err)
 
 			assert.Equal(t, identityMigrator, run.env["DB_USER"], "Flyway must connect as the migrator, not the tenant's runtime role")
@@ -242,7 +196,7 @@ func TestMigratorIdentityAppliesToEveryAction(t *testing.T) {
 func TestMigrateCommandWithoutMigratorIdentityUsesTenantCredentials(t *testing.T) {
 	unsetMigratorEnv(t)
 
-	run := runIdentityCommand(t, NewMigrateCommand(), "migrate")
+	run := runIdentityCommand(t, NewMigrateCommand())
 	require.NoError(t, run.err)
 
 	assert.Equal(t, identityRuntime, run.env["DB_USER"], "with no overlay Flyway keeps the secret's own username")
@@ -263,7 +217,7 @@ func TestMigrateCommandNeverPrintsMigratorPassword(t *testing.T) {
 			if asJSON {
 				extra = append(extra, "--json")
 			}
-			run := runIdentityCommand(t, NewMigrateCommand(), "migrate", extra...)
+			run := runIdentityCommand(t, NewMigrateCommand(), extra...)
 			require.NoError(t, run.err)
 
 			if asJSON {
@@ -294,7 +248,7 @@ func TestMigrateCommandRejectsPartialMigratorIdentityBeforeListing(t *testing.T)
 			unsetMigratorEnv(t)
 			t.Setenv(tt.envVar, tt.value)
 
-			run := runIdentityCommand(t, NewMigrateCommand(), "migrate")
+			run := runIdentityCommand(t, NewMigrateCommand())
 
 			require.Error(t, run.err)
 			assert.Contains(t, run.err.Error(), tt.missing)
@@ -314,7 +268,7 @@ func TestMigrateCommandRejectsInvalidMigratorIdentityBeforeListing(t *testing.T)
 	t.Setenv(envMigratorUser, identityMigrator)
 	t.Setenv(envMigratorPassword, "short")
 
-	run := runIdentityCommand(t, NewMigrateCommand(), "migrate")
+	run := runIdentityCommand(t, NewMigrateCommand())
 
 	require.ErrorIs(t, run.err, migration.ErrInvalidMigratorIdentity)
 	assert.Zero(t, run.listHits, "an invalid identity must fail before the control plane is asked for tenants")
@@ -341,4 +295,33 @@ func TestQuiesceIgnoresMigratorIdentity(t *testing.T) {
 	cmd.SetErr(&out)
 
 	require.NoError(t, cmd.Execute(), "a half-set identity must not stop a path that never uses it")
+}
+
+// TestQuiesceIgnoresSharedMigrator pins the same boundary for --shared-migrator:
+// quiesce accepts the flag and never reads the env var, so not even an
+// unparseable value changes what it does.
+func TestQuiesceIgnoresSharedMigrator(t *testing.T) {
+	injectController(t, migration.NewMemoryQuiesceController())
+
+	run := func(t *testing.T, env *string, extra ...string) string {
+		t.Helper()
+		unsetSharedMigratorEnv(t)
+		if env != nil {
+			t.Setenv(envSharedMigrator, *env)
+		}
+		cmd := NewQuiesceCommand()
+		cmd.SetArgs(append([]string{"status", "--tenant", "cp", "--json"}, extra...))
+		cmd.SetContext(t.Context())
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		require.NoError(t, cmd.Execute(), out.String())
+		return out.String()
+	}
+
+	baseline := run(t, nil)
+	assert.Equal(t, baseline, run(t, nil, sharedArmedFlag))
+	assert.Equal(t, baseline, run(t, new("true")))
+	assert.Equal(t, baseline, run(t, new(sharedUnparseable), sharedArmedFlag))
+	assert.Equal(t, baseline, run(t, new(sharedUnparseable)))
 }

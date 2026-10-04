@@ -132,6 +132,7 @@ run without a migrator identity needs the migrator's own username and password i
 every tenant secret. `MigrateAllOptions.MigratorIdentity` (#1694), set on the CLI
 with `GOBRICKS_MIGRATE_MIGRATOR_USER` and `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD`,
 overlays a shared migrator's credentials instead — see [multi_tenant_migration.md](multi_tenant_migration.md#migrator-identity).
+The opt-in `--shared-migrator` flag (#1730) arms `FlywayMigrator.WithSharedMigrator()` and refuses a tenant with an unsupported database type — see [multi_tenant_migration.md](multi_tenant_migration.md#schema-targeting-postgresql).
 
 Minimum IAM for the runner role:
 

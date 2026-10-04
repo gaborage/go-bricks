@@ -113,6 +113,8 @@ func addCommonFlags(cmd *cobra.Command) *CommonFlags {
 	cmd.Flags().StringVar(&flags.PipelineRunID, "pipeline-run-id", "", "CI/CD run identifier recorded in the audit event (env: GOBRICKS_MIGRATE_PIPELINE_RUN_ID)")
 
 	// Behavior.
+	cmd.Flags().BoolVar(&flags.SharedMigrator, flagSharedMigrator, false,
+		"Refuse, before Flyway runs, any tenant with an unsupported database type or a PostgreSQL tenant with no postgresql.schema; applies to migrate, validate and info (env: "+envSharedMigrator+")")
 	cmd.Flags().BoolVar(&flags.ContinueOnError, "continue-on-error", false, "Continue iterating tenants after a per-tenant failure")
 	cmd.Flags().IntVar(&flags.Parallel, "parallel", 1, "Concurrent tenants to process (1 = sequential)")
 	cmd.Flags().StringVar(&flags.Tenant, "tenant", "", "Run for a single tenant ID instead of listing all")

@@ -214,8 +214,12 @@ before Flyway runs, for `migrate`, `validate` and `info` alike, rather than
 silently targeting `public` and reporting success. The flag is not limited to a
 shared role — a hand-provisioned migrator, a partially applied
 `PGRoleProvisioningSQL` script, or `search_path` drift under `SkipFloorReassert`
-leave the same gap, and it is library-only today (see
-[migration_roles.md](migration_roles.md#the-model) for the CLI caveat).
+leave the same gap. On `go-bricks-migrate` the guard is
+[`--shared-migrator`](#flag-reference), which also refuses a tenant whose
+database type is not a supported one (`postgres`, `PostgreSQL`, or empty and
+not inferred from a `connectionstring`), because the guard keys on the exact
+type `postgresql`. Run `validate --shared-migrator --continue-on-error` as a
+pre-flight: it lists every offending tenant before a `migrate` touches any.
 
 The guard is deliberately fail-closed on one legitimate shape: a `flyway.conf`
 owning `flyway.defaultSchema` also aims a run, but the framework never reads
@@ -307,6 +311,7 @@ go-bricks-migrate quiesce clear  --source-url https://control-plane.example.com/
 | `--flyway-config` | (per-vendor default) | `flyway.conf` path |
 | `--migrations-dir` | (per-vendor default) | Migrations directory |
 | `--continue-on-error` | `false` | Don't stop after the first per-tenant failure |
+| `--shared-migrator` | `$GOBRICKS_MIGRATE_SHARED_MIGRATOR` (`false`) | Arm [`WithSharedMigrator`](#schema-targeting-postgresql) and refuse a tenant with an unsupported database type; `migrate`, `validate` and `info` only |
 | `--parallel <N>` | `1` | Concurrent tenants (1 = sequential, max 32) |
 | `--tenant <id>` | | Run for a single tenant; bypasses listing |
 | `--json` | `false` | NDJSON progress + summary records |
@@ -324,6 +329,15 @@ error naming the missing variable, and a set-but-empty value fails with
 `migration.ErrInvalidMigratorIdentity` before any tenant is listed. It applies to
 `migrate`, `validate` and `info`; `quiesce` opens its control plane with the
 tenant secret's own credentials and ignores both variables.
+
+`GOBRICKS_MIGRATE_SHARED_MIGRATOR` takes Go boolean forms (`true`, `false`,
+`1`, `0`, …); an explicit `--shared-migrator` or `--shared-migrator=false` wins
+over it, and with the flag passed the variable is not read at all. Otherwise an
+unparseable value exits `2` before any tenant is listed. Each
+refused tenant is a per-tenant failure, so a run with one exits `1`. `quiesce`
+and `list` ignore both the flag and the variable. The flag is never inferred
+from the migrator identity: database-per-tenant PostgreSQL with `public` in each
+database is a legitimate shape it would refuse.
 
 ## CI/CD recipe (GitHub Actions, OIDC → AWS)
 
@@ -661,7 +675,7 @@ The `go-bricks-migrate` CLI exits on the same three classes:
 | --- | --- | --- |
 | `0` | clean | Every listed tenant was dispatched and succeeded |
 | `1` | `ErrFleetSplit`, or any run error | At least one tenant was dispatched and at least one failed or was never reached — or the run itself errored while the fleet stayed consistent |
-| `2` | `ErrNothingAttempted` | No tenant was dispatched — empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, or a misuse (unknown flag, stray argument, flag combination that does not resolve). No schema was touched |
+| `2` | `ErrNothingAttempted` | No tenant was dispatched — empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, an unparseable `GOBRICKS_MIGRATE_SHARED_MIGRATOR`, or a misuse (unknown flag, stray argument, flag combination that does not resolve). No schema was touched |
 
 Exit `1` is reserved for a split fleet so a pipeline can trust it: every misuse exits `2`, because a
 command that never ran dispatched nothing — an unknown command or flag, a stray argument, or a flag

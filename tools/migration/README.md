@@ -225,6 +225,7 @@ in the framework can cross-check a DSN it does not parse.
 | --- | --- |
 | `--parallel N` | Concurrency for fleet runs. `1` = sequential (default). Capped at 32 in the engine. |
 | `--continue-on-error` | Keep iterating after the first per-tenant failure instead of fail-fast. |
+| `--shared-migrator` | Refuse, before Flyway runs, a PostgreSQL tenant with no `postgresql.schema` and any tenant whose database type go-bricks does not support. Applies to `migrate`, `validate` and `info`; `quiesce` and `list` ignore it. Off by default. |
 | `--json` | Emit structured per-tenant and summary events on stdout for CI ingestion. |
 | `--flyway-path PATH` | Override the default `flyway` executable lookup. |
 | `--flyway-config PATH` | Override Flyway's `-configFiles=` argument. |
@@ -252,6 +253,7 @@ Recorded on every `migration.applied` audit event. The principal is **never infe
 | `GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | Default `--pipeline-run-id` (e.g. `--pipeline-run-id "$GITHUB_RUN_ID"`). |
 | `GOBRICKS_MIGRATE_MIGRATOR_USER` | Username Flyway connects as, replacing each tenant secret's own. No flag; set together with the password below. |
 | `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` | Password for that user. Exactly one of the two set is a startup error naming the missing variable. |
+| `GOBRICKS_MIGRATE_SHARED_MIGRATOR` | Default `--shared-migrator`, as a Go boolean (`true`, `false`, `1`, `0`, …). An explicit flag still wins, and with one passed the variable is not read at all; an unparseable value exits `2`. `quiesce` and `list` ignore it. |
 
 The migrator password gets no flag, only an environment variable — a flag value
 is visible in `ps` output and in shell history.
@@ -328,7 +330,7 @@ the other Result-derived keys) with `ending_version` mirroring
 | ---- | ------- | ------- |
 | `0` | `clean` | Every listed tenant was dispatched and succeeded |
 | `1` | `fleet_split` | At least one tenant was dispatched, and at least one failed or was never reached — the fleet may be at mixed versions |
-| `2` | `nothing_attempted` | No tenant was dispatched: empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, or a misuse (unknown flag, stray argument, unresolvable flag combination). No schema was touched |
+| `2` | `nothing_attempted` | No tenant was dispatched: empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, an unparseable `GOBRICKS_MIGRATE_SHARED_MIGRATOR`, or a misuse (unknown flag, stray argument, unresolvable flag combination). No schema was touched |
 
 Exit `1` is reserved for a split fleet, so a pipeline can trust it: every misuse
 exits `2`, because a command that never ran dispatched nothing — an unknown
