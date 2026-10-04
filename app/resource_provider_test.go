@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
@@ -729,4 +731,76 @@ func createTestCacheManagerWithConnector(t *testing.T, connector cache.Connector
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = manager.Close() })
 	return manager
+}
+
+// openHandleCounter mints a closeable mock per tenant and tracks how many are open at once.
+type openHandleCounter struct {
+	mu         sync.Mutex
+	open, peak int
+}
+
+func (c *openHandleCounter) connector(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+	m := &testmocks.MockDatabase{}
+	m.On("Close").Run(func(mock.Arguments) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.open--
+	}).Return(nil)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.open++
+	c.peak = max(c.peak, c.open)
+	return m, nil
+}
+
+func (c *openHandleCounter) snapshot() (open, peak int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.open, c.peak
+}
+
+// TestForEachTenantBoundsOpenHandlesDuringASweep drives the real DbManager (max size 2) through
+// the per-tenant DB path for six tenants under an enclosing scope standing in for the job scope:
+// ForEachTenant keeps at most max size + 1 handles open; the same sweep on the job scope alone
+// keeps all six open until the job returns.
+func TestForEachTenantBoundsOpenHandlesDuringASweep(t *testing.T) {
+	const maxSize = 2
+	tenants := []string{"t1", "t2", "t3", "t4", "t5", "t6"}
+
+	newProvider := func(t *testing.T) (*MultiTenantResourceProvider, *openHandleCounter) {
+		counter := &openHandleCounter{}
+		dbMgr := database.NewDbManager(keyedDBConfigSource{}, logger.New("error", false),
+			database.DbManagerOptions{MaxSize: maxSize, IdleTTL: time.Hour}, counter.connector)
+		t.Cleanup(func() { _ = dbMgr.Close() })
+		return NewMultiTenantResourceProvider(dbMgr, nil, nil, nil), counter
+	}
+
+	t.Run("for_each_tenant", func(t *testing.T) {
+		provider, counter := newProvider(t)
+		jobCtx, jobScope := leasescope.Install(context.Background())
+		defer jobScope.ReleaseAll()
+
+		err := multitenant.ForEachTenant(jobCtx, tenants, func(ctx context.Context, _ string) error {
+			_, err := provider.DB(ctx)
+			return err
+		})
+
+		require.NoError(t, err)
+		_, peak := counter.snapshot()
+		assert.LessOrEqual(t, peak, maxSize+1)
+	})
+
+	t.Run("job_scope_only_control", func(t *testing.T) {
+		provider, counter := newProvider(t)
+		jobCtx, jobScope := leasescope.Install(context.Background())
+
+		for _, tenantID := range tenants {
+			_, err := provider.DB(multitenant.SetTenant(jobCtx, tenantID))
+			require.NoError(t, err)
+		}
+
+		open, _ := counter.snapshot()
+		assert.Equal(t, len(tenants), open, "every leased handle stays open until the job scope drains")
+		jobScope.ReleaseAll()
+	})
 }

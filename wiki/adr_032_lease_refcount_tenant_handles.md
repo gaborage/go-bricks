@@ -6,6 +6,8 @@
 > **Amended (2026-08-09):** The Decision section's bullet beginning "Manager `Close()`" — originally `Close()` closes every still-mapped handle regardless of `refs` — is reversed: `Close()` now defers a still-borrowed handle to its final `ReleaseFunc` release, the same detach-then-close-on-last-release protocol eviction/idle-cleanup already use, so the "never `Close()`d" benefit claimed under Consequences → Benefits (the bullet beginning "An in-use handle is **never** `Close()`d") now holds across shutdown too, not only eviction. The original rationale does not survive: ADR-029 cancels consumer contexts but does not join in-flight handlers (`adr_029_graceful_shutdown_order.md:35`), so a handler can still be mid-operation when `Close()` runs. See `internal/resourcepool/resourcepool.go` (`liveLeases`) and Plan 115.
 >
 > **Amended (2026-10-02):** The Decision section's "Seed lease" bullet held for the first claimant only. One seed covered one of a shared create's waiters; the rest claimed after delivery with nothing holding the entry open, so a detached entry closed at the first claimant's release, and a waiter that found it closed retried until "failed to acquire after 4 attempts (pool churn)". The pool now coalesces creates itself (`pendingCreate`, replacing singleflight) and the install reserves one seed per waiter (`refs == seeds == waiters`), so evict, `Remove` and idle cleanup can only detach a fresh entry until every waiter has claimed. Close still discounts unclaimed seeds. The bounded retry and its churn error are gone. See `internal/resourcepool/resourcepool.go` (`installCreated`, `claimSeed`).
+>
+> **Amended (2026-10-04, #1866):** The Decision section's activation-layer seam list named functions that no longer exist and said the outbox relay and inbox cleanup per-tenant children inherit the job scope; each installs its own per-tenant scope that shadows it, and the list now says so. A public callback door, `multitenant.ForEachTenant`, runs caller work once per tenant inside a fresh per-tenant scope drained when the callback returns or panics, so a tenant-sweeping consumer job holds about one tenant's leases at a time. The scope type and its install/register functions stay private in `internal/leasescope`; returning a lease object to apps remains rejected. See `multitenant/foreach_tenant.go`.
 
 ## Context
 
@@ -72,11 +74,13 @@ the active scope.
 - `app/resource_provider.go` (`deps.DB/Cache/Messaging`) registers each lease, then returns the
   bare handle — **accessor and `ResourceProvider` signatures are unchanged, so applications do
   not change.**
-- Scopes are installed at three seams, which cover six unit-of-work types via `context.WithValue`
-  inheritance: **HTTP** (folded into `RequestEnrich`'s existing context clone — zero extra
-  per-request allocation), **AMQP consumers** (`registry.processMessage`, which also covers inbox
-  `ProcessOnce`), and **scheduler jobs** (`module.executeJob`, which also covers outbox relay and
-  inbox cleanup whose per-tenant `SetTenant` children inherit the scope).
+- Scopes are installed at three unit-of-work seams, with `context.WithValue` inheritance carrying
+  each into the work beneath it: **HTTP** (folded into `RequestEnrich`'s existing context clone — zero extra
+  per-request allocation), **message deliveries** (`delivery.Run` in
+  `messaging/internal/delivery`, which also covers inbox `ProcessOnce`), and **scheduler jobs**
+  (`Module.runJobBody`). The outbox relay (`relayTenant`) and inbox cleanup (through
+  `multitenant.FanOutRetentionCleanup`) install their own per-tenant scope, which shadows the job
+  scope, and so does `multitenant.ForEachTenant` (2026-10-04: see amendment above).
 - When a context carries **no** scope (framework health/prewarm probes using the fixed `""` key,
   ad-hoc background work), the lease is released as soon as the caller's own check completes —
   non-leaking, but unprotected, identical to the pre-lease behavior. Those framework-internal

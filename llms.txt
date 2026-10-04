@@ -336,6 +336,30 @@ Schedule methods: `FixedRate(duration)`, `DailyAt(time)`,
 `MonthlyAt(dayOfMonth, time)`. Jobs run in UTC by default
 (`scheduler.timezone` overrides; `-` = host-local).
 
+**Tenant-sweeping job.** A job context carries no tenant, so under
+per-tenant tenancy `JobContext.DB()`/`Messaging()` return nil. Sweep with
+`multitenant.ForEachTenant`: each tenant runs in its own lease scope,
+released when the callback returns, so the job holds about one tenant's
+handles at a time ([scheduler.md](wiki/scheduler.md#multi-tenant-jobs)):
+
+```go
+type SweepJob struct {
+	db func(context.Context) (database.Interface, error) // deps.DB from Init
+}
+
+func (j *SweepJob) Execute(jobCtx scheduler.JobContext) error {
+	tenants := jobCtx.Config().PerTenantJobKeys() // [""] in single-tenant mode
+	return multitenant.ForEachTenant(jobCtx, tenants, func(ctx context.Context, tenantID string) error {
+		db, err := j.db(ctx) // borrow on ctx, never jobCtx; don't keep db after return
+		if err != nil {
+			return fmt.Errorf("tenant %q: %w", tenantID, err)
+		}
+		_, err = db.Exec(ctx, "DELETE FROM sessions WHERE expires_at < now()")
+		return err
+	})
+}
+```
+
 **Always depend on interfaces** (`UserService`), not concrete types
 (`*users.Service`). Each module stays independently testable: swap the
 real `users.Module` for a mock `UserService` in unit tests of `orders`.
