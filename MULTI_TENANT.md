@@ -23,7 +23,7 @@ multitenant:
     type: "header"           # or "subdomain", "path", "composite"
     header: "X-Tenant-ID"   # header name for tenant resolution
     domain: "api.example.com" # root domain for subdomain resolution
-    proxies: true           # trust X-Forwarded-Host headers
+    proxies: false          # subdomain only; when true, read X-Forwarded-Host from a trusted peer (ADR-140)
     # order: [subdomain, path, header]  # resolver.order REQUIRED for type: composite — no default; startup fails without it (ADR-039)
   limits:
     tenants: 100           # maximum number of tenants

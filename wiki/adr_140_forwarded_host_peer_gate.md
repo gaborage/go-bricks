@@ -82,7 +82,7 @@ ADR-039 obligation 1 and the ADR-057 echo v5.4.0 amendment are amended to match.
 
 - `multitenant/resolver.go` — `SubdomainResolver`, `CompositeResolver`
 - `multitenant/errors.go` — `ErrUntrustedForwardedHost`
-- `server/middleware.go` — `newSubdomainResolver`; `server/server.go` —
-  `trustedProxyOptions`
+- `server/middleware.go` — `buildTenantResolver`, `newSubdomainResolver`; `server/server.go` —
+  `vetTrustedProxies` (the vetting both the extractors and the resolver use), `trustedProxyOptions`
 - gaborage/go-bricks#1918
 - See [migrations.md](migrations.md) `[C73.4]`.

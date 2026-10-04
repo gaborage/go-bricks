@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -93,7 +94,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 
 	// Body limit — configurable via server.bodylimit (bytes). config.normalizeServer
 	// owns the default; this <=0 guard is a backstop for the callers that never run
-	// config.Validate (see trustedProxyOptions for the same rationale). Note which way
+	// config.Validate (see vetTrustedProxies for the same rationale). Note which way
 	// it fails: echo compares `req.ContentLength > LimitBytes`, so BodyLimit(0) rejects
 	// every request carrying a body and a negative rejects even empty ones. An
 	// unvalidated 0 would take the service down, not uncap it — the guard converts that
@@ -310,13 +311,13 @@ func newHeaderResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
 	return &multitenant.HeaderResolver{HeaderName: name}
 }
 
-func newSubdomainResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
+func newSubdomainResolver(cfg *config.ResolverConfig, trustedProxies []*net.IPNet) multitenant.TenantResolver {
 	// Normalize Domain: strip leading dot to accept both ".example.com" and "example.com"
 	rootDomain := strings.TrimPrefix(cfg.Domain, ".")
 	if rootDomain == "" {
 		return nil
 	}
-	return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: cfg.Proxies}
+	return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: cfg.Proxies, TrustedProxies: trustedProxies}
 }
 
 func newPathResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
@@ -328,10 +329,10 @@ func newPathResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
 
 // newSubResolver builds the sub-resolver named by a composite order entry, or
 // nil when the name is unknown or that sub-resolver isn't configured.
-func newSubResolver(cfg *config.ResolverConfig, name string) multitenant.TenantResolver {
+func newSubResolver(cfg *config.ResolverConfig, name string, trustedProxies []*net.IPNet) multitenant.TenantResolver {
 	switch name {
 	case config.ResolverTypeSubdomain:
-		return newSubdomainResolver(cfg)
+		return newSubdomainResolver(cfg, trustedProxies)
 	case config.ResolverTypePath:
 		return newPathResolver(cfg)
 	case config.ResolverTypeHeader:
@@ -349,11 +350,11 @@ func newSubResolver(cfg *config.ResolverConfig, name string) multitenant.TenantR
 // config, an empty/unusable Order falls back to config.DefaultResolverOrder():
 // it must not end up with zero sub-resolvers, because buildTenantResolver then
 // returns nil and SetupMiddlewares skips tenant resolution entirely.
-func compositeSubResolvers(cfg *config.ResolverConfig) []multitenant.TenantResolver {
+func compositeSubResolvers(cfg *config.ResolverConfig, trustedProxies []*net.IPNet) []multitenant.TenantResolver {
 	build := func(order []string) []multitenant.TenantResolver {
 		subs := make([]multitenant.TenantResolver, 0, len(order))
 		for _, name := range order {
-			if sub := newSubResolver(cfg, name); sub != nil {
+			if sub := newSubResolver(cfg, name, trustedProxies); sub != nil {
 				subs = append(subs, sub)
 			}
 		}
@@ -370,6 +371,8 @@ func compositeSubResolvers(cfg *config.ResolverConfig) []multitenant.TenantResol
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	resolverCfg := &cfg.Multitenant.Resolver
 	tenantRegex := multitenant.DefaultTenantIDPattern()
+	// Silent: the server's trustedProxyOptions already logged each rejected entry once.
+	trustedProxies := vetTrustedProxies(cfg.Server.TrustedProxies, nil)
 
 	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
 		if res == nil {
@@ -382,11 +385,11 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	case config.ResolverTypeHeader:
 		return wrap(newHeaderResolver(resolverCfg))
 	case config.ResolverTypeSubdomain:
-		return wrap(newSubdomainResolver(resolverCfg))
+		return wrap(newSubdomainResolver(resolverCfg, trustedProxies))
 	case config.ResolverTypePath:
 		return wrap(newPathResolver(resolverCfg))
 	case config.ResolverTypeComposite:
-		return buildCompositeTenantResolver(tenantRegex, compositeSubResolvers(resolverCfg)...)
+		return buildCompositeTenantResolver(tenantRegex, compositeSubResolvers(resolverCfg, trustedProxies)...)
 	default:
 		return nil
 	}

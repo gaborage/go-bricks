@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -63,15 +64,18 @@ func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkip
 // (400). This middleware is registered outer to the access logger and never
 // calls next() on reject, so without this the request leaves no server-side
 // trail when observability is disabled. The resolved tenant is never logged
-// here — there is none on this path; only the failure reason (empty tenant vs
-// resolver error) is included, never the resolver error's message (which may
+// here — there is none on this path; only the failure reason (empty tenant,
+// untrusted X-Forwarded-Host peer, or resolver error) is included, never the
+// resolver error's message or the forwarded host (which may
 // carry caller-controlled request data). With a framework logger it routes
 // through structured WARN-level logging (SensitiveDataFilter, dual-mode
 // routing); with nil (public TenantMiddleware construction) it falls back to
 // the stdlib log package, mirroring corsWarnf in cors.go.
 func logTenantRejection(l logger.Logger, c *echo.Context, resolveErr error) {
 	reason := "empty tenant"
-	if resolveErr != nil {
+	if errors.Is(resolveErr, multitenant.ErrUntrustedForwardedHost) {
+		reason = "X-Forwarded-Host from a peer outside server.trustedproxies"
+	} else if resolveErr != nil {
 		reason = "resolver error"
 	}
 	req := c.Request()

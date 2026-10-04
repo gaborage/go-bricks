@@ -151,6 +151,18 @@ func (s *Server) buildFullPath(route string) string {
 // into echo TrustOptions, preserving echo's loopback/link-local/private
 // defaults (dropping those would break every in-VPC deployment by keying
 // every request on the load balancer's own address).
+func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.TrustOption {
+	nets := vetTrustedProxies(trustedProxies, log)
+	opts := make([]echo.TrustOption, 0, len(nets))
+	for _, ipNet := range nets {
+		opts = append(opts, echo.TrustIPRange(ipNet))
+	}
+	return opts
+}
+
+// vetTrustedProxies returns the server.trustedproxies ranges the server trusts. A nil
+// log vets silently, so a second consumer of the same list (the subdomain tenant
+// resolver) does not repeat the startup ERROR the first one logged.
 //
 // Every entry is re-vetted through config.ParseTrustedProxyCIDR — the same rule set
 // startup validation applies — rather than parsed here, because the re-vet stays
@@ -159,20 +171,20 @@ func (s *Server) buildFullPath(route string) string {
 // config.Validate (ADR-064 closed the NewWithConfig bypass). Without the re-vet, one
 // `0.0.0.0/0` or host-bits entry would trust every hop and hand the extractor back
 // the caller-authored left-most X-Forwarded-For value — the exact spoofing ADR-057
-// closes. Skipping is the safe response because echo's TrustOptions are purely
-// additive, so dropping one can only narrow trust, and the ERROR log makes it visible.
-func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.TrustOption {
-	opts := make([]echo.TrustOption, 0, len(trustedProxies))
+// closes. Skipping is the safe response because trust is purely additive, so
+// dropping one can only narrow it, and the ERROR log makes it visible.
+func vetTrustedProxies(trustedProxies []string, log logger.Logger) []*net.IPNet {
 	nets := make([]*net.IPNet, 0, len(trustedProxies))
 	for _, entry := range trustedProxies {
 		ipNet, err := config.ParseTrustedProxyCIDR(entry)
 		if err != nil {
-			log.Error().Err(err).Str("cidr", entry).
-				Msg("Ignoring invalid server.trustedproxies entry; its proxy will be treated as an untrusted client")
+			if log != nil {
+				log.Error().Err(err).Str("cidr", entry).
+					Msg("Ignoring invalid server.trustedproxies entry; its proxy will be treated as an untrusted client")
+			}
 			continue
 		}
 		nets = append(nets, ipNet)
-		opts = append(opts, echo.TrustIPRange(ipNet))
 	}
 
 	// Per-entry vetting cannot see that a SET trusts everyone: ["0.0.0.0/1","128.0.0.0/1"]
@@ -182,12 +194,14 @@ func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.Trus
 	// (ADR-080).
 	for _, bits := range []int{net.IPv4len * 8, net.IPv6len * 8} {
 		if config.CoversAddressFamily(nets, bits) {
-			log.Error().Str("cidrs", strings.Join(trustedProxies, ",")).
-				Msg("Ignoring server.trustedproxies entirely: the entries together trust every address, which would restore X-Forwarded-For spoofing")
+			if log != nil {
+				log.Error().Str("cidrs", strings.Join(trustedProxies, ",")).
+					Msg("Ignoring server.trustedproxies entirely: the entries together trust every address, which would restore X-Forwarded-For spoofing")
+			}
 			return nil
 		}
 	}
-	return opts
+	return nets
 }
 
 // New creates a new HTTP server instance with the given configuration and logger.

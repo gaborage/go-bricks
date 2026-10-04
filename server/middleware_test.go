@@ -1011,3 +1011,167 @@ func TestSanitizePanicValueRefusesAWrappedAbortSentinel(t *testing.T) {
 	require.ErrorAs(t, recovered.(error), &typed,
 		"only the exact sentinel bypasses sanitizing")
 }
+
+// forwardedHostConfig is a test config whose subdomain resolver trusts X-Forwarded-Host.
+func forwardedHostConfig(resolverType string, trustedProxies ...string) *config.Config {
+	cfg := newTestConfig("", "", "")
+	cfg.Server.TrustedProxies = trustedProxies
+	cfg.Multitenant = config.MultitenantConfig{
+		Enabled: true,
+		Resolver: config.ResolverConfig{
+			Type:    resolverType,
+			Domain:  testDomain,
+			Proxies: true,
+			Order:   []string{config.ResolverTypeSubdomain, config.ResolverTypeHeader},
+		},
+	}
+	return cfg
+}
+
+// forwardedRequest carries X-Forwarded-Host and X-Forwarded-Proto from remoteAddr, with a
+// Host that names no tenant.
+func forwardedRequest(remoteAddr string) *http.Request {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/forwarded", http.NoBody)
+	req.Host = "localhost:8080"
+	req.RemoteAddr = remoteAddr
+	req.Header.Set(HeaderXForwardedHost, "alpha."+testDomain)
+	req.Header.Set(echo.HeaderXForwardedProto, schemeHTTPS)
+	return req
+}
+
+// TestSubdomainForwardedHostTrustMatchesSchemeExtractor pins the parity ADR-140 relies on:
+// the subdomain resolver believes X-Forwarded-Host exactly when the server's installed
+// scheme extractor, built from the same server.trustedproxies, believes X-Forwarded-Proto.
+func TestSubdomainForwardedHostTrustMatchesSchemeExtractor(t *testing.T) {
+	settings := []struct {
+		name           string
+		trustedProxies []string
+	}{
+		{name: "defaults_only"},
+		{name: "listed_public_range", trustedProxies: []string{"203.0.113.0/24"}},
+		{name: "invalid_entry_beside_listed_range", trustedProxies: []string{"not-a-cidr", "203.0.113.0/24"}},
+		{name: "entries_covering_all_ipv4", trustedProxies: []string{"0.0.0.0/1", "128.0.0.0/1"}},
+		{name: "ipv4_default_route_beside_listed_range", trustedProxies: []string{"0.0.0.0/0", "203.0.113.0/24"}},
+		{name: "ipv6_default_route_beside_listed_range", trustedProxies: []string{"::/0", "203.0.113.0/24"}},
+	}
+	peers := []struct{ name, addr string }{
+		{"public_unlisted", "198.51.100.7:443"},
+		{"public_ipv6", "[2001:db8::1]:443"},
+		{"public_in_listed_range", "203.0.113.9:443"},
+		{"rfc1918_10", "10.1.2.3:443"},
+		{"rfc1918_172", "172.16.0.9:443"},
+		{"rfc1918_192", "192.168.1.5:443"},
+		{"loopback", "127.0.0.1:443"},
+		{"link_local", "169.254.10.20:443"},
+		{"ipv6_zone_link_local", "[fe80::1%eth0]:443"},
+		{"ipv4_mapped_public", "[::ffff:203.0.113.9]:443"},
+		{"ipv4_mapped_private", "[::ffff:10.0.0.1]:443"},
+		{"unix_empty", ""},
+		{"unix_abstract", "@"},
+		{"unix_path", "/run/app.sock"},
+	}
+
+	believedOutcomes := map[bool]int{}
+	for _, setting := range settings {
+		srv := newIPExtractorServer(setting.trustedProxies...)
+		resolver := buildTenantResolver(forwardedHostConfig(config.ResolverTypeSubdomain, setting.trustedProxies...))
+		for _, peer := range peers {
+			t.Run(setting.name+"_"+peer.name, func(t *testing.T) {
+				schemeBelieved := extractScheme(srv, peer.addr) == schemeHTTPS
+				tenantID, err := resolver.ResolveTenant(context.Background(), forwardedRequest(peer.addr))
+				hostBelieved := err == nil && tenantID == "alpha"
+
+				assert.Equal(t, schemeBelieved, hostBelieved, "X-Forwarded-Host trust must match X-Forwarded-Proto trust")
+				if !hostBelieved {
+					require.ErrorIs(t, err, multitenant.ErrUntrustedForwardedHost)
+				}
+				believedOutcomes[hostBelieved]++
+			})
+		}
+	}
+	assert.Positive(t, believedOutcomes[true], "the table must contain trusted peers")
+	assert.Positive(t, believedOutcomes[false], "the table must contain untrusted peers")
+}
+
+// TestSetupMiddlewaresLogsEachInvalidTrustedProxyOnce pins that building the resolver's
+// ranges re-vets server.trustedproxies silently: each rejection is logged once per server.
+func TestSetupMiddlewaresLogsEachInvalidTrustedProxyOnce(t *testing.T) {
+	tests := []struct {
+		name           string
+		trustedProxies []string
+		message        string
+	}{
+		{name: "invalid_entry", trustedProxies: []string{"not-a-cidr", "203.0.113.0/24"}, message: "Ignoring invalid server.trustedproxies entry"},
+		{name: "set_covering_all_ipv4", trustedProxies: []string{"0.0.0.0/1", "128.0.0.0/1"}, message: "Ignoring server.trustedproxies entirely"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &testLogger{}
+			New(forwardedHostConfig(config.ResolverTypeSubdomain, tt.trustedProxies...), log)
+
+			count := 0
+			for _, entry := range log.logEntries() {
+				if entry.level == "error" && strings.HasPrefix(entry.msg, tt.message) {
+					count++
+				}
+			}
+			assert.Equal(t, 1, count, "one startup ERROR per rejection, not one per consumer")
+		})
+	}
+}
+
+// TestCompositeTenantResolutionStopsOnUntrustedForwardedHost drives the server's own
+// middleware chain: with order [subdomain, header], an untrusted public peer that sends
+// X-Forwarded-Host gets 400 even with a valid X-Tenant-ID, while the same request from a
+// private peer resolves the forwarded host and one without the header reaches the header resolver.
+func TestCompositeTenantResolutionStopsOnUntrustedForwardedHost(t *testing.T) {
+	tests := []struct {
+		name           string
+		remoteAddr     string
+		trustedProxies []string
+		forwardedHost  bool
+		wantStatus     int
+		wantTenant     string
+	}{
+		{name: "untrusted_peer_with_forwarded_host_is_rejected", remoteAddr: "198.51.100.7:443", forwardedHost: true, wantStatus: http.StatusBadRequest},
+		{name: "trusted_peer_resolves_forwarded_host", remoteAddr: "10.0.0.1:443", forwardedHost: true, wantStatus: http.StatusOK, wantTenant: "alpha"},
+		{name: "listed_public_peer_resolves_forwarded_host", remoteAddr: "203.0.113.9:443", trustedProxies: []string{"203.0.113.0/24"}, forwardedHost: true, wantStatus: http.StatusOK, wantTenant: "alpha"},
+		{name: "untrusted_peer_without_forwarded_host_reaches_header", remoteAddr: "198.51.100.7:443", wantStatus: http.StatusOK, wantTenant: "bravo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &testLogger{}
+			srv := New(forwardedHostConfig(config.ResolverTypeComposite, tt.trustedProxies...), log)
+			srv.echo.GET("/forwarded", func(c *echo.Context) error {
+				tenantID, _ := multitenant.GetTenant(c.Request().Context())
+				return c.String(http.StatusOK, tenantID)
+			})
+
+			req := forwardedRequest(tt.remoteAddr)
+			if !tt.forwardedHost {
+				req.Header.Del(HeaderXForwardedHost)
+			}
+			req.Header.Set(HeaderXTenantID, "bravo")
+			rec := httptest.NewRecorder()
+			srv.echo.ServeHTTP(rec, req)
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantTenant != "" {
+				assert.Equal(t, tt.wantTenant, rec.Body.String())
+				return
+			}
+			var warns []string
+			for _, entry := range log.logEntries() {
+				if entry.level == "warn" && strings.Contains(entry.msg, "[server.tenant]") {
+					warns = append(warns, entry.msg)
+				}
+			}
+			require.Len(t, warns, 1)
+			assert.Contains(t, warns[0], `reason="X-Forwarded-Host from a peer outside server.trustedproxies"`)
+			assert.NotContains(t, warns[0], "alpha."+testDomain, "the X-Forwarded-Host value is never logged")
+			assert.NotContains(t, warns[0], multitenant.ErrUntrustedForwardedHost.Error(), "the resolver error message is never logged")
+		})
+	}
+}
