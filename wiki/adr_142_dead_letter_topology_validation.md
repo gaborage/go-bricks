@@ -74,7 +74,7 @@ a known-broken route is how this shipped unnoticed.
 ## Consequences
 
 - **A declaration set that used to boot now refuses** when a queue's dead-letter route is absent
-  or, by rules 4–6, visibly unroutable. Migration is [migrations.md](migrations.md) `[C73.6]`.
+  or, by rules 4–6, visibly unroutable. Migration is [migrations.md](migrations.md) `[C72.13]`.
 - **Accepted cost, rule 4:** a service whose DLX's parking side is owned by another service now
   fails, because the binding lives in that other set. That service declares the DLX; this one
   marks it external with `DeclareExternalExchange`.
@@ -89,7 +89,7 @@ a known-broken route is how this shipped unnoticed.
 
 ## References
 
-- [migrations.md](migrations.md) `[C73.6]`: detect, the error texts and the exits
+- [migrations.md](migrations.md) `[C72.13]`: detect, the error texts and the exits
 - [ADR-118](adr_118_exchange_redeclaration_conflicts.md): the re-declaration conflict check this complements
 - [ADR-119](adr_119_external_exchange_passive_verification.md): an external exchange carries no type
 - [ADR-106](adr_106_dlq_helper_declares_quorum_queues.md): `DeclareQueueWithDLQ`, whose route passes by construction

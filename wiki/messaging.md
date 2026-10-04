@@ -509,7 +509,7 @@ every queue whose route the set shows cannot park (ADR-142):
 
 X `""`, an external, `headers` or `x-` plugin X, an X with an `alternate-exchange`
 argument, and non-string values are not judged. Migration: [migrations.md](migrations.md)
-`[C73.6]`.
+`[C72.13]`.
 
 Args participate in RabbitMQ's declare-equivalence check: redeclaring an
 existing queue with different args fails the channel with 406
