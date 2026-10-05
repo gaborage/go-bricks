@@ -323,6 +323,12 @@ and rejected: it would need a second transform or a post-load rewrite and reintr
 the `a_b`/`a-b` ambiguity the reachability rule forbids. Selector keys are constrained to
 `[a-z0-9-]` at `Validate`, matching `keystore.keys`.
 
+**Amended by [ADR-144](adr_144_dotted_keystore_entry_names.md):** Logical kids may contain
+interior dots; a dotted family names its generations `<family>.v<N>`, a family without one
+keeps `-v<N>`, so the marker is a function of the family and `Generation.Kid()` stays pure.
+Selector keys are written nested, so `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN` reaches family
+`payments.sign` from any shell. No per-key rewrite was added.
+
 ### 4. Replay and redelivery (#1307, G6, G7)
 
 The seal layer judges the bytes, never the delivery history: no replay, duplicate or

@@ -14,7 +14,9 @@
 // -sign-kid must equal the target endpoint's jose "verify=" tag name, and
 // -encrypt-kid must equal its "decrypt=" tag name — the server binds kid
 // headers to the policy's configured kids and rejects a mismatch with
-// JOSE_KID_UNKNOWN.
+// JOSE_KID_UNKNOWN. Both pass through verbatim: a go-bricks route matches the
+// tag's exact string, so a dotted keystore name (tokens.our) and its hyphenated
+// look-alike (tokens-our) are two different kids (ADR-144).
 //
 // -mode bare emits a single JWE with nothing signed (Visa Message Level
 // Encryption): it takes only the encryption key and -encrypt-kid, refuses
@@ -133,9 +135,9 @@ func parseFlags(args []string, stderr io.Writer) (*cliConfig, error) {
 	cfg := &cliConfig{}
 	cfg.keys = sealcli.KeyFlags(fs, "used to sign the outbound JWS (nested mode only)", "used to encrypt the outbound JWE")
 	fs.StringVar(&cfg.signKid, "sign-kid", "",
-		"kid embedded in the JWS header; must equal the target endpoint's verify= tag name (required with -mode nested; refused with -mode bare)")
+		"kid embedded in the JWS header, verbatim; must equal the target endpoint's verify= tag name exactly (required with -mode nested; refused with -mode bare)")
 	fs.StringVar(&cfg.encryptKid, "encrypt-kid", "",
-		"kid embedded in the JWE header; must equal the target endpoint's decrypt= tag name (required)")
+		"kid embedded in the JWE header, verbatim; must equal the target endpoint's decrypt= tag name exactly (required)")
 	fs.StringVar(&cfg.sigAlg, "sig-alg", "",
 		"JWS signature algorithm: RS256 or PS256 (nested default "+string(jose.DefaultSigAlg)+")")
 	fs.StringVar(&cfg.mode, "mode", modeNested,

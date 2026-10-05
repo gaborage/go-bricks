@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -234,24 +235,23 @@ func TestCheckKeyStoreRejectsUnreachableKeyNames(t *testing.T) {
 	assertSectionNameRejected(t, err, "keystore.keys.my_key")
 }
 
-// TestCheckKeyStoreRejectsADottedKeyName: a '.' is koanf's path delimiter, so a
-// dotted name makes the constructed keystore.keys.<name> Field ambiguous — is
-// "keystore.keys.my.key" the entry "my.key" or a "key" under "my"? The parent
-// field is reported instead, exactly as the databases and static-tenant rules
-// already do, and this must run BEFORE the reachability grammar so the
-// ambiguous path is never built.
-func TestCheckKeyStoreRejectsADottedKeyName(t *testing.T) {
+// TestCheckKeyStoreAcceptsADottedKeyName: a dotted name is a path of
+// env-reachable segments (ADR-144), so it passes the name rules and reaches
+// validateKeyEntry, whose Field is the real koanf path of the entry.
+func TestCheckKeyStoreAcceptsADottedKeyName(t *testing.T) {
 	cfg := &KeyStoreConfig{Keys: map[string]KeyPairConfig{
 		"my.key": {},
 	}}
 
 	err := checkKeyStore(cfg)
 
-	require.Error(t, err)
 	var cfgErr *ConfigError
 	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, "keystore.keys", cfgErr.Field, "the parent field, since a dotted name cannot carry an unambiguous path")
-	assert.ErrorContains(t, err, "'.'")
+	assert.Equal(t, "keystore.keys.my.key.public", cfgErr.Field, "the name rules pass; the missing source is what is reported")
+	assert.Equal(t, "key source required", cfgErr.Message)
+
+	cfg.Keys["my.key"] = KeyPairConfig{Public: KeySourceConfig{Value: "cHVi"}}
+	require.NoError(t, checkKeyStore(cfg))
 }
 
 // TestCheckKeyStoreAcceptsReachableKeyNames is the boundary's other side: a
@@ -361,4 +361,281 @@ func TestValidateKeyStorePKCS12PasswordEnvMustBeAName(t *testing.T) {
 	assert.NotContains(t, err.Error(), literal)
 	require.ErrorContains(t, err, "not an environment variable name")
 	require.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password.env")
+}
+
+// keysNamed builds a hand-built keystore (the ADR-064 door, which never saw the
+// tree reader) whose entries are all complete public entries.
+func keysNamed(names ...string) *KeyStoreConfig {
+	keys := make(map[string]KeyPairConfig, len(names))
+	for _, name := range names {
+		keys[name] = KeyPairConfig{Public: KeySourceConfig{Value: "cHVi"}}
+	}
+	return &KeyStoreConfig{Keys: keys}
+}
+
+// TestCheckKeyStoreNameRules pins the ADR-144 name-set rules on a hand-built
+// Config: they live in check, not in the decode walk, so a Config built in
+// code meets them exactly as a loaded one does.
+func TestCheckKeyStoreNameRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		keys       *KeyStoreConfig
+		wantField  string
+		wantMsg    string
+		wantInAct  string
+		notInInAct string
+	}{
+		{name: "dotted_entry", keys: keysNamed("tokens.our")},
+		{name: "dotted_and_hyphen_entries", keys: keysNamed("tokens.our", "tokens.peer", "webhook-signing", "a.b-c.d")},
+		{name: "dotted_generations", keys: keysNamed("payments.sign.v1", "payments.sign.v2", "payments.encrypt.v1")},
+		{name: "hyphen_generations", keys: keysNamed("payments-sign-v1", "payments-sign-v2")},
+		{name: "legacy_entry_named_secret", keys: keysNamed("secret")},
+		{name: "near_lookalike_is_distinct", keys: keysNamed("tokens-our", "tokens.ours")},
+		{name: "fold_prefix_is_no_conflict", keys: keysNamed("tokens-our", "tokens.our.x")},
+		{
+			name: "entry_prefix", keys: keysNamed("tokens", "tokens.our"),
+			wantField: "keystore.keys.tokens", wantMsg: `entry "tokens" is a dotted prefix of entry "tokens.our"`,
+			wantInAct: "tokens → tokens.default",
+		},
+		{
+			name: "deep_entry_prefix", keys: keysNamed("a.b", "a.b.c.d"),
+			wantField: "keystore.keys.a.b", wantMsg: `entry "a.b" is a dotted prefix of entry "a.b.c.d"`,
+		},
+		{
+			name: "lookalike_entries", keys: keysNamed("tokens-our", "tokens.our"),
+			wantField: "keystore.keys.tokens.our", wantMsg: `"tokens-our" and "tokens.our" differ only in '-' versus '.'`,
+			wantInAct: `override "tokens-our" with KEYSTORE_KEYS_TOKENS-OUR_* (Docker, Kubernetes), or rename it "tokens.our" everywhere`,
+		},
+		{
+			name: "lookalike_mixed_entries", keys: keysNamed("a-b.c", "a.b-c"),
+			wantField: "keystore.keys.a.b-c", wantMsg: `"a-b.c" and "a.b-c" differ only in '-' versus '.'`,
+		},
+		{
+			name: "lookalike_families", keys: keysNamed("payments-sign-v1", "payments.sign.v2"),
+			wantField: "keystore.keys", wantMsg: `families "payments-sign" (payments-sign-v1) and "payments.sign" (payments.sign.v2) differ only in '-' versus '.': a family rename is not a rotation`,
+		},
+		{
+			name: "lookalike_families_same_version", keys: keysNamed("payments-sign-v1", "payments.sign.v1"),
+			wantField: "keystore.keys", wantMsg: `families "payments-sign" (payments-sign-v1) and "payments.sign" (payments.sign.v1) differ only in '-' versus '.'`,
+			wantInAct: `keep one family: set payments-sign-v1 with KEYSTORE_KEYS_PAYMENTS-SIGN-V1_* (Docker, Kubernetes) rather than a POSIX export; ` +
+				`moving to "payments.sign" is a family rename, drained before the cutover`,
+			notInInAct: "rename it",
+		},
+		{
+			name: "lookalike_family_names_the_intended_generation", keys: keysNamed("payments-sign-v1", "payments.sign.v2"),
+			wantField: "keystore.keys", wantMsg: "a family rename is not a rotation",
+			wantInAct: "set payments-sign-v2 with KEYSTORE_KEYS_PAYMENTS-SIGN-V2_*",
+		},
+		{
+			name: "lookalike_generation_with_the_wrong_marker", keys: keysNamed("payments-sign-v1", "payments.sign-v1"),
+			wantField: "keystore.keys.payments.sign-v1", wantMsg: "a dotted family names its generations with a final v<N> segment",
+			wantInAct: "rename it payments.sign.v1",
+		},
+		{
+			name: "nested_families", keys: keysNamed("payments-v1", "payments.sign.v1"),
+			wantField: "keystore.keys", wantMsg: `families "payments" and "payments.sign" nest: messaging.seal.active cannot hold a selector for both`,
+		},
+		{
+			name: "families_nest_when_hyphen_reads_as_dot", keys: keysNamed("payments-sign-v1", "payments.sign.eu.v1"),
+			wantField: "keystore.keys", wantMsg: `families "payments-sign" and "payments.sign.eu" nest when '-' is read as '.': messaging.seal.active cannot hold a selector for both`,
+			wantInAct: "rename one family",
+		},
+		{
+			name: "dotted_family_nests_below_a_longer_hyphen_family", keys: keysNamed("payments-sign-eu-v1", "payments.sign.v1"),
+			wantField: "keystore.keys", wantMsg: `families "payments.sign" and "payments-sign-eu" nest when '-' is read as '.'`,
+		},
+		{name: "hyphen_only_families_that_fold_nest", keys: keysNamed("payments-sign-v1", "payments-sign-eu-v1")},
+		{
+			name: "reserved_word_after_dot", keys: keysNamed("webhook.secret"),
+			wantField: "keystore.keys", wantMsg: `name "webhook.secret" uses the field name "secret" after a '.'`,
+			wantInAct: "webhook-secret",
+		},
+		{
+			name: "empty_segment", keys: keysNamed("tokens..our"),
+			wantField: "keystore.keys", wantMsg: `name "tokens..our" has an empty segment`,
+		},
+		{
+			name: "leading_dot", keys: keysNamed(".tokens"),
+			wantField: "keystore.keys", wantMsg: "has an empty segment",
+		},
+		{
+			name: "underscore_names_its_dotted_spelling", keys: keysNamed("tokens_our"),
+			wantField: "keystore.keys.tokens_our", wantMsg: "not reachable by an environment variable",
+			wantInAct: `write "tokens.our", which KEYSTORE_KEYS_TOKENS_OUR_* reaches`,
+		},
+		{
+			name: "underscore_whose_spelling_is_reserved", keys: keysNamed("webhook_secret"),
+			wantField: "keystore.keys.webhook_secret", wantMsg: "not reachable by an environment variable",
+			notInInAct: `write "`,
+		},
+		{
+			name: "underscore_whose_spelling_is_a_malformed_generation", keys: keysNamed("audit_v1"),
+			wantField: "keystore.keys.audit_v1", wantMsg: "not reachable by an environment variable",
+			notInInAct: `write "`,
+		},
+		{
+			name: "underscore_names_its_dotted_generation", keys: keysNamed("payments_sign_v1"),
+			wantField: "keystore.keys.payments_sign_v1", wantMsg: "not reachable by an environment variable",
+			wantInAct: `write "payments.sign.v1", which KEYSTORE_KEYS_PAYMENTS_SIGN_V1_* reaches`,
+		},
+		{
+			name: "uppercase_segment", keys: keysNamed("Tokens.our"),
+			wantField: "keystore.keys.Tokens.our", wantMsg: "not reachable by an environment variable",
+			wantInAct: `write "tokens.our"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkKeyStore(tt.keys)
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMsg)
+			assert.Contains(t, cfgErr.Action, tt.wantInAct)
+			if tt.notInInAct != "" {
+				assert.NotContains(t, cfgErr.Action, tt.notInInAct)
+			}
+		})
+	}
+}
+
+// TestCheckKeyStoreRefusesMalformedGenerations: a name carrying a generation
+// marker that is no generation fails at Validate with its rename spelled out.
+// The family fixes the marker: a dotted family takes a final v<N> segment, a
+// family without '.' keeps -v<N>.
+func TestCheckKeyStoreRefusesMalformedGenerations(t *testing.T) {
+	tests := []struct {
+		entry     string
+		wantMsg   string
+		wantInAct string
+	}{
+		{entry: "payments.sign-v1", wantMsg: "a dotted family names its generations with a final v<N> segment", wantInAct: "rename it payments.sign.v1"},
+		{entry: "audit.v1", wantMsg: `family "audit" has no '.', so its generations are named audit-v<N>`, wantInAct: "rename it audit-v1, or give the family a second segment (audit.<purpose>.v1)"},
+		{entry: "payments-sign.v1", wantMsg: `family "payments-sign" has no '.'`, wantInAct: "rename it payments-sign-v1"},
+		{entry: "x.y.v0", wantMsg: `generation "v0" must be a positive integer without leading zeros`, wantInAct: "rename it x.y.v1"},
+		{entry: "x.y.v01", wantMsg: `generation "v01" must be a positive integer`},
+		{entry: "x-v0", wantMsg: `generation "v0" must be a positive integer`, wantInAct: "rename it x-v1"},
+		{entry: "x.v1.v2", wantMsg: `"x.v1" before it is no family`},
+		{entry: "x-v1-v2", wantMsg: `"x-v1" before it is no family`},
+		{entry: "-v1", wantMsg: `"" before it is no family`},
+		{entry: strings.Repeat("a", 65) + "-v1", wantMsg: "is 65 bytes, maximum is 64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			err := checkKeyStore(keysNamed(tt.entry))
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "keystore.keys."+tt.entry, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMsg)
+			assert.Contains(t, cfgErr.Action, tt.wantInAct)
+		})
+	}
+}
+
+// TestKeySourceActionNamesTheVariables: a missing source names the two
+// variables that set it, and a hyphenated name adds the POSIX caveat with the
+// dotted spelling any shell can export.
+func TestKeySourceActionNamesTheVariables(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   string
+		want    string
+		notWant string
+	}{
+		{name: "dotted", entry: "tokens.our", want: "e.g. KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_FILE or KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_VALUE", notWant: "POSIX"},
+		{name: "plain", entry: "signing", want: "KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE", notWant: "POSIX"},
+		{
+			name: "hyphenated", entry: "tokens-our",
+			want: "KEYSTORE_KEYS_TOKENS-OUR_PUBLIC_FILE or KEYSTORE_KEYS_TOKENS-OUR_PUBLIC_VALUE; a name with '-' is settable that way " +
+				"from Docker or Kubernetes but not by a POSIX export, while a dotted name (tokens.our) is settable from any shell",
+		},
+		{name: "hyphen_fold_is_reserved", entry: "webhook-secret", want: "not by a POSIX export", notWant: "dotted name"},
+		{
+			name: "undotted_family_generation", entry: "audit-v1",
+			want:    "not by a POSIX export; a generation spelled without '-' belongs to another family, so moving to it is a family rename, drained before the cutover",
+			notWant: "dotted name",
+		},
+		{name: "hyphen_family_generation", entry: "payments-sign-v1", want: "family rename", notWant: "payments.sign.v1"},
+		{name: "dotted_family_generation_with_hyphen", entry: "svc-a.sign.v1", want: "belongs to another family", notWant: "dotted name"},
+		{name: "ordinary_name_gets_no_rename_clause", entry: "tokens-our", want: "dotted name", notWant: "family rename"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkKeyStore(&KeyStoreConfig{Keys: map[string]KeyPairConfig{tt.entry: {}}})
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "key source required", cfgErr.Message)
+			assert.Contains(t, cfgErr.Action, tt.want)
+			if tt.notWant != "" {
+				assert.NotContains(t, cfgErr.Action, tt.notWant)
+			}
+		})
+	}
+}
+
+// TestCheckSealSelectorFamilies: a selector that differs from a provisioned
+// family only in '-' versus '.' selects nothing, so the rotation it was meant
+// to make never happens; Validate refuses it and names both variables. A
+// selector for nothing provisioned is still accepted, as before.
+func TestCheckSealSelectorFamilies(t *testing.T) {
+	hyphenFamily := keysNamed("payments-sign-v1", "payments-sign-v2")
+	tests := []struct {
+		name      string
+		keys      *KeyStoreConfig
+		active    map[string]string
+		wantField string
+		wantMsg   string
+		wantInAct string
+	}{
+		{name: "selects_its_family", keys: hyphenFamily, active: map[string]string{"payments-sign": "v2"}},
+		{name: "selects_dotted_family", keys: keysNamed("payments.sign.v1", "payments.sign.v2"), active: map[string]string{"payments.sign": "v2"}},
+		{name: "unprovisioned_selector_accepted", keys: hyphenFamily, active: map[string]string{"audit": "v1"}},
+		{name: "no_keys", keys: &KeyStoreConfig{}, active: map[string]string{"payments.sign": "v2"}},
+		{
+			name: "dotted_selector_for_hyphen_family", keys: hyphenFamily, active: map[string]string{"payments.sign": "v2"},
+			wantField: "messaging.seal.active.payments.sign",
+			wantMsg:   `selects "payments.sign", which is not provisioned; "payments-sign" is (v1, v2); MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches only payments.sign`,
+			wantInAct: "set the payments-sign selector in YAML or as MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN, or rename the family",
+		},
+		{
+			name: "hyphen_selector_for_dotted_family", keys: keysNamed("payments.sign.v1"), active: map[string]string{"payments-sign": "v1"},
+			wantField: "messaging.seal.active.payments-sign",
+			wantMsg:   `selects "payments-sign", which is not provisioned; "payments.sign" is (v1); MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN reaches only payments-sign`,
+			wantInAct: "MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{KeyStore: *tt.keys, Messaging: MessagingConfig{Seal: SealConfig{Active: tt.active}}}
+			err := checkSealSelectorFamilies(cfg)
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Equal(t, tt.wantMsg, cfgErr.Message)
+			assert.Contains(t, cfgErr.Action, tt.wantInAct)
+		})
+	}
+}
+
+// TestValidateRunsTheSelectorFamilyRule: the cross-section rule is reached
+// through the public Validate door, after both sections passed on their own.
+func TestValidateRunsTheSelectorFamilyRule(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.KeyStore.Keys = map[string]KeyPairConfig{"payments-sign-v1": {Public: KeySourceConfig{Value: "cHVi"}}}
+	cfg.Messaging.Seal.Active = map[string]string{"payments.sign": "v1"}
+
+	err := Validate(cfg)
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "messaging.seal.active.payments.sign", cfgErr.Field)
+	assert.ErrorContains(t, err, "messaging config:")
 }

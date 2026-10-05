@@ -29,7 +29,7 @@ type CreateTokenResponse struct {
 }
 ```
 
-**Tag keys (all kids are case-sensitive, charset `[A-Za-z0-9_-]+`):**
+**Tag keys (all kids are case-sensitive: runs of `[A-Za-z0-9_-]` joined by single dots, so a dotted keystore name such as `tokens.our` is a kid as written — [ADR-144](adr_144_dotted_keystore_entry_names.md); `..` or a leading or trailing `.` is `JOSE_TAG_KID_INVALID`):**
 
 - Request: `decrypt` (our private key), `verify` (peer public key)
 - Response: `sign` (our private key), `encrypt` (peer public key)
@@ -276,7 +276,9 @@ curl -X POST https://api.example.com/v1/tokens \
   --data-binary @sealed.txt
 ```
 
-**Kid rule**: `-sign-kid` must equal the target endpoint's `verify=` tag name, and `-encrypt-kid` must equal its `decrypt=` tag name — the server binds kid headers to the policy's configured kids, and a mismatch fails with `JOSE_KID_UNKNOWN`.
+**Kid rule**: `-sign-kid` must equal the target endpoint's `verify=` tag name, and `-encrypt-kid` must equal its `decrypt=` tag name — the server binds kid headers to the policy's configured kids, and a mismatch fails with `JOSE_KID_UNKNOWN`. Both pass through verbatim: `tokens.our` and `tokens-our` are two different kids.
+
+**Partner kids**: the kid of a tag is the keystore entry name and travels on the wire unchanged, so a partner that pins kids sees exactly that string. A dotted name (`tokens.our`, settable with a POSIX `export` as `KEYSTORE_KEYS_TOKENS_OUR_*`) is a legal kid under RFC 7515 §4.1.4, which gives `kid` no structure, but confirm the partner accepts `.` before using one, and rename a live partner kid only as part of a key rotation with that partner ([keystore.md](keystore.md#entry-names), runbook R2).
 
 **Bare mode (Visa MLE)**: `-mode bare` (default `nested`) emits one compact JWE with no inner JWS. It takes only the encryption key and `-encrypt-kid`; `-sign-key-file`, `-sign-key-value`, `-sign-kid` or `-sig-alg` is refused by name. `-enc A128GCM` is accepted under bare only, and `-typ`, `-iat-ms` (millisecond `iat`) and repeatable `-protected key=value` (string values) are bare-only — under nested, the CLI refuses each by name (`-typ requires -mode bare`). `-envelope visa-mle` prints `{"encData":"<compact>"}` instead of the bare token — the envelope is a body wrapper, so it applies in nested mode too, but Visa's own MLE endpoints expect a bare `A128GCM` JWE inside it, which is what `-mode bare` mints:
 

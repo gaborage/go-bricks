@@ -68,6 +68,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/keymaterial"
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
 // errKeyNotFoundFmt is the fmt.Errorf format used by every accessor when a
@@ -87,6 +88,11 @@ type keyEntry struct {
 // All keys are loaded at construction time; access is read-only and thread-safe.
 type store struct {
 	keys map[string]*keyEntry
+	// folds maps each entry name's '-'-to-'.' fold to the name, so a miss can
+	// name the configured look-alike (ADR-144). config.Validate keeps entry
+	// folds distinct; on a Config that skipped it, the first name in sorted
+	// order is kept.
+	folds map[string]string
 	// families indexes the generation entries by Logical kid (generation.go).
 	families map[string][]Generation
 	// roleLog remembers which framework feature resolved each entry at startup
@@ -98,7 +104,7 @@ type store struct {
 func (s *store) PublicKey(name string) (*rsa.PublicKey, error) {
 	kp, ok := s.keys[name]
 	if !ok {
-		return nil, fmt.Errorf(errKeyNotFoundFmt, name)
+		return nil, s.notFound(name)
 	}
 	if kp.public == nil {
 		return nil, fmt.Errorf("keystore: key %q has no public key configured", name)
@@ -110,7 +116,7 @@ func (s *store) PublicKey(name string) (*rsa.PublicKey, error) {
 func (s *store) PrivateKey(name string) (*rsa.PrivateKey, error) {
 	kp, ok := s.keys[name]
 	if !ok {
-		return nil, fmt.Errorf(errKeyNotFoundFmt, name)
+		return nil, s.notFound(name)
 	}
 	if kp.private == nil {
 		return nil, fmt.Errorf("keystore: key %q has no private key configured", name)
@@ -123,7 +129,7 @@ func (s *store) PrivateKey(name string) (*rsa.PrivateKey, error) {
 func (s *store) Secret(name string) ([]byte, error) {
 	kp, ok := s.keys[name]
 	if !ok {
-		return nil, fmt.Errorf(errKeyNotFoundFmt, name)
+		return nil, s.notFound(name)
 	}
 	if kp.secret == nil {
 		return nil, fmt.Errorf("keystore: key %q has no symmetric secret configured", name)
@@ -152,7 +158,24 @@ func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store
 	if err != nil {
 		return nil, err
 	}
-	return &store{keys: parsed, families: families}, nil
+	folds := make(map[string]string, len(names))
+	for _, name := range names {
+		if _, seen := folds[keyname.Fold(name)]; !seen {
+			folds[keyname.Fold(name)] = name
+		}
+	}
+	return &store{keys: parsed, folds: folds, families: families}, nil
+}
+
+// notFound is the accessors' miss. When a configured entry differs from the
+// requested name only in '-' versus '.', it names that entry: the usual cause
+// is a rename made in one place (code, a tag, YAML or a variable) but not the
+// others.
+func (s *store) notFound(name string) error {
+	if configured, lookalike := s.folds[keyname.Fold(name)]; lookalike && configured != name {
+		return fmt.Errorf(errKeyNotFoundFmt+"; configured %q differs only in '-' versus '.'", name, configured)
+	}
+	return fmt.Errorf(errKeyNotFoundFmt, name)
 }
 
 // loadKeyEntry loads one entry as a symmetric secret, a PKCS#12 bundle, or an

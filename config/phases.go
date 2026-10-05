@@ -138,6 +138,12 @@ func check(cfg *Config) error {
 		return fmt.Errorf("keystore config: %w", err)
 	}
 
+	// Cross-section: a selector is judged against the families the keystore
+	// entries form, so it runs after both sections have been checked on their own.
+	if err := checkSealSelectorFamilies(cfg); err != nil {
+		return fmt.Errorf("messaging config: %w", err)
+	}
+
 	if err := checkAuth(&cfg.Auth); err != nil {
 		return fmt.Errorf("auth config: %w", err)
 	}

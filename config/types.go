@@ -608,9 +608,11 @@ type SealConfig struct {
 	// sign and encrypt alike. Absent for a family with exactly one provisioned
 	// generation, that one is active; with several, startup refuses to guess.
 	// The value grammar is ^v[1-9][0-9]*$ (checked here); resolution against
-	// the keystore is keystore.ActiveGeneration. Environment form:
-	// MESSAGING_SEAL_ACTIVE_<LOGICAL>=v2 — a hyphenated Logical kid is settable
-	// only where the runtime permits '-' in a variable name (ADR-090).
+	// the keystore is keystore.ActiveGeneration. A dotted family is written
+	// nested (active: {payments: {sign: v2}}) and set from any shell as
+	// MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2 (ADR-144); a hyphenated family
+	// is settable by variable only where the runtime permits '-' in a
+	// variable name (ADR-090).
 	Active map[string]string `koanf:"active" json:"active" yaml:"active" toml:"active" mapstructure:"active"`
 }
 
@@ -1074,9 +1076,16 @@ type SchedulerTimeoutConfig struct {
 // KeyStoreConfig holds named key material configuration.
 // Keys can be loaded from files (local dev) or base64-encoded values (EKS deployment).
 type KeyStoreConfig struct {
-	// Keys maps logical names to key material configurations; see
-	// KeyPairConfig for the accepted shapes.
-	// Example names: "signing", "encryption", "legacy", "my-mac-key".
+	// Keys maps entry names to key material configurations; see
+	// KeyPairConfig for the accepted shapes. A name is a dotted path of
+	// [a-z0-9-] segments (ADR-144), written nested in YAML
+	// (keys: {tokens: {our: {public: …}}}) and reached by the environment
+	// through the same path (KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_VALUE), so the
+	// map key is "tokens.our": the app.KeyStore argument, the jose: tag value
+	// and the wire kid, verbatim. A name with '-' is settable by variable only
+	// where the runtime permits '-' in a variable name (ADR-090); a field name
+	// (public, private, secret, pkcs12) may not follow a '.'.
+	// Example names: "signing", "my-mac-key", "tokens.our", "payments.sign.v1".
 	Keys map[string]KeyPairConfig `koanf:"keys" json:"keys" yaml:"keys" toml:"keys" mapstructure:"keys"`
 
 	// SecretMinLength is the minimum byte length enforced for symmetric secret

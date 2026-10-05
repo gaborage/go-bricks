@@ -9,9 +9,13 @@
 // Usage:
 //
 //	open-event -sign-key-file sign.pub.der -encrypt-key-file enc.der \
-//	  -sign-kid svc-payments-sign-v1 -encrypt-kid aud-core-encrypt-v1 \
+//	  -sign-kid svc.payments.sign.v1 -encrypt-kid aud.core.encrypt.v1 \
 //	  -subject card -event-type payment.authorized \
 //	  -tenancy shared -tenant-id t1 body.txt
+//
+// Each kid is a Generation: <family>.v<N> for a dotted family, <family>-v<N> for a family
+// without '.', so -sign-kid svc-payments-sign-v1 still works (ADR-144). The JSON keys
+// signKid, encKid and signFamily carry the values verbatim, dots included.
 //
 // The sealed subject is NEVER printed by default: the document comes back with the subject
 // member rendered as the string "<redacted>", so its place in the document stays visible
@@ -138,9 +142,9 @@ func parseFlags(args []string, stderr io.Writer) (*cliConfig, error) {
 		"used to verify the sealed document's signature",
 		"used to decrypt the subject member")
 	fs.StringVar(&cfg.signKid, "sign-kid", "",
-		"concrete sign generation the body must carry; never peeked from the unauthenticated header (required)")
+		"concrete sign generation the body must carry (<family>.v<N>, or <family>-v<N> for a family without '.'); never peeked from the unauthenticated header (required)")
 	fs.StringVar(&cfg.encryptKid, "encrypt-kid", "",
-		"concrete encrypt generation the inner JWE must carry (required)")
+		"concrete encrypt generation the inner JWE must carry (<family>.v<N>, or <family>-v<N> for a family without '.') (required)")
 	fs.StringVar(&cfg.subject, "subject", "",
 		"json member name of the subject — the one sealed member, and the signed sp entry (required)")
 	fs.StringVar(&cfg.eventType, "event-type", "",

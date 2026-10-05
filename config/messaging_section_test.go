@@ -893,8 +893,9 @@ func newSharedTenancyConfig(rootBroker, tenancy string) *Config {
 	}
 }
 
-// TestCheckMessagingSeal covers the selector shape rules: key reachability
-// and dots, value grammar, and sorted first-error reporting.
+// TestCheckMessagingSeal covers the selector shape rules: key reachability,
+// dotted segments and look-alikes (ADR-144), value grammar, and sorted
+// first-error reporting.
 func TestCheckMessagingSeal(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -904,8 +905,27 @@ func TestCheckMessagingSeal(t *testing.T) {
 	}{
 		{name: "absent", active: nil},
 		{name: "valid", active: map[string]string{"svc-payments-sign": "v2", "svc-enc": "v10"}},
-		{name: "empty_key", active: map[string]string{"": "v1"}, wantField: "messaging.seal.active", wantMsg: "cannot be empty or contain '.'"},
-		{name: "dotted_key", active: map[string]string{"svc.sign": "v1"}, wantField: "messaging.seal.active", wantMsg: "cannot be empty or contain '.'"},
+		{name: "empty_key", active: map[string]string{"": "v1"}, wantField: "messaging.seal.active", wantMsg: "cannot be empty or have an empty segment"},
+		{name: "dotted_key", active: map[string]string{"svc.sign": "v1"}},
+		{name: "dotted_and_hyphen_keys", active: map[string]string{"svc.payments-sign": "v1", "svc-enc": "v2"}},
+		{name: "empty_segment", active: map[string]string{"svc..sign": "v1"}, wantField: "messaging.seal.active", wantMsg: "cannot be empty or have an empty segment"},
+		{name: "trailing_dot", active: map[string]string{"svc.": "v1"}, wantField: "messaging.seal.active", wantMsg: "cannot be empty or have an empty segment"},
+		{name: "unreachable_dotted_key", active: map[string]string{"svc.Sign": "v1"}, wantField: "messaging.seal.active.svc.Sign", wantMsg: "not reachable by an environment variable"},
+		{
+			name: "lookalike_selectors", active: map[string]string{"payments-sign": "v1", "payments.sign": "v2"},
+			wantField: "messaging.seal.active.payments.sign", wantMsg: `selectors "payments-sign" and "payments.sign" differ only in '-' versus '.'`,
+		},
+		{
+			name: "selectors_nest_when_hyphen_reads_as_dot", active: map[string]string{"payments-sign": "v2", "payments.sign.eu": "v1"},
+			wantField: "messaging.seal.active.payments.sign.eu",
+			wantMsg:   `selectors "payments-sign" and "payments.sign.eu" nest when '-' is read as '.': merged from YAML and the environment, one replaces the other in silence`,
+		},
+		{
+			name: "selectors_nest", active: map[string]string{"payments": "v1", "payments.sign": "v2"},
+			wantField: "messaging.seal.active.payments.sign", wantMsg: `selectors "payments" and "payments.sign" nest: merged`,
+		},
+		{name: "hyphen_only_selectors_that_fold_nest", active: map[string]string{"payments-sign": "v2", "payments-sign-eu": "v1"}},
+		{name: "reserved_word_is_no_rule", active: map[string]string{"webhook.secret": "v1"}},
 		{name: "unreachable_key", active: map[string]string{"Svc_Sign": "v1"}, wantField: "messaging.seal.active.Svc_Sign", wantMsg: "not reachable by an environment variable"},
 		{name: "value_missing_v", active: map[string]string{"svc-sign": "2"}, wantField: "messaging.seal.active.svc-sign", wantMsg: `generation "2" must be v<N>`},
 		{name: "value_zero", active: map[string]string{"svc-sign": "v0"}, wantField: "messaging.seal.active.svc-sign", wantMsg: `generation "v0" must be v<N>`},
@@ -924,6 +944,36 @@ func TestCheckMessagingSeal(t *testing.T) {
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, tt.wantField, cfgErr.Field)
 			assert.Contains(t, cfgErr.Message, tt.wantMsg)
+		})
+	}
+}
+
+// TestSelectorSuggestionNamesTheExactVariable: a selector is a leaf, so the
+// dotted spelling an unreachable selector key suggests is reached by exactly
+// one variable, never a VAR_* family; and only a family is suggested, since a
+// selector names a family, never a generation.
+func TestSelectorSuggestionNamesTheExactVariable(t *testing.T) {
+	tests := []struct {
+		selector string
+		want     string
+	}{
+		{selector: "payments_sign", want: `write "payments.sign", which MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches`},
+		{selector: "webhook_secret", want: `write "webhook.secret", which MESSAGING_SEAL_ACTIVE_WEBHOOK_SECRET reaches`},
+		{selector: "payments_sign_v1"},
+		{selector: "audit_v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.selector, func(t *testing.T) {
+			err := checkMessagingSeal(&SealConfig{Active: map[string]string{tt.selector: "v1"}})
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Contains(t, cfgErr.Message, "not reachable by an environment variable")
+			assert.NotContains(t, cfgErr.Action, "_*")
+			if tt.want == "" {
+				assert.NotContains(t, cfgErr.Action, `write "`)
+				return
+			}
+			assert.Contains(t, cfgErr.Action, tt.want)
 		})
 	}
 }

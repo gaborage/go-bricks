@@ -10,12 +10,16 @@
 //
 //	echo '{"order_id":"o-1","card":{"pan":"4111111111111111"}}' | seal-event \
 //	  -sign-key-file sign.der -encrypt-key-file enc.pub.der \
-//	  -sign-kid svc-payments-sign-v1 -encrypt-kid aud-core-encrypt-v1 \
+//	  -sign-kid svc.payments.sign.v1 -encrypt-kid aud.core.encrypt.v1 \
 //	  -subject card -event-type payment.authorized -tenant-id t1
+//
+// A family without '.' keeps its hyphen generations, so
+// -sign-kid svc-payments-sign-v1 still works (ADR-144).
 //
 // The three bindings a consumer checks, each a rejection rather than a publish
 // failure when it is wrong: both kids must be provisioned Generations
-// ("<logical>-v<N>") of the families the consumer's seal tag names;
+// ("<family>.v<N>" for a dotted family, "<family>-v<N>" otherwise) of the
+// families the consumer's seal tag names;
 // -event-type must equal the consumer declaration's EventType, since the
 // signed etyp is compared verbatim; and -tenant-id, which writes the signed
 // tid, must equal the x-tenant-id header the message is published with under
@@ -118,9 +122,9 @@ func parseFlags(args []string, stderr io.Writer) (*cliConfig, error) {
 	cfg := &cliConfig{}
 	cfg.keys = sealcli.KeyFlags(fs, "used to sign the sealed document", "used to encrypt the subject member")
 	fs.StringVar(&cfg.signKid, "sign-kid", "",
-		"concrete sign generation written to the JWS header; must be a provisioned generation of the consumer's sign= family (required)")
+		"concrete sign generation written to the JWS header (<family>.v<N>, or <family>-v<N> for a family without '.'); must be a provisioned generation of the consumer's sign= family (required)")
 	fs.StringVar(&cfg.encryptKid, "encrypt-kid", "",
-		"concrete encrypt generation written to the JWE header; must be a provisioned generation of the consumer's encrypt= family (required)")
+		"concrete encrypt generation written to the JWE header (<family>.v<N>, or <family>-v<N> for a family without '.'); must be a provisioned generation of the consumer's encrypt= family (required)")
 	fs.StringVar(&cfg.subject, "subject", "",
 		"json member name of the subject — the one member sealed, and the signed sp entry (required)")
 	fs.StringVar(&cfg.eventType, "event-type", "",

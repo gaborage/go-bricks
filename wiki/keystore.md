@@ -32,7 +32,16 @@ keystore:
         file: "certs/signing_public.der"        # local dev
       private:
         value: "${SIGNING_PRIVATE_KEY_BASE64}"  # deployed (base64 DER)
-    mac-key:                     # symmetric secret entry — names match ^[a-z0-9-]+$
+    tokens:                      # a namespace: the entries below are "tokens.our" and "tokens.peer"
+      our:
+        public:
+          file: "certs/tokens_our_public.der"
+        private:
+          value: "${TOKENS_OUR_PRIVATE_KEY_BASE64}"
+      peer:
+        public:
+          file: "certs/tokens_peer_public.der"
+    mac-key:                     # symmetric secret entry — a one-segment name
       secret:
         file: "certs/mac-key.bin"               # local dev: raw key bytes
     mac-key-deployed:
@@ -45,11 +54,9 @@ keystore:
           env: "VTS_P12_PASSWORD"               # the variable's NAME; or file: a mounted secret
 ```
 
-The `<name>` must match `^[a-z0-9-]+$`, so the entry stays addressable by environment
-variable: an underscored or uppercase name fails startup
-([ADR-090](adr_090_env_reachable_section_names.md)), and a hyphenated one is settable only
-where the runtime permits `-` in a variable name, which Docker and Kubernetes do and POSIX
-`export` does not.
+The entry name is the path below `keys`, joined with `.`: the YAML above defines
+`signing`, `tokens.our`, `tokens.peer`, `mac-key`, `mac-key-deployed` and `vts`. See
+[Entry names](#entry-names) for the grammar and the environment form.
 
 Each `keys.<name>` entry resolves to **exactly one** of the following shapes:
 
@@ -63,6 +70,90 @@ Within any source, set **exactly one** of `file` (path) or `value`
 (base64-encoded bytes). Setting both, setting a `secret` alongside
 `public`/`private`, or setting a `pkcs12` alongside either, is rejected by the
 config validation layer at startup with a clear `ConfigError`.
+
+### Entry names
+
+A `keystore.keys` entry name is a **dotted path of segments**
+([ADR-144](adr_144_dotted_keystore_entry_names.md)). Each segment matches `[a-z0-9-]+`, and
+YAML writes the segments as nested maps. The environment reaches the same path through the
+unchanged transform (lowercase, `_` → `.`), so a variable and a nested YAML key name one
+entry. The joined string is used verbatim everywhere: as the `Keys` map key, the
+`app.KeyStore` argument (`PrivateKey("tokens.our")`), the `jose:` tag value, the wire `kid`
+and, for a sealing generation, the sealed kid and inbox family. Nothing rewrites one name
+into another, so `tokens-our` and `tokens.our` are two different names.
+
+| Entry name | YAML | Environment variable | POSIX `export` |
+| --- | --- | --- | --- |
+| `tokens.our` | `keys: {tokens: {our: {private: …}}}` | `KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE` | yes |
+| `payments.sign.v1` | `keys: {payments: {sign: {v1: {private: …}}}}` | `KEYSTORE_KEYS_PAYMENTS_SIGN_V1_PRIVATE_FILE` | yes |
+| `tokens-our` | `keys: {tokens-our: {private: …}}` | `KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` | no: Docker and Kubernetes only |
+| `signing` | `keys: {signing: {private: …}}` | `KEYSTORE_KEYS_SIGNING_PRIVATE_VALUE` | yes |
+
+A name is settable with a POSIX `export` exactly when it contains no `-`. Every name that was
+valid before ADR-144 is a one-segment name and keeps its meaning, its variable and its wire kid.
+
+Startup refuses, each with a `ConfigError` naming the koanf path and the rename:
+
+- **A quoted key containing `.`** (`"tokens.our":`). Write it nested; the nested path is the one
+  the variable reaches.
+- **A segment outside `[a-z0-9-]`** (`tokens_our`, `Tokens`). The error names the dotted spelling
+  the variable already reaches (`write "tokens.our", which KEYSTORE_KEYS_TOKENS_OUR_* reaches`),
+  unless that spelling would be refused too (`webhook_secret`, `audit_v1`).
+- **A field name after a `.`.** An entry is recognized by its fields (`public`, `private`,
+  `secret`, `pkcs12`), so `webhook.secret` would read as entry `webhook` with a `secret` field.
+  Rename it `webhook-secret` or `webhook.hmac`. A first segment is never a field, so a legacy
+  entry named `secret` stays valid.
+- **An entry with a name below it** (`tokens` and `tokens.our`). Nested YAML and the environment
+  cannot hold both, so before ADR-144 the nested one was dropped in silence. Rename one of them
+  (`tokens` → `tokens.default`).
+- **Two names that differ only in `-` versus `.`** (`tokens-our` and `tokens.our`, or `a-b.c`
+  and `a.b-c`). A POSIX override of the hyphenated entry creates the dotted one instead, and
+  the override is never applied. Keep one name. Two generation names (`payments-sign-v1` and
+  `payments.sign.v1`) are refused as look-alike families instead (see
+  [Generation entries](#generation-entries-key-families)), because moving a generation into the
+  other family is a drain-then-cutover.
+- **A key under an entry that is not one of its fields** (`privte`), and **a key under a field
+  that is not one of its sources** (`vlaue`; a source takes `file` or `value`, `pkcs12` also
+  takes `password`, which takes `env` or `file`). These were dropped in silence before ADR-144.
+
+When an accessor misses a name and a configured entry differs from it only in `-` versus `.`,
+the error names that entry: `keystore: key "tokens.our" not found; configured "tokens-our"
+differs only in '-' versus '.'`.
+
+**Known limitation.** Nothing reports an entry that no route, declaration or module asks for.
+Take variables left over after the YAML moved from `tokens-our` to `tokens.our`:
+
+- **`tokens.our` configured too:** the look-alike rule refuses the pair.
+- **One half left over** (`KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` alone, `tokens.our`
+  missing): startup fails with `keystore.keys.tokens-our.public key source required`. The
+  error first suggests completing `tokens-our`, which is the wrong fix here: remove the
+  variable.
+- **A complete pair, or a `secret`, left over** (`tokens.our` missing): the stray entry loads
+  in silence. A `jose:` route resolves its kids at startup, so startup fails with the
+  look-alike hint above in the cause. Only a lazy `PrivateKey("tokens.our")` (or `PublicKey`,
+  `Secret`) in module code passes startup and fails on first use, with the same hint.
+
+Remove retired variables together with the YAML they override.
+
+#### Runbooks
+
+- **R0, upgrade.** Nothing to rename. A config that boots today boots unchanged, unless an entry
+  carries a key that is not a field or source, or an entry is nested under another; startup now
+  names both ([migrations.md](migrations.md) `[C72.17]`).
+- **R1, rename an in-process entry** (every reader is in this service: `PrivateKey` literals and
+  `jose:` tags whose peer is the service itself). Change the YAML, the code literals, the tags and
+  the deployment variables in one deploy. The two spellings cannot coexist, so there is no
+  overlap window.
+- **R2, rename a partner-facing JOSE kid.** The kid is on the wire and the partner pins it. Treat
+  the rename as a key rotation with the partner: confirm the partner accepts `.` in a kid,
+  provision the new name beside the old one only if the two are not look-alikes (otherwise
+  switch in one coordinated cutover), then retire the old name.
+- **R3, roll back.** A config holding a dotted name fails on an earlier binary, so roll back the
+  config together with the code.
+
+A sealing family is renamed by draining it: see
+[sealing.md](sealing.md#renaming-a-family). The recommendation is dotted names for new keys,
+and leaving live partner kids and live sealing families alone.
 
 ### PKCS#12 bundles
 
@@ -121,22 +212,48 @@ outside the keystore.
 > How generations, the accept set and the activation selector fit into a sealing rotation,
 > per family: [sealing.md](sealing.md#rotation-runbooks).
 
-An entry named `<logical>-v<N>` is a **generation** of the Logical kid `<logical>`,
-the shape AMQP payload sealing rotates by (spec #1309, issue #1306). The trailing
-`-v<digits>` is the sole generation marker; every other name is an ordinary entry and nothing below applies to it — HTTP jose entries are unaffected.
+An entry named for a version of a Logical kid is a **generation** of that family, the shape
+AMQP payload sealing rotates by (spec #1309, issue #1306). The family fixes the marker
+([ADR-144](adr_144_dotted_keystore_entry_names.md)):
 
-At startup the store refuses a generation entry whose family part fails the Logical kid
-grammar: the jose kid alphabet `^[A-Za-z0-9_-]+$` (already narrowed to `^[a-z0-9-]+$` by
-the reachability rule above), at most 64 characters, and never itself ending in
-`-v<digits>` — `x-v1-v2` is refused because its family `x-v1` would be a generation, so
-every entry belongs to exactly one family by construction. The version is a
-positive integer without leading zeros: `x-v0` and `x-v01` are refused (`v1`, not `v01`), so
-two spellings can never alias one key.
+| Family | Generation names | Example |
+| --- | --- | --- |
+| contains `.` | `<family>.v<N>`, a final segment | `payments.sign.v1`, `payments.sign.v2` |
+| has no `.` | `<family>-v<N>` | `svc-payments-sign-v1`, `svc-payments-sign-v2` |
 
-**Consumer-visible risk:** an existing entry whose name already ends in `-v<digits>`
-acquires generation semantics, and is refused if its family part fails the grammar.
-No shipped example does (0 hits across `wiki/**`, `llms.txt`, `README.md`, the config
-fixtures and the demo project's `config*.yaml` and jose tags).
+Every other name is an ordinary entry and nothing below applies to it — HTTP jose entries are
+unaffected. Because the marker is a function of the family, `Generation.Kid()` is too, and a
+family's marker can never change: a one-segment family such as `signing` keeps `signing-v<N>`
+for its whole life. Moving it to a dotted family is a rename, not a rotation
+([sealing.md](sealing.md#renaming-a-family)).
+
+`config.Validate` and the store refuse a name that carries a marker but is no generation,
+each with the rename spelled out:
+
+- the other family's marker: `payments.sign-v1` (rename `payments.sign.v1`), `audit.v1` and
+  `payments-sign.v1` (rename `audit-v1` and `payments-sign-v1`, or give the family a second
+  segment);
+- a family that fails the Logical kid grammar: the jose kid alphabet (runs of
+  `[A-Za-z0-9_-]` joined by single dots, already narrowed to `[a-z0-9-]` segments by the rules
+  above), at most 64 characters, and never itself ending in a marker — `x-v1-v2` and `x.v1.v2`
+  are refused because their families would be generations, so every entry belongs to exactly
+  one family by construction;
+- a version that is not a positive integer without leading zeros: `x-v0`, `x.y.v01` (`v1`, not
+  `v01`), so two spellings can never alias one key.
+
+Two families that differ only in `-` versus `.` (`payments-sign-v1` beside `payments.sign.v2`,
+or beside `payments.sign.v1`) are refused: that is a second family, not a rotation. The error
+names the variable that reaches the hyphenated generation (`KEYSTORE_KEYS_PAYMENTS-SIGN-V2_*`,
+Docker or Kubernetes only). So are two families that nest, as written or once `-` is read as
+`.` (`payments-v1` beside `payments.sign.v1`; `payments-sign-v1` beside `payments.sign.eu.v1`),
+because `messaging.seal.active` could not hold a selector for both: a POSIX variable for the
+first would land on the path of the second and be dropped. Two families without `.`
+(`payments-sign`, `payments-sign-eu`) are exempt, as before.
+
+**Consumer-visible risk:** an existing entry whose name already ends in `-v<digits>`, or in a
+`v<digits>` segment, acquires generation semantics, and is refused if it is no well-formed
+generation. No shipped example does (0 hits across `wiki/**`, `llms.txt`, `README.md`, the
+config fixtures and the demo project's `config*.yaml` and jose tags).
 
 ```go
 type FamilyEnumerator interface {
@@ -159,11 +276,18 @@ The producer picks which provisioned generation seals new traffic, per Logical k
 messaging:
   seal:
     active:
+      payments:
+        sign: v2                 # family payments.sign; env: MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2
       svc-payments-sign: v2      # env: MESSAGING_SEAL_ACTIVE_SVC-PAYMENTS-SIGN=v2
 ```
 
-`config.Validate` checks the shape — each key is an env-reachable section name, each value
-`v<N>` with `N` a positive integer without leading zeros — and
+A selector key is a family name: a dotted family is written nested, exactly like its keystore
+entries. `config.Validate` checks the shape — each key a dotted path of `[a-z0-9-]` segments,
+no two keys that differ only in `-` versus `.` or nest once `-` is read as `.` (unless neither
+contains `.`), each value `v<N>` with `N` a positive integer without leading zeros — and
+refuses a selector that differs from a provisioned family only in
+`-` versus `.`: `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2` beside family `payments-sign` would
+select nothing and leave the old generation sealing. Then
 `keystore.ActiveGeneration(store, active, logical)` resolves it against the keystore at
 startup, once per Logical kid the producer resolves, sign and encrypt alike:
 
@@ -175,13 +299,13 @@ startup, once per Logical kid the producer resolves, sign and encrypt alike:
 | N | names a provisioned generation | that generation |
 | N | names an unprovisioned generation | error naming the selector value |
 
-The environment door is narrower than the YAML one. The loader lowercases a variable name
-and maps `_` to `.`, so an `MESSAGING_SEAL_ACTIVE_*` override reaches only a Logical kid
-spelled in `[a-z0-9]` — or one with hyphens where the runtime permits `-` in a variable name
-(Docker and Kubernetes do, POSIX `export` does not,
-[ADR-090](adr_090_env_reachable_section_names.md)). Under POSIX a hyphenated kid such as
-`svc-payments-sign` is YAML-only. A selector for a Logical kid the producer never resolves is
-ignored here.
+The loader lowercases a variable name and maps `_` to `.`, so an `MESSAGING_SEAL_ACTIVE_*`
+override reaches the dotted family its segments spell: `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN`
+is the selector for `payments.sign`, from any shell. A hyphenated family is settable that way
+only where the runtime permits `-` in a variable name (Docker and Kubernetes do, POSIX `export`
+does not, [ADR-090](adr_090_env_reachable_section_names.md)); under POSIX a hyphenated family
+such as `svc-payments-sign` is YAML-only. A selector for a Logical kid the producer never
+resolves is ignored here.
 
 ## API
 

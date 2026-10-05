@@ -2400,6 +2400,23 @@ the error says the fix is configuration, not a re-run.
 
 ---
 
+### [ADR-144: Keystore Entry Names Are Dotted Paths, Written Nested](adr_144_dotted_keystore_entry_names.md)
+
+**Date:** 2026-10-04 | **Status:** Accepted | **Breaking:** a key under a keystore entry that is not a field or source, or an entry nested under another entry, now fails startup instead of being dropped
+
+A `keystore.keys` name may be a dotted path written as nested YAML, so `KEYSTORE_KEYS_TOKENS_OUR_*`
+reaches entry `tokens.our` from any shell; the joined path is the name verbatim, the JOSE kid on
+the wire and, for a generation, the sealed kid and inbox family. Entries must be prefix-free and
+fold-distinct (`-` versus `.`); a dotted family names generations `<family>.v<N>`, an undotted one
+keeps `-v<N>`, so `Generation.Kid` stays pure and no existing kid, inbox key or vector moves. One
+`internal/keyname` grammar replaces four copies. Amends ADR-090 (`keystore.keys` only) and
+ADR-097 (generation grammar and the selector env door). See [migrations.md](migrations.md)
+`[C72.17]`.
+
+**Key Benefits:** POSIX-settable key names and selectors without a second naming grammar.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -2574,6 +2591,8 @@ is greenfield. Deep dive: [sealing.md](sealing.md).
 shared by both sides, rotation without touching a tag, and a dedup key no header can forge.
 Amended by ADR-139: `RegisterSealCodec`, `ConfigureSealing` and `SealingRuntime()` are deleted;
 the blank import registers, the app configures, and modules read the facts from `ModuleDeps`.
+Amended by ADR-144: a dotted family names its generations `<family>.v<N>`, and a selector for
+it is written nested or set as `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2`.
 
 ---
 
@@ -2600,7 +2619,9 @@ is read only when someone is already looking.
 
 **Key Benefits:** a section that cannot be driven from the environment can no longer reach
 production, and the silent-sibling collision becomes a startup error naming the offending key.
-**Migration:** [migrations.md](migrations.md) `[C61.22]`.
+**Migration:** [migrations.md](migrations.md) `[C61.22]`. Amended by ADR-144: a `keystore.keys`
+name may be a dotted path of `[a-z0-9-]` segments, written nested; `databases` and
+`multitenant.tenants` keep `^[a-z0-9-]+$`.
 
 ---
 
@@ -3194,7 +3215,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-143) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-144) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

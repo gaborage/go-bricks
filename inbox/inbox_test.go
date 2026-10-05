@@ -223,6 +223,30 @@ func TestProcessOnceAdmitsTheSealedKeyOnlyFromTheSealedDoor(t *testing.T) {
 	}
 }
 
+// TestProcessOnceAdmitsADottedSealedFamily: a dotted sign family (ADR-144) composes the
+// sealed key <family>:<jti> with its dots verbatim, and the ledger door admits it under
+// its own delivery's context exactly as it admits a hyphenated one; ':' still keeps it
+// outside the wire-key grammar.
+func TestProcessOnceAdmitsADottedSealedFamily(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+	in := newTestInbox(db)
+
+	ran := false
+	err := runSealedWithJTI(t, "payments.sign:jti-dotted", func(ctx context.Context, key messaging.DedupKey) error {
+		assert.Equal(t, "payments.sign:jti-dotted", key.String())
+		return in.ProcessOnce(ctx, key, func(context.Context, dbtypes.Tx) error {
+			ran = true
+			return nil
+		})
+	})
+	require.NoError(t, err)
+	assert.True(t, ran)
+
+	_, err = messaging.WireDedupKey("payments.sign:jti-dotted")
+	require.ErrorIs(t, err, messaging.ErrInvalidEventID, "no wire key can spell a sealed one")
+}
+
 func TestProcessOnceRunsFnOnFirstEvent(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	db.ExpectTransaction().
@@ -382,13 +406,18 @@ const (
 
 type stubOpener struct{}
 
+// Open reads the jti from the body, and a "<family>:" prefix, when present, as the
+// verified sign family, so a case can drive a family other than sealedTestFamily.
 func (stubOpener) Open(_ context.Context, body []byte, _ sealruntime.TenantRule, out any) (sealruntime.Envelope, error) {
 	*out.(*sealedEvent) = sealedEvent{Ref: "abc"}
-	jti := sealedTestJTI
+	family, jti := sealedTestFamily, sealedTestJTI
 	if len(body) > 0 {
 		jti = string(body)
 	}
-	return sealruntime.Envelope{JTI: jti, SignFamily: sealedTestFamily}, nil
+	if f, j, ok := strings.Cut(jti, ":"); ok {
+		family, jti = f, j
+	}
+	return sealruntime.Envelope{JTI: jti, SignFamily: family}, nil
 }
 
 type stubCodec struct{}

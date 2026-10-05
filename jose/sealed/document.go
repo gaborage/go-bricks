@@ -7,7 +7,8 @@ package sealed
 
 // NewDocumentSpec builds the Spec of a document that no Go type describes: the Two-kid
 // identity and the json member name of the Subject. Both kids must be Logical kids
-// (CheckLogicalKid: `^[A-Za-z0-9_-]+$`, at most MaxLogicalKidLen, no `-v<digits>` suffix)
+// (CheckLogicalKid: runs of `[A-Za-z0-9_-]` joined by single dots, at most MaxLogicalKidLen,
+// no `-v<digits>` or `.v<digits>` Generation marker)
 // and subjectPath must be non-empty; failures carry the tag scan's own codes,
 // SEAL_TAG_KID_INVALID with the offending Kid and SEAL_TAG_SUBJECT_MISSING.
 //
