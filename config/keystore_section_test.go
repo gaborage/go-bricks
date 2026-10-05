@@ -508,6 +508,7 @@ func TestCheckKeyStoreNameRules(t *testing.T) {
 // The family fixes the marker: a dotted family takes a final v<N> segment, a
 // family without '.' keeps -v<N>.
 func TestCheckKeyStoreRefusesMalformedGenerations(t *testing.T) {
+	const noFamilyAction = "name a generation <family>.v<N> (family with '.') or <family>-v<N> (family without '.')"
 	tests := []struct {
 		entry     string
 		wantMsg   string
@@ -517,12 +518,12 @@ func TestCheckKeyStoreRefusesMalformedGenerations(t *testing.T) {
 		{entry: "audit.v1", wantMsg: `family "audit" has no '.', so its generations are named audit-v<N>`, wantInAct: "rename it audit-v1, or give the family a second segment (audit.<purpose>.v1)"},
 		{entry: "payments-sign.v1", wantMsg: `family "payments-sign" has no '.'`, wantInAct: "rename it payments-sign-v1"},
 		{entry: "x.y.v0", wantMsg: `generation "v0" must be a positive integer without leading zeros`, wantInAct: "rename it x.y.v1"},
-		{entry: "x.y.v01", wantMsg: `generation "v01" must be a positive integer`},
+		{entry: "x.y.v01", wantMsg: `generation "v01" must be a positive integer`, wantInAct: "rename it x.y.v1"},
 		{entry: "x-v0", wantMsg: `generation "v0" must be a positive integer`, wantInAct: "rename it x-v1"},
-		{entry: "x.v1.v2", wantMsg: `"x.v1" before it is no family`},
-		{entry: "x-v1-v2", wantMsg: `"x-v1" before it is no family`},
-		{entry: "-v1", wantMsg: `"" before it is no family`},
-		{entry: strings.Repeat("a", 65) + "-v1", wantMsg: "is 65 bytes, maximum is 64"},
+		{entry: "x.v1.v2", wantMsg: `"x.v1" before it is no family`, wantInAct: noFamilyAction},
+		{entry: "x-v1-v2", wantMsg: `"x-v1" before it is no family`, wantInAct: noFamilyAction},
+		{entry: "-v1", wantMsg: `"" before it is no family`, wantInAct: noFamilyAction},
+		{entry: strings.Repeat("a", 65) + "-v1", wantMsg: "is 65 bytes, maximum is 64", wantInAct: "shorten the family"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.entry, func(t *testing.T) {
