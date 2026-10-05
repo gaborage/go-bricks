@@ -29,7 +29,7 @@ require (
 	// internal NewProducerOptions(); a change there breaks silently.
 	// See gaborage/go-bricks#1014.
 	github.com/rabbitmq/rabbitmq-stream-go-client v1.8.3
-	github.com/redis/go-redis/v9 v9.22.0
+	github.com/redis/go-redis/v9 v9.23.0
 	github.com/rs/zerolog v1.35.1
 	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/stretchr/testify v1.12.1
