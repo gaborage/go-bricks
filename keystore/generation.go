@@ -2,29 +2,11 @@ package keystore
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 
-	"github.com/gaborage/go-bricks/jose"
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
-
-// maxLogicalKidLen caps a Logical kid so the full entry name stays a
-// tractable header value once a generation suffix is appended (spec G4).
-const maxLogicalKidLen = 64
-
-// generationSuffixPattern detects the Generation marker: a trailing "-v"
-// followed by digits only. Any entry name matching it IS a generation entry
-// and is judged by the family rules below; an entry without it is an ordinary
-// entry and is left alone.
-var generationSuffixPattern = regexp.MustCompile(`-v\d+$`)
-
-// generationVersionPattern is the canonical form of a version: a positive
-// integer with no leading zero, so "v1" and "v01" can never name the same key
-// and "v0" is not a generation. config.sealGenerationPattern holds the
-// Activation selector value (messaging.seal.active) to the same grammar —
-// keep in sync.
-var generationVersionPattern = regexp.MustCompile(`^v[1-9]\d*$`)
 
 // Role is the material an entry holds, which decides what a sealing side can
 // do with a generation: verify/encrypt (public only), sign/decrypt (private
@@ -68,7 +50,7 @@ type Generation struct {
 // Kid is the full entry name, e.g. "svc-payments-sign-v2" — the value that
 // travels on the wire and the name the store's accessors take.
 func (g Generation) Kid() string {
-	return g.Logical + "-" + g.Version
+	return keyname.GenerationName(g.Logical, g.Version)
 }
 
 // FamilyEnumerator lists the provisioned generations of a Logical kid. The
@@ -91,31 +73,29 @@ func (s *store) Generations(logical string) []Generation {
 
 // splitGeneration returns the family part and version of a generation entry
 // name, or ok=false when the name carries no generation marker and is an
-// ordinary entry. The LAST "-v<digits>" is the marker, so "x-v1-v2" splits
-// into family "x-v1" and version "v2" — and the family then fails
-// validateLogical, which is the intended refusal.
+// ordinary entry. Any entry name carrying the marker IS a generation entry and
+// is judged by the family rules below, so a malformed one is still ok=true:
+// "x-v1-v2" splits into family "x-v1" and version "v2", and the family then
+// fails validateLogical, which is the intended refusal.
 func splitGeneration(name string) (logical, version string, ok bool) {
-	loc := generationSuffixPattern.FindStringIndex(name)
-	if loc == nil {
-		return "", "", false
-	}
-	return name[:loc[0]], name[loc[0]+1:], true
+	logical, version, form := keyname.SplitGeneration(name)
+	return logical, version, form != keyname.Ordinary
 }
 
 // validateLogical enforces the Logical kid grammar (spec G4): the jose kid
-// alphabet, at most maxLogicalKidLen characters, and never itself ending in
-// the generation marker, so every entry belongs to exactly one family.
+// alphabet, at most keyname.MaxLogicalLen characters, and never itself ending
+// in the generation marker, so every entry belongs to exactly one family.
 func validateLogical(logical string) error {
-	if !jose.ValidKid(logical) {
+	switch keyname.CheckLogical(logical) {
+	case keyname.LogicalNotKid:
 		return fmt.Errorf("logical kid %q is not a valid jose kid (allowed: A-Z a-z 0-9 _ -)", logical)
-	}
-	if len(logical) > maxLogicalKidLen {
-		return fmt.Errorf("logical kid %q is %d characters, maximum is %d", logical, len(logical), maxLogicalKidLen)
-	}
-	if generationSuffixPattern.MatchString(logical) {
+	case keyname.LogicalTooLong:
+		return fmt.Errorf("logical kid %q is %d characters, maximum is %d", logical, len(logical), keyname.MaxLogicalLen)
+	case keyname.LogicalEndsInMarker:
 		return fmt.Errorf("logical kid %q must not end in the generation marker -v<digits>", logical)
+	default:
+		return nil
 	}
-	return nil
 }
 
 // familyOf classifies one loaded entry. Ordinary entries return ok=false and
@@ -129,7 +109,7 @@ func familyOf(name string, entry *keyEntry) (Generation, bool, error) {
 	if err := validateLogical(logical); err != nil {
 		return Generation{}, false, fmt.Errorf("keystore: key %q: %w", name, err)
 	}
-	if !generationVersionPattern.MatchString(version) {
+	if !keyname.ValidVersion(version) {
 		return Generation{}, false, fmt.Errorf("keystore: key %q: generation %q must be a positive integer without leading zeros (v1, not v0 or v01)", name, version)
 	}
 	return Generation{Logical: logical, Version: version, Role: roleOf(entry)}, true, nil

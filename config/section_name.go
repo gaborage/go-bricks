@@ -2,14 +2,15 @@ package config
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
+
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
-// sectionNamePattern is the grammar every USER-CHOSEN section key obeys:
-// entries under databases, multitenant.tenants and keystore.keys. It is the
-// resolver's tenant-ID grammar without the length bound, which stays the
-// resolver's.
+// checkSectionName holds every USER-CHOSEN section key to one grammar,
+// keyname.ValidSectionName (^[a-z0-9-]+$): entries under databases,
+// multitenant.tenants and keystore.keys. It is the resolver's tenant-ID
+// grammar without the length bound, which stays the resolver's.
 //
 // The reason is reachability, not taste. Load maps an environment variable to
 // a config key by lowercasing it and turning '_' into '.', which is not
@@ -23,12 +24,11 @@ import (
 // Hyphen is legal here; whether a hyphenated name is settable depends on the
 // runtime (Docker and Kubernetes permit '-' in variable names, POSIX `export`
 // does not), which the docs state and this rule does not police.
-var sectionNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
-
-// checkSectionName rejects a user-chosen section key no environment variable
-// can address. field is the key PATH, so an operator can find the entry.
+//
+// It rejects a user-chosen section key no environment variable can address.
+// field is the key PATH, so an operator can find the entry.
 func checkSectionName(field, name string) error {
-	if sectionNamePattern.MatchString(name) {
+	if keyname.ValidSectionName(name) {
 		return nil
 	}
 	return &ConfigError{
