@@ -11,8 +11,9 @@
 `_` into `.` (`envVarToKey`). ADR-090 made that transform injective over the user-named maps by
 restricting their keys to `^[a-z0-9-]+$`. For `keystore.keys` that leaves a gap: every
 multi-word name needs a `-`, and a POSIX shell cannot `export` a variable whose name contains
-`-`. `tokens-our` can be set as `KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` from a Kubernetes
-manifest and from nowhere else; `payments-sign-v1` is in the same position. The sealing
+`-`. `tokens-our` can be set as `KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` from a Docker or
+Kubernetes manifest, or passed to a child with `env`, but never by a shell assignment or
+`export`; `payments-sign-v1` is in the same position. The sealing
 selector has the same gap (`MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN`), which ADR-097's Env door
 accepted.
 
@@ -220,7 +221,7 @@ ordinary rotation still reaches it as the recoverable `SEAL_KID_UNKNOWN_GENERATI
 | --- | --- | --- | --- |
 | `tokens.our` | `KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE` | `tokens.our` | — |
 | `payments.sign.v1` | `KEYSTORE_KEYS_PAYMENTS_SIGN_V1_PRIVATE_FILE` | `payments.sign.v1` | `payments.sign` / `payments.sign:<jti>` |
-| `payments-sign-v1` (unchanged) | `KEYSTORE_KEYS_PAYMENTS-SIGN-V1_PRIVATE_FILE` (Docker/K8s only) | `payments-sign-v1` | `payments-sign` / `payments-sign:<jti>` |
+| `payments-sign-v1` (unchanged) | `KEYSTORE_KEYS_PAYMENTS-SIGN-V1_PRIVATE_FILE` (no POSIX `export`) | `payments-sign-v1` | `payments-sign` / `payments-sign:<jti>` |
 
 ### 6. Messages
 

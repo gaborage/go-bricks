@@ -377,8 +377,9 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 }
 
 // keySourceAction names the two variables that set a missing source. A name
-// with '-' is settable that way only from Docker or Kubernetes, never by a
-// POSIX export, so the action also names the dotted spelling any shell can set.
+// with '-' is settable that way only where the runtime allows '-' in a variable
+// name (Docker, Kubernetes, env), never by a POSIX export, so the action also
+// names the dotted spelling any shell can set.
 // A generation has no such spelling: its fold is malformed (audit.v1) or a
 // generation of another family (payments.sign.v1), so moving it is a family
 // rename.

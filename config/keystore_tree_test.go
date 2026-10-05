@@ -733,13 +733,19 @@ func nestNames(names []string) map[string]any {
 }
 
 // nameSetShape is the independent oracle for the set rules: whether any name
-// is a dotted prefix of another, and whether any two share a fold.
+// is a dotted prefix of another, and whether any two unmarked names share a
+// fold. A name with a Generation marker is left to checkKeyFamilies, as
+// checkKeyNameSet leaves it: a marked look-alike (a-v1 beside a.v1) is a
+// malformed name or a family look-alike, refused with that rule's message.
 func nameSetShape(sorted []string) (prefixFree, foldDistinct bool) {
 	prefixFree, foldDistinct = true, true
 	folds := make(map[string]bool, len(sorted))
 	for i, name := range sorted {
 		for _, other := range sorted[i+1:] {
 			prefixFree = prefixFree && !keyname.IsDottedPrefix(name, other)
+		}
+		if _, _, form := keyname.SplitGeneration(name); form != keyname.Ordinary {
+			continue
 		}
 		foldDistinct = foldDistinct && !folds[keyname.Fold(name)]
 		folds[keyname.Fold(name)] = true
@@ -752,7 +758,7 @@ func nameSetShape(sorted []string) (prefixFree, foldDistinct bool) {
 // breaks. It never succeeds with fewer names than it was given, which is the
 // silent loss probe E used to show.
 func FuzzKeystoreTreeFlatten(f *testing.F) {
-	for _, seed := range []string{"a,a.b", "a-b,a.b", "a-b.c,a.b-c", "a.v1,a.b", "a-v1,a.b.v1", "ab.c,ab.c0", "a"} {
+	for _, seed := range []string{"a,a.b", "a-b,a.b", "a-b.c,a.b-c", "a.v1,a.b", "a-v1,a.b.v1", "ab.c,ab.c0", "a", "a-v1,a.v1", "a-b-v1,a.b-v1"} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, raw string) {

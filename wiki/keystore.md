@@ -86,7 +86,7 @@ into another, so `tokens-our` and `tokens.our` are two different names.
 | --- | --- | --- | --- |
 | `tokens.our` | `keys: {tokens: {our: {private: …}}}` | `KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE` | yes |
 | `payments.sign.v1` | `keys: {payments: {sign: {v1: {private: …}}}}` | `KEYSTORE_KEYS_PAYMENTS_SIGN_V1_PRIVATE_FILE` | yes |
-| `tokens-our` | `keys: {tokens-our: {private: …}}` | `KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` | no: Docker and Kubernetes only |
+| `tokens-our` | `keys: {tokens-our: {private: …}}` | `KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` | no: Docker, Kubernetes or `env` |
 | `signing` | `keys: {signing: {private: …}}` | `KEYSTORE_KEYS_SIGNING_PRIVATE_VALUE` | yes |
 
 A name is settable with a POSIX `export` exactly when it contains no `-`. Every name that was
@@ -221,11 +221,12 @@ AMQP payload sealing rotates by (spec #1309, issue #1306). The family fixes the 
 | contains `.` | `<family>.v<N>`, a final segment | `payments.sign.v1`, `payments.sign.v2` |
 | has no `.` | `<family>-v<N>` | `svc-payments-sign-v1`, `svc-payments-sign-v2` |
 
-Every other name is an ordinary entry and nothing below applies to it — HTTP jose entries are
-unaffected. Because the marker is a function of the family, `Generation.Kid()` is too, and a
-family's marker can never change: a one-segment family such as `signing` keeps `signing-v<N>`
-for its whole life. Moving it to a dotted family is a rename, not a rotation
-([sealing.md](sealing.md#renaming-a-family)).
+Every other name is an ordinary entry and nothing below applies to it. The rules judge the
+name, not its use: an HTTP jose entry is unaffected only when its name matches neither shape,
+and one named `partner.v2` or `partner.key-v1` is refused below like any other. Because the
+marker is a function of the family, `Generation.Kid()` is too, and a family's marker can never
+change: a one-segment family such as `signing` keeps `signing-v<N>` for its whole life. Moving
+it to a dotted family is a rename, not a rotation ([sealing.md](sealing.md#renaming-a-family)).
 
 `config.Validate` and the store refuse a name that carries a marker but is no generation,
 each with the rename spelled out:
@@ -244,8 +245,8 @@ each with the rename spelled out:
 Two families that differ only in `-` versus `.` (`payments-sign-v1` beside `payments.sign.v2`,
 or beside `payments.sign.v1`) are refused: that is a second family, not a rotation. The error
 names the variable that reaches the hyphenated generation (`KEYSTORE_KEYS_PAYMENTS-SIGN-V2_*`,
-Docker or Kubernetes only). So are two families that nest, as written or once `-` is read as
-`.` (`payments-v1` beside `payments.sign.v1`; `payments-sign-v1` beside `payments.sign.eu.v1`),
+which a POSIX `export` cannot set). So are two families that nest, as written or once `-` is
+read as `.` (`payments-v1` beside `payments.sign.v1`; `payments-sign-v1` beside `payments.sign.eu.v1`),
 because `messaging.seal.active` could not hold a selector for both: a POSIX variable for the
 first would land on the path of the second and be dropped. Two families without `.`
 (`payments-sign`, `payments-sign-eu`) are exempt, as before.

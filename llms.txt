@@ -4263,11 +4263,12 @@ kstest.AssertKeyNotFound(t, mock, "nonexistent")
 - An entry name is a dotted path of `[a-z0-9-]` segments, written nested in YAML; the joined
   string (`tokens.our`) is the `Keys` key, the `PrivateKey("tokens.our")` argument, the `jose:`
   tag value and the wire `kid`, verbatim. `KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE` reaches it
-  from any shell; a name with `-` (`tokens-our`) is settable by variable only from Docker or
-  Kubernetes. Startup refuses a quoted `"tokens.our":` key (write it nested), a segment
-  outside `[a-z0-9-]`, `public`/`private`/`secret`/`pkcs12` after a `.`, an entry with a name
-  below it (`tokens` + `tokens.our`), two names differing only in `-` versus `.`, and any key
-  under an entry or source that is not one of its fields (ADR-144). Nothing reports an entry
+  from any shell; a name with `-` (`tokens-our`) is settable by variable only where the runtime
+  allows `-` in a variable name (Docker, Kubernetes, or `env` passing it to a child), never by a
+  shell assignment or `export`. Startup refuses a quoted `"tokens.our":` key (write it nested),
+  a segment outside `[a-z0-9-]`, `public`/`private`/`secret`/`pkcs12` after a `.`, an entry with
+  a name below it (`tokens` + `tokens.our`), two names differing only in `-` versus `.`, and any
+  key under an entry or source that is not one of its fields (ADR-144). Nothing reports an entry
   no code asks for: a stray half pair fails startup on its missing source (remove the variable,
   do not complete it), a complete one loads in silence, so retire a stray variable with the
   YAML it overrode.

@@ -15,6 +15,13 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-10-04, [ADR-144](adr_144_dotted_keystore_entry_names.md)):** in §3's
+> generation grammar and Env door, Logical kids may contain interior dots; a dotted family names
+> its generations `<family>.v<N>`, a family without one keeps `-v<N>`, so the marker is a function
+> of the family and `Generation.Kid()` stays pure. Selector keys are written nested, so
+> `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN` reaches family `payments.sign` from any shell. No per-key
+> rewrite was added.
+>
 > **Amended (2026-10-03, #1897):** rule 10 now also requires **no clear case-fold twin of the
 > Subject**. The case-fold rule the 2026-09-04 amendment ran on the serialized bytes for the
 > sealer now runs for every opener door as well — `Open`, `OpenDocument` and `Verify` — because
@@ -322,12 +329,6 @@ kids everywhere, hyphenated kids only where the runtime permits `-` in variable 
 and rejected: it would need a second transform or a post-load rewrite and reintroduces
 the `a_b`/`a-b` ambiguity the reachability rule forbids. Selector keys are constrained to
 `[a-z0-9-]` at `Validate`, matching `keystore.keys`.
-
-**Amended by [ADR-144](adr_144_dotted_keystore_entry_names.md):** Logical kids may contain
-interior dots; a dotted family names its generations `<family>.v<N>`, a family without one
-keeps `-v<N>`, so the marker is a function of the family and `Generation.Kid()` stays pure.
-Selector keys are written nested, so `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN` reaches family
-`payments.sign` from any shell. No per-key rewrite was added.
 
 ### 4. Replay and redelivery (#1307, G6, G7)
 
