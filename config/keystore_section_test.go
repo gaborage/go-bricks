@@ -536,3 +536,66 @@ func TestCheckKeyStoreRefusesMalformedGenerations(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckSealSelectorFamilies: a selector that differs from a provisioned
+// family only in '-' versus '.' selects nothing, so the rotation it was meant
+// to make never happens; Validate refuses it and names both variables. A
+// selector for nothing provisioned is still accepted, as before.
+func TestCheckSealSelectorFamilies(t *testing.T) {
+	hyphenFamily := keysNamed("payments-sign-v1", "payments-sign-v2")
+	tests := []struct {
+		name      string
+		keys      *KeyStoreConfig
+		active    map[string]string
+		wantField string
+		wantMsg   string
+		wantInAct string
+	}{
+		{name: "selects_its_family", keys: hyphenFamily, active: map[string]string{"payments-sign": "v2"}},
+		{name: "selects_dotted_family", keys: keysNamed("payments.sign.v1", "payments.sign.v2"), active: map[string]string{"payments.sign": "v2"}},
+		{name: "unprovisioned_selector_accepted", keys: hyphenFamily, active: map[string]string{"audit": "v1"}},
+		{name: "no_keys", keys: &KeyStoreConfig{}, active: map[string]string{"payments.sign": "v2"}},
+		{
+			name: "dotted_selector_for_hyphen_family", keys: hyphenFamily, active: map[string]string{"payments.sign": "v2"},
+			wantField: "messaging.seal.active.payments.sign",
+			wantMsg:   `selects "payments.sign", which is not provisioned; "payments-sign" is (v1, v2); MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches only payments.sign`,
+			wantInAct: "set the payments-sign selector in YAML or as MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN, or rename the family",
+		},
+		{
+			name: "hyphen_selector_for_dotted_family", keys: keysNamed("payments.sign.v1"), active: map[string]string{"payments-sign": "v1"},
+			wantField: "messaging.seal.active.payments-sign",
+			wantMsg:   `selects "payments-sign", which is not provisioned; "payments.sign" is (v1); MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN reaches only payments-sign`,
+			wantInAct: "MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{KeyStore: *tt.keys, Messaging: MessagingConfig{Seal: SealConfig{Active: tt.active}}}
+			err := checkSealSelectorFamilies(cfg)
+			if tt.wantField == "" {
+				require.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Equal(t, tt.wantMsg, cfgErr.Message)
+			assert.Contains(t, cfgErr.Action, tt.wantInAct)
+		})
+	}
+}
+
+// TestValidateRunsTheSelectorFamilyRule: the cross-section rule is reached
+// through the public Validate door, after both sections passed on their own.
+func TestValidateRunsTheSelectorFamilyRule(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.KeyStore.Keys = map[string]KeyPairConfig{"payments-sign-v1": {Public: KeySourceConfig{Value: "cHVi"}}}
+	cfg.Messaging.Seal.Active = map[string]string{"payments.sign": "v1"}
+
+	err := Validate(cfg)
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "messaging.seal.active.payments.sign", cfgErr.Field)
+	assert.ErrorContains(t, err, "messaging config:")
+}

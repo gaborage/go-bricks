@@ -114,27 +114,35 @@ func checkMessagingPublishTimeout(cfg *MessagingConfig) error {
 
 // checkSealSelectorsBeyondSection runs the selector rules that need more than the messaging
 // section: a sequence an operator layer wrote that a later layer replaced
-// (checkLayerSequences). No check of the decoded section can see it.
+// (checkLayerSequences), which no check of the decoded section can see, then the families
+// the keystore entries form (checkSealSelectorFamilies).
 func checkSealSelectorsBeyondSection(cfg *Config) error {
-	return checkLayerSequences(cfg, fieldMessagingSealActive, selectorsSequenceAction)
+	if err := checkLayerSequences(cfg, fieldMessagingSealActive, selectorsSequenceAction); err != nil {
+		return err
+	}
+	return checkSealSelectorFamilies(cfg)
 }
 
 // checkMessagingSeal judges the Activation selector's shape: every key is a
-// user-chosen section name (env-reachable, no '.'), every value a canonical
-// generation. Whether the key names a Logical kid the keystore holds is the
-// resolver's question (keystore.ActiveGeneration), asked once the store exists.
+// family name, a dotted path of env-reachable segments (ADR-144), no two keys
+// differ only in '-' versus '.' or nest once '-' is read as '.', and every
+// value is a canonical generation.
+// Whether the key names a Logical kid the keystore holds is the resolver's
+// question (keystore.ActiveGeneration), asked once the store exists; the
+// look-alike of a provisioned family is checkSealSelectorFamilies'.
 func checkMessagingSeal(cfg *SealConfig) error {
-	for _, logical := range slices.Sorted(maps.Keys(cfg.Active)) {
-		// A '.' would make the constructed path ambiguous, so the parent field
-		// is reported, as the keystore.keys rule does.
-		if logical == "" || strings.Contains(logical, ".") {
-			err := NewValidationError(fieldMessagingSealActive, fmt.Sprintf("logical kid %q cannot be empty or contain '.' (the config path delimiter)", logical))
-			err.Action = "name the messaging.seal.active entry after the keystore family, without dots"
+	selectors := slices.Sorted(maps.Keys(cfg.Active))
+	for _, logical := range selectors {
+		// An empty segment (the empty key included) makes the constructed path
+		// malformed, so the parent field is reported, as the keystore.keys rule does.
+		if hasEmptySegment(logical) {
+			err := NewValidationError(fieldMessagingSealActive, fmt.Sprintf("logical kid %q cannot be empty or have an empty segment", logical))
+			err.Action = "name the messaging.seal.active entry after the keystore family, its segments joined by single dots"
 			return err
 		}
 		field := fieldMessagingSealActive + "." + logical
-		if err := checkSectionName(field, logical); err != nil {
-			return err
+		if !keyname.ValidName(logical) {
+			return unreachableDottedName(fieldMessagingSealActive, logical)
 		}
 		// keyname.ValidVersion is the grammar the keystore names its generations
 		// by, so a selector can only ever spell one the way the keystore does.
@@ -143,6 +151,22 @@ func checkMessagingSeal(cfg *SealConfig) error {
 			err.Action = "name the generation exactly as the keystore.keys entry suffix spells it"
 			return err
 		}
+	}
+	if earlier, later, found := keyname.FirstFoldClash(selectors); found {
+		err := NewValidationError(fieldMessagingSealActive+"."+later, fmt.Sprintf("selectors %q and %q differ only in '-' versus '.'", earlier, later))
+		err.Action = "keep the one that names the provisioned family"
+		return err
+	}
+	// Merged from YAML and the environment, a scalar on a path and a map at it
+	// replace one another in silence: a POSIX flip of the payments-sign selector
+	// lands on payments.sign and is dropped under a nested payments.sign.eu. No
+	// two provisioned families nest (checkKeyFamilies), so a stale or mistyped
+	// selector is all this refuses.
+	if prefix, name, found := keyname.FirstFoldedPrefix(selectors); found {
+		err := NewValidationError(fieldMessagingSealActive+"."+name,
+			fmt.Sprintf("selectors %q and %q %s: merged from YAML and the environment, one replaces the other in silence", prefix, name, nestClause(prefix, name)))
+		err.Action = "keep only the selector of the provisioned family: provisioned families never nest"
+		return err
 	}
 	return nil
 }
