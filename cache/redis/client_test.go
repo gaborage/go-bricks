@@ -585,7 +585,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 // TestConfigValidateTLS tests structural TLS rules, mirroring
-// config.validateRedisTLS: a hand-built Config never passes through the
+// config.validateRedisTLSMaterial: a hand-built Config never passes through the
 // config layer, so the same fail-closed checks run here.
 func TestConfigValidateTLS(t *testing.T) {
 	tests := []struct {

@@ -441,6 +441,7 @@ var derivedDefaultKeys = []string{
 	"cache.redis.maxretries",
 	"cache.redis.minretrybackoff",
 	"cache.redis.maxretrybackoff",
+	"cache.type",
 	"keystore.secretminlength",
 	"scheduler.timeout.shutdown",
 	"scheduler.timeout.slowjob",
@@ -663,7 +664,6 @@ func koanfOnlyDefaults() map[string]any {
 		// Cache defaults. The redis port/pool/timeout/retry keys are DERIVED — see
 		// derivedDefaultKeys — so only the keys normalize does not own are written here.
 		"cache.enabled":        false,
-		"cache.type":           CacheTypeRedis,
 		"cache.redis.host":     defaultHost,
 		"cache.redis.password": "",
 		fieldCacheRedisDB:      0,
