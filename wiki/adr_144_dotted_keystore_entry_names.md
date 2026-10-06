@@ -275,6 +275,9 @@ is `keystore.keys.<name>[.<field>[.<source>]]` and can be reached by an environm
 | Nested selectors | `messaging.seal.active.payments.sign.eu` | `selectors "payments-sign" and "payments.sign.eu" nest when '-' is read as '.': merged from YAML and the environment, one replaces the other in silence` → keep only the selector of the provisioned family |
 | Selector for a look-alike family | `messaging.seal.active.payments.sign` | `selects "payments.sign", which is not provisioned; "payments-sign" is (v1, v2); MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches only payments.sign` → set the `payments-sign` selector in YAML or as `MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN`, or rename the family |
 | Nested selectors, one lost in the merge | `messaging.seal.active.payments.sign.eu` | `selectors "payments.sign" and "payments.sign.eu" nest: one path cannot hold both, and loading kept only one of them` → remove the stale selector from every YAML file and variable that sets it |
+| Empty selector map | `messaging.seal.active.payments` | `holds an empty map where a generation or a further name segment was expected` → set the selector to a generation (`v<N>`), or remove the key |
+| Sequence | `keystore.keys` or `messaging.seal.active` | `holds a sequence where a map was expected` → write the entries (or the selectors) as a map, one key per name segment |
+| Namespace unmarshaled as one entry | `keystore.keys` | `a keystore entry was decoded from a node holding "our", which is no entry field (public, private, secret or pkcs12)` → unmarshal an entry by its full dotted path, or the keys map |
 
 Three message changes outside the table:
 
