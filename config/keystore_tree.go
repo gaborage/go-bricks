@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -71,6 +72,9 @@ func readKeyTree(tree map[string]any) (map[string]any, error) {
 
 func walkKeys(node map[string]any, prefix string, out map[string]any) error {
 	for _, key := range slices.Sorted(maps.Keys(node)) {
+		if err := checkTreeKey(fieldKeystoreKeys, prefix, key); err != nil {
+			return err
+		}
 		if err := readKeyNode(joinName(prefix, key), node[key], out); err != nil {
 			return err
 		}
@@ -95,7 +99,10 @@ func readKeyNode(name string, child any, out map[string]any) error {
 			Action:   "give the entry its fields (" + fieldList(keyEntrySchema) + "), or remove the value",
 		}
 	}
-	if _, isEntry := entryField(sub); isEntry {
+	if field, isEntry := entryField(sub); isEntry {
+		if err := checkEntry(name, field, sub); err != nil {
+			return err
+		}
 		out[name] = sub
 		return nil
 	}
@@ -104,6 +111,132 @@ func readKeyNode(name string, child any, out map[string]any) error {
 		return nil
 	}
 	return walkKeys(sub, name, out)
+}
+
+// checkEntry holds an entry's children to its fields and each field's subtree
+// to its struct tags. A child that is no field is refused: as a prefix
+// conflict when its subtree holds an entry, as an unknown field otherwise.
+func checkEntry(name, setField string, entry map[string]any) error {
+	for _, key := range slices.Sorted(maps.Keys(entry)) {
+		if fieldSchema := keyEntrySchema.child(key); fieldSchema != nil {
+			if err := checkAgainstSchema(fieldKeystoreKeys+"."+name+"."+key, key, entry[key], fieldSchema); err != nil {
+				return err
+			}
+			continue
+		}
+		if nested, found := firstEntryUnder(entry[key], joinName(name, key)); found {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldKeystoreKeys + "." + name,
+				Message:  fmt.Sprintf("%q is an entry (it sets %s) and the parent of entry %q", name, setField, nested),
+				Action:   fmt.Sprintf("rename one of them (%s → %s.default) so no entry name is a prefix of another", name, name),
+			}
+		}
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldKeystoreKeys + "." + name + "." + key,
+			Message:  fmt.Sprintf("unknown field %q in entry %q", key, name),
+			Action:   "an entry takes " + fieldList(keyEntrySchema),
+		}
+	}
+	return nil
+}
+
+// checkAgainstSchema refuses a key the struct tags do not name, anywhere below
+// an entry's field, which turns ErrorUnused off for this subtree only. A null
+// node is left for the source checks; a value of the wrong shape is refused
+// here, so the error names the path rather than mapstructure's type.
+func checkAgainstSchema(path, label string, node any, s *treeSchema) error {
+	if node == nil {
+		return nil
+	}
+	sub, isMap := stringMap(node)
+	if s.leaf() {
+		if isMap {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    path,
+				Message:  "holds a map where a value was expected",
+				Action:   "set " + label + " to a single value",
+			}
+		}
+		return nil
+	}
+	if !isMap {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    path,
+			Message:  "holds a single value where a map was expected",
+			Action:   label + " takes " + fieldList(s),
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(sub)) {
+		childSchema := s.child(key)
+		if childSchema == nil {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    path + "." + key,
+				Message:  fmt.Sprintf("unknown field %q", key),
+				Action:   label + " takes " + fieldList(s),
+			}
+		}
+		if err := checkAgainstSchema(path+"."+key, key, sub[key], childSchema); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkTreeKey refuses a key the walk cannot read as one name segment: an
+// empty key, and a key that itself contains '.' (a quoted YAML key, or a
+// literal key in a LoadFromMap tree). koanf keeps such a key as a node apart
+// from the nested path an environment variable reaches, so one name would
+// split its precedence across two nodes.
+func checkTreeKey(root, prefix, key string) error {
+	parent := root
+	if prefix != "" {
+		parent = root + "." + prefix
+	}
+	if key == "" {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    parent,
+			Message:  "holds an empty key",
+			Action:   "remove it, or give it a name",
+		}
+	}
+	if !strings.Contains(key, keyname.Sep) {
+		return nil
+	}
+	if hasEmptySegment(key) {
+		// No nested form or variable spells it: both would hold an empty key.
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    parent,
+			Message:  fmt.Sprintf("key %q has an empty segment", key),
+			Action:   "rename it with non-empty segments, written as nested keys",
+		}
+	}
+	action := fmt.Sprintf("write it nested (%s)", nestedForm(key))
+	if envVar := envVarForKey(root + "." + joinName(prefix, key)); envVar != "" {
+		action += fmt.Sprintf("; the nested path is what %s reaches", envReach(root, envVar))
+	}
+	return &ConfigError{
+		Category: errCategoryInvalid,
+		Field:    parent,
+		Message:  fmt.Sprintf("key %q is one YAML key containing '.'", key),
+		Action:   action,
+	}
+}
+
+// envReach names the variables that reach a name under root: a keystore
+// entry holds its fields and sources below the name (KEYSTORE_KEYS_TOKENS_OUR_*),
+// while a selector is the leaf itself, reached by exactly one variable.
+func envReach(root, envVar string) string {
+	if root == fieldKeystoreKeys {
+		return envVar + "_*"
+	}
+	return envVar
 }
 
 // entryField reports the first child (in sorted order) that names an entry
@@ -115,6 +248,31 @@ func entryField(node map[string]any) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// firstEntryUnder reports the first entry name (in sorted depth-first order)
+// in the subtree node, which sits at name.
+func firstEntryUnder(node any, name string) (string, bool) {
+	sub, isMap := stringMap(node)
+	if !isMap {
+		return "", false
+	}
+	if _, isEntry := entryField(sub); isEntry {
+		return name, true
+	}
+	for _, key := range slices.Sorted(maps.Keys(sub)) {
+		if nested, found := firstEntryUnder(sub[key], joinName(name, key)); found {
+			return nested, true
+		}
+	}
+	return "", false
+}
+
+// nestedForm renders a dotted key as the nested YAML that spells it:
+// "tokens.our" becomes "tokens: {our: …}".
+func nestedForm(key string) string {
+	segs := strings.Split(key, keyname.Sep)
+	return strings.Join(segs, ": {") + ": …" + strings.Repeat("}", len(segs)-1)
 }
 
 func joinName(prefix, segment string) string {
@@ -166,6 +324,8 @@ func schemaOf(t reflect.Type) *treeSchema {
 	}
 	return s
 }
+
+func (s *treeSchema) leaf() bool { return len(s.fields) == 0 }
 
 // child returns the schema of key, matched as mapstructure matches a field
 // name (case-insensitively), or nil when the struct has no such field.

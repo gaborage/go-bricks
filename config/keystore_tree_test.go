@@ -1,11 +1,15 @@
 package config
 
 import (
+	"fmt"
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
+	koanfmaps "github.com/knadh/koanf/maps"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -96,7 +100,8 @@ func TestKeystoreTreeAcceptsShapesThatBootToday(t *testing.T) {
 }
 
 // TestKeystoreTreeRefusals pins each refusal of the walk: its Field is the
-// koanf path an operator edits.
+// koanf path an operator edits, and nothing below an entry is dropped in
+// silence any more.
 func TestKeystoreTreeRefusals(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -106,10 +111,102 @@ func TestKeystoreTreeRefusals(t *testing.T) {
 		wantInAct string
 	}{
 		{
+			name:      "quoted_dotted_key",
+			tree:      map[string]any{"tokens.our": publicValue("x")},
+			wantField: "keystore.keys",
+			wantMsg:   `key "tokens.our" is one YAML key containing '.'`,
+			wantInAct: "write it nested (tokens: {our: …}); the nested path is what KEYSTORE_KEYS_TOKENS_OUR_* reaches",
+		},
+		{
+			name:      "quoted_dotted_key_in_namespace",
+			tree:      map[string]any{"payments": map[string]any{"sign.v1": publicValue("x")}},
+			wantField: "keystore.keys.payments",
+			wantMsg:   `key "sign.v1" is one YAML key containing '.'`,
+			wantInAct: "KEYSTORE_KEYS_PAYMENTS_SIGN_V1_*",
+		},
+		{
+			name:      "empty_key",
+			tree:      map[string]any{"tokens": map[string]any{"": publicValue("x")}},
+			wantField: "keystore.keys.tokens",
+			wantMsg:   "holds an empty key",
+		},
+		{
 			name:      "scalar_in_namespace",
 			tree:      map[string]any{"tokens": map[string]any{"our": "x"}},
 			wantField: "keystore.keys.tokens.our",
 			wantMsg:   "holds a value where an entry or a further name segment was expected",
+		},
+		{
+			name: "entry_and_parent",
+			tree: map[string]any{"tokens": map[string]any{
+				"public": map[string]any{"value": "x"},
+				"our":    publicValue("y"),
+			}},
+			wantField: "keystore.keys.tokens",
+			wantMsg:   `"tokens" is an entry (it sets public) and the parent of entry "tokens.our"`,
+			wantInAct: "tokens → tokens.default",
+		},
+		{
+			name: "entry_and_deep_descendant",
+			tree: map[string]any{"a": map[string]any{
+				"secret": map[string]any{"value": "x"},
+				"b":      map[string]any{"c": publicValue("y")},
+			}},
+			wantField: "keystore.keys.a",
+			wantMsg:   `the parent of entry "a.b.c"`,
+		},
+		{
+			name: "unknown_field",
+			tree: map[string]any{"tokens": map[string]any{"our": map[string]any{
+				"public":  map[string]any{"value": "x"},
+				"privkey": map[string]any{"value": "y"},
+			}}},
+			wantField: "keystore.keys.tokens.our.privkey",
+			wantMsg:   `unknown field "privkey" in entry "tokens.our"`,
+			wantInAct: "an entry takes public, private, secret or pkcs12",
+		},
+		{
+			name: "unknown_scalar_field",
+			tree: map[string]any{"tokens": map[string]any{
+				"public":  map[string]any{"value": "x"},
+				"comment": "rotated 2026-09",
+			}},
+			wantField: "keystore.keys.tokens.comment",
+			wantMsg:   `unknown field "comment" in entry "tokens"`,
+		},
+		{
+			name:      "unknown_source_key",
+			tree:      map[string]any{"tokens": map[string]any{"our": map[string]any{"public": map[string]any{"vlaue": "x"}}}},
+			wantField: "keystore.keys.tokens.our.public.vlaue",
+			wantMsg:   `unknown field "vlaue"`,
+			wantInAct: "public takes file or value",
+		},
+		{
+			name:      "unknown_pkcs12_key",
+			tree:      map[string]any{"vts": map[string]any{"pkcs12": map[string]any{"file": "vts.p12", "pasword": map[string]any{"env": "P"}}}},
+			wantField: "keystore.keys.vts.pkcs12.pasword",
+			wantMsg:   `unknown field "pasword"`,
+			wantInAct: "pkcs12 takes file, value or password",
+		},
+		{
+			name:      "unknown_password_key",
+			tree:      map[string]any{"vts": map[string]any{"pkcs12": map[string]any{"file": "vts.p12", "password": map[string]any{"value": "hunter2"}}}},
+			wantField: "keystore.keys.vts.pkcs12.password.value",
+			wantMsg:   `unknown field "value"`,
+			wantInAct: "password takes env or file",
+		},
+		{
+			name:      "scalar_source",
+			tree:      map[string]any{"tokens": map[string]any{"public": "pub.der"}},
+			wantField: "keystore.keys.tokens.public",
+			wantMsg:   "holds a single value where a map was expected",
+			wantInAct: "public takes file or value",
+		},
+		{
+			name:      "map_under_leaf",
+			tree:      map[string]any{"tokens": map[string]any{"public": map[string]any{"file": map[string]any{"x": "y"}}}},
+			wantField: "keystore.keys.tokens.public.file",
+			wantMsg:   "holds a map where a value was expected",
 		},
 	}
 	for _, tt := range tests {
@@ -118,6 +215,32 @@ func TestKeystoreTreeRefusals(t *testing.T) {
 			cfgErr := requireTreeError(t, err, tt.wantField, tt.wantMsg)
 			assert.Contains(t, cfgErr.Action, tt.wantInAct)
 		})
+	}
+}
+
+// TestTreeKeyWithAnEmptySegment: a literal key with an empty segment has no
+// nested form and no variable that reaches it, so the refusal offers neither:
+// both would hold an empty key and fail again.
+func TestTreeKeyWithAnEmptySegment(t *testing.T) {
+	roots := []struct {
+		name  string
+		field string
+		load  func(*testing.T, map[string]any) (*Config, error)
+		value any
+	}{
+		{name: "keystore", field: "keystore.keys", load: loadKeyTree, value: publicValue("x")},
+	}
+	for _, root := range roots {
+		for _, key := range []string{".", "tokens..our", ".tokens", "tokens."} {
+			t.Run(root.name+"/"+key, func(t *testing.T) {
+				_, err := root.load(t, map[string]any{key: root.value})
+				cfgErr := requireTreeError(t, err, root.field, fmt.Sprintf("key %q has an empty segment", key))
+				assert.Contains(t, cfgErr.Action, "rename it")
+				assert.NotContains(t, cfgErr.Action, ": {:")
+				assert.NotContains(t, cfgErr.Action, "__")
+				assert.NotContains(t, cfgErr.Action, "reaches")
+			})
+		}
 	}
 }
 
@@ -139,6 +262,25 @@ func TestStringMapConvertsStringKeyedMaps(t *testing.T) {
 	assert.Equal(t, "pub", cfg.KeyStore.Keys["tokens.our"].Public.Value)
 }
 
+// TestKeystoreTreeFirstErrorIsDeterministic: the walk sorts children at every
+// level, so a tree with several faults reports the same one on every run
+// whatever order Go iterates its maps in.
+func TestKeystoreTreeFirstErrorIsDeterministic(t *testing.T) {
+	tree := map[string]any{
+		"zz": map[string]any{"public": map[string]any{"vlaue": "x"}},
+		"mm": map[string]any{"our": "scalar"},
+		"aa": map[string]any{"b": map[string]any{"public": map[string]any{"value": "x"}, "privkey": map[string]any{}}},
+		"cc": map[string]any{"d.e": publicValue("x")},
+	}
+	_, first := loadKeyTree(t, tree)
+	require.Error(t, first)
+	for range 50 {
+		_, err := loadKeyTree(t, tree)
+		require.EqualError(t, err, first.Error())
+	}
+	requireTreeError(t, first, "keystore.keys.aa.b.privkey", `unknown field "privkey"`)
+}
+
 // TestKeyEntryFieldsArePinnedToKeyPairConfig: keyname.FieldSegments is the set
 // a dotted name may not use after a '.', and the tree reader recognizes an
 // entry by KeyPairConfig's tags. A field added to the struct without the
@@ -150,4 +292,78 @@ func TestKeyEntryFieldsArePinnedToKeyPairConfig(t *testing.T) {
 	}
 	assert.ElementsMatch(t, keyname.FieldSegments, tags)
 	assert.ElementsMatch(t, keyname.FieldSegments, keyEntrySchema.names())
+}
+
+// TestLoadFromMapDottedKeys: LoadFromMap unflattens only its top-level keys,
+// so a flat dotted key reaches the nested path, while a literal dotted key
+// inside a nested map is the quoted-key shape and is refused.
+func TestLoadFromMapDottedKeys(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{"keystore.keys.tokens.our.public.value": "our-pub"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]KeyPairConfig{"tokens.our": {Public: KeySourceConfig{Value: "our-pub"}}}, cfg.KeyStore.Keys)
+
+	_, err = LoadFromMap(map[string]any{"keystore": map[string]any{"keys": map[string]any{"tokens.our": publicValue("our-pub")}}})
+	requireTreeError(t, err, "keystore.keys", `key "tokens.our" is one YAML key containing '.'`)
+}
+
+// fuzzNames maps fuzz bytes onto candidate names over a deliberately small
+// alphabet, so prefix, fold and generation-marker collisions are frequent;
+// ',' separates names. A byte already in the alphabet is kept, so a seed reads
+// as written. Only valid entry names of one to four segments are kept,
+// deduplicated, at most eight.
+func fuzzNames(raw string) []string {
+	const alphabet = "abcv01-.,"
+	var sb strings.Builder
+	for i := range len(raw) {
+		c := raw[i]
+		if strings.IndexByte(alphabet, c) < 0 {
+			c = alphabet[int(c)%len(alphabet)]
+		}
+		sb.WriteByte(c)
+	}
+	var names []string
+	for name := range strings.SplitSeq(sb.String(), ",") {
+		if !keyname.ValidEntryName(name) || strings.Count(name, keyname.Sep) > 3 || slices.Contains(names, name) {
+			continue
+		}
+		names = append(names, name)
+		if len(names) == 8 {
+			break
+		}
+	}
+	return names
+}
+
+// FuzzKeystoreEnvRoundTrip: for every valid entry name, the variable
+// keyToEnvVar builds for one of its sources is turned back by the unchanged
+// transform into that exact path, the path unflattens and walks to exactly
+// that entry, envVarForKey names the variable, and the variable is
+// POSIX-exportable exactly when the name holds no '-'. This is the ADR-144
+// promise: KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE is entry "tokens.our".
+func FuzzKeystoreEnvRoundTrip(f *testing.F) {
+	for _, seed := range []string{"tokens.our", "payments.sign.v1", "tokens-our", "secret", "a-b.c-d", "x"} {
+		f.Add(seed)
+	}
+	posix := regexp.MustCompile(`^[A-Z0-9_]+$`)
+	f.Fuzz(func(t *testing.T, raw string) {
+		names := fuzzNames(raw)
+		if len(names) == 0 {
+			t.Skip()
+		}
+		name := names[0]
+		path := fieldKeystoreKeys + "." + name + ".public.value"
+		envVar := keyToEnvVar(path)
+		require.Equal(t, path, envVarToKey(envVar))
+		require.Equal(t, envVar, envVarForKey(path))
+		require.Equal(t, !strings.Contains(name, "-"), posix.MatchString(envVar), "variable %s", envVar)
+
+		tree := koanfmaps.Unflatten(map[string]any{envVarToKey(envVar): "v"}, keyname.Sep)
+		section, ok := stringMap(tree["keystore"])
+		require.True(t, ok)
+		keysTree, ok := stringMap(section["keys"])
+		require.True(t, ok)
+		flat, err := readKeyTree(keysTree)
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{name: map[string]any{"public": map[string]any{"value": "v"}}}, flat)
+	})
 }

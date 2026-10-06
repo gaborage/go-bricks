@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
 // envVarNamePattern is the POSIX environment-variable name grammar. A value
@@ -74,6 +76,11 @@ func checkKeyStore(cfg *KeyStoreConfig) error {
 		}
 	}
 	return nil
+}
+
+// hasEmptySegment reports whether a dotted name has an empty segment.
+func hasEmptySegment(name string) bool {
+	return slices.Contains(strings.Split(name, keyname.Sep), "")
 }
 
 // validateKeyEntry validates a single keystore entry. An entry is exactly one
