@@ -128,6 +128,46 @@ keystore:
 	assert.Contains(t, err.Error(), `"tokens" is an entry (it sets public) and the parent of entry "tokens.our"`)
 }
 
+// TestLoadTenantStoreFromFileRefusesTopLevelDottedKeys: config.LoadFromMap splits a
+// top-level key on '.' (koanf's confmap unflatten), but a service's Load reads its YAML files
+// with no unflatten, so it keeps such a key literal and ignores it. Decoded as is, the file
+// would hand this tool tenants the service never serves: a quoted "multitenant.tenants"
+// replaced the nested tenants, and flat keys alone enabled tenancy the service reads as off.
+func TestLoadTenantStoreFromFileRefusesTopLevelDottedKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		key  string
+	}{
+		{
+			name: "quoted_key_beside_nested_section",
+			body: tenantStoreYAML + `
+"multitenant.tenants":
+  tenant-x:
+    database: {type: postgresql, host: x.example.com, port: 5432, database: tenant_x, username: u_x, password: p_x}
+`,
+			key: "multitenant.tenants",
+		},
+		{
+			name: "flat_keys_only",
+			body: `
+multitenant.enabled: true
+multitenant.tenants.tenant-f.database.type: postgresql
+multitenant.tenants.tenant-f.database.host: f.example.com
+`,
+			key: "multitenant.enabled",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := loadTenantStoreFromFile(writeTenantStoreYAMLContent(t, tc.body))
+			require.Error(t, err)
+			assert.Nil(t, store)
+			assert.Contains(t, err.Error(), `top-level key "`+tc.key+`" contains '.'`)
+		})
+	}
+}
+
 // TestLoadTenantStoreFromFileRejectsDeliveredEmptyScalar proves the delivered-empty guard
 // reaches a tenants.yaml: a tenant's port set to "" fails the load instead of decoding as a
 // legal 0.

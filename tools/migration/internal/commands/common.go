@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -218,14 +220,17 @@ func resolveConfigProvider(ctx context.Context, flags *CommonFlags, fileStore *c
 // Lookup keys mirror the standard go-bricks config layout.
 //
 // The tree is decoded by config.LoadFromMap, the framework's own decoder (framework
-// defaults underneath, no environment, no Validate), so the file decodes exactly as a
-// service's Load decodes it at the go-bricks version this module pins: the delivered-empty
-// and numeric-duration guards, the comma-split []string hook and the ADR-144 keystore tree
+// defaults underneath, no environment, no Validate), so the file decodes as a service's Load
+// decodes it at the go-bricks version this module pins: the delivered-empty and
+// numeric-duration guards, the comma-split []string hook and the ADR-144 keystore tree
 // reader all come from that one place. A local copy of the decoder drifted once already: it
 // lacked the keystore tree reader, so a nested messaging.seal.active selector aborted the
 // load and dotted keystore names decoded as phantom entries. The defaults change nothing the
 // store reads: they configure no database (DBConfig("") still answers not configured) and
 // reach no tenant entry, whose keys are user-chosen.
+//
+// One input decodes apart, so it is refused first: a top-level key containing '.'. See
+// refuseTopLevelDottedKeys.
 func loadTenantStoreFromFile(path string) (*config.TenantStore, error) {
 	if err := validateConfigPath(path); err != nil {
 		return nil, err
@@ -236,11 +241,33 @@ func loadTenantStoreFromFile(path string) (*config.TenantStore, error) {
 		return nil, fmt.Errorf("load config %q: %w", path, err)
 	}
 
-	cfg, err := config.LoadFromMap(k.Raw())
+	raw := k.Raw()
+	if err := refuseTopLevelDottedKeys(raw); err != nil {
+		return nil, fmt.Errorf("decode config %q: %w", path, err)
+	}
+	cfg, err := config.LoadFromMap(raw)
 	if err != nil {
 		return nil, fmt.Errorf("decode config %q: %w", path, err)
 	}
 	return config.NewTenantStore(cfg), nil
+}
+
+// refuseTopLevelDottedKeys refuses a top-level key that contains '.' (a quoted
+// "multitenant.tenants", or a flat multitenant.enabled). config.LoadFromMap reads its map as
+// dotted keys and splits every top-level key on '.', in sorted order, so such a key would
+// become a path and replace the nested section it names. A service's Load reads its YAML
+// files with no such split: it keeps the key literal and ignores it. Decoded as is, the file
+// could hand this tool tenants the service never serves; refusing keeps the two readings
+// from parting. Only top-level keys are split, so a deeper dotted key is left to the
+// framework's own rules.
+func refuseTopLevelDottedKeys(raw map[string]any) error {
+	for _, key := range slices.Sorted(maps.Keys(raw)) {
+		if strings.Contains(key, ".") {
+			return fmt.Errorf("top-level key %q contains '.': a service's Load keeps it as one literal key and ignores it, "+
+				"while this tool would read it as a path; write it nested, or remove it", key)
+		}
+	}
+	return nil
 }
 
 // validateConfigPath rejects paths with shell metacharacters or traversal
