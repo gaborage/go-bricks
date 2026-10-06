@@ -12463,12 +12463,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C72.25] a static tenant cache refuses a `manager` block · breaking · when: match
 
-- detect: `git grep -nE '(^[[:space:]]*|\.)manager[[:space:]]*:' -- '*.yaml' '*.yml'` in every
+- detect: `git grep -nE '(^[[:space:]]*|\.)manager([[:space:]]*:|\.)' -- '*.yaml' '*.yml'` in every
   config file and overlay, then keep only hits nested under `multitenant:` → `tenants:` → `<id>:`
   → `cache:` (a dotted `tenants.<id>.cache.manager` key counts; `database.manager`, root
   `cache.manager` and `messaging` keys do not). Also
   `git grep -nE 'MULTITENANT_TENANTS_[A-Z0-9_]+_CACHE_MANAGER_'` over env files and deploy
-  manifests, and `git grep -nE 'Manager:[[:space:]]*(config\.)?CacheManagerConfig\{|\.Cache\.Manager\.' -- '*.go'`,
+  manifests, and `git grep -nE 'CacheManagerConfig\{|\.Cache\.Manager([^A-Za-z]|$)' -- '*.go'`,
   keeping only hits inside a `config.TenantEntry`'s `Cache: config.CacheConfig{…}` literal or on a
   `Tenants[…].Cache.Manager` assignment.
 - scope: `config.Validate` refuses a static tenant cache whose `Manager` is not the zero

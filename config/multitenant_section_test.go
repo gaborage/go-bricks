@@ -55,16 +55,18 @@ func TestValidateRefusesTenantCacheManagerBlock(t *testing.T) {
 	tests := []struct {
 		name    string
 		enabled bool
+		manager CacheManagerConfig
 	}{
-		{name: "enabled_tenant_cache", enabled: true},
-		{name: "disabled_tenant_cache", enabled: false},
+		{name: "enabled_tenant_cache", enabled: true, manager: CacheManagerConfig{MaxSize: 50}},
+		{name: "disabled_tenant_cache", enabled: false, manager: CacheManagerConfig{MaxSize: 50}},
+		{name: "idlettl_only", enabled: true, manager: CacheManagerConfig{IdleTTL: time.Minute}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tenantCacheConfig(&CacheConfig{
 				Enabled: tt.enabled,
 				Redis:   RedisConfig{Host: "acme.redis"},
-				Manager: CacheManagerConfig{MaxSize: 50},
+				Manager: tt.manager,
 			})
 
 			err := Validate(cfg)
