@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -52,7 +53,9 @@ var (
 // selector map itself is not read here; mapstructure refuses a nested
 // selector there (a map where a string belongs) rather than dropping it.
 // Every refusal is a *ConfigError; mapstructure wraps it in a DecodeError that
-// unwraps, so errors.As reaches it.
+// unwraps, so errors.As reaches it. Its Field is named from the root Load
+// meets (keystore.keys, messaging.seal.active); Config.Unmarshal rewrites it
+// to the path it decoded (rerootTreeErrors).
 func keystoreTreeHook() mapstructure.DecodeHookFuncType {
 	return func(_, to reflect.Type, data any) (any, error) {
 		switch to {
@@ -64,6 +67,38 @@ func keystoreTreeHook() mapstructure.DecodeHookFuncType {
 			return replaceSelectorTree(data)
 		}
 		return data, nil
+	}
+}
+
+// treeNodes are the paths where Load hands keystoreTreeHook its nodes, and so the roots its
+// refusals are named from: the entry map (and one entry) at keystore.keys, and the seal
+// section at messaging.seal, whose active child the walk reads.
+var treeNodes = []string{fieldKeystoreKeys, strings.TrimSuffix(fieldMessagingSealActive, keyname.Sep+sealActiveChild)}
+
+// rerootTreeErrors rewrites the Field of every tree-reader refusal in err from the root Load
+// meets it at to the path Config.Unmarshal decoded: the hook fires on its types at any path
+// (custom.keys, keystore.keys.tokens), and mapstructure's DecodeError names the node it was
+// given, relative to key. A refusal is a fresh *ConfigError per decode, so it is rewritten in
+// place.
+func rerootTreeErrors(err error, key string) {
+	var joined interface{ Unwrap() []error }
+	if errors.As(err, &joined) {
+		for _, inner := range joined.Unwrap() {
+			rerootTreeErrors(inner, key)
+		}
+		return
+	}
+	var decodeErr *mapstructure.DecodeError
+	var cfgErr *ConfigError
+	if !errors.As(err, &decodeErr) || !errors.As(decodeErr.Unwrap(), &cfgErr) {
+		return
+	}
+	decoded := strings.Trim(key+keyname.Sep+decodeErr.Name(), keyname.Sep)
+	for _, node := range treeNodes {
+		if rest, found := strings.CutPrefix(cfgErr.Field, node); found {
+			cfgErr.Field = decoded + rest
+			return
+		}
 	}
 }
 

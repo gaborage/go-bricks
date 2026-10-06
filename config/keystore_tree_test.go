@@ -381,7 +381,7 @@ func TestConfigUnmarshalReadsTheKeystoreTree(t *testing.T) {
 	assert.Equal(t, map[string]string{"payments.sign": "v2"}, seal.Active)
 
 	err = cfg.Unmarshal("custom.ks", &KeyStoreConfig{})
-	requireTreeError(t, err, "keystore.keys.tokens", `(it sets public) and the parent of entry "tokens.our"`)
+	requireTreeError(t, err, "custom.ks.keys.tokens", `(it sets public) and the parent of entry "tokens.our"`)
 }
 
 // TestConfigUnmarshalKeysMapReadsTheTree: Unmarshal straight into the keys
@@ -409,7 +409,7 @@ func TestConfigUnmarshalKeysMapReadsTheTree(t *testing.T) {
 	assert.Equal(t, "pub", ptrKeys["tokens.our"].Public.Value)
 
 	err = cfg.Unmarshal("custom.keys", &map[string]KeyPairConfig{})
-	requireTreeError(t, err, "keystore.keys.tokens", `(it sets public) and the parent of entry "tokens.our"`)
+	requireTreeError(t, err, "custom.keys.tokens", `(it sets public) and the parent of entry "tokens.our"`)
 }
 
 // TestConfigUnmarshalEntryRefusesANamespace: a dotted entry is read by its
@@ -426,8 +426,44 @@ func TestConfigUnmarshalEntryRefusesANamespace(t *testing.T) {
 	assert.Equal(t, KeyPairConfig{Public: KeySourceConfig{Value: "pub"}}, entry)
 
 	err = cfg.Unmarshal("keystore.keys.tokens", &KeyPairConfig{})
-	cfgErr := requireTreeError(t, err, "keystore.keys", `a keystore entry was decoded from a node holding "our", which is no entry field`)
+	cfgErr := requireTreeError(t, err, "keystore.keys.tokens", `a keystore entry was decoded from a node holding "our", which is no entry field`)
 	assert.Equal(t, "unmarshal an entry by its full dotted path (e.g. keystore.keys.tokens.our), or the keys map, which reads nested names", cfgErr.Action)
+}
+
+// TestConfigUnmarshalNamesTheDecodedPath: the tree reader fires on its types
+// wherever Config.Unmarshal meets them, so a refusal names the path that was
+// decoded, not the keystore.keys or messaging.seal.active root Load meets.
+// A custom section that holds one entry beside its own metadata is refused,
+// as a keystore entry is: the reader cannot tell a sibling from a name.
+func TestConfigUnmarshalNamesTheDecodedPath(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{
+		"custom": map[string]any{
+			"partner": map[string]any{"public": map[string]any{"value": "x"}, "kid": "partner-2026"},
+			"vendor":  map[string]any{"keys": map[string]any{"a": map[string]any{"public": map[string]any{"value": "x"}, "label": "y"}}},
+			"seal":    map[string]any{"active": map[string]any{"payments": map[string]any{}}},
+		},
+	})
+	require.NoError(t, err)
+
+	err = cfg.Unmarshal("custom.partner", &KeyPairConfig{})
+	requireTreeError(t, err, "custom.partner", `a keystore entry was decoded from a node holding "kid"`)
+
+	err = cfg.Unmarshal("custom.vendor.keys", &map[string]KeyPairConfig{})
+	requireTreeError(t, err, "custom.vendor.keys.a.label", `unknown field "label" in entry "a"`)
+
+	var vendor struct {
+		Keys map[string]KeyPairConfig `koanf:"keys"`
+	}
+	err = cfg.Unmarshal("custom.vendor", &vendor)
+	requireTreeError(t, err, "custom.vendor.keys.a.label", `unknown field "label" in entry "a"`)
+
+	err = cfg.Unmarshal("custom.seal", &SealConfig{})
+	requireTreeError(t, err, "custom.seal.active.payments", "holds an empty map")
+
+	err = cfg.Unmarshal("custom", &struct {
+		Seal SealConfig `koanf:"seal"`
+	}{})
+	requireTreeError(t, err, "custom.seal.active.payments", "holds an empty map")
 }
 
 // TestKeystoreTreeRefusesSequences: mapstructure's weak decoding merges a
