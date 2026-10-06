@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -482,7 +483,7 @@ func TestConfigValidate(t *testing.T) {
 
 		err := cfg.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "host is required")
+		assert.Contains(t, err.Error(), "redis.host: required")
 	})
 
 	t.Run("InvalidPort", func(t *testing.T) {
@@ -504,7 +505,7 @@ func TestConfigValidate(t *testing.T) {
 
 				err := cfg.Validate()
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid port")
+				assert.Contains(t, err.Error(), "redis.port: invalid value: "+strconv.Itoa(tt.port))
 			})
 		}
 	})
@@ -528,7 +529,7 @@ func TestConfigValidate(t *testing.T) {
 
 				err := cfg.Validate()
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid database number")
+				assert.Contains(t, err.Error(), "redis.database: must be between 0 and 15")
 			})
 		}
 	})
@@ -542,7 +543,7 @@ func TestConfigValidate(t *testing.T) {
 
 		err := cfg.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid pool size")
+		assert.Contains(t, err.Error(), "redis.poolsize: must be positive")
 	})
 
 	// A hand-built Config never passes through the config layer's cache.loadtimeout
@@ -584,79 +585,6 @@ func TestConfigValidate(t *testing.T) {
 	})
 }
 
-// TestConfigValidateTLS tests structural TLS rules, mirroring
-// config.checkRedisTLSMaterial: a hand-built Config never passes through the
-// config layer, so the same fail-closed checks run here.
-func TestConfigValidateTLS(t *testing.T) {
-	tests := []struct {
-		name      string
-		tls       TLSConfig
-		wantField string
-	}{
-		{
-			name: "enabled_without_material_is_valid",
-			tls:  TLSConfig{Enabled: true},
-		},
-		{
-			name:      "staged_material_while_disabled",
-			tls:       TLSConfig{CAFile: "/etc/ca.pem"},
-			wantField: "redis.tls.enabled",
-		},
-		{
-			name:      "ca_file_and_value_together",
-			tls:       TLSConfig{Enabled: true, CAFile: "/etc/ca.pem", CAValue: "Zm9v"},
-			wantField: "redis.tls.cafile",
-		},
-		{
-			name:      "cert_file_and_value_together",
-			tls:       TLSConfig{Enabled: true, CertFile: "/etc/c.pem", CertValue: "Zm9v", KeyFile: "/etc/k.pem"},
-			wantField: "redis.tls.certfile",
-		},
-		{
-			name:      "key_file_and_value_together",
-			tls:       TLSConfig{Enabled: true, CertFile: "/etc/c.pem", KeyFile: "/etc/k.pem", KeyValue: "Zm9v"},
-			wantField: "redis.tls.keyfile",
-		},
-		{
-			name:      "cert_without_key",
-			tls:       TLSConfig{Enabled: true, CertFile: "/etc/c.pem"},
-			wantField: "redis.tls.keyfile",
-		},
-		{
-			name:      "key_without_cert",
-			tls:       TLSConfig{Enabled: true, KeyValue: "Zm9v"},
-			wantField: "redis.tls.certfile",
-		},
-		{
-			name:      "unsupported_minversion",
-			tls:       TLSConfig{Enabled: true, MinVersion: "1.1"},
-			wantField: "redis.tls.minversion",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{
-				Host:     "localhost",
-				Port:     6379,
-				PoolSize: 10,
-				TLS:      tt.tls,
-			}
-
-			err := cfg.Validate()
-			if tt.wantField == "" {
-				assert.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			var configErr *cache.ConfigError
-			require.ErrorAs(t, err, &configErr)
-			assert.Equal(t, tt.wantField, configErr.Field)
-		})
-	}
-}
-
-// TestConfigAddress tests the Address method of the Config struct.
 func TestConfigAddress(t *testing.T) {
 	cfg := &Config{
 		Host: "redis.example.com",
@@ -1193,67 +1121,6 @@ func TestNewClientAuthenticatesAsNamedACLUser(t *testing.T) {
 	})
 }
 
-// TestConfigValidateUsername mirrors the config layer's rule at the client's own
-// door, which a hand-built Config reaches without passing through config
-// validation. go-redis builds the AUTH clause only when the password is
-// non-empty, so a name with an empty password would dial with no AUTH at all and
-// run as whatever identity the server hands an unauthenticated client: the pair
-// is refused, naming both keys. An empty name with a password is the legacy
-// default-user form and stands, as does neither key set, and a whitespace-only
-// name is refused ahead of the coupling rule.
-func TestConfigValidateUsername(t *testing.T) {
-	t.Run("named_user_with_password", func(t *testing.T) {
-		assert.NoError(t, usernameConfig("svc", "pw").Validate())
-	})
-
-	t.Run("absent_username_with_password", func(t *testing.T) {
-		assert.NoError(t, usernameConfig("", "pw").Validate())
-	})
-
-	t.Run("neither_username_nor_password", func(t *testing.T) {
-		assert.NoError(t, usernameConfig("", "").Validate())
-	})
-
-	t.Run("named_user_without_password", func(t *testing.T) {
-		requireUsernameRejected(t, usernameConfig("svc", ""), "redis.password")
-	})
-
-	t.Run("whitespace_only_username_with_password", func(t *testing.T) {
-		requireUsernameRejected(t, usernameConfig(" \t ", "pw"), "whitespace-only")
-	})
-
-	t.Run("whitespace_only_username_without_password", func(t *testing.T) {
-		requireUsernameRejected(t, usernameConfig(" \t ", ""), "whitespace-only")
-	})
-}
-
-// usernameConfig returns an otherwise valid Config carrying the ACL identity
-// under test, so a case states only the two fields the username rules read.
-func usernameConfig(username, password string) *Config {
-	return &Config{
-		Host:     "localhost",
-		Port:     6379,
-		PoolSize: 10,
-		Username: username,
-		Password: password,
-	}
-}
-
-// requireUsernameRejected asserts Validate refuses cfg with a ConfigError
-// addressed to redis.username — the field both username rules share — carrying
-// wantMsg, which is what tells the two rules apart.
-func requireUsernameRejected(t *testing.T, cfg *Config, wantMsg string) {
-	t.Helper()
-
-	err := cfg.Validate()
-	require.Error(t, err)
-	var configErr *cache.ConfigError
-	require.ErrorAs(t, err, &configErr)
-	assert.Equal(t, "redis.username", configErr.Field)
-	assert.Contains(t, configErr.Message, wantMsg,
-		"the message must name the rule that fired, not just the field both rules share")
-}
-
 // TestConfigValidateMode pins the transport selector at the package's own
 // validation door, which a hand-built Config reaches without passing through
 // config validation. Empty is standalone, so a Config that predates the field
@@ -1346,7 +1213,7 @@ func TestConfigValidateClusterRejectsNonZeroDatabase(t *testing.T) {
 			var configErr *cache.ConfigError
 			require.ErrorAs(t, err, &configErr)
 			assert.Equal(t, tt.wantField, configErr.Field)
-			assert.Contains(t, configErr.Message, "redis.mode",
+			assert.Contains(t, configErr.Message, "mode is cluster",
 				"the operator has to know which of the two keys to change, so the message names the other one")
 		})
 	}

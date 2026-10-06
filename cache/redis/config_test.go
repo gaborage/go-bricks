@@ -127,3 +127,18 @@ func TestRedisConfigCarriesNoInjectionTags(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigValidateMapsRuleViolation pins the cache/redis adapter over the shared
+// rule set: the violation's relative field gains the "redis." head, and a closed
+// set travels in the message because cache.ConfigError has no Action.
+func TestConfigValidateMapsRuleViolation(t *testing.T) {
+	cfg := Config{Host: "localhost", Port: 0, PoolSize: 10}
+
+	err := cfg.Validate()
+
+	var cfgErr *cache.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "redis.port", cfgErr.Field)
+	assert.Equal(t, "invalid value: 0 (must be one of: 1-65535)", cfgErr.Message)
+	assert.NoError(t, cfgErr.Err)
+}
