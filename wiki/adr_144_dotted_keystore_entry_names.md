@@ -98,7 +98,14 @@ How the `keys` subtree is read:
 - **Sequences.** A YAML sequence where the entry map belongs is refused, empty or not:
   mapstructure's weak decoding would merge its maps into the entry map and skip the walk, so a
   namespace would decode as a phantom entry. A sequence where the selector map belongs is
-  refused for the same reason. Both decoded as a map before this ADR.
+  refused for the same reason. Both decoded as a map before this ADR. Decode sees only the
+  sequence that survives the merge: a map a later layer sets on the same path (the env
+  overlay, or a variable) replaces it, and what it held was dropped in silence. So each
+  operator layer's sequences are recorded before the merge, at `keystore.keys` and every name
+  below it down to the first entry, and anywhere under `messaging.seal.active`, and
+  `config.Validate` refuses one that never reached decode (`checkLayerSequences`). Inside an
+  entry the field schema governs: a later layer that sets a source over a sequence there drops
+  no entry.
 - **Bad keys.** A child key containing `.` (a quoted YAML key, or a literal key in a nested
   `LoadFromMap` tree), and an empty key, are refused: write the name nested instead.
 - **Entries.** A node with at least one child named `public`, `private`, `secret` or `pkcs12`
@@ -126,7 +133,12 @@ The walk lives in decode because decode is the only place the nested tree exists
 that judge the final set (§3) live in `check`, so a hand-built `Config` (ADR-064) meets them
 too. A hook error is a `*ConfigError`. mapstructure v2.5.0 wraps it in a `DecodeError` that
 unwraps, and joins struct-field errors with `errors.Join`. `errors.As` therefore reaches
-`Field` and `Action` through both `Load` and `Config.Unmarshal`; a test pins both doors.
+`Field` and `Action` through both `Load` and `Config.Unmarshal`; a test pins both doors. The
+hook names a `Field` from the root `Load` meets (`keystore.keys`, `messaging.seal.active`), but
+fires on its types wherever they are decoded, so `Config.Unmarshal` rewrites the `Field` to the
+path it decoded, from the `DecodeError`'s node name: `custom.keys.tokens`, not
+`keystore.keys.tokens`. A custom section decoded into one of these types is read as the
+keystore is, so a key there that is no entry field (`kid:` beside `public:`) is refused.
 
 ### 3. Injectivity (check)
 
@@ -277,7 +289,8 @@ is `keystore.keys.<name>[.<field>[.<source>]]` and can be reached by an environm
 | Nested selectors, one lost in the merge | `messaging.seal.active.payments.sign.eu` | `selectors "payments.sign" and "payments.sign.eu" nest: one path cannot hold both, and loading kept only one of them` → remove the stale selector from every YAML file and variable that sets it |
 | Empty selector map | `messaging.seal.active.payments` | `holds an empty map where a generation or a further name segment was expected` → set the selector to a generation (`v<N>`), or remove the key |
 | Sequence | `keystore.keys` or `messaging.seal.active` | `holds a sequence where a map was expected` → write the entries (or the selectors) as a map, one key per name segment |
-| Namespace unmarshaled as one entry | `keystore.keys` | `a keystore entry was decoded from a node holding "our", which is no entry field (public, private, secret or pkcs12)` → unmarshal an entry by its full dotted path, or the keys map |
+| Sequence a later layer replaced (`config.Validate`) | its path (`keystore.keys`, `keystore.keys.tokens`, `messaging.seal.active.payments`) | `holds a sequence where a map was expected, and a later layer replaced it, which would drop what it held` → same Action |
+| Namespace unmarshaled as one entry | the unmarshaled path (`keystore.keys.tokens`) | `a keystore entry was decoded from a node holding "our", which is no entry field (public, private, secret or pkcs12)` → unmarshal an entry by its full dotted path, or the keys map |
 
 Three message changes outside the table:
 
@@ -333,7 +346,17 @@ Three message changes outside the table:
   - an entry with another entry nested inside it (such as `tokens` plus `tokens.our`);
   - a `KEYSTORE_KEYS_*` variable whose path ends off a source, including a POSIX variable that
     spells a hyphenated entry while its first segment is an entry;
-  - a sequence under `keystore.keys` or `messaging.seal.active`, which decoded as a map.
+  - a sequence under `keystore.keys` or `messaging.seal.active`, which decoded as a map, or,
+    when a later layer replaced it with a map, was dropped with what it held;
+  - a nested selector map in one YAML file that a later file replaces with a scalar on its
+    parent path (`payments: {sign: v1}` under an overlay's `payments: v2`). It never reached
+    decode, so it booted; each file's selectors are now judged before the merge, and the pair
+    nests.
+
+  Code changes too: `Config.Unmarshal` into a `KeyPairConfig`, a map of them, a
+  `KeyStoreConfig` or a `SealConfig` reads the node as the keystore does at any path, so a
+  custom section that holds a key no entry field names, which loaded with the key dropped, is
+  refused.
 
   A malformed generation name (`x-v01`, `x-v1-v2`) is refused by `config.Validate` before the
   keystore sees it, so a service that never registers the keystore module, which booted with
@@ -372,7 +395,11 @@ Three message changes outside the table:
   of the hook chain. That copy lacked the tree reader: a nested selector aborted the load and
   dotted names decoded as phantom entries. The CLI pins a released go-bricks, so it reads
   dotted names, and refuses what this ADR refuses at decode, from its pin bump to this
-  release; until then it decodes as the pinned release's `Load` does.
+  release; until then it decodes with the pinned release's decoder. One input decodes apart:
+  `LoadFromMap` splits a top-level key on `.`, while `Load` keeps it literal and ignores it, so
+  the CLI refuses a top-level key containing `.` before decoding. It does not run
+  `config.Validate`, so the layer rules (`checkSelectorLayers`, `checkLayerSequences`) are the
+  service's alone; its one file is one layer.
 - **Known limitation: an entry nothing references.** The rules above judge names against each
   other, never against their readers: no mechanism reports a `keystore.keys` entry that no
   route, declaration or module asks for. Take leftover variables kept after the YAML moved
@@ -383,23 +410,30 @@ Three message changes outside the table:
     `public` is the half an RSA entry requires: `keystore.keys.tokens-our.public key source
     required`. Its Action first suggests completing `tokens-our`, which is the wrong fix here:
     remove the variable.
-  - **When the public half, a complete pair, or a `secret` is left over**, the stray entry is a
-    legal entry (a public-only entry is a verify-only key) and loads in silence. How the
-    missing `tokens.our` then surfaces depends on its reader:
+  - **When the public half, a complete pair, a complete `pkcs12` stanza or a `secret` is left
+    over**, the stray entry is a legal entry (a public-only entry is a verify-only key) and
+    loads in silence. How the missing `tokens.our` then surfaces depends on its reader:
     - a `jose:` route resolves its kids at startup, so startup fails with the look-alike hint in
       the cause;
     - a sealing declaration resolves its families at startup too, and fails naming the
       generation entry it expected;
     - an `httpclient` built `WithJOSE` passes startup: `Build` validates the policies but
-      resolves no kid, and its `JOSETransport` resolves both kids on every request, so the
-      first request fails with `JOSE_KID_UNKNOWN`, the look-alike hint in its cause. A
-      code-built `jose.Seal` or `jose.Open` call behaves the same way;
+      resolves no kid. Its `JOSETransport` resolves the sign and encrypt kids only when it
+      seals a request body, and the decrypt and verify kids only when it opens a protected
+      response (`application/jose`, or an `Envelope` it unwraps); a bodyless request or a
+      plaintext error response resolves none. The first call that does fails with
+      `JOSE_KID_UNKNOWN`, the look-alike hint in its cause, and a call answered with a
+      plaintext `400` shows nothing. A code-built `jose.Seal` or `jose.Open` call, and a
+      direct `jose/sealed` `Seal`, `Open` or `OpenDocument`, resolve on use too;
     - a lazy `PrivateKey`, `PublicKey` or `Secret` call in module code passes startup and fails
       on first use, with the look-alike hint.
 
   A clean boot therefore proves the names the startup readers use, never the ones resolved per
-  call. Retire variables together with the YAML they override, and exercise every per-call
-  reader after a rename.
+  call. Retire variables together with the YAML they override, and after a rename resolve
+  every kid a `WithJOSE` client's policies name in the module's `Init` (`PrivateKey` for the
+  sign and decrypt kids, `PublicKey` for the encrypt and verify kids), or make one call that
+  carries a body and receives a protected `2xx`; exercise every other per-call reader the same
+  way.
 - **One grammar.** The four copies of the grammar are one, and the keep-in-sync comments are gone.
 - **Reserved words follow `KeyPairConfig`.** Adding a field to `KeyPairConfig` reserves another
   segment word, which is a breaking change for any name that uses it. A test pins the reserved

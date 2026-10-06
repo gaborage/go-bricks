@@ -20,7 +20,9 @@
 > its generations `<family>.v<N>`, a family without one keeps `-v<N>`, so the marker is a function
 > of the family and `Generation.Kid()` stays pure. Selector keys are written nested, so
 > `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN` reaches family `payments.sign` from any shell. No per-key
-> rewrite was added.
+> rewrite was added. A hyphenated kid's selector is not YAML-only, as §3 says: `env` can pass
+> `MESSAGING_SEAL_ACTIVE_SVC-PAYMENTS-SIGN=v2` to a child process; only a POSIX shell assignment
+> or `export` cannot set it.
 >
 > **Amended (2026-10-03, #1897):** rule 10 now also requires **no clear case-fold twin of the
 > Subject**. The case-fold rule the 2026-09-04 amendment ran on the serialized bytes for the

@@ -9,7 +9,7 @@
 // Usage:
 //
 //	open-event -sign-key-file sign.pub.der -encrypt-key-file enc.der \
-//	  -sign-kid svc.payments.sign.v1 -encrypt-kid aud.core.encrypt.v1 \
+//	  -sign-kid svc.payments.sign.v1 -encrypt-kid aud-core-encrypt-v1 \
 //	  -subject card -event-type payment.authorized \
 //	  -tenancy shared -tenant-id t1 body.txt
 //

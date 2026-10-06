@@ -10,7 +10,7 @@
 //
 //	echo '{"order_id":"o-1","card":{"pan":"4111111111111111"}}' | seal-event \
 //	  -sign-key-file sign.der -encrypt-key-file enc.pub.der \
-//	  -sign-kid svc.payments.sign.v1 -encrypt-kid aud.core.encrypt.v1 \
+//	  -sign-kid svc.payments.sign.v1 -encrypt-kid aud-core-encrypt-v1 \
 //	  -subject card -event-type payment.authorized -tenant-id t1
 //
 // A family without '.' keeps its hyphen generations, so

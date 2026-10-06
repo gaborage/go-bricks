@@ -93,7 +93,7 @@ and a sealed event by accident. A declaration is a sentinel plus exactly one Sub
 
 ```go
 type PaymentAuthorized struct {
-    _        struct{} `seal:"sign=svc-payments-sign,encrypt=aud-core-encrypt"`
+    _        struct{} `seal:"sign=svc.payments.sign,encrypt=aud-core-encrypt"`
     OrderID  string   `json:"order_id"  validate:"required"`
     Amount   int64    `json:"amount"    validate:"gt=0"`
     Card     Card     `json:"card"      seal:"subject"` // its json name is the sp entry
@@ -144,8 +144,7 @@ A dotted family is written nested in YAML and set from any shell:
 `KEYSTORE_KEYS_SVC_PAYMENTS_SIGN_V2_PRIVATE_FILE` provisions its `v2`. A hyphenated family is
 settable by variable only where the runtime allows `-` in a variable name: a container
 manifest, or `env` passing the variable to a child process, but never a POSIX shell assignment
-or `export`, so from a shell its selector is set in YAML
-([keystore.md](keystore.md#activation-messagingsealactive)). A selector that differs from a
+or `export` ([keystore.md](keystore.md#activation-messagingsealactive)). A selector that differs from a
 provisioned family only in `-` versus `.` fails `config.Validate`, because it would select
 nothing. So do two families, or two selectors, that nest once `-` is read as `.`
 (`payments-sign` beside `payments.sign.eu`): a POSIX flip of the first selector lands on the
@@ -160,7 +159,9 @@ keystore:
     svc:
       payments:
         sign:
-          v1: { private: { file: certs/payments-sign-v1.der } }   # producer: entry svc.payments.sign.v1
+          v1:                                                      # producer: entry svc.payments.sign.v1
+            public: { file: certs/payments-sign-v1-pub.der }       # public is required
+            private: { file: certs/payments-sign-v1.der }
     aud-core-encrypt-v1: { public: { file: certs/core-encrypt-v1.der } }   # a hyphenated family keeps -v<N>
 messaging:
   seal:
