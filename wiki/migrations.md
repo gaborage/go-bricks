@@ -11933,7 +11933,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (C72.22). ADR-117 amendment.
 - gist: config now checks the Redis endpoint through the same shared rule set as cache/redis.
   At startup that moves the keyprefix grammar after every endpoint rule, so a section with a bad
-  keyprefix and another fault reports the other fault (C72.23), and the two messages that named a
+  keyprefix and an endpoint fault reports the endpoint fault (C72.23), and the two messages that named a
   sibling key absolutely now name it relative to the block, `mode` and `password` (C72.24).
   ADR-117 amendment.
 
@@ -12577,7 +12577,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: gaborage/go-bricks#2045 · `internal/redisrules` (`Check`), `cache/redis/config.go`
   (`(*Config).validate`) · [ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md) amendment
 
-### [C72.23] at startup, a cache section with a bad keyprefix and another Redis fault reports the other fault · silent-behavior · when: match
+### [C72.23] at startup, a cache section with a bad keyprefix and a Redis endpoint fault reports the endpoint fault · silent-behavior · when: match
 
 - detect: `git grep -n 'keyprefix' -- '*_test.go'` over your own modules, keeping tests that run
   `config.Validate` (or `config.Load`) on a cache section carrying both a bad
@@ -12596,12 +12596,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C72.24] two cache messages name their sibling key relative to the Redis block · silent-behavior · when: match
 
-- detect: `git grep -nE 'when cache[.]redis[.]mode is|requires cache[.]redis[.]password' -- '*.go'`
-  over your own modules.
+- detect: `git grep -nE 'cache[.]redis[.](mode|password)' -- '*.go'` over your own modules,
+  keeping hits that compare the text of a `cache.redis.database` or `cache.redis.username` error.
 - scope: exactly two messages, at `config.Validate` and at the cache connector, for the root and
   every tenant section; `Field`, Category and Action are unchanged. A tenant section's message
   used to name the root key `cache.redis.*`.
-- gate: match = a hit. no-match = no hit.
+- gate: match = a hit that compares one of the old texts below in full or by a substring the new
+  text lacks, such as `cache.redis.mode` or `cache.redis.password`. no-match = no hit.
 - before → after (`Message`):
   - `cache.redis.database`: `must be 0 when cache.redis.mode is cluster: the cluster client has no database selection` → `must be 0 when mode is cluster: the cluster client has no database selection`
   - `cache.redis.username`: `requires cache.redis.password: the client sends no AUTH without one, so the connection would silently run as the default user` → `requires password: the client sends no AUTH without one, so the connection would silently run as the default user`

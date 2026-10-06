@@ -1188,14 +1188,12 @@ func TestCheckRedisMapsRuleViolation(t *testing.T) {
 	assert.Equal(t, "must be one of: 1-65535", cfgErr.Action)
 }
 
-// c7224Changed lists the rows whose startup text [C72.24] changes: the two messages that
-// named a sibling key absolutely. It must equal that atom's list.
-var c7224Changed = []string{"cluster_needs_database_zero", "username_needs_password"}
-
-// TestValidateRedisCacheOutputIsByteIdentical pins config.Validate's text for one fault per
-// Redis rule across the move into internal/redisrules: every row reads as it did before the
-// move unless it carries an after text, and the rows that do are exactly c7224Changed.
-func TestValidateRedisCacheOutputIsByteIdentical(t *testing.T) {
+// TestValidateRedisCacheOutputAcrossTheRuleMove pins config.Validate's text for one fault per
+// Redis rule across the move into internal/redisrules: every row reads byte-identically to
+// before the move unless it carries an after text, and the rows that do are exactly
+// c7224Changed, the two messages [C72.24] lists.
+func TestValidateRedisCacheOutputAcrossTheRuleMove(t *testing.T) {
+	c7224Changed := []string{"cluster_needs_database_zero", "username_needs_password"}
 	tests := []struct {
 		name   string
 		mutate func(r *RedisConfig)
