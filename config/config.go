@@ -127,7 +127,9 @@ func Load() (*Config, error) {
 // LoadFromMap builds a Config from data alone — framework defaults plus data's dotted keys,
 // reading no file and no environment variable — for unit tests of code that reads through
 // the getters or InjectInto. data merges as a YAML layer does, so ADR-104 presence and the
-// delivered-empty checks see its keys.
+// delivered-empty checks see its keys. The tools/migration CLI (go-bricks-migrate) also
+// decodes its --source-config file through it, so the file decodes as a service's Load
+// decodes it, with no copy of the decoder to keep in sync.
 //
 // It does NOT run Validate: a module test supplies only the keys it reads, and the section
 // checks would refuse that partial tree. Load is the door that validates.
