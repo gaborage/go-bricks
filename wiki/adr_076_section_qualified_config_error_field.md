@@ -20,7 +20,7 @@
 <!-- -->
 
 > **Amended (2026-08-31, one engine for every kind):** the database placement logic and the
-> 2026-08-30 cache amendment below were independent reimplementations of the same root/named/tenant
+> cache addendum below were independent reimplementations of the same root/named/tenant
 > rewrite; `cache_section.go`'s 35 lines are now one unexported `section` type in
 > `config/section.go`, keyed by kind (`database`/`cache`) and resource key, backing the
 > "cannot drift" promise for both. `QualifyCacheConfigErrorForKey` and

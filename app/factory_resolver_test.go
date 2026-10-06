@@ -1200,34 +1200,51 @@ func TestCacheConnectorNamespacesAnUnvalidatedTenantUnderTheAppName(t *testing.T
 
 func TestCacheConnectorRefusalNeverDials(t *testing.T) {
 	tests := []struct {
-		name      string
-		mutate    func(*config.CacheConfig)
-		wantField string
-		wantCat   string
+		name       string
+		mutate     func(*config.CacheConfig)
+		wantField  string
+		wantCat    string
+		wantMsg    string
+		wantAction string
 	}{
 		{
 			name:      "database_out_of_range",
 			mutate:    func(s *config.CacheConfig) { s.Redis.Database = 16 },
 			wantField: "multitenant.tenants.acme.cache.redis.database",
 			wantCat:   "invalid",
+			wantMsg:   "must be between 0 and 15",
 		},
 		{
 			name:      "negative_pool_size",
 			mutate:    func(s *config.CacheConfig) { s.Redis.PoolSize = -1 },
 			wantField: "multitenant.tenants.acme.cache.redis.poolsize",
 			wantCat:   "invalid",
+			wantMsg:   "must be positive",
 		},
 		{
 			name:      "username_without_password",
 			mutate:    func(s *config.CacheConfig) { s.Redis.Username = "svc" },
 			wantField: "multitenant.tenants.acme.cache.redis.username",
 			wantCat:   "invalid",
+			wantMsg: "requires cache.redis.password: the client sends no AUTH without one, " +
+				"so the connection would silently run as the default user",
+		},
+		{
+			name:       "unsupported_type",
+			mutate:     func(s *config.CacheConfig) { s.Type = "memcached" },
+			wantField:  "multitenant.tenants.acme.cache.type",
+			wantCat:    "invalid",
+			wantMsg:    "'memcached' is not supported",
+			wantAction: "must be one of: redis",
 		},
 		{
 			name:      "disabled",
 			mutate:    func(s *config.CacheConfig) { s.Enabled = false },
 			wantField: "multitenant.tenants.acme.cache",
 			wantCat:   "not_configured",
+			wantMsg:   "(optional)",
+			wantAction: "to enable: set MULTITENANT_TENANTS_ACME_CACHE_ENABLED env var or add " +
+				"multitenant.tenants.acme.cache.enabled to config.yaml",
 		},
 	}
 
@@ -1245,6 +1262,8 @@ func TestCacheConnectorRefusalNeverDials(t *testing.T) {
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, tt.wantField, cfgErr.Field)
 			assert.Equal(t, tt.wantCat, cfgErr.Category)
+			assert.Equal(t, tt.wantMsg, cfgErr.Message)
+			assert.Equal(t, tt.wantAction, cfgErr.Action)
 			assert.Zero(t, mr.TotalConnectionCount())
 		})
 	}
