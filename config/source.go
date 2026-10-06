@@ -5,6 +5,8 @@ import (
 
 	koanfmaps "github.com/knadh/koanf/maps"
 	"github.com/knadh/koanf/v2"
+
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
 // koanfDelim is the key delimiter every koanf tree in this package is built with; the
@@ -19,8 +21,13 @@ const koanfDelim = "."
 type configSource struct {
 	k         *koanf.Koanf
 	delivered map[string]bool
+	// selectors holds every messaging.seal.active selector name an operator layer offered,
+	// recorded BEFORE the merge decides what survives. Unlike delivered, a selector the merge
+	// dropped or a later layer replaced stays here: checkSelectorLayers judges them all, since
+	// two selectors on one path can never both reach the tree (ADR-144).
+	selectors map[string]bool
 	// sequences holds the dotted path of every YAML sequence an operator layer wrote where
-	// the keystore.keys or messaging.seal.active walk expects a map, recorded before the
+	// the keystore.keys or messaging.seal.active walk expects a map, also recorded before the
 	// merge. A sequence that survives is refused at decode; one a later layer replaced never
 	// reaches decode, so checkLayerSequences refuses it instead (ADR-144).
 	sequences map[string]bool
@@ -32,6 +39,7 @@ func newConfigSource() *configSource {
 	return &configSource{
 		k:         koanf.New(koanfDelim),
 		delivered: map[string]bool{},
+		selectors: map[string]bool{},
 		sequences: map[string]bool{},
 	}
 }
@@ -62,6 +70,7 @@ type mergeFunc func(src, dest map[string]any) error
 // tree and so is never recorded as delivered.
 func (s *configSource) recording(merge mergeFunc) mergeFunc {
 	return func(src, dest map[string]any) error {
+		s.recordSelectors(src)
 		s.recordSequences(src)
 		if err := merge(src, dest); err != nil {
 			return err
@@ -96,6 +105,17 @@ func (s *configSource) record(src, dest map[string]any, prefix string) {
 		}
 		s.delivered[path] = true
 	}
+}
+
+// recordSelectors records the selector names under messaging.seal.active in an incoming
+// layer, before it is merged. Below that path, a map is a namespace and any other value a
+// selector, as the decode walk reads them.
+func (s *configSource) recordSelectors(src map[string]any) {
+	eachSubtree(src, fieldMessagingSealActive, func(node any) {
+		if tree, isMap := stringMap(node); isMap {
+			s.recordSelectorTree(tree, "")
+		}
+	})
 }
 
 // recordSequences records where an incoming layer holds a sequence that the decode walk
@@ -157,6 +177,35 @@ func visitSubtree(node any, path []string, visit func(node any)) {
 		if strings.EqualFold(key, path[0]) {
 			visitSubtree(value, path[1:], visit)
 		}
+	}
+}
+
+func (s *configSource) recordSelectorTree(tree map[string]any, prefix string) {
+	for key, value := range tree {
+		name := joinName(prefix, key)
+		if sub, isMap := stringMap(value); isMap {
+			s.recordSelectorTree(sub, name)
+			continue
+		}
+		s.recordSelector(name)
+	}
+}
+
+// recordSelectorKey records the selector a koanf key names, when it names one. Load calls it
+// for every environment variable as it is read: two variables on one path (…_PAYMENTS and
+// …_PAYMENTS_SIGN) collide inside the provider's own unflatten, before any merge sees them.
+func (s *configSource) recordSelectorKey(key string) {
+	if name, found := strings.CutPrefix(key, fieldMessagingSealActive+koanfDelim); found {
+		s.recordSelector(name)
+	}
+}
+
+// recordSelector keeps a name the selector grammar accepts. Any other name is
+// checkMessagingSeal's to refuse when it survives the merge, and would only garble a pair
+// reported here.
+func (s *configSource) recordSelector(name string) {
+	if keyname.ValidName(name) {
+		s.selectors[name] = true
 	}
 }
 

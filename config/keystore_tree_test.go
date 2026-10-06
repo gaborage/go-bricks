@@ -561,6 +561,150 @@ func loadKeystoreYAML(t *testing.T, base, overlay string, env map[string]string)
 	return Load()
 }
 
+// TestLoadKeystoreNameProbes replays the reproducers that motivated ADR-144
+// through the real Load. Before it, A, C and H produced a phantom entry and a
+// missing-source error naming the wrong key, E booted green with "our"
+// silently dropped, F aborted decode, and I booted green with the override
+// unused. D and G, the hyphenated spellings, keep working unchanged.
+func TestLoadKeystoreNameProbes(t *testing.T) {
+	t.Run("probe_a_nested_yaml", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, `
+keystore:
+  keys:
+    tokens:
+      our:
+        public:
+          value: our-pub
+`, "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]KeyPairConfig{"tokens.our": {Public: KeySourceConfig{Value: "our-pub"}}}, cfg.KeyStore.Keys)
+	})
+
+	t.Run("probe_b_quoted_key", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, `
+keystore:
+  keys:
+    "tokens.our":
+      public:
+        value: our-pub
+`, "", nil)
+		cfgErr := requireTreeError(t, err, "keystore.keys", `key "tokens.our" is one YAML key containing '.'`)
+		assert.Contains(t, cfgErr.Action, "write it nested")
+	})
+
+	t.Run("probe_c_posix_env", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "", "", map[string]string{"KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_VALUE": "our-pub"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]KeyPairConfig{"tokens.our": {Public: KeySourceConfig{Value: "our-pub"}}}, cfg.KeyStore.Keys)
+	})
+
+	t.Run("probe_d_hyphen_env", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "", "", map[string]string{"KEYSTORE_KEYS_TOKENS-OUR_PUBLIC_VALUE": "our-pub"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]KeyPairConfig{"tokens-our": {Public: KeySourceConfig{Value: "our-pub"}}}, cfg.KeyStore.Keys)
+	})
+
+	t.Run("probe_e_entry_and_parent", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, `
+keystore:
+  keys:
+    tokens:
+      public:
+        value: tokens-pub
+      our:
+        public:
+          value: our-pub
+`, "", nil)
+		requireTreeError(t, err, "keystore.keys.tokens", `"tokens" is an entry (it sets public) and the parent of entry "tokens.our"`)
+	})
+
+	t.Run("probe_f_posix_selector", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "", "", map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN": "v2"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments.sign": "v2"}, cfg.Messaging.Seal.Active)
+	})
+
+	t.Run("probe_g_hyphen_selector", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "", "", map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN": "v2"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments-sign": "v2"}, cfg.Messaging.Seal.Active)
+
+		cfg, err = loadKeystoreYAML(t, `
+messaging:
+  seal:
+    active:
+      payments-sign: v3
+`, "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments-sign": "v3"}, cfg.Messaging.Seal.Active)
+	})
+
+	t.Run("probe_h_nested_generations", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, `
+keystore:
+  keys:
+    payments:
+      sign:
+        v1:
+          public: {value: sign-pub}
+          private: {value: sign-priv}
+      encrypt:
+        v1:
+          public: {value: enc-pub}
+messaging:
+  seal:
+    active:
+      payments:
+        sign: v1
+`, "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, KeyPairConfig{Public: KeySourceConfig{Value: "sign-pub"}, Private: KeySourceConfig{Value: "sign-priv"}}, cfg.KeyStore.Keys["payments.sign.v1"])
+		assert.Equal(t, KeyPairConfig{Public: KeySourceConfig{Value: "enc-pub"}}, cfg.KeyStore.Keys["payments.encrypt.v1"])
+		assert.Len(t, cfg.KeyStore.Keys, 2)
+		assert.Equal(t, map[string]string{"payments.sign": "v1"}, cfg.Messaging.Seal.Active)
+	})
+
+	t.Run("probe_i_posix_override_of_hyphen_entry", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, `
+keystore:
+  keys:
+    tokens-our:
+      public: {value: yaml-pub}
+      private: {value: yaml-priv}
+`, "", map[string]string{
+			"KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_VALUE":  "env-pub",
+			"KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE": "env-priv",
+		})
+		cfgErr := requireTreeError(t, err, "keystore.keys.tokens.our", `"tokens-our" and "tokens.our" differ only in '-' versus '.'`)
+		assert.Contains(t, cfgErr.Action, "KEYSTORE_KEYS_TOKENS-OUR_*")
+	})
+
+	t.Run("posix_selector_for_hyphen_family", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, `
+keystore:
+  keys:
+    payments-sign-v1:
+      public: {value: v1-pub}
+    payments-sign-v2:
+      public: {value: v2-pub}
+`, "", map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN": "v2"})
+		requireTreeError(t, err, "messaging.seal.active.payments.sign", `"payments-sign" is (v1, v2)`)
+	})
+
+	t.Run("posix_override_of_hyphen_generation", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, `
+keystore:
+  keys:
+    payments-sign-v1:
+      public: {value: yaml-pub}
+`, "", map[string]string{"KEYSTORE_KEYS_PAYMENTS_SIGN_V1_PRIVATE_FILE": "/run/secrets/sign"})
+		cfgErr := requireTreeError(t, err, "keystore.keys",
+			`families "payments-sign" (payments-sign-v1) and "payments.sign" (payments.sign.v1) differ only in '-' versus '.'`)
+		assert.Contains(t, cfgErr.Action, "set payments-sign-v1 with KEYSTORE_KEYS_PAYMENTS-SIGN-V1_* (Docker, Kubernetes)")
+		assert.Contains(t, cfgErr.Action, "drained before the cutover")
+	})
+}
+
 // TestLoadRefusesASelectorFlipLostUnderANestedSelector: a POSIX variable for a
 // hyphen family's selector reaches its folded path, and when YAML holds a
 // map there (a dotted selector below the fold) the merge drops the variable
@@ -632,6 +776,101 @@ messaging:
 		require.NoError(t, err)
 		assert.Equal(t, map[string]string{"payments-sign": "v2", "payments-sign-eu": "v1"}, cfg.Messaging.Seal.Active)
 		assert.Len(t, cfg.KeyStore.Keys, 3)
+	})
+}
+
+// TestLoadRefusesSelectorsThatNestAcrossLayers: two selectors that nest as
+// written live on one path, a scalar and a map, so the YAML files and the
+// environment cannot both deliver them. The merge keeps one in silence (an
+// environment scalar over a YAML map is dropped, anything else replaces), and
+// the rule that refuses nesting selectors judged only the survivor: startup
+// passed and sealing failed at Init with "no messaging.seal.active.payments.sign
+// selector", a selector that had been written. The rule now reads every
+// selector a layer offered, before the merge.
+func TestLoadRefusesSelectorsThatNestAcrossLayers(t *testing.T) {
+	const family = `
+app:
+  env: development
+keystore:
+  keys:
+    payments:
+      sign:
+        v1:
+          public: {value: v1-pub}
+        v2:
+          public: {value: v2-pub}
+`
+	const nestedSelector = `
+messaging:
+  seal:
+    active:
+      payments:
+        sign: v2
+`
+	const action = "remove the stale selector from every YAML file and variable that sets it: provisioned families never nest, so only one of the two can name a family"
+	tests := []struct {
+		name      string
+		overlay   string
+		env       map[string]string
+		wantField string
+		wantPair  string
+	}{
+		{
+			name:      "env_map_replaces_yaml_selector",
+			env:       map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN_EU": "v1"},
+			wantField: "messaging.seal.active.payments.sign.eu",
+			wantPair:  `selectors "payments.sign" and "payments.sign.eu" nest`,
+		},
+		{
+			name:      "env_scalar_dropped_over_yaml_map",
+			env:       map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS": "v1"},
+			wantField: "messaging.seal.active.payments.sign",
+			wantPair:  `selectors "payments" and "payments.sign" nest`,
+		},
+		{
+			name:      "overlay_scalar_replaces_base_map",
+			overlay:   "messaging:\n  seal:\n    active:\n      payments: v1\n",
+			wantField: "messaging.seal.active.payments.sign",
+			wantPair:  `selectors "payments" and "payments.sign" nest`,
+		},
+		{
+			name:      "overlay_map_replaces_base_selector",
+			overlay:   "messaging:\n  seal:\n    active:\n      payments:\n        sign:\n          eu: v1\n",
+			wantField: "messaging.seal.active.payments.sign.eu",
+			wantPair:  `selectors "payments.sign" and "payments.sign.eu" nest`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadKeystoreYAML(t, family+nestedSelector, tt.overlay, tt.env)
+			cfgErr := requireTreeError(t, err, tt.wantField, tt.wantPair)
+			assert.Contains(t, cfgErr.Message, "one path cannot hold both, and loading kept only one of them")
+			assert.Equal(t, action, cfgErr.Action)
+		})
+	}
+
+	// Two variables are one layer, but koanf unflattens them into one tree
+	// with the same loss, in map order: the rule reads each variable's name.
+	t.Run("two_variables_that_nest", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, family, "", map[string]string{
+			"MESSAGING_SEAL_ACTIVE_PAYMENTS":      "v1",
+			"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN": "v2",
+		})
+		requireTreeError(t, err, "messaging.seal.active.payments.sign", `selectors "payments" and "payments.sign" nest`)
+	})
+
+	t.Run("same_path_override_boots", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, family+nestedSelector, "messaging:\n  seal:\n    active:\n      payments:\n        sign: v1\n",
+			map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN": "v2"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments.sign": "v2"}, cfg.Messaging.Seal.Active)
+	})
+
+	t.Run("hyphen_only_selectors_across_layers_boot", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "messaging:\n  seal:\n    active:\n      payments-sign: v2\n", "",
+			map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN-EU": "v1"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments-sign": "v2", "payments-sign-eu": "v1"}, cfg.Messaging.Seal.Active)
 	})
 }
 
