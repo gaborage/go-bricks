@@ -98,11 +98,10 @@ func applyRedisDefaults(cfg *RedisConfig) {
 	}
 }
 
-// validateRedisCache is the startup door's Redis check. Beyond the connect door's rules
-// (checkCacheSection) it judges the keyprefix grammar and loads the TLS material, in that
-// order around them so a section with several faults reports the same one it always did.
+// validateRedisCache is the startup door's Redis check: checkCacheSection's Redis rules plus
+// the keyprefix grammar and the TLS material load.
 func validateRedisCache(cfg *RedisConfig) error {
-	if err := validateRedisEndpoint(cfg); err != nil {
+	if err := checkRedisEndpoint(cfg); err != nil {
 		return err
 	}
 
@@ -110,7 +109,7 @@ func validateRedisCache(cfg *RedisConfig) error {
 		return err
 	}
 
-	if err := validateRedisClientSettings(cfg); err != nil {
+	if err := checkRedisClientSettings(cfg); err != nil {
 		return err
 	}
 
@@ -125,13 +124,13 @@ func checkCacheSection(cfg *CacheConfig) error {
 	if err := checkCacheType(cfg); err != nil {
 		return err
 	}
-	if err := validateRedisEndpoint(&cfg.Redis); err != nil {
+	if err := checkRedisEndpoint(&cfg.Redis); err != nil {
 		return err
 	}
-	return validateRedisClientSettings(&cfg.Redis)
+	return checkRedisClientSettings(&cfg.Redis)
 }
 
-func validateRedisEndpoint(cfg *RedisConfig) error {
+func checkRedisEndpoint(cfg *RedisConfig) error {
 	if cfg.Host == "" {
 		return NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
 	}
@@ -143,7 +142,7 @@ func validateRedisEndpoint(cfg *RedisConfig) error {
 	return validateRedisMode(cfg)
 }
 
-func validateRedisClientSettings(cfg *RedisConfig) error {
+func checkRedisClientSettings(cfg *RedisConfig) error {
 	if err := validateRedisUsername(cfg); err != nil {
 		return err
 	}
@@ -168,7 +167,7 @@ func validateRedisClientSettings(cfg *RedisConfig) error {
 		return NewValidationError("cache.redis.writetimeout", "must be >= -1")
 	}
 
-	return validateRedisTLSMaterial(&cfg.TLS)
+	return checkRedisTLSMaterial(&cfg.TLS)
 }
 
 // validateRedisMode checks the transport selector and the one setting it
@@ -295,11 +294,11 @@ const fieldCacheRedisTLSPrefix = "cache.redis.tls."
 // loader, matching the spelling cache/redis uses for the same material.
 const cacheRedisTLSErrPrefix = "cache: redis: tls:"
 
-// validateRedisTLSMaterial is the structural TLS check (staged material under a disabled
+// checkRedisTLSMaterial is the structural TLS check (staged material under a disabled
 // block, mutual exclusivity of file/value sources, cert/key pairing, min-version enum); its
 // rules live in clienttls, beside the loader that consumes the same material, and this only
 // maps a violation onto the cache.redis.tls.* keys.
-func validateRedisTLSMaterial(cfg *RedisTLSConfig) error {
+func checkRedisTLSMaterial(cfg *RedisTLSConfig) error {
 	m := redisTLSMaterial(cfg)
 	if v := clienttls.ValidateMaterial(&m, cfg.Enabled); v != nil {
 		return NewValidationError(fieldCacheRedisTLSPrefix+v.Field, v.Message)
@@ -312,7 +311,7 @@ func validateRedisTLSMaterial(cfg *RedisTLSConfig) error {
 // later, a Redis client is created lazily per tenant on first use, so config validation is
 // the only door at which a missing or corrupt bundle can fail the boot rather than a request
 // hours later. The dial loads it again; the two loads are a startup gate and a use-time one,
-// not a cache. It assumes validateRedisTLSMaterial passed.
+// not a cache. It assumes checkRedisTLSMaterial passed.
 func loadRedisTLS(cfg *RedisTLSConfig) error {
 	if !cfg.Enabled {
 		return nil
@@ -339,13 +338,8 @@ func redisTLSMaterial(cfg *RedisTLSConfig) clienttls.Material {
 
 // ResolveCacheSectionForKey returns a normalized, checked, owned clone of
 // section, with errors addressed to resourceKey. It never mutates section.
-//
-// It is the cache connect door, for sections config.Validate may never have seen: a custom
-// or dynamic resource source, a TenantStore.AddTenant tenant. The steps run in order: nil,
-// disabled, Normalization (the step Validate's normalizeCache shares), then Check
-// (checkCacheSection). Unlike the database door it takes no strictness, since a
-// cache section infers nothing; and it leaves the key namespace (keyprefix grammar, the
-// app.name default) to the connector that applies it.
+// It is the cache connect door, for sections Validate may never have seen. It leaves the key
+// namespace to the connector that applies it.
 func ResolveCacheSectionForKey(section *CacheConfig, resourceKey string) (*CacheConfig, error) {
 	sec := kindCache(resourceKey)
 	if section == nil {

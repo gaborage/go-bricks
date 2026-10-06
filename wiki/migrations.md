@@ -12463,9 +12463,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: `git grep -n 'cache.type' -- '*_test.go'` over your own modules, then keep hits that
   build a `config.Config` by hand with `Cache.Enabled: true` and no `Type`, and expect
   `config.Validate` to fail on `cache.type`.
-- scope: only an EMPTY root `cache.type` changes. A config loaded through koanf already got
+- scope: only an EMPTY `cache.type` changes. A config loaded through koanf already got
   `redis` (the default is now rendered by normalize, same value); a non-empty type other than
-  `redis` still fails on `cache.type`; tenant sections already got `redis` when enabled.
+  `redis` still fails on `cache.type`. An enabled tenant section already got `redis`; a
+  DISABLED root or tenant section built by hand now also reads `redis` after `Validate`, where
+  it read `""`.
 - gate: match = a test or startup path that relies on `Validate` refusing an enabled root cache
   with an empty type. no-match = every config is loaded through koanf, or sets a type.
 - before: `config.Validate` on a hand-built `Config` whose enabled root cache names a host and no

@@ -1003,6 +1003,24 @@ func TestResolveCacheSectionForKeyRefuses(t *testing.T) {
 			wantAction: "set CACHE_REDIS_HOST env var or add cache.redis.host to config.yaml",
 		},
 		{
+			name:       "root_unsupported_type",
+			key:        "",
+			section:    &CacheConfig{Enabled: true, Type: "memcached", Redis: RedisConfig{Host: "redis.acme.internal"}},
+			wantField:  "cache.type",
+			wantCat:    "invalid",
+			wantMsg:    "'memcached' is not supported",
+			wantAction: "must be one of: redis",
+		},
+		{
+			name:       "root_port_out_of_range",
+			key:        "",
+			section:    &CacheConfig{Enabled: true, Redis: RedisConfig{Host: "redis.acme.internal", Port: 99999}},
+			wantField:  "cache.redis.port",
+			wantCat:    "invalid",
+			wantMsg:    "invalid value: 99999",
+			wantAction: "must be one of: 1-65535",
+		},
+		{
 			name:       "tenant_port_out_of_range",
 			key:        "acme",
 			section:    &CacheConfig{Enabled: true, Redis: RedisConfig{Host: "redis.acme.internal", Port: 99999}},
@@ -1028,6 +1046,7 @@ func TestResolveCacheSectionForKeyRefuses(t *testing.T) {
 			section:   &CacheConfig{Enabled: true, Redis: RedisConfig{Host: "redis.acme.internal"}, LoadTimeout: -time.Second},
 			wantField: "multitenant.tenants.acme.cache.loadtimeout",
 			wantCat:   "invalid",
+			wantMsg:   "must be non-negative",
 		},
 	}
 
@@ -1040,17 +1059,24 @@ func TestResolveCacheSectionForKeyRefuses(t *testing.T) {
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, tt.wantField, cfgErr.Field)
 			assert.Equal(t, tt.wantCat, cfgErr.Category)
-			if tt.wantMsg != "" {
-				assert.Equal(t, tt.wantMsg, cfgErr.Message)
-			}
+			assert.Equal(t, tt.wantMsg, cfgErr.Message)
 			assert.Equal(t, tt.wantAction, cfgErr.Action)
 		})
 	}
 }
 
 func TestResolveCacheSectionForKeyCarriesExplicitKeyPrefixUnchecked(t *testing.T) {
-	for _, prefix := range []string{"orders:v2", ""} {
-		t.Run("prefix_"+prefix, func(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+	}{
+		{name: "explicit_multi_segment_prefix", prefix: "orders:v2"},
+		{name: "explicit_empty_prefix", prefix: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix := tt.prefix
 			section := &CacheConfig{Enabled: true, Redis: RedisConfig{Host: "redis.acme.internal", KeyPrefix: &prefix}}
 
 			got, err := ResolveCacheSectionForKey(section, "acme")
@@ -1097,4 +1123,15 @@ func TestNormalizeCacheFillsEmptyRootType(t *testing.T) {
 	require.NoError(t, normalizeCache(&cfg, false))
 	require.NoError(t, checkCache(&cfg))
 	assert.Equal(t, "redis", cfg.Type)
+}
+
+func TestResolveCacheSectionForKeyIsIdempotent(t *testing.T) {
+	section := &CacheConfig{Enabled: true, Redis: RedisConfig{Host: "redis.acme.internal", Mode: "cluster"}}
+
+	once, err := ResolveCacheSectionForKey(section, "acme")
+	require.NoError(t, err)
+	twice, err := ResolveCacheSectionForKey(once, "acme")
+	require.NoError(t, err)
+
+	assert.Equal(t, *once, *twice)
 }
