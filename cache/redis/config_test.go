@@ -142,3 +142,20 @@ func TestConfigValidateMapsRuleViolation(t *testing.T) {
 	assert.Equal(t, "invalid value: 0 (must be one of: 1-65535)", cfgErr.Message)
 	assert.NoError(t, cfgErr.Err)
 }
+
+// TestConfigValidateJudgesLoadTimeoutAfterTheRules pins [C72.22]'s one ordering change: the
+// load-timeout bound stays outside the shared rule set and runs after it, so a Config that
+// also breaks the TLS structure reports the TLS field.
+func TestConfigValidateJudgesLoadTimeoutAfterTheRules(t *testing.T) {
+	cfg := Config{
+		Host: "localhost", Port: 6379, PoolSize: 10,
+		LoadTimeout: -time.Millisecond,
+		TLS:         TLSConfig{CAFile: "/etc/ca.pem"},
+	}
+
+	err := cfg.Validate()
+
+	var cfgErr *cache.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "redis.tls.enabled", cfgErr.Field)
+}
