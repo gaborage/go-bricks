@@ -142,8 +142,9 @@ entry, when one entry serves both.
 A dotted family is written nested in YAML and set from any shell:
 `MESSAGING_SEAL_ACTIVE_SVC_PAYMENTS_SIGN=v2` selects for family `svc.payments.sign`, and
 `KEYSTORE_KEYS_SVC_PAYMENTS_SIGN_V2_PRIVATE_FILE` provisions its `v2`. A hyphenated family is
-settable by variable only where the runtime allows `-` in a variable name (Docker and Kubernetes
-manifests yes, POSIX `export` no), otherwise its selector is YAML-only
+settable by variable only where the runtime allows `-` in a variable name: a container
+manifest, or `env` passing the variable to a child process, but never a POSIX shell assignment
+or `export`, so from a shell its selector is set in YAML
 ([keystore.md](keystore.md#activation-messagingsealactive)). A selector that differs from a
 provisioned family only in `-` versus `.` fails `config.Validate`, because it would select
 nothing. So do two families, or two selectors, that nest once `-` is read as `.`
@@ -468,7 +469,10 @@ go install github.com/gaborage/go-bricks/cmd/seal-event@latest
 
 Generate DER fixture keys with openssl. The CLI holds the PRODUCER role: the sign PRIVATE
 half and the encrypt PUBLIC half. The consumer holds the mirror image — the sign public and
-the encrypt private — under the same generation names.
+the encrypt private — under the same generation names. The examples below mint for the
+families the [Keys](#keys) YAML declares: the dotted `svc.payments.sign` (generation
+`svc.payments.sign.v1`) and the hyphenated `aud-core-encrypt` (generation
+`aud-core-encrypt-v1`), so they show both marker shapes.
 
 ```sh
 # Sign pair — the PUBLIC half is what the consumer provisions as
@@ -477,7 +481,7 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out s
 openssl pkey -inform DER -in sign.der -pubout -outform DER -out sign.pub.der
 
 # Encrypt pair — the audience's key; the CLI needs only the PKIX DER public half,
-# the consumer provisions the private half as aud.core.encrypt.v1
+# the consumer provisions the private half as aud-core-encrypt-v1
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out enc.der
 openssl pkey -inform DER -in enc.der -pubout -outform DER -out enc.pub.der
 ```
@@ -488,7 +492,7 @@ Seal one event body and publish it:
 echo '{"order_id":"o-1","amount":100,"card":{"pan":"4111111111111111","expiry":"12/30"}}' \
   | seal-event \
     -sign-key-file sign.der -encrypt-key-file enc.pub.der \
-    -sign-kid svc.payments.sign.v1 -encrypt-kid aud.core.encrypt.v1 \
+    -sign-kid svc.payments.sign.v1 -encrypt-kid aud-core-encrypt-v1 \
     -subject card -event-type payment.authorized -tenant-id t1 > body.txt
 
 rabbitmqadmin publish exchange=payments routing_key=payment.authorized \
@@ -510,7 +514,7 @@ Consumer-side rejections — the publish succeeds, the open refuses:
   compared verbatim (`SEAL_EVENT_TYPE_MISMATCH`).
 - Both kids must be provisioned Generations of the tag's families on the consumer:
   `<logical>.v<N>` for a dotted family, `<logical>-v<N>` for a family without `.`, never the
-  bare Logical kid. Hyphenated kids such as `svc-payments-sign-v1` keep working. The CLI
+  bare Logical kid, as `svc.payments.sign.v1` and `aud-core-encrypt-v1` above show. The CLI
   refuses a family passed alone (`is a family, not a generation: pass svc.payments.sign.v<N>`)
   and the marker the family does not take (`family "svc.payments.sign" takes the marker of
   svc.payments.sign.v1`). A wrong family is `SEAL_KID_FAMILY_MISMATCH`; a right family the
@@ -535,7 +539,7 @@ with the same `SEAL_*` code.
 go install github.com/gaborage/go-bricks/cmd/open-event@latest
 
 open-event -sign-key-file sign.pub.der -encrypt-key-file enc.der \
-  -sign-kid svc.payments.sign.v1 -encrypt-kid aud.core.encrypt.v1 \
+  -sign-kid svc.payments.sign.v1 -encrypt-kid aud-core-encrypt-v1 \
   -subject card -event-type payment.authorized \
   -tenancy shared -tenant-id t1 body.txt
 ```
@@ -547,7 +551,7 @@ EventType:  payment.authorized
 TenantID:   t1
 SignKid:    svc.payments.sign.v1
 SignFamily: svc.payments.sign
-EncKid:     aud.core.encrypt.v1
+EncKid:     aud-core-encrypt-v1
 
 {"order_id":"o-1","amount":100,"card":"<redacted>"}
 ```

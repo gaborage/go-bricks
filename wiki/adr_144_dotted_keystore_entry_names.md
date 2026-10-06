@@ -330,11 +330,18 @@ Three message changes outside the table:
 - **Breaking.** Some configs that boot today now fail at startup instead of losing data silently:
   - a key under a `keystore.keys` entry that is not one of its four fields;
   - a key under a field that is not one of its sources;
-  - an entry with another entry nested inside it (such as `tokens` plus `tokens.our`).
+  - an entry with another entry nested inside it (such as `tokens` plus `tokens.our`);
+  - a `KEYSTORE_KEYS_*` variable whose path ends off a source, including a POSIX variable that
+    spells a hyphenated entry while its first segment is an entry;
+  - a sequence under `keystore.keys` or `messaging.seal.active`, which decoded as a map.
 
-  Error texts change in `keystore.ActiveGeneration`, `internal/sealcli`, the keystore
-  not-found path, `jose` tag kid refusals and `sealed.CheckLogicalKid`, and a malformed
-  generation name is refused by `config.Validate` before the keystore sees it. See `[C72.17]`.
+  A malformed generation name (`x-v01`, `x-v1-v2`) is refused by `config.Validate` before the
+  keystore sees it, so a service that never registers the keystore module, which booted with
+  one, now fails too. Error texts change in the config name and source refusals,
+  `internal/sealcli`, the keystore's own grammar errors and not-found path, `jose` tag kid
+  refusals and `sealed.CheckLogicalKid`; `keystore.ActiveGeneration` and
+  `ErrFamilyUnprovisioned` keep their text for a family without `.`. `[C72.17]` lists each old
+  and new text.
 - **Additive.** Dotted names can be written as nested YAML, set from a POSIX environment, and
   used in `jose:` and `seal:` tags, `messaging.seal.active` and the CLIs. `jose.ValidKid`
   accepts interior dots; every caller that uses it as a gate inherits that widening.
@@ -371,18 +378,28 @@ Three message changes outside the table:
   route, declaration or module asks for. Take leftover variables kept after the YAML moved
   from `tokens-our` to `tokens.our`:
   - **When `tokens.our` is configured too**, the look-alike rule refuses the pair.
-  - **When `tokens.our` is missing and one half is left over**
-    (`KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` alone), startup fails on the stray entry:
-    `keystore.keys.tokens-our.public key source required`. Its Action first suggests
-    completing `tokens-our`, which is the wrong fix here: remove the variable.
-  - **When a complete pair, or a `secret`, is left over**, the stray entry loads in silence.
-    How the missing `tokens.our` then surfaces depends on its reader. A `jose:` route resolves
-    its kids at startup, so startup fails with the look-alike hint in the cause; a sealing
-    declaration resolves its families at startup too, and fails naming the generation entry it
-    expected. Only a lazy `PrivateKey`, `PublicKey` or `Secret` call in module code passes
-    startup and fails on first use, with the look-alike hint.
+  - **When `tokens.our` is missing and the private half is left over**
+    (`KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` alone), startup fails on the stray entry, because
+    `public` is the half an RSA entry requires: `keystore.keys.tokens-our.public key source
+    required`. Its Action first suggests completing `tokens-our`, which is the wrong fix here:
+    remove the variable.
+  - **When the public half, a complete pair, or a `secret` is left over**, the stray entry is a
+    legal entry (a public-only entry is a verify-only key) and loads in silence. How the
+    missing `tokens.our` then surfaces depends on its reader:
+    - a `jose:` route resolves its kids at startup, so startup fails with the look-alike hint in
+      the cause;
+    - a sealing declaration resolves its families at startup too, and fails naming the
+      generation entry it expected;
+    - an `httpclient` built `WithJOSE` passes startup: `Build` validates the policies but
+      resolves no kid, and its `JOSETransport` resolves both kids on every request, so the
+      first request fails with `JOSE_KID_UNKNOWN`, the look-alike hint in its cause. A
+      code-built `jose.Seal` or `jose.Open` call behaves the same way;
+    - a lazy `PrivateKey`, `PublicKey` or `Secret` call in module code passes startup and fails
+      on first use, with the look-alike hint.
 
-  Retire variables together with the YAML they override.
+  A clean boot therefore proves the names the startup readers use, never the ones resolved per
+  call. Retire variables together with the YAML they override, and exercise every per-call
+  reader after a rename.
 - **One grammar.** The four copies of the grammar are one, and the keep-in-sync comments are gone.
 - **Reserved words follow `KeyPairConfig`.** Adding a field to `KeyPairConfig` reserves another
   segment word, which is a breaking change for any name that uses it. A test pins the reserved

@@ -114,7 +114,12 @@ Startup refuses, each with a `ConfigError` naming the koanf path and the rename:
   other family is a drain-then-cutover.
 - **A key under an entry that is not one of its fields** (`privte`), and **a key under a field
   that is not one of its sources** (`vlaue`; a source takes `file` or `value`, `pkcs12` also
-  takes `password`, which takes `env` or `file`). These were dropped in silence before ADR-144.
+  takes `password`, which takes `env` or `file`), whether YAML or a variable put it there
+  (`KEYSTORE_KEYS_SIGNING_PUBLIC_FILENAME`). These were dropped in silence before ADR-144,
+  unless the junk key left the entry's required source unset, which failed with `key source
+  required`.
+- **A YAML sequence where the `keys` map belongs** (`keys: []`, or `- tokens: …` items). It
+  decoded as a map before ADR-144.
 
 When an accessor misses a name and a configured entry differs from it only in `-` versus `.`,
 the error names that entry: `keystore: key "tokens.our" not found; configured "tokens-our"
@@ -124,22 +129,33 @@ differs only in '-' versus '.'`.
 Take variables left over after the YAML moved from `tokens-our` to `tokens.our`:
 
 - **`tokens.our` configured too:** the look-alike rule refuses the pair.
-- **One half left over** (`KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` alone, `tokens.our`
-  missing): startup fails with `keystore.keys.tokens-our.public key source required`. The
-  error first suggests completing `tokens-our`, which is the wrong fix here: remove the
-  variable.
-- **A complete pair, or a `secret`, left over** (`tokens.our` missing): the stray entry loads
-  in silence. A `jose:` route resolves its kids at startup, so startup fails with the
-  look-alike hint above in the cause. Only a lazy `PrivateKey("tokens.our")` (or `PublicKey`,
-  `Secret`) in module code passes startup and fails on first use, with the same hint.
+- **The private half left over** (`KEYSTORE_KEYS_TOKENS-OUR_PRIVATE_VALUE` alone, `tokens.our`
+  missing): `public` is the half an RSA entry requires, so startup fails with
+  `keystore.keys.tokens-our.public key source required`. The error first suggests completing
+  `tokens-our`, which is the wrong fix here: remove the variable.
+- **The public half, a complete pair, or a `secret` left over** (`tokens.our` missing): the
+  stray entry is a legal entry (a public-only one is a verify-only key) and loads in silence.
+  A `jose:` route resolves its kids at startup, so startup fails with the look-alike hint
+  above in the cause, and a sealing declaration resolves its families at startup, failing on
+  the generation entry it expected. An `httpclient` built `WithJOSE` does not:
+  `Build` validates its policies but resolves no kid, and its transport resolves both kids on
+  every request, so the first request fails with `JOSE_KID_UNKNOWN` and the same hint. A
+  code-built `jose.Seal`/`jose.Open` call, and a lazy `PrivateKey("tokens.our")` (or
+  `PublicKey`, `Secret`) in module code, also pass startup and fail on first use.
 
-Remove retired variables together with the YAML they override.
+A clean boot proves the names the startup readers use, not the ones resolved per call. Remove
+retired variables together with the YAML they override, and after a rename send one request
+through every `WithJOSE` client and exercise every lazily read entry.
 
 #### Runbooks
 
-- **R0, upgrade.** Nothing to rename. A config that boots today boots unchanged, unless an entry
-  carries a key that is not a field or source, or an entry is nested under another; startup now
-  names both ([migrations.md](migrations.md) `[C72.17]`).
+- **R0, upgrade.** Nothing to rename. A config that boots today boots unchanged, unless one of
+  these is in it, which startup now refuses ([migrations.md](migrations.md) `[C72.17]`): a key
+  under an entry that is not a field, or under a field that is not a source, from YAML or a
+  variable (a name nested under an entry included); a POSIX variable that spells a hyphenated
+  entry while its first segment is an entry; a YAML sequence under `keystore.keys` or
+  `messaging.seal.active`; or a malformed generation entry (`x-v01`) in a service that does
+  not register the keystore module, which used to be the only reader that refused it.
 - **R1, rename an in-process entry** (every reader is in this service: `PrivateKey` literals and
   `jose:` tags whose peer is the service itself). Change the YAML, the code literals, the tags and
   the deployment variables in one deploy. The two spellings cannot coexist, so there is no
@@ -290,7 +306,9 @@ judges nesting across every YAML file and variable before they are merged, since
 keeps only one of two selectors on one path (`payments.sign` in YAML beside
 `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN_EU`). It also refuses a selector that differs from a
 provisioned family only in `-` versus `.`: `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2` beside
-family `payments-sign` would select nothing and leave the old generation sealing. Then
+family `payments-sign` would select nothing and leave the old generation sealing. A sequence
+where the `active` map belongs, and an empty map where a selector belongs, are refused while
+decoding. Then
 `keystore.ActiveGeneration(store, active, logical)` resolves it against the keystore at
 startup, once per Logical kid the producer resolves, sign and encrypt alike:
 
@@ -306,9 +324,10 @@ The loader lowercases a variable name and maps `_` to `.`, so an `MESSAGING_SEAL
 override reaches the dotted family its segments spell: `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN`
 is the selector for `payments.sign`, from any shell. A hyphenated family is settable that way
 only where the runtime permits `-` in a variable name (Docker and Kubernetes do, POSIX `export`
-does not, [ADR-090](adr_090_env_reachable_section_names.md)); under POSIX a hyphenated family
-such as `svc-payments-sign` is YAML-only. A selector for a Logical kid the producer never
-resolves is ignored here.
+does not, [ADR-090](adr_090_env_reachable_section_names.md)). A POSIX shell cannot assign or
+`export` the selector of a hyphenated family such as `svc-payments-sign`; set it in YAML, in a
+container manifest, or with `env` passing `MESSAGING_SEAL_ACTIVE_SVC-PAYMENTS-SIGN=v2` to the
+child process. A selector for a Logical kid the producer never resolves is ignored here.
 
 ## API
 
