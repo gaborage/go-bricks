@@ -311,7 +311,8 @@ func (f *FactoryResolver) HasCustomFactories() bool {
 
 // newRedisConnector creates a cache connector that reads Redis configuration
 // from the resourceSource for each tenant/key and creates Redis cache instances.
-// The section it dialed from travels back with the instance (see dialingCacheConnector).
+// Every section passes the connect door first, and the door's clone — the section it
+// dialed from — travels back with the instance (see dialingCacheConnector).
 func newRedisConnector(resourceSource TenantStore, log logger.Logger) dialingCacheConnector {
 	return func(ctx context.Context, key string) (cache.Cache, *config.CacheConfig, error) {
 		if resourceSource == nil {
@@ -331,60 +332,21 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) dialingCac
 			return nil, nil, err
 		}
 
-		if err = validateRedisCacheConfig(cacheCfg, key, log); err != nil {
-			// Wrapped once, at this one call site, for every check validateRedisCacheConfig
-			// raises — the door's own errors cannot forget the wrap the way #1248 did, because
-			// there is only one place left to call it from.
-			return nil, nil, config.QualifyCacheConfigErrorForKey(err, key)
+		resolved, err := config.ResolveCacheSectionForKey(cacheCfg, key)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("key", key).
+				Msg("Cache configuration refused before the dial")
+			return nil, nil, err
 		}
 
-		instance, err := connectRedisCache(cacheCfg, key, log)
+		instance, err := connectRedisCache(resolved, key, log)
 		if err != nil {
 			return nil, nil, err
 		}
-		return instance, cacheCfg, nil
+		return instance, resolved, nil
 	}
-}
-
-// validateRedisCacheConfig rejects a cache config this connector cannot build a Redis client
-// from: unexpectedly nil, disabled, an unsupported type, or a missing host. Every error it
-// raises is root-spelled — addressing it to key is the caller's single responsibility, not
-// this function's, which is what makes the wrap impossible to forget for a check added here
-// later.
-func validateRedisCacheConfig(cacheCfg *config.CacheConfig, key string, log logger.Logger) error {
-	if cacheCfg == nil {
-		log.Error().
-			Str("key", key).
-			Msg("Cache configuration unexpectedly nil")
-		return config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key))
-	}
-
-	if !cacheCfg.Enabled {
-		log.Error().
-			Str("key", key).
-			Msg("Cache configuration has Enabled=false")
-		return config.NewNotConfiguredError("cache", "CACHE_ENABLED", "cache.enabled")
-	}
-
-	// Validate cache type is "redis" (or empty for backward compatibility)
-	if cacheCfg.Type != "" && cacheCfg.Type != config.CacheTypeRedis {
-		log.Error().
-			Str("key", key).
-			Str("type", cacheCfg.Type).
-			Msg("Invalid cache type - only 'redis' is supported")
-		return config.NewInvalidFieldError("cache.type",
-			fmt.Sprintf("unsupported type '%s'", cacheCfg.Type),
-			[]string{config.CacheTypeRedis})
-	}
-
-	if cacheCfg.Redis.Host == "" {
-		log.Error().
-			Str("key", key).
-			Msg("Redis host is empty - cannot create cache instance")
-		return config.NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
-	}
-
-	return nil
 }
 
 // redisClientConfig maps the resolved cache config onto the Redis client's own config.
@@ -411,16 +373,16 @@ func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
 	}
 }
 
-// connectRedisCache builds and dials the Redis client for an already-validated cache config.
+// connectRedisCache builds and dials the Redis client for a section the connect door resolved.
 // redis.NewClient returns two error classes through one return, and they are spelled
 // differently on the way out: a dial failure is not a config-shape error, so it is returned
 // exactly as the cache package raised it, while a config-class error — cache.ConfigError,
 // raised by the client's own shape check and by the TLS material load — is addressed to key,
-// the same as validateRedisCacheConfig's whole return is above.
+// the same as the door's own errors are.
 //
-// Do not add a config-validation check here: one belongs in validateRedisCacheConfig, whose
-// whole return the door qualifies. What this function qualifies is the config-class error the
-// cache package raises from inside NewClient, which no check of this door's can pre-empt.
+// Do not add a config-validation check here: one belongs in config.ResolveCacheSectionForKey.
+// What this function qualifies is the config-class error the cache package raises from inside
+// NewClient — the TLS material load above all, which the door leaves to the dial.
 func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logger) (cache.Cache, error) {
 	redisCfg := redisClientConfig(cacheCfg)
 
@@ -462,7 +424,7 @@ func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logg
 // The cache package spells its config errors in its own root namespace ("redis.tls",
 // "redis.port"), so a tenant's error named no tenant and not even the "cache." head this
 // layer's keys carry. The error is therefore restated as this layer's ConfigError at the root
-// spelling and handed to the same addressing engine validateRedisCacheConfig's return goes
+// spelling and handed to the same addressing engine the connect door's errors go
 // through, which rewrites the root head to the tenant's cache subtree. The cache package's own
 // message, loader prefix and all, is carried across verbatim so nothing is lost in the move.
 func qualifyRedisClientError(err error, key string) error {

@@ -2996,6 +2996,14 @@ hint rather than rebuilding it from `Field`, which is what lets the not-configur
 (`cache.enabled` under `Field` `cache`) travel; hints naming a key outside the field, and
 hand-written actions, are still untouched. Closes #1125.
 
+**Addendum (2026-10-05, `[C72.18]`–`[C72.21]`):** the cache CONNECT door joins the rule. A section
+`config.Validate` never saw (a custom or dynamic `ResourceSource`, `TenantStore.AddTenant`) reached
+the Redis client without Normalization. Every key now passes `config.ResolveCacheSectionForKey`
+before the dial — nil, disabled, the Normalization step startup shares, then the type and config's
+Redis rules minus the keyprefix grammar and the TLS file read — and gets an owned clone with its
+errors addressed by key (root byte-identical). No Strictness: a cache section infers nothing; the
+key namespace stays the connector's, after the dial. Closes #2044.
+
 ### [ADR-075: One Normalized Default per Scheduler Timeout Key](adr_075_scheduler_timeout_single_default.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted

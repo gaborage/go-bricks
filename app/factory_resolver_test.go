@@ -220,110 +220,6 @@ func (m *mockCacheInstance) Close() error {
 	return nil
 }
 
-// TestFactoryResolverDefensiveValidation tests the defensive validation paths in newRedisConnector
-func TestFactoryResolverDefensiveValidation(t *testing.T) {
-	t.Run("nil cacheCfg returned from TenantStore", func(t *testing.T) {
-		// Mock TenantStore that returns (nil, nil) from CacheConfig
-		mockStore := &mockTenantStoreNilCacheCfg{}
-
-		resolver := NewFactoryResolver(nil)
-		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
-
-		c, err := connector(context.Background(), testCacheKey)
-
-		assert.Nil(t, c)
-		require.Error(t, err)
-
-		// Should return typed ConfigError with "invalid" category
-		var configErr *config.ConfigError
-		require.ErrorAs(t, err, &configErr)
-		assert.Equal(t, "invalid", configErr.Category)
-		assert.Contains(t, err.Error(), "configuration is nil")
-	})
-
-	t.Run("cache disabled (Enabled=false)", func(t *testing.T) {
-		// Mock TenantStore that returns Enabled=false
-		mockStore := &mockTenantStoreCacheDisabled{}
-
-		resolver := NewFactoryResolver(nil)
-		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
-
-		c, err := connector(context.Background(), testCacheKey)
-
-		assert.Nil(t, c)
-		require.Error(t, err)
-
-		// Should return typed ConfigError with "not_configured" category
-		assert.True(t, config.IsNotConfigured(err), "error should be 'not configured' type")
-
-		var configErr *config.ConfigError
-		require.ErrorAs(t, err, &configErr)
-		assert.Equal(t, "not_configured", configErr.Category)
-		// testCacheKey is a resource key, so the error is addressed to that tenant (C61.23).
-		assert.Equal(t, "multitenant.tenants.test-key.cache", configErr.Field)
-	})
-
-	t.Run("invalid cache type (not redis)", func(t *testing.T) {
-		// Mock TenantStore that returns Type="memcached"
-		mockStore := &mockTenantStoreInvalidType{}
-
-		resolver := NewFactoryResolver(nil)
-		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
-
-		c, err := connector(context.Background(), testCacheKey)
-
-		assert.Nil(t, c)
-		require.Error(t, err)
-
-		// Should return typed ConfigError with "invalid" category
-		var configErr *config.ConfigError
-		require.ErrorAs(t, err, &configErr)
-		assert.Equal(t, "invalid", configErr.Category)
-		assert.Equal(t, "multitenant.tenants.test-key.cache.type", configErr.Field)
-		assert.Contains(t, err.Error(), "memcached")
-		assert.Contains(t, err.Error(), "redis")
-	})
-
-	t.Run("empty Redis host", func(t *testing.T) {
-		// Mock TenantStore that returns Redis.Host=""
-		mockStore := &mockTenantStoreEmptyHost{}
-
-		resolver := NewFactoryResolver(nil)
-		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
-
-		c, err := connector(context.Background(), testCacheKey)
-
-		assert.Nil(t, c)
-		require.Error(t, err)
-
-		// Should return typed ConfigError with "missing" category
-		var configErr *config.ConfigError
-		require.ErrorAs(t, err, &configErr)
-		assert.Equal(t, "missing", configErr.Category)
-		assert.Equal(t, "multitenant.tenants.test-key.cache.redis.host", configErr.Field)
-		assert.Contains(t, err.Error(), "MULTITENANT_TENANTS_TEST-KEY_CACHE_REDIS_HOST")
-	})
-
-	t.Run("redis client validation failure - invalid port", func(t *testing.T) {
-		// Mock TenantStore that returns valid host but INVALID port
-		// This passes app-level validation (line 139: Host != "")
-		// but fails Redis client validation (port > 65535)
-		mockStore := &mockTenantStoreInvalidPort{}
-
-		resolver := NewFactoryResolver(nil)
-		connector := resolver.CacheConnector(mockStore, logger.New("debug", true))
-
-		c, err := connector(context.Background(), testCacheKey)
-
-		assert.Nil(t, c)
-		require.Error(t, err)
-
-		// Should return cache.ConfigError from redis.Config.Validate()
-		// This tests the error logging path at factory_resolver.go:174-182
-		assert.Contains(t, err.Error(), "invalid port")
-	})
-}
-
 // TestCacheConnectorAddressesConfigErrorsToTheKey pins that the runtime cache door spells its
 // config errors the way the startup door already does: a non-empty resource key is a tenant id,
 // so Field names that tenant's cache subtree and the hint names the tenant's env var — or drops
@@ -518,33 +414,6 @@ func (m *mockTenantStoreEmptyHost) BrokerURL(_ context.Context, _ string) (strin
 }
 
 func (m *mockTenantStoreEmptyHost) IsDynamic() bool {
-	return false
-}
-
-type mockTenantStoreInvalidPort struct{}
-
-func (m *mockTenantStoreInvalidPort) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
-	return &config.CacheConfig{
-		Enabled: true,
-		Type:    "redis",
-		Redis: config.RedisConfig{
-			Host:     "localhost", // Valid - passes app-level validation
-			Port:     99999,       // INVALID - fails Redis validation (> 65535)
-			Database: 0,
-			PoolSize: 10,
-		},
-	}, nil
-}
-
-func (m *mockTenantStoreInvalidPort) DBConfig(_ context.Context, _ string) (*config.DatabaseConfig, error) {
-	return nil, nil
-}
-
-func (m *mockTenantStoreInvalidPort) BrokerURL(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-
-func (m *mockTenantStoreInvalidPort) IsDynamic() bool {
 	return false
 }
 
@@ -1265,4 +1134,119 @@ func TestFactoryResolverCacheConnectorReadsOnceOnTheCustomPath(t *testing.T) {
 
 	assert.Equal(t, 1, store.reads, "the custom path must read the cache section once per created instance")
 	assertWireKey(t, c, mock, dialedPrefix+":"+keyPrefixLogical)
+}
+
+// fixedCacheSectionStore answers every cache key with one section, the shape of a dynamic
+// tenant source that hands over a section config.Validate never saw.
+type fixedCacheSectionStore struct {
+	TenantStore
+	section *config.CacheConfig
+}
+
+func (s *fixedCacheSectionStore) CacheConfig(context.Context, string) (*config.CacheConfig, error) {
+	return s.section, nil
+}
+
+// unvalidatedSectionFor is an enabled section naming only where miniredis listens: every
+// other field is the zero a store that skipped config.Validate delivers.
+func unvalidatedSectionFor(mr *miniredis.Miniredis) *config.CacheConfig {
+	return &config.CacheConfig{
+		Enabled: true,
+		Redis:   config.RedisConfig{Host: mr.Host(), Port: mr.Server().Addr().Port},
+	}
+}
+
+func defaultCacheConnectorFor(store TenantStore) cache.Connector {
+	resolver := newFactoryResolverForConfig(nil, &config.Config{App: config.AppConfig{Name: keyPrefixAppName}})
+	return resolver.CacheConnector(store, logger.New("error", true))
+}
+
+func TestCacheConnectorDialsAnUnvalidatedSection(t *testing.T) {
+	for _, key := range []string{"", keyPrefixTenant} {
+		t.Run("key_"+key, func(t *testing.T) {
+			mr := miniredis.RunT(t)
+
+			c, err := defaultCacheConnectorFor(&fixedCacheSectionStore{section: unvalidatedSectionFor(mr)})(
+				context.Background(), key)
+
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = c.Close() })
+			assert.Positive(t, mr.TotalConnectionCount())
+			provider, ok := c.(cache.LoadTimeoutProvider)
+			require.True(t, ok)
+			assert.Equal(t, 500*time.Millisecond, provider.LoadTimeout())
+		})
+	}
+}
+
+func TestCacheConnectorNamespacesAnUnvalidatedTenantUnderTheAppName(t *testing.T) {
+	mr := miniredis.RunT(t)
+
+	c, err := defaultCacheConnectorFor(&fixedCacheSectionStore{section: unvalidatedSectionFor(mr)})(
+		context.Background(), keyPrefixTenant)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	assertWireKeyFrom(t, c, mr.Keys, "orders:acme:user:1")
+}
+
+func TestCacheConnectorRefusalNeverDials(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*config.CacheConfig)
+	}{
+		{name: "database_out_of_range", mutate: func(s *config.CacheConfig) { s.Redis.Database = 16 }},
+		{name: "negative_pool_size", mutate: func(s *config.CacheConfig) { s.Redis.PoolSize = -1 }},
+		{name: "username_without_password", mutate: func(s *config.CacheConfig) { s.Redis.Username = "svc" }},
+		{name: "disabled", mutate: func(s *config.CacheConfig) { s.Enabled = false }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := miniredis.RunT(t)
+			section := unvalidatedSectionFor(mr)
+			tt.mutate(section)
+
+			c, err := defaultCacheConnectorFor(&fixedCacheSectionStore{section: section})(
+				context.Background(), keyPrefixTenant)
+
+			assert.Nil(t, c)
+			var cfgErr *config.ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Zero(t, mr.TotalConnectionCount())
+		})
+	}
+}
+
+// TestCacheConnectorRefusesAMultiSegmentPrefixAfterTheDial pins that the one-segment base
+// rule stays the connector's, after the dial: the door carries an explicit keyprefix
+// unchecked, so the refusal still matches cache.ErrInvalidKeyPrefix and the dialed
+// instance is closed.
+func TestCacheConnectorRefusesAMultiSegmentPrefixAfterTheDial(t *testing.T) {
+	mr := miniredis.RunT(t)
+	section := unvalidatedSectionFor(mr)
+	section.Redis.KeyPrefix = new("orders:v2")
+
+	c, err := defaultCacheConnectorFor(&fixedCacheSectionStore{section: section})(
+		context.Background(), keyPrefixTenant)
+
+	require.ErrorIs(t, err, cache.ErrInvalidKeyPrefix)
+	assert.Nil(t, c)
+	assert.Positive(t, mr.TotalConnectionCount())
+	assert.Eventually(t, func() bool { return mr.CurrentConnectionCount() == 0 },
+		5*time.Second, 10*time.Millisecond, "the dialed instance must be closed")
+}
+
+// TestCacheConnectorNeverMutatesTheStoreSection pins that the door works on its own clone:
+// TenantStore.CacheConfig("") hands out the live root section.
+func TestCacheConnectorNeverMutatesTheStoreSection(t *testing.T) {
+	mr := miniredis.RunT(t)
+	section := unvalidatedSectionFor(mr)
+
+	c, err := defaultCacheConnectorFor(&fixedCacheSectionStore{section: section})(context.Background(), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	assert.Zero(t, section.Redis.PoolSize)
+	assert.Empty(t, section.Type)
 }

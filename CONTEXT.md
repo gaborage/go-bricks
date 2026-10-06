@@ -62,7 +62,8 @@ _Avoid_: validation (for this phase alone), verification, assertion, linting
 **Strictness**:
 How normalization treats an explicit value that contradicts an inferred one:
 `startup` fails fast; `connect` tolerates it and lets the vendor's own error
-surface at dial.
+surface at dial. It applies to database sections only: a cache section infers
+nothing, so it has one connect door (normalize + check, no strictness arms).
 _Avoid_: mode, level, policy, static/dynamic
 
 **Verdict**:
