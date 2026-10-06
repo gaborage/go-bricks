@@ -439,6 +439,84 @@ func TestOpenPositiveVector(t *testing.T) {
 	assert.Equal(t, key, env2.DedupKey())
 }
 
+// dottedVectorsFile holds one body sealed under dotted families (ADR-144), minted once
+// under -update with the production SealDocument and the published keys, then byte-stable.
+const dottedVectorsFile = "testdata/vectors_dotted.json"
+
+const (
+	dottedSignKid = "svc.payments.sign.v2"
+	dottedEncKid  = "acme.core.enc.v1"
+)
+
+type dottedVectorShape struct {
+	Note     string `json:"note"`
+	SignKid  string `json:"signKid"`
+	EncKid   string `json:"encKid"`
+	Positive string `json:"positive"`
+}
+
+// dottedVectorKeys binds the dotted kids to the published key material, so the vector needs
+// no new key file: a kid is a label, and which label a key carries is the whole point.
+func dottedVectorKeys(k *vectorKeys) (producer, consumer bricksjose.KeyResolver) {
+	producer = jositest.NewTestResolver(map[string]any{
+		dottedSignKid: k.priv[vecSignKid],
+		dottedEncKid:  &k.priv[vecEncKid].PublicKey,
+	})
+	consumer = jositest.NewTestResolver(map[string]any{
+		dottedSignKid: &k.priv[vecSignKid].PublicKey,
+		dottedEncKid:  k.priv[vecEncKid],
+	})
+	return producer, consumer
+}
+
+// TestOpenDottedVector opens the published dotted vector: the outer kid and inner iss are
+// the dotted generation verbatim, the family is the dotted family, and the inbox key is
+// <family>:<jti>. A family whose marker moved would no longer split, so this file pins
+// the dotted wire shape across releases.
+func TestOpenDottedVector(t *testing.T) {
+	k := loadVectorKeys(t)
+	producer, consumer := dottedVectorKeys(k)
+	spec, err := sealed.NewDocumentSpec("svc.payments.sign", "acme.core.enc", "card")
+	require.NoError(t, err)
+
+	if _, statErr := os.Stat(dottedVectorsFile); errors.Is(statErr, os.ErrNotExist) && *update {
+		body, _, sealErr := sealed.SealDocument([]byte(`{"orderId":"ord-dotted","card":{"pan":"4111111111111111","exp":"12/29"},"amount":1250}`),
+			spec, &sealed.Options{
+				SignKid: dottedSignKid, EncryptKid: dottedEncKid, EventType: eventType, TenantID: vecTenant, Keys: producer,
+				Now: func() time.Time { return time.Unix(vecIAT, 0) },
+			})
+		require.NoError(t, sealErr)
+		raw, marshalErr := json.MarshalIndent(dottedVectorShape{Note: fixtureNote, SignKid: dottedSignKid, EncKid: dottedEncKid, Positive: string(body)}, "", "  ")
+		require.NoError(t, marshalErr)
+		require.NoError(t, os.WriteFile(dottedVectorsFile, append(raw, '\n'), 0o600))
+	}
+	raw, err := os.ReadFile(dottedVectorsFile)
+	require.NoError(t, err)
+	var vf dottedVectorShape
+	require.NoError(t, json.Unmarshal(raw, &vf))
+	require.Equal(t, dottedSignKid, vf.SignKid)
+
+	opened, err := sealed.OpenDocument([]byte(vf.Positive), spec, &sealed.OpenOptions{
+		EventType: eventType, Tenant: sealed.TenantExpectation{Required: true, Expected: vecTenant}, Keys: consumer,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, dottedSignKid, opened.Envelope.SignKid)
+	assert.Equal(t, "svc.payments.sign", opened.Envelope.SignFamily)
+	assert.Equal(t, dottedEncKid, opened.Envelope.EncKid)
+	assert.Equal(t, time.Unix(vecIAT, 0).UTC(), opened.Envelope.IssuedAt)
+	assert.Equal(t, "svc.payments.sign:"+opened.Envelope.JTI, opened.Envelope.DedupKey())
+	assert.JSONEq(t, `{"pan":"4111111111111111","exp":"12/29"}`, string(opened.Subject))
+
+	// The hyphenated look-alike family is another family: rule 3 refuses the body.
+	hyphenSpec, err := sealed.NewDocumentSpec("svc-payments-sign", "acme-core-enc", "card")
+	require.NoError(t, err)
+	_, err = sealed.OpenDocument([]byte(vf.Positive), hyphenSpec, &sealed.OpenOptions{EventType: eventType, Keys: k.consumer})
+	var oe *sealed.OpenError
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, sealed.CodeKidFamilyMismatch, oe.Err.Code)
+	assert.Equal(t, 3, oe.Rule)
+}
+
 // requireVectorRefusal asserts the vector's code, rule, details and sentinel, and that no slot value leaks into the text (#1307).
 func requireVectorRefusal(t *testing.T, err error, tc *vector) {
 	t.Helper()

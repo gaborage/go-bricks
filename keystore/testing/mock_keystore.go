@@ -67,7 +67,9 @@ func NewMockKeyStore() *MockKeyStore {
 // under test sees, but it keeps the FamilyEnumerator ordering contract:
 // Generations returns ascending versions whatever the declaration order. Pair
 // it with WithPublicKey and friends on the generation's Kid() when the module
-// also fetches material.
+// also fetches material. Kid() follows the family's marker (ADR-144):
+// WithGeneration("payments.sign", "v1", …) is "payments.sign.v1",
+// WithGeneration("payments-sign", "v1", …) is "payments-sign-v1".
 func (m *MockKeyStore) WithGeneration(logical, version string, role keystore.Role) *MockKeyStore {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -483,6 +483,28 @@ func TestSecretNotFound(t *testing.T) {
 	assert.ErrorContains(t, err, `key "nope" not found`)
 }
 
+// TestNotFoundNamesTheLookAlike: a miss whose name differs from a configured
+// entry only in '-' versus '.' names that entry, on every accessor; any other
+// miss keeps the plain text (ADR-144).
+func TestNotFoundNamesTheLookAlike(t *testing.T) {
+	_, pub := generateTestKeys(t)
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"tokens-our": {Public: config.KeySourceConfig{Value: base64.StdEncoding.EncodeToString(marshalPublicKeyDER(t, pub))}},
+	}, 32)
+	require.NoError(t, err)
+
+	const want = `keystore: key "tokens.our" not found; configured "tokens-our" differs only in '-' versus '.'`
+	_, err = s.PublicKey("tokens.our")
+	require.EqualError(t, err, want)
+	_, err = s.PrivateKey("tokens.our")
+	require.EqualError(t, err, want)
+	_, err = s.Secret("tokens.our")
+	require.EqualError(t, err, want)
+
+	_, err = s.PublicKey("tokens.peer")
+	require.EqualError(t, err, `keystore: key "tokens.peer" not found`)
+}
+
 func TestSecretOnRSAEntryRejected(t *testing.T) {
 	_, pub := generateTestKeys(t)
 	s, err := newStore(map[string]config.KeyPairConfig{
