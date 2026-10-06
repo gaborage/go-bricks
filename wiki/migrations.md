@@ -12467,7 +12467,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   config file and overlay, then keep only hits nested under `multitenant:` → `tenants:` → `<id>:`
   → `cache:` (a dotted `tenants.<id>.cache.manager` key counts; `database.manager`, root
   `cache.manager` and `messaging` keys do not). Also
-  `git grep -nE 'MULTITENANT_TENANTS_[A-Z0-9_]+_CACHE_MANAGER_'` over env files and deploy
+  `git grep -nE 'MULTITENANT_TENANTS_[A-Z0-9_-]+_CACHE_MANAGER_'` over env files and deploy
   manifests, and `git grep -nE 'CacheManagerConfig\{|\.Cache\.Manager([^A-Za-z]|$)' -- '*.go'`,
   keeping only hits inside a `config.TenantEntry`'s `Cache: config.CacheConfig{…}` literal or on a
   `Tenants[…].Cache.Manager` assignment. Of those hits, drop a block whose every value is zero
