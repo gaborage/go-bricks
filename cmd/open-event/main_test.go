@@ -836,6 +836,65 @@ func TestSealEventToOpenEventRoundTrip(t *testing.T) {
 	assert.Contains(t, stderr, "-print-subject")
 }
 
+// TestSealEventToOpenEventRoundTripDottedKids drives both binaries with dotted
+// generations (ADR-144): the kids travel verbatim, the family the opener derives and
+// reports is the dotted one, and the two mistakes an operator makes with the new shape —
+// a family where its generation belongs, and the marker the family does not take — are
+// refused as usage errors that spell the kid to pass.
+func TestSealEventToOpenEventRoundTripDottedKids(t *testing.T) {
+	const (
+		dottedSignKid = "payments.sign.v1"
+		dottedEncKid  = "payments.encrypt.v1"
+	)
+	fx := newCLIFixture(t)
+	sealBin := buildBinary(t, fx.dir, "seal-event")
+	openBin := buildBinary(t, fx.dir, "open-event")
+	signPrivPath := writeFile(t, fx.dir, "sign.der", derPKCS8Private(t, fx.signPriv))
+	encPubPath := writeFile(t, fx.dir, "enc.pub.der", derPKIXPublic(t, &fx.encPriv.PublicKey))
+	sealArgs := []string{
+		"-sign-key-file", signPrivPath,
+		"-encrypt-key-file", encPubPath,
+		"-sign-kid", dottedSignKid,
+		"-encrypt-kid", dottedEncKid,
+		"-subject", subjectMember,
+		"-event-type", testEventType,
+		"-tenant-id", testTenant,
+	}
+
+	body, stderr, code := runBinary(t, sealBin, sealArgs, []byte(docJSON))
+	require.Equal(t, 0, code, "seal-event stderr: %s", stderr)
+
+	openArgs := withFlag(t, withFlag(t, fx.baseArgs(), "-sign-kid", dottedSignKid), "-encrypt-kid", dottedEncKid)
+	stdout, stderr, code := runBinary(t, openBin, append(openArgs, "-json"), []byte(body))
+	require.Equal(t, exitOK, code, "open-event stderr: %s", stderr)
+	got := decodeSuccess(t, stdout)
+	assert.Equal(t, dottedSignKid, got.Envelope.SignKid)
+	assert.Equal(t, "payments.sign", got.Envelope.SignFamily)
+	assert.Equal(t, dottedEncKid, got.Envelope.EncKid)
+	assert.NotContains(t, stdout, subjectMarker)
+
+	// A consumer declaring the hyphenated look-alike family refuses the dotted body: a
+	// family rename is a drain-then-cutover, never an alias.
+	stdout, _, code = runBinary(t, openBin, append(fx.baseArgs(), "-json"), []byte(body))
+	require.Equal(t, exitRefused, code)
+	var refusal refusalPayload
+	require.NoError(t, json.Unmarshal([]byte(stdout), &refusal))
+	assert.Equal(t, sealed.CodeKidFamilyMismatch, refusal.Code)
+
+	for _, tc := range []struct{ kid, want string }{
+		{kid: "payments.sign", want: `-sign-kid "payments.sign" is a family, not a generation: pass payments.sign.v<N>`},
+		{kid: "payments.sign-v1", want: `-sign-kid "payments.sign-v1" is not a generation: family "payments.sign" takes the marker of payments.sign.v1`},
+	} {
+		_, stderr, code = runBinary(t, openBin, withFlag(t, openArgs, "-sign-kid", tc.kid), []byte(body))
+		assert.Equal(t, exitUsage, code, tc.kid)
+		assert.Contains(t, stderr, tc.want)
+
+		_, stderr, code = runBinary(t, sealBin, withFlag(t, sealArgs, "-sign-kid", tc.kid), []byte(docJSON))
+		assert.Equal(t, 1, code, "seal-event reports a kid it cannot split as a tool error, as before: %s", tc.kid)
+		assert.Contains(t, stderr, tc.want)
+	}
+}
+
 // errWriteFailed is what the injected writers fail with — a plain sentinel, so no assertion
 // depends on an OS error string.
 var errWriteFailed = errors.New("stream write failed")

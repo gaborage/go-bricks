@@ -251,6 +251,40 @@ func TestSealPayloadKidBinding(t *testing.T) {
 	})
 }
 
+// TestSealPayloadPassesDottedKidsVerbatim: seal-payload never judges a kid's grammar, so
+// a dotted keystore name (ADR-144) reaches the header byte for byte, opens under a policy
+// naming the same strings, and is unknown to one naming the hyphenated look-alike.
+func TestSealPayloadPassesDottedKidsVerbatim(t *testing.T) {
+	fx := newCLIFixture(t)
+	payload := []byte(`{"pan":"card-fixture-0000"}`)
+	stdout, stderr, code := runCLI([]string{
+		"-sign-key-file", fx.signPath,
+		"-encrypt-key-file", fx.encPath,
+		"-sign-kid", "tokens.peer",
+		"-encrypt-kid", "tokens.our",
+	}, payload)
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	compact := strings.TrimSpace(stdout)
+
+	policy := func(decrypt, verify string) *jose.Policy {
+		return &jose.Policy{
+			Direction: jose.DirectionInbound, DecryptKid: decrypt, VerifyKid: verify,
+			SigAlg: jose.DefaultSigAlg, KeyAlg: jose.DefaultKeyAlg, Enc: jose.DefaultEnc, Cty: jose.DefaultCty,
+		}
+	}
+	plaintext, _, _, err := jose.Open(compact, policy("tokens.our", "tokens.peer"),
+		jositest.NewTestResolver(map[string]any{"tokens.our": fx.encPriv, "tokens.peer": fx.signPub}))
+	require.NoError(t, err)
+	assert.JSONEq(t, string(payload), string(plaintext))
+
+	err = openErr(compact, policy("tokens-our", "tokens-peer"),
+		jositest.NewTestResolver(map[string]any{"tokens-our": fx.encPriv, "tokens-peer": fx.signPub}))
+	require.ErrorIs(t, err, jose.ErrKidUnknown)
+	var joseErr *jose.Error
+	require.ErrorAs(t, err, &joseErr)
+	assert.Equal(t, "tokens.our", joseErr.Kid, "the token carries the dotted kid verbatim")
+}
+
 // TestSealPayloadRejections exercises the CLI's error paths, each asserting
 // both the exit code and a distinguishing stderr fragment.
 func TestSealPayloadRejections(t *testing.T) {
