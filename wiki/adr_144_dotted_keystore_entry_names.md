@@ -105,7 +105,8 @@ How the `keys` subtree is read:
 How the `active` subtree is read:
 
 - A scalar (or null) leaf at path `p` becomes the selector `join(p, ".")`.
-- Maps are namespaces.
+- Non-empty maps are namespaces. An empty map is neither a selector nor a namespace, so it is
+  refused at its path, as mapstructure refused it before this ADR.
 - Literal dotted keys and empty keys are refused. A literal key with an empty segment (`"."`,
   `"tokens..our"`) is refused with a plain rename, since no nested form or variable spells it.
 

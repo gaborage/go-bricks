@@ -220,9 +220,9 @@ func checkAgainstSchema(path, label string, node any, s *treeSchema) error {
 }
 
 // readSelectorTree flattens messaging.seal.active: a scalar or null leaf at
-// path p is the selector for family join(p, "."), and every map is a
-// namespace. The flat spelling of today (payments-sign: v2) is a one-segment
-// leaf and reads unchanged.
+// path p is the selector for family join(p, "."), and every non-empty map is
+// a namespace. An empty map is refused: it is neither. The flat spelling of
+// today (payments-sign: v2) is a one-segment leaf and reads unchanged.
 func readSelectorTree(tree map[string]any) (map[string]any, error) {
 	out := make(map[string]any)
 	if err := walkSelectors(tree, "", out); err != nil {
@@ -238,6 +238,16 @@ func walkSelectors(node map[string]any, prefix string, out map[string]any) error
 		}
 		name := joinName(prefix, key)
 		if sub, isMap := stringMap(node[key]); isMap {
+			if len(sub) == 0 {
+				// Neither a selector nor a namespace: walking it would drop the
+				// key in silence, where mapstructure refused it before ADR-144.
+				return &ConfigError{
+					Category: errCategoryInvalid,
+					Field:    fieldMessagingSealActive + "." + name,
+					Message:  "holds an empty map where a generation or a further name segment was expected",
+					Action:   "set the selector to a generation (v<N>), or remove the key",
+				}
+			}
 			if err := walkSelectors(sub, name, out); err != nil {
 				return err
 			}

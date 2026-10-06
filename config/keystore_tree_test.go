@@ -318,6 +318,34 @@ func TestKeystoreTreeReadsSelectors(t *testing.T) {
 	requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty key")
 }
 
+// TestKeystoreTreeRefusesAnEmptySelectorNamespace: an empty map in the
+// selector tree selects nothing and names no further segment. Before ADR-144
+// mapstructure refused it ('messaging.seal.active[payments]' expected type
+// 'string', got unconvertible type 'map[string]interface {}'); the walk must
+// not drop it in silence, and refuses it at its own path instead.
+func TestKeystoreTreeRefusesAnEmptySelectorNamespace(t *testing.T) {
+	tests := []struct {
+		name      string
+		tree      map[string]any
+		wantField string
+	}{
+		{name: "one_segment", tree: map[string]any{"payments": map[string]any{}}, wantField: "messaging.seal.active.payments"},
+		{name: "nested", tree: map[string]any{"payments": map[string]any{"sign": map[string]any{}}}, wantField: "messaging.seal.active.payments.sign"},
+		{
+			name:      "beside_a_selector",
+			tree:      map[string]any{"payments": map[string]any{"sign": "v2", "encrypt": map[string]any{}}},
+			wantField: "messaging.seal.active.payments.encrypt",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadSelectorTree(t, tt.tree)
+			cfgErr := requireTreeError(t, err, tt.wantField, "holds an empty map where a generation or a further name segment was expected")
+			assert.Equal(t, "set the selector to a generation (v<N>), or remove the key", cfgErr.Action)
+		})
+	}
+}
+
 // TestConfigUnmarshalReadsTheKeystoreTree: the public Config.Unmarshal door
 // decodes with the same tree reader as Load, for either struct, and its
 // refusal is a *ConfigError errors.As reaches through mapstructure's
