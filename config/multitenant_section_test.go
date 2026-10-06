@@ -847,7 +847,7 @@ func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) 
 			&RedisConfig{Host: "acme.redis", Username: "svc"},
 			"a tenant ACL user with no password must fail at startup")
 		assert.Equal(t, wantField, cfgErr.Field)
-		assert.Contains(t, cfgErr.Message, "cache.redis.password")
+		assert.Contains(t, cfgErr.Message, "requires password:")
 	})
 }
 
@@ -870,7 +870,7 @@ func TestValidateMultitenantTenantsCacheModeIsTenantAddressed(t *testing.T) {
 			&RedisConfig{Host: "acme.redis", Mode: "cluster", Database: 3},
 			"a tenant cluster cache on a non-zero database must fail at startup")
 		assert.Equal(t, "multitenant.tenants.acme.cache.redis.database", cfgErr.Field)
-		assert.Contains(t, cfgErr.Message, "cache.redis.mode")
+		assert.Contains(t, cfgErr.Message, "when mode is cluster")
 	})
 }
 

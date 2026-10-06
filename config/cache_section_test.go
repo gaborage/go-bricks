@@ -540,7 +540,7 @@ func TestValidateCacheRedisUsername(t *testing.T) {
 			name:      "named_user_without_password",
 			username:  "svc",
 			wantField: "cache.redis.username",
-			wantMsg:   "cache.redis.password",
+			wantMsg:   "requires password:",
 		},
 		{
 			name:      "whitespace_only_username_with_password",
@@ -684,7 +684,7 @@ func TestValidateCacheRedisClusterRejectsNonZeroDatabase(t *testing.T) {
 			var cfgErr *ConfigError
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, tt.wantField, cfgErr.Field)
-			assert.Contains(t, cfgErr.Message, "cache.redis.mode",
+			assert.Contains(t, cfgErr.Message, "when mode is cluster",
 				"the message must name the other key, so the operator knows which of the two to change")
 		})
 	}
@@ -1170,4 +1170,120 @@ func TestCloneCacheSectionCopiesEveryReferenceField(t *testing.T) {
 	walk(reflect.TypeFor[CacheConfig](), "")
 
 	assert.Equal(t, []string{"Redis.KeyPrefix"}, refs)
+}
+
+// TestCheckRedisMapsRuleViolation pins the config adapter over the shared rule set: the
+// relative field gains the "cache.redis." head and a closed set becomes the Action.
+func TestCheckRedisMapsRuleViolation(t *testing.T) {
+	_, err := ResolveCacheSectionForKey(&CacheConfig{
+		Enabled: true,
+		Redis:   RedisConfig{Host: "localhost", Port: 70000},
+	}, "")
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, errCategoryInvalid, cfgErr.Category)
+	assert.Equal(t, "cache.redis.port", cfgErr.Field)
+	assert.Equal(t, "invalid value: 70000", cfgErr.Message)
+	assert.Equal(t, "must be one of: 1-65535", cfgErr.Action)
+}
+
+// c7224Changed lists the startup messages [C72.24] changes: the two that named a sibling
+// key absolutely. It must equal that atom's list.
+var c7224Changed = []string{"cluster_needs_database_zero", "username_needs_password"}
+
+// TestValidateRedisCacheOutputIsByteIdentical pins config.Validate's text for one fault per
+// Redis rule across the move into internal/redisrules: every row reads as it did before the
+// move, except the c7224Changed rows.
+func TestValidateRedisCacheOutputIsByteIdentical(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(r *RedisConfig)
+		want   string
+	}{
+		{
+			"host_missing", func(r *RedisConfig) { r.Host = "" },
+			"cache config: config_missing: cache.redis.host required set CACHE_REDIS_HOST env var or add cache.redis.host to config.yaml",
+		},
+		{
+			"port_out_of_range", func(r *RedisConfig) { r.Port = 70000 },
+			"cache config: config_invalid: cache.redis.port invalid value: 70000 must be one of: 1-65535",
+		},
+		{
+			"mode_unknown", func(r *RedisConfig) { r.Mode = "sentinel" },
+			"cache config: config_invalid: cache.redis.mode 'sentinel' is not supported must be one of: standalone, cluster",
+		},
+		{
+			"cluster_needs_database_zero", func(r *RedisConfig) { r.Mode, r.Database = "cluster", 3 },
+			"cache config: config_invalid: cache.redis.database must be 0 when mode is cluster: the cluster client has no database selection",
+		},
+		{
+			"username_whitespace_only", func(r *RedisConfig) { r.Username, r.Password = " ", "pw" },
+			"cache config: config_invalid: cache.redis.username must not be whitespace-only",
+		},
+		{
+			"username_needs_password", func(r *RedisConfig) { r.Username = "svc" },
+			"cache config: config_invalid: cache.redis.username requires password: the client sends no AUTH without one, so the connection would silently run as the default user",
+		},
+		{
+			"database_out_of_range", func(r *RedisConfig) { r.Database = 16 },
+			"cache config: config_invalid: cache.redis.database must be between 0 and 15",
+		},
+		{
+			"poolsize_negative", func(r *RedisConfig) { r.PoolSize = -1 },
+			"cache config: config_invalid: cache.redis.poolsize must be positive",
+		},
+		{
+			"dialtimeout_negative", func(r *RedisConfig) { r.DialTimeout = -1 },
+			"cache config: config_invalid: cache.redis.dialtimeout must be non-negative",
+		},
+		{
+			"readtimeout_below_minus_one", func(r *RedisConfig) { r.ReadTimeout = -2 },
+			"cache config: config_invalid: cache.redis.readtimeout must be >= -1",
+		},
+		{
+			"writetimeout_below_minus_one", func(r *RedisConfig) { r.WriteTimeout = -2 },
+			"cache config: config_invalid: cache.redis.writetimeout must be >= -1",
+		},
+		{
+			"tls_material_under_disabled_block", func(r *RedisConfig) { r.TLS.CAFile = "/etc/ca.pem" },
+			"cache config: config_invalid: cache.redis.tls.enabled must be true when any tls.* field is set",
+		},
+		{
+			"keyprefix_with_whitespace", func(r *RedisConfig) { r.KeyPrefix = new("a b") },
+			"cache config: config_invalid: cache.redis.keyprefix must not contain whitespace",
+		},
+	}
+
+	assert.Equal(t, []string{"cluster_needs_database_zero", "username_needs_password"}, c7224Changed)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				App:    createValidAppConfig(),
+				Server: createValidServerConfig(),
+				Log:    createValidLogConfig(),
+				Cache:  CacheConfig{Enabled: true, Type: CacheTypeRedis, Redis: RedisConfig{Host: "localhost"}},
+			}
+			tt.mutate(&cfg.Cache.Redis)
+
+			err := Validate(cfg)
+
+			require.Error(t, err)
+			assert.Equal(t, tt.want, err.Error())
+		})
+	}
+}
+
+// TestValidateRedisCacheJudgesKeyPrefixAfterTheRules pins [C72.23]: the keyprefix grammar
+// runs after the shared rule set, so a section that also breaks a rule reports the rule.
+func TestValidateRedisCacheJudgesKeyPrefixAfterTheRules(t *testing.T) {
+	err := validateRedisCache(&RedisConfig{
+		Host: "localhost", Port: 6379, PoolSize: 10,
+		KeyPrefix: new("a b"),
+		Username:  "svc",
+	})
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "cache.redis.username", cfgErr.Field)
 }

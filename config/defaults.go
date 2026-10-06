@@ -150,14 +150,6 @@ const (
 	defaultRedisMaxRetries      = 3
 	defaultRedisMinRetryBackoff = 8 * time.Millisecond
 	defaultRedisMaxRetryBackoff = 512 * time.Millisecond
-
-	// cacheRedisModeStandalone and cacheRedisModeCluster are the two values
-	// cache.redis.mode accepts. Standalone is the default: it dials one server and
-	// speaks the single-node protocol. Cluster speaks the cluster protocol against
-	// the one configured address, which is required by an endpoint that answers
-	// MOVED to a single-node client, such as Amazon ElastiCache Serverless.
-	cacheRedisModeStandalone = "standalone"
-	cacheRedisModeCluster    = "cluster"
 )
 
 // Startup timeout defaults
@@ -228,8 +220,6 @@ const (
 	fieldAppRateLimit        = "app.rate.limit"
 	fieldCacheRedisDB        = "cache.redis.database"
 	fieldCacheRedisKeyPrefix = "cache.redis.keyprefix"
-	fieldCacheRedisMode      = "cache.redis.mode"
-	fieldCacheRedisPool      = "cache.redis.poolsize"
 	fieldResolverOrder       = "multitenant.resolver.order"
 	errInvalidField          = "invalid value: %v"
 	databasesFieldPrefix     = "databases.%s"

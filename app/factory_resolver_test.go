@@ -1226,7 +1226,7 @@ func TestCacheConnectorRefusalNeverDials(t *testing.T) {
 			mutate:    func(s *config.CacheConfig) { s.Redis.Username = "svc" },
 			wantField: "multitenant.tenants.acme.cache.redis.username",
 			wantCat:   "invalid",
-			wantMsg: "requires cache.redis.password: the client sends no AUTH without one, " +
+			wantMsg: "requires password: the client sends no AUTH without one, " +
 				"so the connection would silently run as the default user",
 		},
 		{

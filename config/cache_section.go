@@ -3,10 +3,10 @@ package config
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/gaborage/go-bricks/internal/cachekey"
 	"github.com/gaborage/go-bricks/internal/clienttls"
+	"github.com/gaborage/go-bricks/internal/redisrules"
 )
 
 // normalizeCache fills Redis defaults unconditionally, even when the cache is
@@ -71,7 +71,7 @@ func checkCacheType(cfg *CacheConfig) error {
 // untouched: a missing host is a real misconfiguration that must fail fast.
 func applyRedisDefaults(cfg *RedisConfig) {
 	if cfg.Mode == "" {
-		cfg.Mode = cacheRedisModeStandalone
+		cfg.Mode = redisrules.ModeStandalone
 	}
 	if cfg.Port == 0 {
 		cfg.Port = defaultRedisPort
@@ -99,18 +99,14 @@ func applyRedisDefaults(cfg *RedisConfig) {
 	}
 }
 
-// validateRedisCache is the startup door's Redis check: checkCacheSection's Redis rules plus
+// validateRedisCache is the startup door's Redis check: checkCacheSection's Redis rules, then
 // the keyprefix grammar and the TLS material load.
 func validateRedisCache(cfg *RedisConfig) error {
-	if err := checkRedisEndpoint(cfg); err != nil {
+	if err := checkRedis(cfg); err != nil {
 		return err
 	}
 
 	if err := validateRedisKeyPrefix(cfg); err != nil {
-		return err
-	}
-
-	if err := checkRedisClientSettings(cfg); err != nil {
 		return err
 	}
 
@@ -125,106 +121,40 @@ func checkCacheSection(cfg *CacheConfig) error {
 	if err := checkCacheType(cfg); err != nil {
 		return err
 	}
-	if err := checkRedisEndpoint(&cfg.Redis); err != nil {
-		return err
-	}
-	return checkRedisClientSettings(&cfg.Redis)
+	return checkRedis(&cfg.Redis)
 }
 
-func checkRedisEndpoint(cfg *RedisConfig) error {
-	if cfg.Host == "" {
-		return NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
-	}
-
-	if cfg.Port <= 0 || cfg.Port > 65535 {
-		return NewInvalidFieldError("cache.redis.port", fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
-	}
-
-	return validateRedisMode(cfg)
-}
-
-func checkRedisClientSettings(cfg *RedisConfig) error {
-	if err := validateRedisUsername(cfg); err != nil {
-		return err
-	}
-
-	if cfg.Database < 0 || cfg.Database > 15 {
-		return NewValidationError(fieldCacheRedisDB, "must be between 0 and 15")
-	}
-
-	if cfg.PoolSize <= 0 {
-		return NewValidationError(fieldCacheRedisPool, errMustBePositive)
-	}
-
-	if cfg.DialTimeout < 0 {
-		return NewValidationError("cache.redis.dialtimeout", errMustBeNonNegative)
-	}
-
-	if cfg.ReadTimeout < -1 {
-		return NewValidationError("cache.redis.readtimeout", "must be >= -1")
-	}
-
-	if cfg.WriteTimeout < -1 {
-		return NewValidationError("cache.redis.writetimeout", "must be >= -1")
-	}
-
-	return checkRedisTLSMaterial(&cfg.TLS)
-}
-
-// validateRedisMode checks the transport selector and the one setting it
-// forecloses. The enum is closed: an unrecognized value is refused rather than
-// defaulted, because the default dials a single node and a cluster-protocol
-// endpoint answers MOVED to the first key, so a typo would surface as a runtime
-// cache failure instead of a startup one.
-//
-// Under cluster the database must be 0. go-redis drops the selected database on
-// the way to the cluster client (UniversalOptions.Cluster copies no DB, and
-// ClusterOptions has no such field), so accepting the pair would move the whole
-// keyspace to database 0 on the mode flip alone. That error is addressed to the
-// database key — the value that cannot be honored — and names the mode, because
-// either could be the one the operator meant to change. It runs before the 0-15
-// range check, since under cluster the range does not apply at all.
-func validateRedisMode(cfg *RedisConfig) error {
-	cacheRedisModes := []string{cacheRedisModeStandalone, cacheRedisModeCluster}
-	if cfg.Mode != "" && !slices.Contains(cacheRedisModes, cfg.Mode) {
-		return NewInvalidFieldError(fieldCacheRedisMode, fmt.Sprintf(errNotSupportedFmt, cfg.Mode), cacheRedisModes)
-	}
-
-	if cfg.Mode == cacheRedisModeCluster && cfg.Database != 0 {
-		return NewValidationError(fieldCacheRedisDB, fmt.Sprintf(
-			"must be 0 when %s is %s: the cluster client has no database selection",
-			fieldCacheRedisMode, cacheRedisModeCluster))
-	}
-
-	return nil
-}
-
-// validateRedisUsername checks the ACL identity and the one key it requires.
-//
-// A whitespace-only ACL user is a typo, not an identity: it travels to Redis as an
-// AUTH argument no ACL rule can match. Checked before the coupling rule so a name
-// that is both blank and unaccompanied is reported as the typo it is.
-//
-// A name with no password is refused rather than dialed. go-redis builds the HELLO
-// handshake's AUTH clause inside `if password != ""`, and gates the legacy AUTH
-// fallback the same way, so an empty password sends no AUTH at all: the connection
-// would run as whatever identity the endpoint gives an unauthenticated client — on a
-// stock Redis the `default` user, typically `nopass ~* +@all`. Failing closed here
-// turns that silent privilege swap into a startup error. The reverse pair is fine: a
-// password alone is the legacy form that selects the default user.
-func validateRedisUsername(cfg *RedisConfig) error {
-	if cfg.Username == "" {
+// checkRedis runs the shared Redis endpoint rules (internal/redisrules) and addresses the
+// first violation to its cache.redis.* key: a missing value names its env var and YAML path,
+// a closed set becomes the Action.
+func checkRedis(cfg *RedisConfig) error {
+	v := redisrules.Check(&redisrules.Endpoint{
+		Host:         cfg.Host,
+		Mode:         cfg.Mode,
+		Username:     cfg.Username,
+		Password:     cfg.Password,
+		Port:         cfg.Port,
+		Database:     cfg.Database,
+		PoolSize:     cfg.PoolSize,
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		TLSEnabled:   cfg.TLS.Enabled,
+		TLS:          redisTLSMaterial(&cfg.TLS),
+	})
+	if v == nil {
 		return nil
 	}
-	if strings.TrimSpace(cfg.Username) == "" {
-		return NewValidationError("cache.redis.username", "must not be whitespace-only")
+
+	field := "cache.redis." + v.Field
+	switch {
+	case v.Missing:
+		return NewMissingFieldError(field, keyToEnvVar(field), field)
+	case len(v.Allowed) > 0:
+		return NewInvalidFieldError(field, v.Message, v.Allowed)
+	default:
+		return NewValidationError(field, v.Message)
 	}
-	if cfg.Password == "" {
-		return NewValidationError("cache.redis.username",
-			"requires cache.redis.password: the client sends no AUTH without one, "+
-				"so the connection would silently run as the default user")
-	}
-	return nil
 }
 
 // validateRedisKeyPrefix checks an explicitly delivered key namespace against the
@@ -285,41 +215,28 @@ func cacheKeyPrefixDefaultApplies(cfg *Config) bool {
 	return false
 }
 
-// fieldCacheRedisTLSPrefix namespaces a clienttls.Violation's relative key
-// (e.g. "cafile") into this layer's config key. The tenant spelling
-// (multitenant.tenants.<id>.cache.redis.tls.*) is derived from it downstream,
-// so the "cache." head must stay.
-const fieldCacheRedisTLSPrefix = "cache.redis.tls."
+// fieldCacheRedisTLS is the key a TLS material load failure is addressed to. The tenant
+// spelling (multitenant.tenants.<id>.cache.redis.tls) is derived from it downstream, so the
+// "cache." head must stay.
+const fieldCacheRedisTLS = "cache.redis.tls"
 
 // cacheRedisTLSErrPrefix names the cache's error namespace for the shared TLS
 // loader, matching the spelling cache/redis uses for the same material.
 const cacheRedisTLSErrPrefix = "cache: redis: tls:"
-
-// checkRedisTLSMaterial is the structural TLS check (staged material under a disabled
-// block, mutual exclusivity of file/value sources, cert/key pairing, min-version enum); its
-// rules live in clienttls, beside the loader that consumes the same material, and this only
-// maps a violation onto the cache.redis.tls.* keys.
-func checkRedisTLSMaterial(cfg *RedisTLSConfig) error {
-	m := redisTLSMaterial(cfg)
-	if v := clienttls.ValidateMaterial(&m, cfg.Enabled); v != nil {
-		return NewValidationError(fieldCacheRedisTLSPrefix+v.Field, v.Message)
-	}
-	return nil
-}
 
 // loadRedisTLS actually loads the material, which means this validation reads files —
 // unusual here, and deliberate. Unlike server.tls, whose material is read at Start() one hop
 // later, a Redis client is created lazily per tenant on first use, so config validation is
 // the only door at which a missing or corrupt bundle can fail the boot rather than a request
 // hours later. The dial loads it again; the two loads are a startup gate and a use-time one,
-// not a cache. It assumes checkRedisTLSMaterial passed.
+// not a cache. It assumes checkRedis passed.
 func loadRedisTLS(cfg *RedisTLSConfig) error {
 	if !cfg.Enabled {
 		return nil
 	}
 	m := redisTLSMaterial(cfg)
 	if _, err := clienttls.Build(cacheRedisTLSErrPrefix, &m); err != nil {
-		return NewValidationError(strings.TrimSuffix(fieldCacheRedisTLSPrefix, "."), err.Error())
+		return NewValidationError(fieldCacheRedisTLS, err.Error())
 	}
 	return nil
 }
