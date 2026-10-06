@@ -41,6 +41,19 @@ func TestScanTypeValidDeclaration(t *testing.T) {
 	assert.Equal(t, []string{"card"}, spec.SealedPaths())
 }
 
+// TestScanTypeDottedFamilies: a seal: tag takes dotted families verbatim
+// (ADR-144); the keystore names their generations <family>.v<N>.
+func TestScanTypeDottedFamilies(t *testing.T) {
+	type evt struct {
+		_    struct{} `seal:"sign=payments.sign,encrypt=payments.encrypt"`
+		Card cardData `json:"card" seal:"subject"`
+	}
+	spec, err := sealed.ScanType(reflect.TypeOf(evt{}))
+	require.NoError(t, err)
+	assert.Equal(t, "payments.sign", spec.SignLogical)
+	assert.Equal(t, "payments.encrypt", spec.EncryptLogical)
+}
+
 func TestScanTypeUnwrapsPointersAndUsesFieldNameWithoutJSONTag(t *testing.T) {
 	type evt struct {
 		_    struct{} `seal:"encrypt=enc-fam, sign=sign-fam"`
@@ -178,7 +191,7 @@ func TestScanTypeScanErrors(t *testing.T) {
 			Card *cardData `json:"card" seal:"subject"`
 		}{}), code: sealed.CodeTagSubjectInvalid, msg: "embedded"},
 		{name: "kid_bad_alphabet", typ: reflect.TypeOf(struct {
-			_ struct{} `seal:"sign=svc.sign,encrypt=e"`
+			_ struct{} `seal:"sign=svc..sign,encrypt=e"`
 			A string   `json:"a" seal:"subject"`
 		}{}), code: sealed.CodeTagKidInvalid, msg: "must match"},
 		{name: "kid_too_long", typ: reflect.TypeOf(struct {
@@ -188,7 +201,15 @@ func TestScanTypeScanErrors(t *testing.T) {
 		{name: "kid_ends_in_generation", typ: reflect.TypeOf(struct {
 			_ struct{} `seal:"sign=svc-sign-v2,encrypt=e"`
 			A string   `json:"a" seal:"subject"`
-		}{}), code: sealed.CodeTagKidInvalid, msg: "generation name"},
+		}{}), code: sealed.CodeTagKidInvalid, msg: `names a generation; the tag takes the family "svc-sign"`},
+		{name: "kid_is_a_dotted_generation", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=payments.sign,encrypt=payments.encrypt.v1"`
+			A string   `json:"a" seal:"subject"`
+		}{}), code: sealed.CodeTagKidInvalid, msg: `"payments.encrypt.v1" for encrypt names a generation; the tag takes the family "payments.encrypt"`},
+		{name: "kid_ends_in_malformed_generation", typ: reflect.TypeOf(struct {
+			_ struct{} `seal:"sign=audit.v1,encrypt=e"`
+			A string   `json:"a" seal:"subject"`
+		}{}), code: sealed.CodeTagKidInvalid, msg: "must not end in -v<digits> or .v<digits> (that is a generation name)"},
 		{name: "sentinel_empty", typ: reflect.TypeOf(struct {
 			_ struct{} `seal:""`
 			A string   `json:"a" seal:"subject"`
@@ -280,12 +301,12 @@ func TestScanTypeTaggedEmbedIsNotPromoted(t *testing.T) {
 
 func TestScanTypeKidInvalidCarriesTheKid(t *testing.T) {
 	_, err := sealed.ScanType(reflect.TypeOf(struct {
-		_ struct{} `seal:"sign=s,encrypt=bad.kid"`
+		_ struct{} `seal:"sign=s,encrypt=bad..kid"`
 		A string   `json:"a" seal:"subject"`
 	}{}))
 	var jerr *jose.Error
 	require.ErrorAs(t, err, &jerr)
-	assert.Equal(t, "bad.kid", jerr.Kid)
+	assert.Equal(t, "bad..kid", jerr.Kid)
 	assert.Contains(t, jerr.Message, "for encrypt")
 }
 

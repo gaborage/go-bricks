@@ -79,7 +79,7 @@ func recordSealRole(ks sealruntime.KeyStore, kids ...string) {
 func provisionedWithRole(families keystore.FamilyEnumerator, keys jose.KeyResolver, logical string, need keystore.Role, side string) error {
 	gens := families.Generations(logical)
 	if len(gens) == 0 {
-		return fmt.Errorf("%w: %s family %q (expected a keystore.keys entry named %s-v<N>)", ErrFamilyUnprovisioned, side, logical, logical)
+		return fmt.Errorf("%w: %s family %q (expected a keystore.keys entry named %s)", ErrFamilyUnprovisioned, side, logical, keystore.Generation{Logical: logical, Version: "v<N>"}.Kid())
 	}
 	for _, gen := range gens {
 		switch {
