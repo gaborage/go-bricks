@@ -15,13 +15,13 @@ import (
 const (
 	// ModeStandalone dials one server and speaks the single-node protocol. It is
 	// the default, and the empty Mode means exactly this.
-	ModeStandalone = "standalone"
+	ModeStandalone = redisrules.ModeStandalone
 
 	// ModeCluster speaks the cluster protocol against the single configured
 	// address, which the client treats as a seed and follows the slot map from.
 	// Required by endpoints that answer MOVED to a single-node client, such as
 	// Amazon ElastiCache Serverless.
-	ModeCluster = "cluster"
+	ModeCluster = redisrules.ModeCluster
 )
 
 // Config holds Redis-specific configuration options. Nothing decodes it: the app
@@ -140,8 +140,8 @@ func (c *Config) Validate() error {
 
 // validate is Validate plus the TLS material projection it built on the way,
 // so a caller that needs both — NewClient — pays for the projection once. The
-// endpoint rules are redisrules', shared with the config layer, because a
-// hand-built Config reaches this door without passing through config.
+// endpoint rules come from redisrules, because a hand-built Config reaches this
+// door without passing through config.
 func (c *Config) validate() (clienttls.Material, error) {
 	m := c.TLS.material()
 	if v := redisrules.Check(&redisrules.Endpoint{

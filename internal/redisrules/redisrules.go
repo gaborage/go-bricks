@@ -1,8 +1,7 @@
-// Package redisrules holds the one Redis endpoint rule set shared by the config
-// layer (startup and the connect door) and cache/redis (a hand-built Config).
-// It lives here because config must not import cache/redis, and cache/redis
-// must not import config (ADR-108). Each caller adapts a Violation into its own
-// error type and key namespace.
+// Package redisrules holds the one Redis endpoint rule set. It lives here so that
+// both config and cache/redis can call it: config must not import cache/redis,
+// and cache/redis must not import config (ADR-108). Each caller adapts a
+// Violation into its own error type and key namespace.
 package redisrules
 
 import (
@@ -13,9 +12,10 @@ import (
 	"github.com/gaborage/go-bricks/internal/clienttls"
 )
 
+// Transport modes. An empty Mode means ModeStandalone.
 const (
-	modeStandalone = "standalone"
-	modeCluster    = "cluster"
+	ModeStandalone = "standalone"
+	ModeCluster    = "cluster"
 )
 
 // Endpoint is the transport-facing slice of a Redis configuration.
@@ -81,13 +81,13 @@ func Check(e *Endpoint) *Violation {
 // database on the way to the cluster client; that error is addressed to the
 // database, the value that cannot be honored, and runs before its 0-15 range.
 func checkMode(e *Endpoint) *Violation {
-	if e.Mode != "" && e.Mode != modeStandalone && e.Mode != modeCluster {
+	if e.Mode != "" && e.Mode != ModeStandalone && e.Mode != ModeCluster {
 		return &Violation{
 			Field: "mode", Message: fmt.Sprintf("'%s' is not supported", e.Mode),
-			Allowed: []string{modeStandalone, modeCluster},
+			Allowed: []string{ModeStandalone, ModeCluster},
 		}
 	}
-	if e.Mode == modeCluster && e.Database != 0 {
+	if e.Mode == ModeCluster && e.Database != 0 {
 		return &Violation{
 			Field:   "database",
 			Message: "must be 0 when mode is cluster: the cluster client has no database selection",
