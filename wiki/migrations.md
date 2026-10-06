@@ -12480,7 +12480,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   with defaults, so a validated tenant cache keeps a zero `Manager`. A block whose every leaf is
   an explicit `0` equals the zero value and passes. **Unchanged**: the root `cache.manager`, still
   accepted and filled (`idlettl` 15m, `cleanupinterval` 5m, `maxsize` 100 single-tenant, 0 kept in
-  multi-tenant); dynamic-source tenant configs, which never reach `config.Validate`.
+  multi-tenant); dynamic-source tenants, whose store-fetched configs skip the static tenant walk
+  `config.Validate` runs.
 - gate: match = a non-zero detect hit under a static tenant's `cache:` in a multi-tenant deployment
   with a static source. no-match = no hit, or every hit sits in a tenants block that deployment does not
   consume.

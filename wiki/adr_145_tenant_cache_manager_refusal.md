@@ -79,8 +79,9 @@ multi-tenant so the pool scales to `multitenant.limits.tenants`).
 
 **Out of scope:**
 
-- Dynamic-source tenant configs resolve at runtime and never reach
-  `config.Validate`, and the #2044 connect door carries `Manager` untouched,
+- Under `source.type: dynamic`, `config.Validate` still runs but skips the
+  static tenant walk, and tenant configs fetched from the store at runtime
+  never pass through it; the #2044 connect door carries `Manager` untouched,
   so a dynamic tenant's `manager` block stays unread and unrefused.
 - `config` and `cache.NewCacheManager` disagree on `cleanupinterval`
   (`cache/manager.go` replaces a non-positive value where config refuses a
