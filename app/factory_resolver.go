@@ -377,12 +377,10 @@ func redisClientConfig(cacheCfg *config.CacheConfig) *redis.Config {
 // redis.NewClient returns two error classes through one return, and they are spelled
 // differently on the way out: a dial failure is not a config-shape error, so it is returned
 // exactly as the cache package raised it, while a config-class error — cache.ConfigError,
-// raised by the client's own shape check and by the TLS material load — is addressed to key,
-// the same as the door's own errors are.
+// raised by the TLS material load the door leaves to the dial — is addressed to key, the same
+// as the door's own errors are.
 //
 // Do not add a config-validation check here: one belongs in config.ResolveCacheSectionForKey.
-// What this function qualifies is the config-class error the cache package raises from inside
-// NewClient — the TLS material load above all, which the door leaves to the dial.
 func connectRedisCache(cacheCfg *config.CacheConfig, key string, log logger.Logger) (cache.Cache, error) {
 	redisCfg := redisClientConfig(cacheCfg)
 

@@ -329,12 +329,12 @@ func TestCacheConnectorAddressesConfigErrorsToTheKey(t *testing.T) {
 	}
 }
 
-// Mock TenantStore implementations for defensive validation tests
+// Mock TenantStore implementations for the connector's error-addressing tests
 
 type mockTenantStoreNilCacheCfg struct{}
 
 func (m *mockTenantStoreNilCacheCfg) CacheConfig(_ context.Context, _ string) (*config.CacheConfig, error) {
-	// Returns (nil, nil) to trigger defensive nil check
+	// Returns (nil, nil) to trigger the connect door's nil refusal
 	return nil, nil
 }
 
@@ -417,7 +417,7 @@ func (m *mockTenantStoreEmptyHost) IsDynamic() bool {
 	return false
 }
 
-// mockTenantStoreBadTLSMaterial passes every app-level check and the Redis
+// mockTenantStoreBadTLSMaterial passes the connect door and the Redis
 // structural check, and fails only where the TLS material is loaded: cavalue
 // is not base64.
 type mockTenantStoreBadTLSMaterial struct{}
