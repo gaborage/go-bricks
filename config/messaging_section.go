@@ -113,10 +113,14 @@ func checkMessagingPublishTimeout(cfg *MessagingConfig) error {
 }
 
 // checkSealSelectorsBeyondSection runs the selector rules that need more than the messaging
-// section: the families the keystore entries form (checkSealSelectorFamilies), then the
-// selectors every operator layer offered, including the ones the merge dropped or replaced
-// (checkSelectorLayers), which no check of the decoded section can see.
+// section: a sequence an operator layer wrote that a later layer replaced
+// (checkLayerSequences), the families the keystore entries form (checkSealSelectorFamilies),
+// then the selectors every operator layer offered, including the ones the merge dropped or
+// replaced (checkSelectorLayers). No check of the decoded section can see the first or the last.
 func checkSealSelectorsBeyondSection(cfg *Config) error {
+	if err := checkLayerSequences(cfg, fieldMessagingSealActive, selectorsSequenceAction); err != nil {
+		return err
+	}
 	if err := checkSealSelectorFamilies(cfg); err != nil {
 		return err
 	}

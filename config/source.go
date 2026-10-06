@@ -26,12 +26,22 @@ type configSource struct {
 	// dropped or a later layer replaced stays here: checkSelectorLayers judges them all, since
 	// two selectors on one path can never both reach the tree (ADR-144).
 	selectors map[string]bool
+	// sequences holds the dotted path of every YAML sequence an operator layer wrote where
+	// the keystore.keys or messaging.seal.active walk expects a map, also recorded before the
+	// merge. A sequence that survives is refused at decode; one a later layer replaced never
+	// reaches decode, so checkLayerSequences refuses it instead (ADR-144).
+	sequences map[string]bool
 }
 
 // newConfigSource returns an empty source: a fresh koanf tree and a presence set in which
 // every key is absent.
 func newConfigSource() *configSource {
-	return &configSource{k: koanf.New(koanfDelim), delivered: map[string]bool{}, selectors: map[string]bool{}}
+	return &configSource{
+		k:         koanf.New(koanfDelim),
+		delivered: map[string]bool{},
+		selectors: map[string]bool{},
+		sequences: map[string]bool{},
+	}
 }
 
 // loadRecording loads a provider through merge, then records as delivered every leaf key of
@@ -61,6 +71,7 @@ type mergeFunc func(src, dest map[string]any) error
 func (s *configSource) recording(merge mergeFunc) mergeFunc {
 	return func(src, dest map[string]any) error {
 		s.recordSelectors(src)
+		s.recordSequences(src)
 		if err := merge(src, dest); err != nil {
 			return err
 		}
@@ -97,25 +108,74 @@ func (s *configSource) record(src, dest map[string]any, prefix string) {
 }
 
 // recordSelectors records the selector names under messaging.seal.active in an incoming
-// layer, before it is merged. Each path segment is matched as mapstructure matches a field
-// name, case-insensitively; below it, a map is a namespace and any other value a selector, as
-// the decode walk reads them.
+// layer, before it is merged. Below that path, a map is a namespace and any other value a
+// selector, as the decode walk reads them.
 func (s *configSource) recordSelectors(src map[string]any) {
-	s.recordSelectorsAt(src, strings.Split(fieldMessagingSealActive, koanfDelim))
+	eachSubtree(src, fieldMessagingSealActive, func(node any) {
+		if tree, isMap := stringMap(node); isMap {
+			s.recordSelectorTree(tree, "")
+		}
+	})
 }
 
-func (s *configSource) recordSelectorsAt(node any, path []string) {
+// recordSequences records where an incoming layer holds a sequence that the decode walk
+// would refuse: at keystore.keys or at any name below it, down to the first entry (inside an
+// entry the field schema governs, and a later layer that sets a source there drops no entry),
+// and at messaging.seal.active or anywhere below it.
+func (s *configSource) recordSequences(src map[string]any) {
+	eachSubtree(src, fieldKeystoreKeys, func(node any) { s.recordSequencesBelow(node, fieldKeystoreKeys, true) })
+	eachSubtree(src, fieldMessagingSealActive, func(node any) { s.recordSequencesBelow(node, fieldMessagingSealActive, false) })
+}
+
+// recordSequencesBelow records node at path when it is a sequence, and otherwise descends
+// into a map's children; skipEntries leaves out a child the keystore walk reads as an entry.
+func (s *configSource) recordSequencesBelow(node any, path string, skipEntries bool) {
+	if isSequence(node) {
+		s.sequences[path] = true
+		return
+	}
+	tree, isMap := stringMap(node)
+	if !isMap {
+		return
+	}
+	for key, child := range tree {
+		if skipEntries && isKeyEntry(child) {
+			continue
+		}
+		s.recordSequencesBelow(child, path+koanfDelim+key, skipEntries)
+	}
+}
+
+// isKeyEntry reports whether node is a map the keystore walk reads as an entry: one with a
+// child that names an entry field.
+func isKeyEntry(node any) bool {
+	tree, isMap := stringMap(node)
+	if !isMap {
+		return false
+	}
+	_, isEntry := entryField(tree)
+	return isEntry
+}
+
+// eachSubtree calls visit with every node of src at the dotted path, each segment matched as
+// mapstructure matches a field name, case-insensitively, so a layer that writes Keystore: is
+// read where decode reads it.
+func eachSubtree(src map[string]any, path string, visit func(node any)) {
+	visitSubtree(src, strings.Split(path, koanfDelim), visit)
+}
+
+func visitSubtree(node any, path []string, visit func(node any)) {
+	if len(path) == 0 {
+		visit(node)
+		return
+	}
 	section, isMap := stringMap(node)
 	if !isMap {
 		return
 	}
-	if len(path) == 0 {
-		s.recordSelectorTree(section, "")
-		return
-	}
 	for key, value := range section {
 		if strings.EqualFold(key, path[0]) {
-			s.recordSelectorsAt(value, path[1:])
+			visitSubtree(value, path[1:], visit)
 		}
 	}
 }

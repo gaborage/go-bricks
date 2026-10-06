@@ -23,6 +23,15 @@ func normalizeKeyStore(cfg *KeyStoreConfig) {
 	}
 }
 
+// checkKeyStoreWithLayers refuses a sequence an operator layer wrote under keystore.keys that
+// a later layer replaced (checkLayerSequences), then checks the decoded section.
+func checkKeyStoreWithLayers(cfg *Config) error {
+	if err := checkLayerSequences(cfg, fieldKeystoreKeys, keysSequenceAction); err != nil {
+		return err
+	}
+	return checkKeyStore(&cfg.KeyStore)
+}
+
 // checkKeyStore judges the floor first, then the entry names, then each entry.
 // A set SecretMinLength must be at least DefaultKeyStoreSecretMinLength — the
 // floor is mandatory and a set value can only raise it (ADR-095) — and is

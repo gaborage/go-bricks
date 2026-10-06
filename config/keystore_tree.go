@@ -74,7 +74,7 @@ func keystoreTreeHook() mapstructure.DecodeHookFuncType {
 // judge, as before.
 func readKeysNode(data any) (any, error) {
 	if isSequence(data) {
-		return nil, sequenceError(fieldKeystoreKeys, "write the entries as a map, one key per name segment (keys: {tokens: {our: {public: …}}})")
+		return nil, sequenceError(fieldKeystoreKeys, keysSequenceAction)
 	}
 	tree, isMap := stringMap(data)
 	if !isMap {
@@ -122,7 +122,7 @@ func replaceSelectorTree(data any) (any, error) {
 			continue
 		}
 		if isSequence(section[key]) {
-			return nil, sequenceError(fieldMessagingSealActive, "write the selectors as a map, one key per name segment (active: {payments: {sign: v2}})")
+			return nil, sequenceError(fieldMessagingSealActive, selectorsSequenceAction)
 		}
 		tree, isMap := stringMap(section[key])
 		if !isMap {
@@ -149,6 +149,11 @@ func isSequence(node any) bool {
 	return kind == reflect.Slice || kind == reflect.Array
 }
 
+const (
+	keysSequenceAction      = "write the entries as a map, one key per name segment (keys: {tokens: {our: {public: …}}})"
+	selectorsSequenceAction = "write the selectors as a map, one key per name segment (active: {payments: {sign: v2}})"
+)
+
 func sequenceError(field, action string) *ConfigError {
 	return &ConfigError{
 		Category: errCategoryInvalid,
@@ -156,6 +161,25 @@ func sequenceError(field, action string) *ConfigError {
 		Message:  "holds a sequence where a map was expected",
 		Action:   action,
 	}
+}
+
+// checkLayerSequences refuses a sequence an operator layer wrote under root (keystore.keys
+// or messaging.seal.active, recorded before the merge) that never reached decode. Decode
+// refuses a sequence that survives the merge; a map a later layer sets at the same path (the
+// env overlay, or a variable) replaces it instead, and the entries or selectors it held were
+// dropped in silence. A hand-built Config has no layers.
+func checkLayerSequences(cfg *Config, root, action string) error {
+	if cfg.src == nil {
+		return nil
+	}
+	for _, path := range slices.Sorted(maps.Keys(cfg.src.sequences)) {
+		if path == root || strings.HasPrefix(path, root+keyname.Sep) {
+			err := sequenceError(path, action)
+			err.Message += ", and a later layer replaced it, which would drop what it held"
+			return err
+		}
+	}
+	return nil
 }
 
 // readKeyTree flattens keystore.keys: every node with a field child (public,

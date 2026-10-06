@@ -134,7 +134,7 @@ func check(cfg *Config) error {
 		return fmt.Errorf("messaging config: %w", err)
 	}
 
-	if err := checkKeyStore(&cfg.KeyStore); err != nil {
+	if err := checkKeyStoreWithLayers(cfg); err != nil {
 		return fmt.Errorf("keystore config: %w", err)
 	}
 

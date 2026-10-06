@@ -344,6 +344,18 @@ func TestKeystoreTreeRefusesAnEmptySelectorNamespace(t *testing.T) {
 			assert.Equal(t, "set the selector to a generation (v<N>), or remove the key", cfgErr.Action)
 		})
 	}
+
+	// The real Load reaches the same walk from a YAML file, and a variable's
+	// scalar on the same path is dropped over the map, not merged into it.
+	t.Run("yaml_through_load", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, "messaging:\n  seal:\n    active:\n      payments: {}\n", "", nil)
+		requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty map")
+	})
+	t.Run("yaml_under_a_variable_scalar", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, "messaging:\n  seal:\n    active:\n      payments: {}\n", "",
+			map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS": "v2"})
+		requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty map")
+	})
 }
 
 // TestConfigUnmarshalReadsTheKeystoreTree: the public Config.Unmarshal door
@@ -823,6 +835,137 @@ messaging:
 			map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN-EU": "v1"})
 		require.NoError(t, err)
 		assert.Equal(t, map[string]string{"payments-sign": "v2", "payments-sign-eu": "v1"}, cfg.Messaging.Seal.Active)
+	})
+}
+
+// TestLoadRefusesASequenceALaterLayerReplaced: a sequence under keystore.keys
+// or messaging.seal.active is refused at decode, but only one that survives the
+// merge reaches decode. A map from a later layer (the env overlay, or a
+// variable) replaces a sequence at its path, so the entries or selectors the
+// sequence held were dropped and the config booted. Each layer's sequences are
+// recorded before the merge, as its selectors are, and refused after decode.
+func TestLoadRefusesASequenceALaterLayerReplaced(t *testing.T) {
+	const keysSequence = `
+keystore:
+  keys:
+    - tokens:
+        our:
+          public: {value: our-pub}
+`
+	const selectorSequence = `
+messaging:
+  seal:
+    active:
+      - payments-sign: v2
+`
+	keysAction := "write the entries as a map, one key per name segment (keys: {tokens: {our: {public: …}}})"
+	selectorsAction := "write the selectors as a map, one key per name segment (active: {payments: {sign: v2}})"
+	tests := []struct {
+		name       string
+		base       string
+		overlay    string
+		env        map[string]string
+		wantField  string
+		wantAction string
+		wantWrap   string
+	}{
+		{
+			name:       "keys_sequence_under_a_variable",
+			base:       keysSequence,
+			env:        map[string]string{"KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE": "sig-pub"},
+			wantField:  "keystore.keys",
+			wantAction: keysAction,
+			wantWrap:   "keystore config: ",
+		},
+		{
+			name:       "keys_sequence_under_an_overlay_map",
+			base:       keysSequence,
+			overlay:    "keystore:\n  keys:\n    signing:\n      public: {value: sig-pub}\n",
+			wantField:  "keystore.keys",
+			wantAction: keysAction,
+			wantWrap:   "keystore config: ",
+		},
+		{
+			name:       "empty_keys_sequence_under_a_variable",
+			base:       "keystore:\n  keys: []\n",
+			env:        map[string]string{"KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE": "sig-pub"},
+			wantField:  "keystore.keys",
+			wantAction: keysAction,
+			wantWrap:   "keystore config: ",
+		},
+		{
+			name:       "namespace_sequence_under_a_variable",
+			base:       "keystore:\n  keys:\n    tokens:\n      - our:\n          public: {value: our-pub}\n",
+			env:        map[string]string{"KEYSTORE_KEYS_TOKENS_PEER_PUBLIC_VALUE": "peer-pub"},
+			wantField:  "keystore.keys.tokens",
+			wantAction: keysAction,
+			wantWrap:   "keystore config: ",
+		},
+		{
+			name:       "capitalized_keys_sequence_beside_a_variable",
+			base:       "Keystore:\n  Keys:\n    - tokens:\n        our:\n          public: {value: our-pub}\n",
+			env:        map[string]string{"KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE": "sig-pub"},
+			wantField:  "keystore.keys",
+			wantAction: keysAction,
+			wantWrap:   "keystore config: ",
+		},
+		{
+			name:       "selector_sequence_under_a_variable",
+			base:       selectorSequence,
+			env:        map[string]string{"MESSAGING_SEAL_ACTIVE_ORDERS": "v1"},
+			wantField:  "messaging.seal.active",
+			wantAction: selectorsAction,
+			wantWrap:   "messaging config: ",
+		},
+		{
+			name:       "selector_sequence_under_an_overlay_map",
+			base:       selectorSequence,
+			overlay:    "messaging:\n  seal:\n    active:\n      orders: v1\n",
+			wantField:  "messaging.seal.active",
+			wantAction: selectorsAction,
+			wantWrap:   "messaging config: ",
+		},
+		{
+			name:       "nested_selector_sequence_under_a_variable",
+			base:       "messaging:\n  seal:\n    active:\n      payments:\n        - sign: v2\n",
+			env:        map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_ENCRYPT": "v1"},
+			wantField:  "messaging.seal.active.payments",
+			wantAction: selectorsAction,
+			wantWrap:   "messaging config: ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadKeystoreYAML(t, tt.base, tt.overlay, tt.env)
+			cfgErr := requireTreeError(t, err, tt.wantField, "holds a sequence where a map was expected")
+			assert.Contains(t, cfgErr.Message, "a later layer replaced it")
+			assert.Equal(t, tt.wantAction, cfgErr.Action)
+			assert.Contains(t, err.Error(), "invalid configuration: "+tt.wantWrap)
+		})
+	}
+
+	// Inside an entry the field schema governs: a later layer that sets a
+	// source over a sequence there overrides one field of one entry and drops
+	// no entry, as it did before.
+	t.Run("sequence_inside_an_entry_under_a_variable_boots", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "keystore:\n  keys:\n    tokens:\n      public: [a, b]\n", "",
+			map[string]string{"KEYSTORE_KEYS_TOKENS_PUBLIC_VALUE": "tok-pub"})
+		require.NoError(t, err)
+		assert.Equal(t, "tok-pub", cfg.KeyStore.Keys["tokens"].Public.Value)
+	})
+
+	t.Run("map_over_map_boots", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "keystore:\n  keys:\n    tokens:\n      our:\n        public: {value: our-pub}\n",
+			"messaging:\n  seal:\n    active:\n      payments-sign: v1\n",
+			map[string]string{"KEYSTORE_KEYS_TOKENS_PEER_PUBLIC_VALUE": "peer-pub"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"tokens.our", "tokens.peer"}, slices.Sorted(maps.Keys(cfg.KeyStore.Keys)))
+	})
+
+	// A sequence elsewhere is no keystore or selector node: it is not recorded.
+	t.Run("sequence_outside_both_subtrees_boots", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, "log:\n  sensitivefields: [pan]\nkeystore:\n  other: [x]\n", "", nil)
+		require.NoError(t, err)
 	})
 }
 
