@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -361,4 +362,48 @@ func TestValidateKeyStorePKCS12PasswordEnvMustBeAName(t *testing.T) {
 	assert.NotContains(t, err.Error(), literal)
 	require.ErrorContains(t, err, "not an environment variable name")
 	require.ErrorContains(t, err, "keystore.keys.vts.pkcs12.password.env")
+}
+
+// keysNamed builds a hand-built keystore (the ADR-064 door, which never saw the
+// tree reader) whose entries are all complete public entries.
+func keysNamed(names ...string) *KeyStoreConfig {
+	keys := make(map[string]KeyPairConfig, len(names))
+	for _, name := range names {
+		keys[name] = KeyPairConfig{Public: KeySourceConfig{Value: "cHVi"}}
+	}
+	return &KeyStoreConfig{Keys: keys}
+}
+
+// TestCheckKeyStoreRefusesMalformedGenerations: a name carrying a generation
+// marker that is no generation fails at Validate with its rename spelled out.
+// The family fixes the marker: a dotted family takes a final v<N> segment, a
+// family without '.' keeps -v<N>.
+func TestCheckKeyStoreRefusesMalformedGenerations(t *testing.T) {
+	const noFamilyAction = "name a generation <family>.v<N> (family with '.') or <family>-v<N> (family without '.')"
+	tests := []struct {
+		entry     string
+		wantMsg   string
+		wantInAct string
+	}{
+		{entry: "payments.sign-v1", wantMsg: "a dotted family names its generations with a final v<N> segment", wantInAct: "rename it payments.sign.v1"},
+		{entry: "audit.v1", wantMsg: `family "audit" has no '.', so its generations are named audit-v<N>`, wantInAct: "rename it audit-v1, or give the family a second segment (audit.<purpose>.v1)"},
+		{entry: "payments-sign.v1", wantMsg: `family "payments-sign" has no '.'`, wantInAct: "rename it payments-sign-v1"},
+		{entry: "x.y.v0", wantMsg: `generation "v0" must be a positive integer without leading zeros`, wantInAct: "rename it x.y.v1"},
+		{entry: "x.y.v01", wantMsg: `generation "v01" must be a positive integer`, wantInAct: "rename it x.y.v1"},
+		{entry: "x-v0", wantMsg: `generation "v0" must be a positive integer`, wantInAct: "rename it x-v1"},
+		{entry: "x.v1.v2", wantMsg: `"x.v1" before it is no family`, wantInAct: noFamilyAction},
+		{entry: "x-v1-v2", wantMsg: `"x-v1" before it is no family`, wantInAct: noFamilyAction},
+		{entry: "-v1", wantMsg: `"" before it is no family`, wantInAct: noFamilyAction},
+		{entry: strings.Repeat("a", 65) + "-v1", wantMsg: "is 65 bytes, maximum is 64", wantInAct: "shorten the family"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			err := checkKeyStore(keysNamed(tt.entry))
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "keystore.keys."+tt.entry, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMsg)
+			assert.Contains(t, cfgErr.Action, tt.wantInAct)
+		})
+	}
 }

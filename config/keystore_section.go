@@ -38,8 +38,9 @@ func checkKeyStoreWithLayers(cfg *Config) error {
 // alone since white-box tests call checkKeyStore directly, before normalize
 // has filled it. Each entry is
 // either an RSA pair (public required with exactly one source, private
-// optional) or a symmetric secret — a mixed entry is rejected. Each entry's
-// NAME is judged first, against the env-reachability grammar.
+// optional) or a symmetric secret — a mixed entry is rejected. The generation
+// entry names are judged first (checkKeyFamilies), then each entry's NAME
+// against the env-reachability grammar, before its sources.
 func checkKeyStore(cfg *KeyStoreConfig) error {
 	if cfg.SecretMinLength != nil && *cfg.SecretMinLength < DefaultKeyStoreSecretMinLength {
 		err := NewValidationError(fieldKeystoreMinLength,
@@ -58,6 +59,10 @@ func checkKeyStore(cfg *KeyStoreConfig) error {
 		names = append(names, name)
 	}
 	slices.Sort(names)
+
+	if err := checkKeyFamilies(names); err != nil {
+		return err
+	}
 
 	for _, name := range names {
 		// A '.' collides with koanf's path delimiter: the constructed section
@@ -90,6 +95,43 @@ func checkKeyStore(cfg *KeyStoreConfig) error {
 // hasEmptySegment reports whether a dotted name has an empty segment.
 func hasEmptySegment(name string) bool {
 	return slices.Contains(strings.Split(name, keyname.Sep), "")
+}
+
+// checkKeyFamilies refuses what cannot be a family among the sorted entry
+// names: a name that carries a Generation marker but is no Generation, with
+// its rename.
+func checkKeyFamilies(names []string) error {
+	for _, name := range names {
+		if logical, version, form := keyname.SplitGeneration(name); form == keyname.Malformed {
+			return malformedGenerationError(name, logical, version)
+		}
+	}
+	return nil
+}
+
+// malformedGenerationError names why a name carrying a Generation marker is no
+// Generation, with the rename when the marker is the one its family does not
+// take.
+func malformedGenerationError(name, logical, version string) *ConfigError {
+	err := &ConfigError{Category: errCategoryInvalid, Field: fmt.Sprintf(keystoreKeysFieldPrefix, name)}
+	switch fault := keyname.CheckLogical(logical); {
+	case fault == keyname.LogicalTooLong:
+		err.Message = fmt.Sprintf("family %q is %d bytes, maximum is %d", logical, len(logical), keyname.MaxLogicalLen)
+		err.Action = "shorten the family"
+	case fault != keyname.LogicalOK:
+		err.Message = fmt.Sprintf("ends in a generation marker, but %q before it is no family", logical)
+		err.Action = "name a generation <family>.v<N> (family with '.') or <family>-v<N> (family without '.'), with a family that does not end in a marker itself"
+	case !keyname.ValidVersion(version):
+		err.Message = fmt.Sprintf("generation %q must be a positive integer without leading zeros (v1, not v0 or v01)", version)
+		err.Action = "rename it " + keyname.GenerationName(logical, "v1") + " or another canonical version"
+	case strings.Contains(logical, keyname.Sep):
+		err.Message = "a dotted family names its generations with a final v<N> segment"
+		err.Action = "rename it " + keyname.GenerationName(logical, version)
+	default:
+		err.Message = fmt.Sprintf("family %q has no '.', so its generations are named %s-v<N>", logical, logical)
+		err.Action = fmt.Sprintf("rename it %s, or give the family a second segment (%s.<purpose>.%s)", keyname.GenerationName(logical, version), logical, version)
+	}
+	return err
 }
 
 // validateKeyEntry validates a single keystore entry. An entry is exactly one
