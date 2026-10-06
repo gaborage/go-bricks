@@ -149,7 +149,9 @@ provisioned family only in `-` versus `.` fails `config.Validate`, because it wo
 nothing. So do two families, or two selectors, that nest once `-` is read as `.`
 (`payments-sign` beside `payments.sign.eu`): a POSIX flip of the first selector lands on the
 path that holds the second, and the merge drops it in silence. Two families without `.`
-(`payments-sign`, `payments-sign-eu`) are exempt, as before.
+(`payments-sign`, `payments-sign-eu`) are exempt, as before. Two selectors that nest as written
+(`payments.sign`, `payments.sign.eu`) fail too when they come from different YAML files or
+variables: the merge keeps only one, so each layer's selectors are judged before it.
 
 ```yaml
 keystore:

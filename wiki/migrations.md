@@ -12501,7 +12501,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   config that boots today meets this rule. A sequence under `keystore.keys` or
   `messaging.seal.active`, which mapstructure merged into a map, is refused, empty or not, and
   `Config.Unmarshal` into one `KeyPairConfig` refuses a node holding a child that is no entry
-  field (a namespace's path, such as `keystore.keys.tokens` holding `tokens.our`).
+  field (a namespace's path, such as `keystore.keys.tokens` holding `tokens.our`). Two
+  selectors that nest as written fail `Validate` even though the merge kept only one of them:
+  every layer's selectors are judged before the merge. No config that boots on v0.71.1 meets
+  this rule: every such pair puts a map on a selector path, which v0.71.1 refused at decode
+  (`expected type 'string', got unconvertible type 'map[string]interface {}'`).
 - gate: match = any (a), (b), (c), (d) or (e) hit. no-match = entries carry only fields and sources,
   sources only their keys, no look-alike or quoted dotted name exists, and no pinned error text.
 - before: `keys: {tokens: {public: …, our: {public: …}}}` booted, with `our` silently dropped;

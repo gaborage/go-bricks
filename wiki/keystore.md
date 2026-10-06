@@ -286,9 +286,11 @@ A selector key is a family name: a dotted family is written nested, exactly like
 entries. `config.Validate` checks the shape — each key a dotted path of `[a-z0-9-]` segments,
 no two keys that differ only in `-` versus `.` or nest once `-` is read as `.` (unless neither
 contains `.`), each value `v<N>` with `N` a positive integer without leading zeros — and
-refuses a selector that differs from a provisioned family only in
-`-` versus `.`: `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2` beside family `payments-sign` would
-select nothing and leave the old generation sealing. Then
+judges nesting across every YAML file and variable before they are merged, since the merge
+keeps only one of two selectors on one path (`payments.sign` in YAML beside
+`MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN_EU`). It also refuses a selector that differs from a
+provisioned family only in `-` versus `.`: `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2` beside
+family `payments-sign` would select nothing and leave the old generation sealing. Then
 `keystore.ActiveGeneration(store, active, logical)` resolves it against the keystore at
 startup, once per Logical kid the producer resolves, sign and encrypt alike:
 

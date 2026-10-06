@@ -176,8 +176,20 @@ replace one another in silence:
   under `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN`.
 
 Once families nest neither as written nor after folding, no valid config needs both
-selectors. The selector rule then refuses the stale or mistyped selector that would swallow a
-flip whatever is provisioned.
+selectors, so the selector rule refuses the stale or mistyped one, whatever is provisioned.
+Judged on the merged section, though, it sees only a pair that survived as two paths: a
+folded pair (`payments-sign` beside `payments.sign.eu`). Two selectors that nest as written
+(`payments.sign` and `payments.sign.eu`, or `payments` and `payments.sign`) share one path,
+a scalar and a map, so at most one reaches the tree, and the family the lost one named boots
+with no selector. Sealing then fails at `Init` with `no messaging.seal.active.payments.sign
+selector`, naming a selector that was written. The rule therefore also reads what each layer
+offered, before the merge (`checkSelectorLayers`): `Load` records every selector name a YAML
+file holds as that file is merged, and every `MESSAGING_SEAL_ACTIVE_*` variable as the
+environment provider reads it, since two variables on one path already collide in the
+provider's unflatten. Any two of those that nest, as written or after folding, fail startup
+with `selectors "payments.sign" and "payments.sign.eu" nest: one path cannot hold both, and
+loading kept only one of them`. A hand-built `Config` has no layers and meets only the rule
+on its section.
 
 ### 4. Generations
 
@@ -262,6 +274,7 @@ is `keystore.keys.<name>[.<field>[.<source>]]` and can be reached by an environm
 | Look-alike selectors | `messaging.seal.active.payments.sign` | `selectors "payments-sign" and "payments.sign" differ only in '-' versus '.'` |
 | Nested selectors | `messaging.seal.active.payments.sign.eu` | `selectors "payments-sign" and "payments.sign.eu" nest when '-' is read as '.': merged from YAML and the environment, one replaces the other in silence` → keep only the selector of the provisioned family |
 | Selector for a look-alike family | `messaging.seal.active.payments.sign` | `selects "payments.sign", which is not provisioned; "payments-sign" is (v1, v2); MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches only payments.sign` → set the `payments-sign` selector in YAML or as `MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN`, or rename the family |
+| Nested selectors, one lost in the merge | `messaging.seal.active.payments.sign.eu` | `selectors "payments.sign" and "payments.sign.eu" nest: one path cannot hold both, and loading kept only one of them` → remove the stale selector from every YAML file and variable that sets it |
 
 Three message changes outside the table:
 

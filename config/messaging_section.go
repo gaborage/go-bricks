@@ -112,6 +112,40 @@ func checkMessagingPublishTimeout(cfg *MessagingConfig) error {
 	return nil
 }
 
+// checkSealSelectorsBeyondSection runs the selector rules that need more than the messaging
+// section: the families the keystore entries form (checkSealSelectorFamilies), then the
+// selectors every operator layer offered, including the ones the merge dropped or replaced
+// (checkSelectorLayers), which no check of the decoded section can see.
+func checkSealSelectorsBeyondSection(cfg *Config) error {
+	if err := checkSealSelectorFamilies(cfg); err != nil {
+		return err
+	}
+	return checkSelectorLayers(cfg)
+}
+
+// checkSelectorLayers judges the selectors every operator layer offered (the YAML files, the
+// environment variables), not only the ones the merge kept. Two selectors that nest as
+// written live on one path, a scalar and a map, so the layers cannot both deliver them: an
+// environment scalar over a YAML map is dropped, anything else replaces, and two variables
+// collide in the provider's unflatten. checkMessagingSeal sees only the survivor, so the
+// family the lost selector named booted with none and failed when sealing resolved, naming a
+// selector that had been written. The pair is refused here instead. A pair that nests only
+// once '-' is read as '.' is two paths and reaches checkMessagingSeal intact; it is judged here
+// too only when a later layer dropped one of the two. A hand-built Config has no layers.
+func checkSelectorLayers(cfg *Config) error {
+	if cfg.src == nil {
+		return nil
+	}
+	prefix, name, found := keyname.FirstFoldedPrefix(slices.Sorted(maps.Keys(cfg.src.selectors)))
+	if !found {
+		return nil
+	}
+	err := NewValidationError(fieldMessagingSealActive+"."+name,
+		fmt.Sprintf("selectors %q and %q %s: one path cannot hold both, and loading kept only one of them", prefix, name, nestClause(prefix, name)))
+	err.Action = "remove the stale selector from every YAML file and variable that sets it: provisioned families never nest, so only one of the two can name a family"
+	return err
+}
+
 // checkMessagingSeal judges the Activation selector's shape: every key is a
 // family name, a dotted path of env-reachable segments (ADR-144), no two keys
 // differ only in '-' versus '.' or nest once '-' is read as '.', and every

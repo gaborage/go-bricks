@@ -140,7 +140,7 @@ func check(cfg *Config) error {
 
 	// Cross-section: a selector is judged against the families the keystore
 	// entries form, so it runs after both sections have been checked on their own.
-	if err := checkSealSelectorFamilies(cfg); err != nil {
+	if err := checkSealSelectorsBeyondSection(cfg); err != nil {
 		return fmt.Errorf("messaging config: %w", err)
 	}
 

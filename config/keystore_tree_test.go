@@ -731,6 +731,101 @@ messaging:
 	})
 }
 
+// TestLoadRefusesSelectorsThatNestAcrossLayers: two selectors that nest as
+// written live on one path, a scalar and a map, so the YAML files and the
+// environment cannot both deliver them. The merge keeps one in silence (an
+// environment scalar over a YAML map is dropped, anything else replaces), and
+// the rule that refuses nesting selectors judged only the survivor: startup
+// passed and sealing failed at Init with "no messaging.seal.active.payments.sign
+// selector", a selector that had been written. The rule now reads every
+// selector a layer offered, before the merge.
+func TestLoadRefusesSelectorsThatNestAcrossLayers(t *testing.T) {
+	const family = `
+app:
+  env: development
+keystore:
+  keys:
+    payments:
+      sign:
+        v1:
+          public: {value: v1-pub}
+        v2:
+          public: {value: v2-pub}
+`
+	const nestedSelector = `
+messaging:
+  seal:
+    active:
+      payments:
+        sign: v2
+`
+	const action = "remove the stale selector from every YAML file and variable that sets it: provisioned families never nest, so only one of the two can name a family"
+	tests := []struct {
+		name      string
+		overlay   string
+		env       map[string]string
+		wantField string
+		wantPair  string
+	}{
+		{
+			name:      "env_map_replaces_yaml_selector",
+			env:       map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN_EU": "v1"},
+			wantField: "messaging.seal.active.payments.sign.eu",
+			wantPair:  `selectors "payments.sign" and "payments.sign.eu" nest`,
+		},
+		{
+			name:      "env_scalar_dropped_over_yaml_map",
+			env:       map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS": "v1"},
+			wantField: "messaging.seal.active.payments.sign",
+			wantPair:  `selectors "payments" and "payments.sign" nest`,
+		},
+		{
+			name:      "overlay_scalar_replaces_base_map",
+			overlay:   "messaging:\n  seal:\n    active:\n      payments: v1\n",
+			wantField: "messaging.seal.active.payments.sign",
+			wantPair:  `selectors "payments" and "payments.sign" nest`,
+		},
+		{
+			name:      "overlay_map_replaces_base_selector",
+			overlay:   "messaging:\n  seal:\n    active:\n      payments:\n        sign:\n          eu: v1\n",
+			wantField: "messaging.seal.active.payments.sign.eu",
+			wantPair:  `selectors "payments.sign" and "payments.sign.eu" nest`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadKeystoreYAML(t, family+nestedSelector, tt.overlay, tt.env)
+			cfgErr := requireTreeError(t, err, tt.wantField, tt.wantPair)
+			assert.Contains(t, cfgErr.Message, "one path cannot hold both, and loading kept only one of them")
+			assert.Equal(t, action, cfgErr.Action)
+		})
+	}
+
+	// Two variables are one layer, but koanf unflattens them into one tree
+	// with the same loss, in map order: the rule reads each variable's name.
+	t.Run("two_variables_that_nest", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, family, "", map[string]string{
+			"MESSAGING_SEAL_ACTIVE_PAYMENTS":      "v1",
+			"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN": "v2",
+		})
+		requireTreeError(t, err, "messaging.seal.active.payments.sign", `selectors "payments" and "payments.sign" nest`)
+	})
+
+	t.Run("same_path_override_boots", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, family+nestedSelector, "messaging:\n  seal:\n    active:\n      payments:\n        sign: v1\n",
+			map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN": "v2"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments.sign": "v2"}, cfg.Messaging.Seal.Active)
+	})
+
+	t.Run("hyphen_only_selectors_across_layers_boot", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "messaging:\n  seal:\n    active:\n      payments-sign: v2\n", "",
+			map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS-SIGN-EU": "v1"})
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments-sign": "v2", "payments-sign-eu": "v1"}, cfg.Messaging.Seal.Active)
+	})
+}
+
 // TestLoadKeystoreLayerPrecedence: a dotted entry is one koanf path, so the
 // three operator layers override it leaf by leaf exactly as any other key —
 // environment over the env overlay over the base file — and the presence

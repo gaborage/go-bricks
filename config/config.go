@@ -106,6 +106,9 @@ func Load() (*Config, error) {
 			if configSections[k] {
 				return "", nil
 			}
+			// Before the provider unflattens: two variables on one selector path collide
+			// there, and only one would reach the merge (checkSelectorLayers).
+			src.recordSelectorKey(k)
 			return k, v
 		},
 	}), nil, skipScalarOverMapMerge); err != nil {
