@@ -1162,12 +1162,20 @@ func defaultCacheConnectorFor(store TenantStore) cache.Connector {
 }
 
 func TestCacheConnectorDialsAnUnvalidatedSection(t *testing.T) {
-	for _, key := range []string{"", keyPrefixTenant} {
-		t.Run("key_"+key, func(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "root_key", key: ""},
+		{name: "tenant_key", key: keyPrefixTenant},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			mr := miniredis.RunT(t)
 
 			c, err := defaultCacheConnectorFor(&fixedCacheSectionStore{section: unvalidatedSectionFor(mr)})(
-				context.Background(), key)
+				context.Background(), tt.key)
 
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = c.Close() })
@@ -1192,13 +1200,35 @@ func TestCacheConnectorNamespacesAnUnvalidatedTenantUnderTheAppName(t *testing.T
 
 func TestCacheConnectorRefusalNeverDials(t *testing.T) {
 	tests := []struct {
-		name   string
-		mutate func(*config.CacheConfig)
+		name      string
+		mutate    func(*config.CacheConfig)
+		wantField string
+		wantCat   string
 	}{
-		{name: "database_out_of_range", mutate: func(s *config.CacheConfig) { s.Redis.Database = 16 }},
-		{name: "negative_pool_size", mutate: func(s *config.CacheConfig) { s.Redis.PoolSize = -1 }},
-		{name: "username_without_password", mutate: func(s *config.CacheConfig) { s.Redis.Username = "svc" }},
-		{name: "disabled", mutate: func(s *config.CacheConfig) { s.Enabled = false }},
+		{
+			name:      "database_out_of_range",
+			mutate:    func(s *config.CacheConfig) { s.Redis.Database = 16 },
+			wantField: "multitenant.tenants.acme.cache.redis.database",
+			wantCat:   "invalid",
+		},
+		{
+			name:      "negative_pool_size",
+			mutate:    func(s *config.CacheConfig) { s.Redis.PoolSize = -1 },
+			wantField: "multitenant.tenants.acme.cache.redis.poolsize",
+			wantCat:   "invalid",
+		},
+		{
+			name:      "username_without_password",
+			mutate:    func(s *config.CacheConfig) { s.Redis.Username = "svc" },
+			wantField: "multitenant.tenants.acme.cache.redis.username",
+			wantCat:   "invalid",
+		},
+		{
+			name:      "disabled",
+			mutate:    func(s *config.CacheConfig) { s.Enabled = false },
+			wantField: "multitenant.tenants.acme.cache",
+			wantCat:   "not_configured",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1213,6 +1243,8 @@ func TestCacheConnectorRefusalNeverDials(t *testing.T) {
 			assert.Nil(t, c)
 			var cfgErr *config.ConfigError
 			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Equal(t, tt.wantCat, cfgErr.Category)
 			assert.Zero(t, mr.TotalConnectionCount())
 		})
 	}
