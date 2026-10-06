@@ -360,6 +360,12 @@ Three message changes outside the table:
   keep ADR-090 §4's runtime-dependent posture. They are valid one-segment names, not a
   compatibility shim, because they are already persisted in sealed bodies, inbox keys and
   partner kid pins.
+- **`go-bricks-migrate`.** Its `--source-config` file is often the service's own config, so the
+  CLI decodes it with `config.LoadFromMap`, the framework's decoder, instead of a local copy
+  of the hook chain. That copy lacked the tree reader: a nested selector aborted the load and
+  dotted names decoded as phantom entries. The CLI pins a released go-bricks, so it reads
+  dotted names, and refuses what this ADR refuses at decode, from its pin bump to this
+  release; until then it decodes as the pinned release's `Load` does.
 - **Known limitation: an entry nothing references.** The rules above judge names against each
   other, never against their readers: no mechanism reports a `keystore.keys` entry that no
   route, declaration or module asks for. Take leftover variables kept after the YAML moved

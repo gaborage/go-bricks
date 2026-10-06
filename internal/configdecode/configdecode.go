@@ -1,7 +1,7 @@
 // Package configdecode holds mapstructure decode hooks shared by the go-bricks config
 // and migration packages, so the decode guards have a single source of truth
-// inside the module. The tools/migration CLI is a separate module and cannot import
-// go-bricks/internal, so it keeps a byte-identical local copy in sync with this one.
+// inside the module. The tools/migration CLI keeps no copy: it decodes its config file
+// through config.LoadFromMap, so it runs these hooks at the go-bricks version it pins.
 package configdecode
 
 import (
@@ -22,9 +22,6 @@ var durationType = reflect.TypeOf(time.Duration(0))
 // framework-wide "unset -> use default" idiom and passes; a bool is never a duration and is
 // always rejected; a source that is already time.Duration (e.g. a typed default) passes.
 // Guards exact time.Duration only, matching StringToTimeDurationHookFunc's scope.
-//
-// Mirrored in tools/migration/internal/commands/common.go (a separate module that cannot
-// import go-bricks/internal) — keep the two in sync.
 func NumericToDurationGuardHookFunc() mapstructure.DecodeHookFunc {
 	return func(f, t reflect.Type, data any) (any, error) {
 		if t != durationType {
@@ -71,8 +68,6 @@ func NumericToDurationGuardHookFunc() mapstructure.DecodeHookFunc {
 // time.Duration is exempt: StringToTimeDurationHookFunc owns that target and already fails
 // loudly on an empty string. Every other target is untouched — an empty string is a legal
 // string, and the database-identity subset is ADR-051's to judge.
-//
-// Mirrored in tools/migration/internal/commands/common.go — keep the two in sync.
 func EmptyStringToScalarGuardHookFunc() mapstructure.DecodeHookFunc {
 	return func(f, t reflect.Type, data any) (any, error) {
 		if f.Kind() != reflect.String {

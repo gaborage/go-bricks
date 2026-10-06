@@ -12506,6 +12506,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   every layer's selectors are judged before the merge. No config that boots on v0.71.1 meets
   this rule: every such pair puts a map on a selector path, which v0.71.1 refused at decode
   (`expected type 'string', got unconvertible type 'map[string]interface {}'`).
+  `go-bricks-migrate --source-config` decodes its file with the framework's decoder, so from
+  its go-bricks pin bump to this release it reads dotted names and refuses these shapes too;
+  before, it ignored junk under a keystore entry and aborted on a nested selector.
 - gate: match = any (a), (b), (c), (d) or (e) hit. no-match = entries carry only fields and sources,
   sources only their keys, no look-alike or quoted dotted name exists, and no pinned error text.
 - before: `keys: {tokens: {public: …, our: {public: …}}}` booted, with `our` silently dropped;

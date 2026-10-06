@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/go-viper/mapstructure/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -81,86 +80,70 @@ func TestLoadTenantStoreFromFileRejectsUnitlessNumericDuration(t *testing.T) {
 	assert.Contains(t, err.Error(), "unit-less numeric duration 30")
 }
 
-// TestTenantDecoderConfigCommaSplitsStringSlice proves the CLI decoder carries the same
-// comma-split []string hook as the framework's config.buildDecoderConfig, so a comma-scalar
-// []string field (e.g. a tenants.yaml allowlist) decodes to multiple elements identically
-// to a framework Load instead of a single-element wrap.
-func TestTenantDecoderConfigCommaSplitsStringSlice(t *testing.T) {
-	type target struct {
-		Allow []string `mapstructure:"allow"`
-	}
-	var out target
-	dc := tenantDecoderConfig()
-	dc.Result = &out
-	dec, err := mapstructure.NewDecoder(dc)
+// tenantStoreWithKeystoreYAML is a service config file used as the tenant source: besides
+// multitenant.tenants it carries the keystore and the seal selector, written as ADR-144
+// dotted names (nested), exactly as the service's own Load reads them.
+const tenantStoreWithKeystoreYAML = tenantStoreYAML + `
+keystore:
+  keys:
+    payments:
+      sign:
+        v1:
+          public: {value: sign-pub}
+        v2:
+          public: {value: sign-pub-2}
+messaging:
+  seal:
+    active:
+      payments:
+        sign: v2
+`
+
+// TestLoadTenantStoreFromFileReadsDottedKeystoreNames: --source-config decodes the whole
+// file, so a file that boots the service must load here too. The CLI's own copy of the
+// framework decoder lacked the keystore tree reader, so the nested selector the ADR
+// recommends aborted the load ('[payments]' expected type 'string').
+func TestLoadTenantStoreFromFileReadsDottedKeystoreNames(t *testing.T) {
+	store, err := loadTenantStoreFromFile(writeTenantStoreYAMLContent(t, tenantStoreWithKeystoreYAML))
 	require.NoError(t, err)
-	require.NoError(t, dec.Decode(map[string]any{"allow": "a,b"}))
-	assert.Equal(t, []string{"a", "b"}, out.Allow)
+	tenants := store.Tenants()
+	assert.Len(t, tenants, 2)
+	assert.Contains(t, tenants, "tenant-a")
 }
 
-// TestTenantDecoderConfigRejectsEmptyScalar proves the CLI decoder carries the framework's
-// delivered-empty guard for both target sets, so a tenants.yaml key set to "" fails here
-// exactly as it fails a framework Load instead of decoding as a legal 0 or false.
-func TestTenantDecoderConfigRejectsEmptyScalar(t *testing.T) {
-	type target struct {
-		Port    int    `mapstructure:"port"`
-		MinLen  *int   `mapstructure:"minlen"`
-		Enabled *bool  `mapstructure:"enabled"`
-		Strict  bool   `mapstructure:"strict"`
-		Comment string `mapstructure:"comment"`
-	}
+// TestLoadTenantStoreFromFileRefusesWhatTheFrameworkRefuses: the file is decoded by the
+// framework's own decoder, so a keystore entry nested under another fails here as it fails
+// the service's startup, instead of decoding the namespace "tokens" as a phantom entry with
+// "our" dropped.
+func TestLoadTenantStoreFromFileRefusesWhatTheFrameworkRefuses(t *testing.T) {
+	_, err := loadTenantStoreFromFile(writeTenantStoreYAMLContent(t, tenantStoreYAML+`
+keystore:
+  keys:
+    tokens:
+      public: {value: tokens-pub}
+      our:
+        public: {value: our-pub}
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"tokens" is an entry (it sets public) and the parent of entry "tokens.our"`)
+}
 
-	tests := []struct {
-		name    string
-		input   map[string]any
-		wantErr bool
-		assert  func(t *testing.T, got target)
-	}{
-		{name: "empty_int_rejected", input: map[string]any{"port": ""}, wantErr: true},
-		{name: "empty_int_pointer_rejected", input: map[string]any{"minlen": ""}, wantErr: true},
-		{name: "whitespace_int_rejected", input: map[string]any{"port": "  "}, wantErr: true},
-		{name: "empty_bool_pointer_rejected", input: map[string]any{"enabled": ""}, wantErr: true},
-		{name: "empty_bool_rejected", input: map[string]any{"strict": ""}, wantErr: true},
-		{name: "whitespace_bool_rejected", input: map[string]any{"strict": "  "}, wantErr: true},
-		{
-			name:   "empty_string_target_passes",
-			input:  map[string]any{"comment": ""},
-			assert: func(t *testing.T, got target) { assert.Empty(t, got.Comment) },
-		},
-		{
-			name:   "explicit_value_passes",
-			input:  map[string]any{"port": "5432"},
-			assert: func(t *testing.T, got target) { assert.Equal(t, 5432, got.Port) },
-		},
-		{
-			name:  "explicit_bool_passes",
-			input: map[string]any{"enabled": "false", "strict": "true"},
-			assert: func(t *testing.T, got target) {
-				require.NotNil(t, got.Enabled)
-				assert.False(t, *got.Enabled)
-				assert.True(t, got.Strict)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var out target
-			dc := tenantDecoderConfig()
-			dc.Result = &out
-			dec, err := mapstructure.NewDecoder(dc)
-			require.NoError(t, err)
-
-			err = dec.Decode(tt.input)
-			if tt.wantErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "delivered empty")
-				return
-			}
-			require.NoError(t, err)
-			tt.assert(t, out)
-		})
-	}
+// TestLoadTenantStoreFromFileRejectsDeliveredEmptyScalar proves the delivered-empty guard
+// reaches a tenants.yaml: a tenant's port set to "" fails the load instead of decoding as a
+// legal 0.
+func TestLoadTenantStoreFromFileRejectsDeliveredEmptyScalar(t *testing.T) {
+	_, err := loadTenantStoreFromFile(writeTenantStoreYAMLContent(t, `
+multitenant:
+  enabled: true
+  tenants:
+    tenant-a:
+      database:
+        type: postgresql
+        host: a.example.com
+        port: ""
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delivered empty")
 }
 
 func TestBuildListerSingleTenantPath(t *testing.T) {
