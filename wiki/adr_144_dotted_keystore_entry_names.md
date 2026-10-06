@@ -79,14 +79,26 @@ named `secret` therefore stays legal. `databases` and `multitenant.tenants` keep
 ### 2. Reading the tree (decode)
 
 One mapstructure DecodeHook, `keystoreTreeHook`, is placed first in both `buildDecoderConfig`
-and `unmarshalDecoderConfig`. It fires on the target struct types `KeyStoreConfig` and
-`SealConfig` and replaces their `keys` or `active` subtree with a flat map keyed by dotted
-names. mapstructure then decodes that map into `map[string]KeyPairConfig` or
-`map[string]string` exactly as before, through the same guard hooks. Children are sorted at
-every level, and the input tree is never mutated. No exported type changes.
+and `unmarshalDecoderConfig`. mapstructure runs it at every nested decode, and it acts on three
+target types. An entry map (`map[string]KeyPairConfig`, or of pointers) has the node it is
+decoded from replaced by a flat map keyed by dotted names; a `SealConfig` has its `active`
+subtree replaced the same way. mapstructure then decodes that map into `map[string]KeyPairConfig`
+or `map[string]string` exactly as before, through the same guard hooks. Because the hook keys on
+the entry map rather than on `KeyStoreConfig`, `Config.Unmarshal("keystore.keys", &m)` reads
+dotted names as `Load` does. One `KeyPairConfig` is the third target: a node decoded into it that
+holds a child no entry field names is refused, so `Config.Unmarshal` of a namespace's path
+(`keystore.keys.tokens`, holding `tokens.our`) fails instead of yielding an empty entry. A
+`map[string]string` is no keystore type, so `Config.Unmarshal` of the selector map alone is not
+read; mapstructure refuses a nested selector there, a map where a string belongs. Unmarshal
+`SealConfig` instead. Children are sorted at every level, and the input tree is never mutated. No
+exported type changes.
 
 How the `keys` subtree is read:
 
+- **Sequences.** A YAML sequence where the entry map belongs is refused, empty or not:
+  mapstructure's weak decoding would merge its maps into the entry map and skip the walk, so a
+  namespace would decode as a phantom entry. A sequence where the selector map belongs is
+  refused for the same reason. Both decoded as a map before this ADR.
 - **Bad keys.** A child key containing `.` (a quoted YAML key, or a literal key in a nested
   `LoadFromMap` tree), and an empty key, are refused: write the name nested instead.
 - **Entries.** A node with at least one child named `public`, `private`, `secret` or `pkcs12`

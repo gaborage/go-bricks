@@ -379,9 +379,9 @@ func buildDecoderConfig() *mapstructure.DecoderConfig {
 
 // unmarshalDecoderConfig is the decoder for the public Config.Unmarshal. It mirrors koanf's
 // default Unmarshal decoder (StringToTimeDurationHookFunc + text-unmarshaler + WeaklyTypedInput)
-// plus the keystore tree reader (so Unmarshal("keystore", &KeyStoreConfig{}) reads dotted
-// names as Load does), the delivered-empty scalar guard and the numeric-duration guard —
-// deliberately WITHOUT the comma-split slice hook, so
+// plus the keystore tree reader (so Unmarshal of the keystore section, its keys map or one
+// entry reads dotted names as Load does), the delivered-empty scalar guard and the
+// numeric-duration guard — deliberately WITHOUT the comma-split slice hook, so
 // string -> []string keeps koanf's default single-element wrap on this public seam instead of
 // silently comma-splitting. (koanf's default uses its own unexported textUnmarshalerHookFunc;
 // the exported mapstructure.TextUnmarshallerHookFunc is the closest public equivalent and

@@ -27,14 +27,15 @@ import (
 // families) live in checkKeyStore and checkMessagingSeal, so a hand-built
 // Config meets them too (ADR-064).
 
-const (
-	keystoreKeysChild = "keys"
-	sealActiveChild   = "active"
-)
+// sealActiveChild is SealConfig's selector field, matched as mapstructure
+// matches a field name.
+const sealActiveChild = "active"
 
 var (
-	keyStoreConfigType = reflect.TypeFor[KeyStoreConfig]()
-	sealConfigType     = reflect.TypeFor[SealConfig]()
+	keysMapType       = reflect.TypeFor[map[string]KeyPairConfig]()
+	keysPtrMapType    = reflect.TypeFor[map[string]*KeyPairConfig]()
+	keyPairConfigType = reflect.TypeFor[KeyPairConfig]()
+	sealConfigType    = reflect.TypeFor[SealConfig]()
 	// keyEntrySchema is the key tree one keystore entry may hold, read from the
 	// mapstructure tags of KeyPairConfig and its source structs, so a field
 	// added there is accepted here without a second list.
@@ -42,41 +43,92 @@ var (
 )
 
 // keystoreTreeHook is the decode hook that reads the keystore.keys and
-// messaging.seal.active subtrees as dotted names. It fires on the target
-// struct types, so it serves Load, LoadFromMap and Config.Unmarshal of either
-// struct alike, and no exported type changes. Every refusal is a *ConfigError;
-// mapstructure wraps it in a DecodeError that unwraps, so errors.As reaches it.
+// messaging.seal.active subtrees as dotted names. mapstructure runs it at
+// every nested decode, so it fires wherever the target is an entry map
+// (map[string]KeyPairConfig, or of pointers), one KeyPairConfig, or a
+// SealConfig: Load, LoadFromMap and Config.Unmarshal of the keystore section,
+// of its keys map, of one entry or of the seal section alike, and no exported
+// type changes. A map[string]string is no keystore type, so Unmarshal of the
+// selector map itself is not read here; mapstructure refuses a nested
+// selector there (a map where a string belongs) rather than dropping it.
+// Every refusal is a *ConfigError; mapstructure wraps it in a DecodeError that
+// unwraps, so errors.As reaches it.
 func keystoreTreeHook() mapstructure.DecodeHookFuncType {
 	return func(_, to reflect.Type, data any) (any, error) {
 		switch to {
-		case keyStoreConfigType:
-			return replaceSubtree(data, keystoreKeysChild, readKeyTree)
+		case keysMapType, keysPtrMapType:
+			return readKeysNode(data)
+		case keyPairConfigType:
+			return data, checkEntryNode(data)
 		case sealConfigType:
-			return replaceSubtree(data, sealActiveChild, readSelectorTree)
+			return replaceSelectorTree(data)
 		}
 		return data, nil
 	}
 }
 
-// replaceSubtree returns a shallow copy of data with the child named child
-// (matched as mapstructure matches a field name) replaced by read's flat map.
-// data is never mutated: koanf owns it. Anything that is not a string-keyed
+// readKeysNode reads the node an entry map is decoded from. A sequence is
+// refused: mapstructure's weak decoding would merge its maps into the entry
+// map and skip the walk, decoding a namespace as a phantom entry. Anything
+// else that is not a string-keyed map is passed through for mapstructure to
+// judge, as before.
+func readKeysNode(data any) (any, error) {
+	if isSequence(data) {
+		return nil, sequenceError(fieldKeystoreKeys, "write the entries as a map, one key per name segment (keys: {tokens: {our: {public: …}}})")
+	}
+	tree, isMap := stringMap(data)
+	if !isMap {
+		return data, nil
+	}
+	return readKeyTree(tree)
+}
+
+// checkEntryNode refuses a node decoded into one KeyPairConfig that holds a
+// child no entry field names. Through an entry map every entry was already
+// read by the walk, which refuses such a child; what is left is
+// Config.Unmarshal of a namespace's path (keystore.keys.tokens, which holds
+// tokens.our), which would decode as an empty entry with "our" dropped.
+func checkEntryNode(data any) error {
+	node, isMap := stringMap(data)
+	if !isMap {
+		return nil
+	}
+	for _, key := range slices.Sorted(maps.Keys(node)) {
+		if keyEntrySchema.child(key) == nil {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldKeystoreKeys,
+				Message:  fmt.Sprintf("a keystore entry was decoded from a node holding %q, which is no entry field (%s)", key, fieldList(keyEntrySchema)),
+				Action:   "unmarshal an entry by its full dotted path (e.g. keystore.keys.tokens.our), or the keys map, which reads nested names",
+			}
+		}
+	}
+	return nil
+}
+
+// replaceSelectorTree returns a shallow copy of a seal section with its
+// active child (matched as mapstructure matches a field name) replaced by the
+// flat selector map. data is never mutated: koanf owns it. A sequence there is
+// refused, as under keystore.keys; anything else that is not a string-keyed
 // map is passed through for mapstructure to judge, as before.
-func replaceSubtree(data any, child string, read func(map[string]any) (map[string]any, error)) (any, error) {
+func replaceSelectorTree(data any) (any, error) {
 	section, ok := stringMap(data)
 	if !ok {
 		return data, nil
 	}
 	var out map[string]any
 	for _, key := range slices.Sorted(maps.Keys(section)) {
-		if !strings.EqualFold(key, child) {
+		if !strings.EqualFold(key, sealActiveChild) {
 			continue
+		}
+		if isSequence(section[key]) {
+			return nil, sequenceError(fieldMessagingSealActive, "write the selectors as a map, one key per name segment (active: {payments: {sign: v2}})")
 		}
 		tree, isMap := stringMap(section[key])
 		if !isMap {
 			continue
 		}
-		flat, err := read(tree)
+		flat, err := readSelectorTree(tree)
 		if err != nil {
 			return nil, err
 		}
@@ -89,6 +141,21 @@ func replaceSubtree(data any, child string, read func(map[string]any) (map[strin
 		return data, nil
 	}
 	return out, nil
+}
+
+// isSequence reports whether node is a YAML sequence (any slice or array).
+func isSequence(node any) bool {
+	kind := reflect.ValueOf(node).Kind()
+	return kind == reflect.Slice || kind == reflect.Array
+}
+
+func sequenceError(field, action string) *ConfigError {
+	return &ConfigError{
+		Category: errCategoryInvalid,
+		Field:    field,
+		Message:  "holds a sequence where a map was expected",
+		Action:   action,
+	}
 }
 
 // readKeyTree flattens keystore.keys: every node with a field child (public,
