@@ -24,8 +24,9 @@ import (
 // names first, and mapstructure decodes that map exactly as before.
 //
 // The walk lives in decode because decode is the only place the nested tree
-// exists. The rules that judge the final name set live in checkKeyStore and
-// checkMessagingSeal, so a hand-built Config meets them too (ADR-064).
+// exists. The rules that judge the final name set (prefix-free, fold-distinct,
+// families) live in checkKeyStore and checkMessagingSeal, so a hand-built
+// Config meets them too (ADR-064).
 
 // sealActiveChild is SealConfig's selector field, matched as mapstructure
 // matches a field name.
