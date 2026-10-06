@@ -537,6 +537,47 @@ func TestCheckKeyStoreRefusesMalformedGenerations(t *testing.T) {
 	}
 }
 
+// TestKeySourceActionNamesTheVariables: a missing source names the two
+// variables that set it, and a hyphenated name adds the POSIX caveat with the
+// dotted spelling any shell can export.
+func TestKeySourceActionNamesTheVariables(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   string
+		want    string
+		notWant string
+	}{
+		{name: "dotted", entry: "tokens.our", want: "e.g. KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_FILE or KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_VALUE", notWant: "POSIX"},
+		{name: "plain", entry: "signing", want: "KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE", notWant: "POSIX"},
+		{
+			name: "hyphenated", entry: "tokens-our",
+			want: "KEYSTORE_KEYS_TOKENS-OUR_PUBLIC_FILE or KEYSTORE_KEYS_TOKENS-OUR_PUBLIC_VALUE; a name with '-' is settable that way " +
+				"from Docker or Kubernetes but not by a POSIX export, while a dotted name (tokens.our) is settable from any shell",
+		},
+		{name: "hyphen_fold_is_reserved", entry: "webhook-secret", want: "not by a POSIX export", notWant: "dotted name"},
+		{
+			name: "undotted_family_generation", entry: "audit-v1",
+			want:    "not by a POSIX export; a generation spelled without '-' belongs to another family, so moving to it is a family rename, drained before the cutover",
+			notWant: "dotted name",
+		},
+		{name: "hyphen_family_generation", entry: "payments-sign-v1", want: "family rename", notWant: "payments.sign.v1"},
+		{name: "dotted_family_generation_with_hyphen", entry: "svc-a.sign.v1", want: "belongs to another family", notWant: "dotted name"},
+		{name: "ordinary_name_gets_no_rename_clause", entry: "tokens-our", want: "dotted name", notWant: "family rename"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkKeyStore(&KeyStoreConfig{Keys: map[string]KeyPairConfig{tt.entry: {}}})
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "key source required", cfgErr.Message)
+			assert.Contains(t, cfgErr.Action, tt.want)
+			if tt.notWant != "" {
+				assert.NotContains(t, cfgErr.Action, tt.notWant)
+			}
+		})
+	}
+}
+
 // TestCheckSealSelectorFamilies: a selector that differs from a provisioned
 // family only in '-' versus '.' selects nothing, so the rotation it was meant
 // to make never happens; Validate refuses it and names both variables. A

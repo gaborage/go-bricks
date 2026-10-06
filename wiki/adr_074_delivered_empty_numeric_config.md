@@ -82,6 +82,12 @@ compatibility guarantee. The copies must be kept in sync by hand, and a source-c
 `internal/configdecode` now fails when they diverge — a gate that holds whichever way #1109
 decides, since it neither imports the package nor assumes the copy stays.
 
+> **Amended by [ADR-144](adr_144_dotted_keystore_entry_names.md) (v0.72.0):** the CLI keeps
+> no copy. `tenantDecoderConfig` lacked the keystore tree reader that ADR adds to the
+> framework decoder, so the CLI now decodes its file through `config.LoadFromMap`, which runs
+> this hook at the go-bricks version the CLI pins. The copy and the source-comparison test
+> are gone.
+
 An empty string is judged after trimming, so a whitespace-only value is rejected too.
 That one is a message change rather than a new failure — `"   "` already failed to
 parse — but it keeps one rule for what "delivered empty" means.

@@ -58,7 +58,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E70 | v0.69.0 → v0.70.0 | breaking (C70.1 — construction fails when `source.type` is `dynamic` without an `app.Options.ResourceSource` whose `IsDynamic()` is true, or is `static` beside one whose `IsDynamic()` is true, where all three booted; a single-tenant `source.type` outside `static`/`dynamic` fails `config.Validate`, where it booted reading as static) + breaking (C70.2 — a resource source whose `IsDynamic()` is false is asked for `""` once per kind at build under `app.startup.<kind>`, and a lookup error other than not-configured fails construction) + breaking (C70.3 — beside such a store, its answer for `""`, not the root blocks, decides the absence WARN, the `DatabaseRequirer` abort, the #366 declarations gate, the fatal pre-init and `ModuleDeps.*Configured`) + breaking (C70.4 — multi-tenant `messaging.tenancy: shared` pre-initializes the control-plane broker at build, and without one reads `MessagingConfigured` false, refuses its declarations and reports `not_configured` where it reported `per_tenant`) + silent-behavior (C70.5 — a single-tenant dynamic store's messaging declarations no longer abort on an empty root broker) + silent-behavior (C70.6 — the single-tenant cache pre-warms, and a `""` known absent is no longer pre-warmed) + breaking (C70.7 — a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false: multi-tenant `messaging.tenancy: shared` without a control-plane broker, stream-only outboxes included, and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag) + silent-behavior (C70.8 — a single-tenant dynamic store with no root broker, and a caller store serving `""` beside an empty root messaging block, now pass outbox `Init`) + breaking (C70.9 — a shared-ledger outbox refuses `Init` exactly when `ModuleDeps.ControlPlaneMessagingAbsent` is true, so a caller static store not serving `""` beside a root broker now aborts it) + silent-behavior (C70.10 — a shared-ledger outbox beside a caller store serving `""` and an empty root messaging block now passes `Init`, a dynamic store is exempt by the plan instead of `source.type`, and a hand-built `ModuleDeps` no longer aborts it on root config) + breaking (C70.11 — multi-tenant `messaging.tenancy: per-tenant` on the built-in store with at least one static tenant and none setting `messaging.url` reads `MessagingConfigured` false, so a per-tenant-ledger outbox refuses `Init` and messaging declarations refuse startup, where both booted and every tenant resolve failed) + silent-behavior (C70.12 — a 2xx the JOSE transport rejects — over `MaxResponseBytes`, malformed or tampered JOSE — is no longer retried, and the over-cap error reads `ValidationError` where it read `NetworkError`) + silent-behavior (C70.13 — a followed `https`→`http` redirect that carried `Authorization`, `Cookie` or `Proxy-Authorization` now fails with `ErrRedirectDowngrade`, and the redirect-cap error reads `httpclient: stopped after 10 redirects`) + breaking (C70.14 — `StopConsumers` takes a `context.Context` on `messaging.Manager`, `messaging.Registry`, `messaging.RegistryInterface` and `mocks.MockRegistry`, and now blocks until the consumer supervisors exit or the window — `ctx`'s deadline capped at 5s — closes) + compile-break (C70.15 — `Publisher[T].Seal`, `jose/sealed.Seal`/`SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`, so every two-value assignment stops compiling) + silent-behavior (C70.16 — behind a proxy on a public or `100.64.0.0/10` address not listed in `server.trustedproxies`, `X-Forwarded-Proto` is ignored, so the HSTS header stops and the `url.scheme` metric label reads `http`) + breaking (C70.17 — the HTTP server instrumentation scope becomes `github.com/labstack/echo-otel/v5`, HTTP server metrics lose `server.address`/`server.port`/`http.request.method_original`, spans lose the body-size attributes, HTTP/2 and HTTP/3 `network.protocol.version` reads `2`/`3`, and span `error.type` is no longer set on a returned 4xx error and reads the status code for a 5xx error that carries one (it read the Go type)) | 17 | C70.14, C70.15 — `go build ./... && go vet ./...` names every call site | if any environment sets `source.type` or your code passes `app.Options.ResourceSource`, make them agree before the bump: `dynamic` exactly when the resource source's `IsDynamic()` returns true (C70.1); if the store reports `false`, make it answer `""` with a configuration or a not-configured error, within `app.startup.<kind>` (C70.2), and read what that answer now decides (C70.3); and under multi-tenant `messaging.tenancy: shared`, confirm the control-plane broker is set and reachable at startup, or that no module declares messaging (C70.4); and with an enabled per-tenant-ledger outbox, confirm that same broker, and set `MessagingConfigured: true` on any hand-built `ModuleDeps` (C70.7); and with an enabled shared-ledger outbox, confirm the store serving `""` answers it with a broker (C70.9); and under multi-tenant `messaging.tenancy: per-tenant` with no `app.Options.ResourceSource` and at least one static tenant, confirm at least one of them sets `messaging.url`, or that no module declares messaging and no per-tenant-ledger outbox is enabled (C70.11); and behind a proxy on a public or `100.64.0.0/10` address, list its CIDRs in `server.trustedproxies` (C70.16); and repoint any query, dashboard or alert that filters on the scope `github.com/labstack/echo-opentelemetry` or reads `server.address`/`http.request.method_original` from HTTP server metrics, body sizes from spans, or `network.protocol.version` `2.0`/`3.0`, or matches span `error.type` on a Go type name (C70.17) |
 | E71 | v0.70.0 → v0.71.0 | compile-break (C71.1–C71.5 — `logger.WithAMQPCounter`/`WithDBCounter`, `FactoryResolver.MessagingClientFactory`, `RouteRegistry.AddRoute`/`RoutesByModule`, `server.NewHandlerContextForTestWithOptions` and the `postgresql`/`oracle` `Statement`/`Transaction` aliases are removed; `NewHandlerContextForTest` gains `...TestContextOption`) + compile-break (C71.6 — ten `database` tracking re-exports are removed: `TrackingContext`, `TrackedStatement`/`TrackedStmt`, `TrackedTransaction`/`TrackedTx`, `TrackDBOperation`, `NewTrackingSettings`, `RegisterConnectionPoolMetrics`, `DefaultSlowQueryThreshold`, `DefaultMaxQueryLength`) + compile-break (C71.7 — `database.TrackedDB`/`NewTrackedDB` and the raw-`*sql.DB` tracking wrapper are removed) + compile-break (C71.8–C71.12 — `app` drops `TimeoutProvider`/`StandardTimeoutProvider`/`Options.TimeoutProvider`, `SignalHandler.WaitForSignal`, `Prober`, `RegisterStreamRuntime`/`StreamRuntime` and `App.MessagingDeclarations()`) + compile-break (C71.13 — `httpclient` no longer exports the trace header constants `HeaderXRequestID`/`HeaderTraceParent`/`HeaderTraceState` or the forwarders `WithTraceID`, `TraceIDFromContext`, `EnsureTraceID`, `WithTraceParent`, `TraceParentFromContext`, `WithTraceState`, `TraceStateFromContext` and `GenerateTraceParent`; each is the same name in `trace`, except the three getters, which are `trace.IDFromContext`/`ParentFromContext`/`StateFromContext`) + compile-break (C71.14 — `httpclient.IsJOSEError` is gone; `jose.IsError` gives the same answer) + compile-break (C71.15 — package `testing` no longer exports the 46 constants after its logger block, its service, messaging, database, user, tenant, OpenTelemetry, duration, port and size literals; only `TestLoggerLevelDebug`/`TestLoggerLevelError`/`TestLoggerLevelDisabled` stay) + compile-break (C71.16 — `messaging.Client`, and so `messaging.AMQPClient`, loses `Consume`, which was `ConsumeFromQueue` with only `Queue` set; `mocks.MockMessagingClient` and `MockAMQPClient` lose `Consume`, `ExpectConsume` and `ExpectConsumeAny`, and `MockAMQPClient` gains `ExpectConsumeFromQueueAny`; `fixtures.NewWorkingMessagingClient`/`NewFailingMessagingClient`/`NewMessageSimulator` return `*mocks.MockAMQPClient`) + compile-break (C71.17 — `cache/testing.AssertOperationCountGreaterThan` is gone; `AssertOperationCountAtLeast` takes the same arguments) | 17 | C71.1, C71.2, C71.3, C71.4, C71.5, C71.6, C71.7, C71.13, C71.14, C71.15, C71.17 — `go build ./... && go vet ./... && go vet -tags=integration ./...` names every call site, and a build-tagged file under `go vet -tags=<tag>`; C71.8–C71.12 — `go build ./... && go vet ./...` names every use, except a `WaitForSignal` method on your own `SignalHandler`, which compiles and goes dead (C71.9); C71.16 only partially — the same commands name every call, mock helper and typed fixture receiver, but a type assertion or type switch to `*mocks.MockMessagingClient` and a testify expectation keyed `"Consume"` compile, so only C71.16's detect greps find them | none |
 | E711 | v0.71.0 → v0.71.1 | silent-behavior (C711.1 — a value logged through a pointer to a string, map, slice, array, interface or another pointer, or a JSON document or PEM block held in a `[]string`/`[N]string`, is now filtered like the value logged directly, so keys the filter masks no longer reach the sink or the OTel log export in clear) | 1 | none | update log fixtures that pinned such a value's unmasked output; logs written by earlier versions through such values may hold secrets — rotate any credential that could have been logged that way and purge retained logs per your retention policy (C711.1) |
-| E72 | v0.71.1 → v0.72.0 | silent-behavior (C72.1 — `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read; attribute arrays and maps nested deeper than 64 export empty; `otel/log/global` is deprecated) + silent-behavior (C72.2 — an OTLP/HTTP endpoint with a path, such as the documented `https://otlp.nr-data.net:4318/v1/traces`, now exports to exactly that path: a path-bearing trace endpoint, which booted and failed every export, starts exporting, and a path-bearing metrics or logs endpoint, which failed provider construction — inside an App a WARN and a no-op provider for all three signals — now boots and exports, so telemetry that was dropped leaves the service as new egress and new vendor ingest) + breaking (C72.3 — an HTTP OTLP endpoint with userinfo, a query, a fragment, an encoded slash or no host, or a gRPC `grpc://` endpoint, fails `Validate` with `ErrInvalidEndpointFormat`, which inside an App is a WARN and a no-op provider for every signal) + breaking (C72.4 — `OTEL_EXPORTER_OTLP_*` endpoint, insecure and trace protocol variables no longer reach the OTLP exporters, so an `insecure: false` exporter, HTTP or gRPC, can no longer be turned into plaintext and an env endpoint path no longer applies; a deployment that relied on either gets no startup error, and its exports fail at runtime if the collector does not serve the configured path over TLS) + silent-behavior (C72.5 — a migration audit event's log record is now an action log on the audit span: a successful one is exported at the default `samplingrate` 0.0, where it was dropped, every one changes `log.type` from trace to action, and with tracing on it carries the span's ids) + breaking (C72.6 — an inbound `traceparent` marked not sampled now drops this service's spans at every nonzero `trace.sample.rate`, including the default `1.0`, where they were recorded and exported as orphans; a remote sampled flag is re-judged by the rate) + silent-behavior (C72.7 — a pooled database, cache or publisher lookup that evicts an LRU victim, or races `Close`, returns only after the resource it displaced is closed, restoring the ≤v0.70 ordering that v0.71.x lost) + breaking (C72.8 — with `multitenant.resolver.proxies: true`, `X-Forwarded-Host` from a peer outside loopback, link-local, private, unix-socket and `server.trustedproxies` fails the request with 400 `Invalid tenant` and stops a composite order, and the tenant host is the last entry of the last header line instead of the first entry) + compile-break (C72.9 — `messaging.RegisterSealCodec`, `ConfigureSealing`, `SealingRuntime`, the twelve `Seal*` seam aliases and the three `SealTenancy*` constants are removed; the seal-runtime seam moves to root `internal/sealruntime`) + breaking (C72.10 — `PublishSealed` admitted an authentic stored body under a sign generation the producer holds without its private key; it now refuses it with `ErrSealedBytesRejected` and `SEAL_KID_UNKNOWN_GENERATION`) + breaking (C72.11 — `jose/sealed.Open`, `OpenDocument` and `Verify` refuse a document carrying a clear top-level member whose name case-folds to the Subject member's without equaling it, with `SEAL_PAYLOAD_UNDECODABLE` rule 10: the sealed consumer nacks it into the DLQ without requeue, where the cleartext sits at rest, and `PublishSealed` refuses it non-recoverably and does not publish) + breaking (C72.12 — under `observability.metrics.temporality: delta` on an OTLP endpoint, UpDownCounters, ObservableUpDownCounters and gauges export as Cumulative where they exported as Delta, so non-monotonic sums carry levels and sync UpDownCounter and Gauge series are kept for the life of the process) + breaking (C72.13 — `Declarations.Validate()` refuses a queue whose `x-dead-letter-exchange` is absent from the declaration set or, being a locally declared fanout, direct or topic exchange, has no binding that delivers the dead-lettered message, where each booted and dropped every dead-lettered message) + breaking (C72.14 — within one `MigrateAll` call, a tenant whose resolved migration target (host, port, database plus schema, or plus the effective post-overlay username when the schema is empty; Oracle: host, port, PDB, username) an earlier tenant claimed is refused with `migration.ErrDuplicateMigrationTarget` before Flyway runs, so a run that was clean ends `ErrFleetSplit`) + silent-behavior (C72.15 — under multi-tenant `messaging.tenancy: shared` the messaging tenant-count WARN no longer fires, and with `publisher.idlettl` or `publisher.maxcached` unset or 0 the publisher pool idles out after 1h instead of 10m and caps at 50 instead of `multitenant.limits.tenants`; under `source.type: dynamic` a leftover `multitenant.tenants` map no longer triggers the tenant-count WARN for any pool) + silent-behavior (C72.16 — `database/testing` transaction and session no-rows errors gain the suffix ` (use WillReturnRows)`, so a consumer test comparing their full text with `EqualError` or `err.Error() ==` fails; prefixes and every pool text are unchanged) | 16 | C72.1 (d) only — `go build ./...` fails on a `replace`-pinned old `otel/log`; C72.2–C72.7 move no signature and no configuration key; C72.3's rejections surface at startup; C72.8 partially — a downstream UNKEYED `multitenant.SubdomainResolver{…}` literal stops compiling (`go build ./...` names it; keyed literals are unaffected); the new field and the `ErrUntrustedForwardedHost` sentinel are otherwise additive, and no key moves; C72.9 — `go build ./... && go vet ./... && go vet -tags=integration ./...` names every use; C72.10 moves no signature and no configuration key; C72.11 is a runtime refusal; no signature moves; C72.12 moves no signature and no configuration key; C72.13 moves no signature and no configuration key; Validate refuses at startup; C72.14 is a runtime refusal; no signature moves; C72.15 moves no signature and no configuration key; C72.16 moves no signature and no configuration key; test-time text only | for C72.2, list every HTTP endpoint that carries a path (the atom's detect), confirm that path is the collector's full export path, a gateway prefix included, and that the backend is meant to receive and bill this telemetry; for C72.3, fix every endpoint form its detect names before the bump; for C72.4, list every `OTEL_EXPORTER_OTLP_*` endpoint, insecure and protocol variable in every environment, and set the same values through `OBSERVABILITY_<SIGNAL>_ENDPOINT`/`_INSECURE` in the same rollout as the bump (a path-bearing config endpoint does not export before it); for C72.5, find dashboards, alerts or queries that select audit records by `log.type = trace` and repoint them to `action`; for C72.6, decide, per service, whether it receives `traceparent` headers from a sampler upstream and at what rate, against its own `trace.sample.rate`; for C72.8, list the CIDRs of every proxy on a public or `100.64.0.0/10` address in `server.trustedproxies`, and give tests that send `X-Forwarded-Host` a trusted `RemoteAddr`; for C72.9, run its detect and list every custom codec (none has a replacement: blank-import `messaging/sealed`) and every `SealingRuntime()` reader (moves to `ModuleDeps`); for C72.10, list each producer that calls `PublishSealed` and holds a sign-family entry `public:`-only, and whether its sealed-bytes store still holds bytes under that generation; for C72.11, list the producers of every sealed `EventType` you consume and check each one that does not seal through go-bricks v0.63.0+ `Seal`/`SealDocument` (a partner or hand-rolled sealer) for a clear member case-folding to the Subject — have it drop or rename that member before the bump, and treat a twin refusal in the DLQ as cleartext cardholder data to scrub, never to replay; for C72.12, list every dashboard, alert or collector rule that reads an UpDownCounter or gauge series from a service running `temporality: delta`, and repoint the ones that summed or rated the old per-interval changes; for C72.13, run its detect and walk every raw-`Args` dead-letter route and every `d.Exchanges`/`d.Queues` mutation against its rules; complete each failing route, or mark a DLX another service owns external with `DeclareExternalExchange`, in the same change as the bump; for C72.14, list every tenant's resolved host, port, database, schema and effective username (the `MigratorIdentity` overlay replaces the username) and give each colliding tenant a distinct `postgresql.schema`, or a migrator role whose role-level `search_path` selects that tenant's schema, or de-list the alias or repeated ID, before the bump; `go-bricks-migrate` gets the check at its routine go-bricks pin bump; for C72.15, under multi-tenant `messaging.tenancy: shared` run its detect and decide whether each service keeps the new publisher `idlettl`/`maxcached` defaults or pins the old values explicitly; for C72.16, run its detect and move every test that compares a `database/testing` transaction or session no-rows error's full text to the suffixed text or a substring check |
+| E72 | v0.71.1 → v0.72.0 | silent-behavior (C72.1 — `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read; attribute arrays and maps nested deeper than 64 export empty; `otel/log/global` is deprecated) + silent-behavior (C72.2 — an OTLP/HTTP endpoint with a path, such as the documented `https://otlp.nr-data.net:4318/v1/traces`, now exports to exactly that path: a path-bearing trace endpoint, which booted and failed every export, starts exporting, and a path-bearing metrics or logs endpoint, which failed provider construction — inside an App a WARN and a no-op provider for all three signals — now boots and exports, so telemetry that was dropped leaves the service as new egress and new vendor ingest) + breaking (C72.3 — an HTTP OTLP endpoint with userinfo, a query, a fragment, an encoded slash or no host, or a gRPC `grpc://` endpoint, fails `Validate` with `ErrInvalidEndpointFormat`, which inside an App is a WARN and a no-op provider for every signal) + breaking (C72.4 — `OTEL_EXPORTER_OTLP_*` endpoint, insecure and trace protocol variables no longer reach the OTLP exporters, so an `insecure: false` exporter, HTTP or gRPC, can no longer be turned into plaintext and an env endpoint path no longer applies; a deployment that relied on either gets no startup error, and its exports fail at runtime if the collector does not serve the configured path over TLS) + silent-behavior (C72.5 — a migration audit event's log record is now an action log on the audit span: a successful one is exported at the default `samplingrate` 0.0, where it was dropped, every one changes `log.type` from trace to action, and with tracing on it carries the span's ids) + breaking (C72.6 — an inbound `traceparent` marked not sampled now drops this service's spans at every nonzero `trace.sample.rate`, including the default `1.0`, where they were recorded and exported as orphans; a remote sampled flag is re-judged by the rate) + silent-behavior (C72.7 — a pooled database, cache or publisher lookup that evicts an LRU victim, or races `Close`, returns only after the resource it displaced is closed, restoring the ≤v0.70 ordering that v0.71.x lost) + breaking (C72.8 — with `multitenant.resolver.proxies: true`, `X-Forwarded-Host` from a peer outside loopback, link-local, private, unix-socket and `server.trustedproxies` fails the request with 400 `Invalid tenant` and stops a composite order, and the tenant host is the last entry of the last header line instead of the first entry) + compile-break (C72.9 — `messaging.RegisterSealCodec`, `ConfigureSealing`, `SealingRuntime`, the twelve `Seal*` seam aliases and the three `SealTenancy*` constants are removed; the seal-runtime seam moves to root `internal/sealruntime`) + breaking (C72.10 — `PublishSealed` admitted an authentic stored body under a sign generation the producer holds without its private key; it now refuses it with `ErrSealedBytesRejected` and `SEAL_KID_UNKNOWN_GENERATION`) + breaking (C72.11 — `jose/sealed.Open`, `OpenDocument` and `Verify` refuse a document carrying a clear top-level member whose name case-folds to the Subject member's without equaling it, with `SEAL_PAYLOAD_UNDECODABLE` rule 10: the sealed consumer nacks it into the DLQ without requeue, where the cleartext sits at rest, and `PublishSealed` refuses it non-recoverably and does not publish) + breaking (C72.12 — under `observability.metrics.temporality: delta` on an OTLP endpoint, UpDownCounters, ObservableUpDownCounters and gauges export as Cumulative where they exported as Delta, so non-monotonic sums carry levels and sync UpDownCounter and Gauge series are kept for the life of the process) + breaking (C72.13 — `Declarations.Validate()` refuses a queue whose `x-dead-letter-exchange` is absent from the declaration set or, being a locally declared fanout, direct or topic exchange, has no binding that delivers the dead-lettered message, where each booted and dropped every dead-lettered message) + breaking (C72.14 — within one `MigrateAll` call, a tenant whose resolved migration target (host, port, database plus schema, or plus the effective post-overlay username when the schema is empty; Oracle: host, port, PDB, username) an earlier tenant claimed is refused with `migration.ErrDuplicateMigrationTarget` before Flyway runs, so a run that was clean ends `ErrFleetSplit`) + silent-behavior (C72.15 — under multi-tenant `messaging.tenancy: shared` the messaging tenant-count WARN no longer fires, and with `publisher.idlettl` or `publisher.maxcached` unset or 0 the publisher pool idles out after 1h instead of 10m and caps at 50 instead of `multitenant.limits.tenants`; under `source.type: dynamic` a leftover `multitenant.tenants` map no longer triggers the tenant-count WARN for any pool) + silent-behavior (C72.16 — `database/testing` transaction and session no-rows errors gain the suffix ` (use WillReturnRows)`, so a consumer test comparing their full text with `EqualError` or `err.Error() ==` fails; prefixes and every pool text are unchanged) + breaking (C72.17 — a key under a `keystore.keys` entry or source that is not one of its fields (a name nested under an entry included), and a `KEYSTORE_KEYS_*` variable whose path ends off a source (a POSIX one spelling a hyphenated entry, which now names the dotted entry, included), fail startup where v0.71.1 dropped them in silence; so does a sequence under `keystore.keys` or `messaging.seal.active`, which v0.71.1 decoded as a map, or dropped with what it held when a later layer replaced it with a map, a nested selector map that a later YAML file replaced with a scalar on its parent path, which v0.71.1 never decoded, and a malformed generation entry in a service without the keystore module, which v0.71.1 refused only in that module's `Init`; a dotted name is now a path written nested, no name that boots today changes its variable or wire kid, and config, keystore, `jose`/`seal:` tag and `sealcli` error texts move) | 17 | C72.1 (d) only — `go build ./...` fails on a `replace`-pinned old `otel/log`; C72.2–C72.7 move no signature and no configuration key; C72.3's rejections surface at startup; C72.8 partially — a downstream UNKEYED `multitenant.SubdomainResolver{…}` literal stops compiling (`go build ./...` names it; keyed literals are unaffected); the new field and the `ErrUntrustedForwardedHost` sentinel are otherwise additive, and no key moves; C72.9 — `go build ./... && go vet ./... && go vet -tags=integration ./...` names every use; C72.10 moves no signature and no configuration key; C72.11 is a runtime refusal; no signature moves; C72.12 moves no signature and no configuration key; C72.13 moves no signature and no configuration key; Validate refuses at startup; C72.14 is a runtime refusal; no signature moves; C72.15 moves no signature and no configuration key; C72.16 moves no signature and no configuration key; test-time text only; C72.17 moves no signature and no configuration key; a startup refusal | for C72.2, list every HTTP endpoint that carries a path (the atom's detect), confirm that path is the collector's full export path, a gateway prefix included, and that the backend is meant to receive and bill this telemetry; for C72.3, fix every endpoint form its detect names before the bump; for C72.4, list every `OTEL_EXPORTER_OTLP_*` endpoint, insecure and protocol variable in every environment, and set the same values through `OBSERVABILITY_<SIGNAL>_ENDPOINT`/`_INSECURE` in the same rollout as the bump (a path-bearing config endpoint does not export before it); for C72.5, find dashboards, alerts or queries that select audit records by `log.type = trace` and repoint them to `action`; for C72.6, decide, per service, whether it receives `traceparent` headers from a sampler upstream and at what rate, against its own `trace.sample.rate`; for C72.8, list the CIDRs of every proxy on a public or `100.64.0.0/10` address in `server.trustedproxies`, and give tests that send `X-Forwarded-Host` a trusted `RemoteAddr`; for C72.9, run its detect and list every custom codec (none has a replacement: blank-import `messaging/sealed`) and every `SealingRuntime()` reader (moves to `ModuleDeps`); for C72.10, list each producer that calls `PublishSealed` and holds a sign-family entry `public:`-only, and whether its sealed-bytes store still holds bytes under that generation; for C72.11, list the producers of every sealed `EventType` you consume and check each one that does not seal through go-bricks v0.63.0+ `Seal`/`SealDocument` (a partner or hand-rolled sealer) for a clear member case-folding to the Subject — have it drop or rename that member before the bump, and treat a twin refusal in the DLQ as cleartext cardholder data to scrub, never to replay; for C72.12, list every dashboard, alert or collector rule that reads an UpDownCounter or gauge series from a service running `temporality: delta`, and repoint the ones that summed or rated the old per-interval changes; for C72.13, run its detect and walk every raw-`Args` dead-letter route and every `d.Exchanges`/`d.Queues` mutation against its rules; complete each failing route, or mark a DLX another service owns external with `DeclareExternalExchange`, in the same change as the bump; for C72.14, list every tenant's resolved host, port, database, schema and effective username (the `MigratorIdentity` overlay replaces the username) and give each colliding tenant a distinct `postgresql.schema`, or a migrator role whose role-level `search_path` selects that tenant's schema, or de-list the alias or repeated ID, before the bump; `go-bricks-migrate` gets the check at its routine go-bricks pin bump; for C72.15, under multi-tenant `messaging.tenancy: shared` run its detect and decide whether each service keeps the new publisher `idlettl`/`maxcached` defaults or pins the old values explicitly; for C72.16, run its detect and move every test that compares a `database/testing` transaction or session no-rows error's full text to the suffixed text or a substring check; for C72.17, run its detect and, before the bump, delete or fix every junk key or variable under a keystore entry or source, rename one of an entry nested under another, keep one of two look-alike names, rewrite every sequence under `keystore.keys` or `messaging.seal.active`, in any layer, as a map, delete every selector map a later YAML file replaces with a scalar, rename every malformed generation entry, and move pinned config, keystore, `jose`/`seal:` tag and `sealcli` error texts to the new wording |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -6241,7 +6241,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - ref: [ADR-090](adr_090_env_reachable_section_names.md) · `config/validation.go`
   (`sectionNamePattern`, `checkSectionName`, and its three call sites) ·
   [ADR-024](adr_024_config_key_flatsmush.md) (`[C401.1]`, the leaf-key half of the same property) ·
-  `wiki/multi_tenant_resolvers.md` (the resolver grammar this reuses) · issue #1124
+  `wiki/multi_tenant_resolvers.md` (the resolver grammar this reuses) · issue #1124 ·
+  for `keystore.keys` only, amended by `[C72.17]` ([ADR-144](adr_144_dotted_keystore_entry_names.md)):
+  a dotted name is a nested path of `[a-z0-9-]` segments rather than a refusal
 
 ### [C61.23] the outbox ledger is sequenced, laned and drained by one leader · silent-behavior + compile-break · when: match
 
@@ -11838,7 +11840,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `logger/filter.go` (`filterPointerWithProtection`) · `logger/opaque.go` (`holdsOpaqueString`) ·
   [GHSA-3m9p-48v4-c9vp](https://github.com/gaborage/go-bricks/security/advisories/GHSA-3m9p-48v4-c9vp)
 
-## E72 · v0.71.1 → v0.72.0 — OpenTelemetry Go moves to v1.47.0 with stable logs + a path in an OTLP/HTTP endpoint is the export path, used exactly + malformed OTLP endpoints fail `Validate` + OTLP endpoint and TLS come only from config + migration audit logs are exported as action logs + trace sampling honors the parent's decision + a pooled lookup returns only after the resource it displaced is closed + `X-Forwarded-Host` counts only from a trusted peer + the sealing seam is framework-only + `PublishSealed` refuses a sign generation the producer holds without its private key + the opener refuses a clear case-fold twin of the sealed Subject + delta temporality keeps UpDownCounters and gauges cumulative + a dead-letter route the declaration set shows cannot park fails `Validate` + a fleet migration run refuses a tenant whose migration target another tenant of the run claimed + shared messaging takes the single-tenant publisher-pool defaults + `database/testing` transaction and session no-rows errors gain the `(use WillReturnRows)` hint
+## E72 · v0.71.1 → v0.72.0 — OpenTelemetry Go moves to v1.47.0 with stable logs + a path in an OTLP/HTTP endpoint is the export path, used exactly + malformed OTLP endpoints fail `Validate` + OTLP endpoint and TLS come only from config + migration audit logs are exported as action logs + trace sampling honors the parent's decision + a pooled lookup returns only after the resource it displaced is closed + `X-Forwarded-Host` counts only from a trusted peer + the sealing seam is framework-only + `PublishSealed` refuses a sign generation the producer holds without its private key + the opener refuses a clear case-fold twin of the sealed Subject + delta temporality keeps UpDownCounters and gauges cumulative + a dead-letter route the declaration set shows cannot park fails `Validate` + a fleet migration run refuses a tenant whose migration target another tenant of the run claimed + shared messaging takes the single-tenant publisher-pool defaults + `database/testing` transaction and session no-rows errors gain the `(use WillReturnRows)` hint + a `keystore.keys` name is a dotted path written nested, and a key under a keystore entry that is no field or source fails startup
 
 - gist: OpenTelemetry Go moves to v1.47.0, and `otel/log` and `sdk/log` reach their first stable
   release. The GoBricks API is unchanged. Consumers inherit upstream behavior: the SDK no longer
@@ -11919,6 +11921,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gist: the `database/testing` doubles gain `AssertAllExpectationsMet`, and the transaction and
   session no-rows errors gain the ` (use WillReturnRows)` hint the pool error already had, so a test
   that pins those texts in full must add the suffix (C72.16).
+- gist: a `keystore.keys` name needed a `-` for every multi-word name, which no POSIX shell can
+  `export`, and a nested YAML name or `KEYSTORE_KEYS_TOKENS_OUR_*` produced a phantom entry
+  `tokens`; anything under an entry that was not a field was dropped in silence. A name is now a
+  dotted path written nested — `KEYSTORE_KEYS_TOKENS_OUR_*` reaches entry `tokens.our`, which is
+  also the `jose:` tag value and the wire kid, and a dotted family names its generations
+  `<family>.v<N>` — while a key under an entry or source that is not one of its fields, an entry
+  nested under another, and two names differing only in `-` versus `.` fail startup. No existing
+  name, kid, inbox key or vector moves (C72.17). ADR-144.
 
 ### [C72.1] OpenTelemetry Go moves to v1.47.0: `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read and attribute values nested deeper than 64 export empty · silent-behavior · when: match
 
@@ -12454,6 +12464,233 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   check.
 - verify: `go test ./...`  # the updated pins pass
 - ref: gaborage/go-bricks#1652 · `database/testing/expectations.go` (`expectationSet.resolveQuery`)
+
+### [C72.17] keystore.keys names may be dotted paths written nested; junk under a keystore entry fails startup · breaking · when: match
+
+- detect:
+  - (a) configs that boot on v0.71.1 and fail startup on v0.72.0. Read every YAML layer
+    (`config.yaml`/`.yml` and every `config.<env>.yaml`/`.yml`) with
+    `git grep -nE -A12 '^[[:space:]]*(keys|active)[[:space:]]*:' -- '*.yaml' '*.yml'`, and list
+    every `KEYSTORE_KEYS_*` and `MESSAGING_SEAL_ACTIVE_*` variable in deployment manifests and
+    secret stores:
+    - under `keystore.keys`, a key inside an entry other than `public`, `private`, `secret` or
+      `pkcs12` (a misspelled field such as `privte`, a scalar such as `note:`, or a map such as
+      `our:` beside `public:`), or a key inside one of those other than `file` or `value`
+      (`pkcs12` also takes `password`, which takes `env` or `file`). v0.71.1 dropped the key.
+      Judge the merged tree, not each file: `our:` in `config.yaml` and `public:` on the same
+      name in `config.<env>.yaml` or a variable form an entry with a name nested under it. A
+      junk key that leaves the entry's required source unset (the only key under `public`,
+      `secret` or `pkcs12`) is not in this list: v0.71.1 already failed it with `key source
+      required`;
+    - a `KEYSTORE_KEYS_*` variable whose path, read with `_` as `.`, ends anywhere but at such
+      a source (`KEYSTORE_KEYS_SIGNING_PUBLIC_FILENAME`, `KEYSTORE_KEYS_SIGNING_TIMEOUT`), or a
+      POSIX variable that spells a hyphenated entry (`KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_VALUE` for
+      `tokens-our`) while an entry is named after its first segment (`tokens`). v0.71.1 dropped
+      the variable;
+    - a YAML sequence directly under `keystore.keys` or `messaging.seal.active` (`keys:` or
+      `active:` followed by `- …` items, or `[]`), in any layer, and a deeper one (`keys:
+      {tokens: [- our: …]}`) that a later layer replaces with a map (an overlay, or a variable
+      such as `KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE`). v0.71.1 merged a surviving sequence at
+      `keys:` or `active:` into a map, and dropped a replaced one with everything it held; a
+      deeper one that survives failed v0.71.1's decode too;
+    - a nested selector in one YAML file that a later file replaces with a scalar on its
+      parent path: `active: {payments: {sign: v1}}` in `config.yaml` under `active: {payments:
+      v2}` in `config.<env>.yaml`, or `{payments-sign: {eu: v1}}` under `{payments-sign: v2}`.
+      v0.71.1 decoded only the overlay's scalar and booted; v0.72.0 judges each file's
+      selectors before the merge and refuses the pair as nesting. Delete the stale map;
+    - a malformed generation entry (`x-v0`, `x-v01`, `x-v1-v2`, a family over 64 bytes) in a
+      service that does not register `keystore.NewModule()`. v0.71.1 refused it only in the
+      keystore module's `Init`; v0.72.0 refuses it in `config.Validate`, keystore module or not.
+  - (b) configs that fail on both releases, with a different error, or that now boot: a quoted
+    key containing `.` (`"tokens.our":`); a POSIX variable that spells a hyphenated entry
+    while no entry is named after its first segment (v0.71.1 named a phantom `tokens`); a
+    scalar where an entry belongs; an entry or selector name outside `[a-z0-9-]`; a selector
+    written nested that no later layer replaces, which v0.71.1 failed to decode and v0.72.0
+    reads as the dotted selector `payments.sign` (an empty map there is refused; one a later
+    file replaces with a scalar is in (a)); a malformed generation entry in a service that
+    registers `keystore.NewModule()`.
+    These matter only where a test, script, alert or runbook names the old error.
+  - (c) tests and scripts that pin a text v0.72.0 moves. The old spellings:
+
+    ```sh
+    git grep -nE \
+      -e "key name .* cannot contain '\.'" -e "cannot be empty or contain '\.'" \
+      -e 'entry (after the keystore family, )?without dots' -e "digits and '-' only" \
+      -e "set either 'file' \(path\) or 'value' \(base64\)" \
+      -e 'must not end in (the generation marker )?-v<digits>' \
+      -e 'not a valid jose kid \(allowed: A-Z a-z 0-9 _ -\)' \
+      -e 'must match \^\[A-Za-z0-9_-\]\+\$' -e 'contains disallowed characters' \
+      -e 'expected <logical>-v<N>' -e "expected type 'string', got unconvertible" \
+      -e 'expected a map or struct' -e 'keystore: key .*: (generation|logical kid)' \
+      -e "'keystore\.keys\[" -- '*.go' '*.sh'
+    ```
+
+  - (d) Go code that calls `Config.Unmarshal` into a target that is or holds a
+    `config.KeyPairConfig`, a map of them, a `KeyStoreConfig` or a `SealConfig`, at any path,
+    a custom section included: list each type's uses with
+    `git grep -nwE 'KeyPairConfig|KeyStoreConfig|SealConfig' -- '*.go'` (a variable, a map
+    value or a struct field) and follow each to its `Unmarshal`. The tree reader fires on
+    these types wherever they are decoded. v0.71.1 dropped a key in such a node that is no
+    entry field, so `custom.partner: {public: …, kid: partner-2026}` read through
+    `Unmarshal("custom.partner", &kp)` loaded; v0.72.0 refuses it, as it refuses a namespace's
+    path (`keystore.keys.tokens`), and its `Field` names the unmarshaled path.
+- scope: names that boot today keep their meaning, their variable and their wire kid; no kid,
+  `iss`, inbox key or vector moves. A `keystore.keys` name is now a path of `[a-z0-9-]` segments,
+  written nested. Startup refuses a quoted key containing `.`, a field name (`public`, `private`,
+  `secret`, `pkcs12`) after a `.`, a name that is a dotted prefix of another, two names with
+  equal `-`-to-`.` folds, and any key under an entry or source that is not one of its fields.
+  `config.Validate` refuses a generation entry that is no generation (`x-v01`, `x-v1-v2`,
+  `payments.sign-v1`, `audit.v1`) with its rename; v0.71.1 left the old malformed shapes to the
+  keystore module's `Init`. `messaging.seal.active` keys follow the same segments, and a
+  selector that differs from a provisioned family only in `-` versus `.` fails `Validate`. Two
+  families, or two selectors, that nest once `-` is read as `.` fail `Validate` when either
+  contains `.` (`payments-sign` beside `payments.sign.eu`); two names without `.` are exempt.
+  Two selectors that nest as written fail too, because each layer's selectors are judged before
+  the merge keeps one. Such a pair puts a map on a selector path, which v0.71.1 refused at
+  decode, unless a later YAML file replaced that map with a scalar on its parent path; that
+  config booted on v0.71.1 and fails now (detect (a)). A sequence under `keystore.keys` or
+  `messaging.seal.active` is refused, empty or not: at decode when it survives the merge, and
+  by `config.Validate` (`invalid configuration: keystore config:` or `messaging config:`, with
+  `a later layer replaced it` in the Message) when an overlay or a variable replaced it with a
+  map. A selector holding an empty map is refused. `Config.Unmarshal` into a `KeyPairConfig`
+  refuses a node holding a child that is no entry field (a namespace's path, such as
+  `keystore.keys.tokens` holding `tokens.our`, or a custom section's metadata key), and every
+  tree refusal it returns names the path it decoded. Every refusal is a `*ConfigError` that
+  `errors.As` reaches. A refusal made while decoding is wrapped `failed to unmarshal config:
+  decoding failed due to the following error(s):`; one made by `config.Validate` keeps
+  `invalid configuration:`, so a quoted dotted key, refused by `Validate` on v0.71.1, changes
+  wrapper. `go-bricks-migrate --source-config` decodes its file with the framework's decoder,
+  so from its go-bricks pin bump to this release it reads dotted names and refuses these
+  shapes too; before, it ignored junk under a keystore entry and aborted on a nested selector.
+  It also refuses a top-level key containing `.` (`multitenant.tenants:` quoted, or flat
+  `multitenant.enabled: true`), which a service's `Load` keeps as one literal key and ignores,
+  so the tool cannot list tenants the service never serves.
+- note: the texts that move, old → new (no `JOSE_*` or `SEAL_*` code moves):
+  - quoted dotted key: `key name "tokens.our" cannot contain '.' (the config path delimiter)`
+    → `key "tokens.our" is one YAML key containing '.'`; under `messaging.seal.active`,
+    `logical kid "payments.sign" cannot be empty or contain '.' (the config path delimiter)` →
+    `key "payments.sign" is one YAML key containing '.'`, and an empty selector key or segment
+    → `logical kid "" cannot be empty or have an empty segment`;
+  - name grammar, `keystore.keys` and `messaging.seal.active` only (databases and tenants keep
+    theirs): the Action `rename it using lowercase letters, digits and '-' only: …` → `rename it
+    using lowercase letters, digits and '-' within a segment and nesting between segments: …`,
+    followed by `; write "tokens.our", which KEYSTORE_KEYS_TOKENS_OUR_* reaches` when that
+    spelling is valid;
+  - `key source required`: the Message is unchanged; the Action `set either 'file' (path) or
+    'value' (base64)` gains `, e.g. KEYSTORE_KEYS_<NAME>_<FIELD>_FILE or
+    KEYSTORE_KEYS_<NAME>_<FIELD>_VALUE`, and a POSIX note for a name with `-`;
+  - a scalar or a sequence where an entry belongs: `'keystore.keys[tokens]' expected a map or
+    struct, got "string"` (or `"slice"`) → `keystore.keys.tokens holds a value where an entry or
+    a further name segment was expected`;
+  - a value of the wrong shape below an entry field: a map where a value belongs,
+    `'keystore.keys[tokens].public.value' expected type 'string', got unconvertible type
+    'map[string]interface {}'` → `keystore.keys.tokens.public.value holds a map where a value
+    was expected`; a scalar or a sequence where a source map belongs,
+    `'keystore.keys[tokens].public' expected a map or struct, got "string"` (or `"slice"`) →
+    `keystore.keys.tokens.public holds a single value where a map was expected`, and the same
+    under `pkcs12.password`;
+  - the label mapstructure puts before every keystore decode error moves from the failing node
+    (`'keystore.keys[tokens].public'`) to the hooked one (`'keystore.keys' config_invalid:`),
+    and the node's path moves into the `ConfigError`'s Field;
+  - a nested selector: `'messaging.seal.active[payments]' expected type 'string', got
+    unconvertible type 'map[string]interface {}'` → it decodes as `payments.sign`, or fails
+    with a selector refusal from ADR-144 §6 (an empty map: `holds an empty map where a
+    generation or a further name segment was expected`);
+  - a POSIX variable for a hyphenated entry with no entry for its first segment:
+    `keystore.keys.tokens.public key source required` → `keystore.keys.tokens.our "tokens-our"
+    and "tokens.our" differ only in '-' versus '.'`;
+  - a malformed generation, now refused by `config.Validate`: `keystore: key "x-v01":
+    generation "v01" must be a positive integer without leading zeros (v1, not v0 or v01)` →
+    `keystore.keys.x-v01 generation "v01" must be a positive integer without leading zeros (v1,
+    not v0 or v01)` with the Action `rename it x-v1 or another canonical version`, and
+    `keystore: key "x-v1-v2": logical kid "x-v1" must not end in the generation marker
+    -v<digits>` → `keystore.keys.x-v1-v2 ends in a generation marker, but "x-v1" before it is
+    no family`, and a family over 64 bytes, `keystore: key "<name>": logical kid "<family>" is
+    70 characters, maximum is 64` → `keystore.keys.<name> family "<family>" is 70 bytes,
+    maximum is 64`. The keystore's own texts, which only a Config that skipped `Validate` reaches,
+    become `must not end in the generation marker -v<digits> or .v<digits>` and `is not a
+    valid jose kid (allowed: A-Z a-z 0-9 _ -, and '.' between non-empty runs)`;
+  - `jose:` tag kid (`JOSE_TAG_KID_INVALID`): `kid "x" contains disallowed characters` → `kid
+    "x" is not a key identifier: runs of A-Z a-z 0-9 _ - joined by single dots, with no empty
+    run`;
+  - `seal:` tag and `sealed.CheckLogicalKid`: `must match ^[A-Za-z0-9_-]+$` → `must match
+    ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$`; `must not end in -v<digits> (that is a generation
+    name)` → `must not end in -v<digits> or .v<digits> (that is a generation name)`; a tag
+    naming a generation (`sign=payments-sign-v1`) → `logical kid "payments-sign-v1" for sign
+    names a generation; the tag takes the family "payments-sign"`;
+  - `seal-event` and `open-event` kid flags: `-sign-kid "payments-sign" is not a generation:
+    expected <logical>-v<N> with N a positive integer without leading zeros` → a family passed
+    alone, `-sign-kid "payments-sign" is a family, not a generation: pass payments-sign-v<N>`;
+    the marker the family does not take, `-sign-kid "payments.sign-v1" is not a generation:
+    family "payments.sign" takes the marker of payments.sign.v1`; anything else, `is not a
+    generation: expected <family>.v<N> (family with '.') or <family>-v<N> (family without
+    '.'), with N a positive integer without leading zeros`. Exit codes are unchanged;
+  - a keystore accessor miss, `keystore: key "tokens.our" not found`, gains `; configured
+    "tokens-our" differs only in '-' versus '.'` when such a look-alike is configured.
+  - Unchanged for a family without `.`: `keystore.ActiveGeneration`'s and
+    `ErrFamilyUnprovisioned`'s `expected a keystore.keys entry named payments-sign-v<N>`.
+- gate: match = any (a), (c) or (d) hit, or a (b) hit that a test, script, alert or runbook
+  names by its old error. A (c) hit counts when it compares the full text or the changed part;
+  `digits and '-' only` counts only on a keystore or selector name, and `expected type
+  'string'` and `expected a map or struct` only on `messaging.seal.active` or `keystore.keys`.
+  no-match = entries carry only fields and sources, sources only their keys, no variable lands
+  off a source, no sequence sits under `keys` or `active` in any layer, no layer holds a
+  selector map that a later layer replaces with a scalar, every generation entry is well
+  formed, and no pinned text moves.
+- before: `keys: {tokens: {public: {value: …}, our: {public: …}}}` booted with `our` dropped;
+  `keys: {tokens: {public: {value: …}, private: {vlaue: …}}}` booted with no private key read;
+  `keys: []` booted with no keys; `keys: [- tokens: …]` under
+  `KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE` booted with `signing` alone; `active: {payments: {sign:
+  v1}}` under an overlay's `active: {payments: v2}` booted with `payments: v2`;
+  `keys: {x-v01: {public: …}}` booted in a service without the keystore module.
+- after: startup refuses each one:
+  - `failed to unmarshal config: decoding failed due to the following error(s): 'keystore.keys'
+    config_invalid: keystore.keys.tokens "tokens" is an entry (it sets public) and the parent of
+    entry "tokens.our" rename one of them (tokens → tokens.default) so no entry name is a prefix
+    of another`;
+  - `… config_invalid: keystore.keys.tokens.private.vlaue unknown field "vlaue" private takes
+    file or value`;
+  - `… config_invalid: keystore.keys holds a sequence where a map was expected …`;
+  - `invalid configuration: keystore config: config_invalid: keystore.keys holds a sequence
+    where a map was expected, and a later layer replaced it, which would drop what it held …`;
+  - `invalid configuration: messaging config: config_invalid:
+    messaging.seal.active.payments.sign selectors "payments" and "payments.sign" nest: one path
+    cannot hold both, and loading kept only one of them …`;
+  - `invalid configuration: keystore config: config_invalid: keystore.keys.x-v01 generation
+    "v01" must be a positive integer without leading zeros (v1, not v0 or v01) rename it x-v1 or
+    another canonical version`.
+- apply: delete the junk key or variable, or fix its spelling; rename one of a nested pair
+  (`tokens` → `tokens.default`) everywhere it is named; keep one of two look-alike names; write
+  a quoted dotted key nested; rewrite a sequence as a map, or delete it where a later layer
+  already supplies the map; delete a stale selector map that a later file replaces with a
+  scalar; rename a malformed generation entry
+  (`x-v01` → `x-v1`); unmarshal one entry by its full dotted path, or the keys map; move pinned
+  error texts to the new wording above, or to a substring check on the part that did not move.
+  To adopt dotted names, follow the runbooks in [keystore.md](keystore.md#entry-names) and
+  [sealing.md](sealing.md#renaming-a-family) — a live sealing family moves only by a
+  drain-then-cutover rename.
+- verify: `go test ./...`, then boot the app in every environment. A boot proves the config
+  decodes and passes `config.Validate`, and that every `jose:` route and every sealing
+  declaration resolved its kids, since both resolve at startup. It does not prove a kid that is
+  resolved per call: an `httpclient` built `WithJOSE`, a code-built `jose.Seal`, `jose.Open`
+  or `jose/sealed` `Seal`/`Open`/`OpenDocument`, or a `PrivateKey`, `PublicKey` or `Secret`
+  call in module code. `Build` validates a `WithJOSE` client's policies but resolves no kid.
+  Its `JOSETransport` resolves the sign and encrypt kids only when it seals a request body,
+  and the decrypt and verify kids only when it opens a protected response (`application/jose`,
+  or an `Envelope` it unwraps); a bodyless request or a plaintext error response resolves
+  none, so an ordinary `400` proves nothing. For each `WithJOSE` client, either resolve every
+  kid its two policies name in the module's `Init` (`PrivateKey` for the sign and decrypt kids,
+  `PublicKey` for the encrypt and verify kids, failing `Init` on an error), or make one call
+  that carries a body and receives a protected `2xx`. Exercise every other per-call reader the
+  same way; a missing kid fails with `JOSE_KID_UNKNOWN`, or the keystore's `not found`,
+  carrying the look-alike hint.
+  With a dotted name, `export KEYSTORE_KEYS_<SEGMENTS>_<FIELD>_<SOURCE>=…` in a POSIX shell and
+  confirm the value arrives.
+- ref: [ADR-144](adr_144_dotted_keystore_entry_names.md) · `config/keystore_tree.go`
+  (`keystoreTreeHook`) · `config/keystore_section.go` (`checkKeyStore`, `checkKeyFamilies`,
+  `checkSealSelectorFamilies`, `checkKeyStoreWithLayers`) · `config/messaging_section.go`
+  (`checkMessagingSeal`, `checkSelectorLayers`) · `config/source.go` (`recordSelectors`,
+  `recordSequences`) · `internal/keyname/keyname.go` · `internal/sealcli/spec.go`
 
 ---
 

@@ -4,6 +4,12 @@
 - **Date**: 2026-08-30
 - **Related**: [ADR-024](adr_024_config_key_flatsmush.md) (the same reachability property for FRAMEWORK leaf keys, solved by renaming them) · [ADR-039](adr_039_composite_resolver_order.md) (the resolved tenant-ID grammar this rule reuses) · [ADR-064](adr_064_app_validates_every_config.md) (every construction path runs `config.Validate`, so this check binds them all)
 
+> **Amended by [ADR-144](adr_144_dotted_keystore_entry_names.md) (2026-10-04):** a
+> `keystore.keys` name may be a dotted path of `[a-z0-9-]` segments, written nested in YAML and
+> reached by the unchanged transform (`KEYSTORE_KEYS_TOKENS_OUR_*` → `tokens.our`). §2 and §6
+> stand: the nested path is read as the name, nothing is renamed. `databases` and
+> `multitenant.tenants` are unchanged.
+
 ## Context
 
 `Load` maps an environment variable to a config key by lowercasing it and turning every `_`
