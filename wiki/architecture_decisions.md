@@ -2400,6 +2400,24 @@ the error says the fix is configuration, not a re-run.
 
 ---
 
+### [ADR-145: A Tenant Cache Refuses a `manager` Block](adr_145_tenant_cache_manager_refusal.md)
+
+**Date:** 2026-10-05 | **Status:** Accepted | **Breaking:** `config.Validate` refuses a static tenant's `multitenant.tenants.<id>.cache.manager` block, enabled or not, where it was accepted and never read
+
+The single cache manager reads only the root `cache.manager`, yet a tenant cache's manager
+block was accepted and, for an enabled tenant, filled with defaults nothing read, so
+`multitenant.tenants.<id>.cache.manager.maxsize` changed nothing. A non-zero tenant block, judged
+as written before any fill, now fails with `cache.manager.* is only supported on the root cache`,
+mirroring the database's `database.manager.*` refusal; tenant blocks are no longer filled. A
+tenants block that is inert (multitenancy disabled, or a dynamic source) is not judged, and the
+root `cache.manager` is accepted and filled as before. See [migrations.md](migrations.md)
+`[C72.25]`.
+
+**Key Benefits:** a tenant pool setting that could never take effect fails at startup instead of
+reading as tuned.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3194,7 +3212,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-143) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-145) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
