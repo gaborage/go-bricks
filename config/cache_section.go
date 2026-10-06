@@ -29,9 +29,10 @@ func normalizeCache(cfg *CacheConfig, multitenant bool) error {
 
 // normalizeCacheSection is the Normalization step both cache doors share: Validate's
 // normalizeCache and the connect door, ResolveCacheSectionForKey. It fills the section's own
-// fields only, so re-running it on a normalized section changes nothing.
+// fields only, so re-running it on a normalized section changes nothing. The type is filled
+// only for an enabled section, the gating the tenant default always had.
 func normalizeCacheSection(cfg *CacheConfig) error {
-	if cfg.Type == "" {
+	if cfg.Enabled && cfg.Type == "" {
 		cfg.Type = CacheTypeRedis
 	}
 	applyRedisDefaults(&cfg.Redis)

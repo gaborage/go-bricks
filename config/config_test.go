@@ -1659,7 +1659,6 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 		"cache.redis.maxretries":      3,
 		"cache.redis.minretrybackoff": "8ms",
 		"cache.redis.maxretrybackoff": "512ms",
-		"cache.type":                  "redis",
 		"keystore.secretminlength":    32,
 		"scheduler.timeout.shutdown":  "30s",
 		"scheduler.timeout.slowjob":   "25s",

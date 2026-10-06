@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -1115,14 +1117,26 @@ func TestResolveCacheSectionForKeyLeavesTLSFileReadToTheDial(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestNormalizeCacheFillsEmptyRootType pins the startup half of the shared Normalization
-// step: a hand-built root with no type is filled with redis instead of refused.
-func TestNormalizeCacheFillsEmptyRootType(t *testing.T) {
-	cfg := CacheConfig{Enabled: true, Redis: RedisConfig{Host: "redis.internal"}}
+// TestLoadFillsADeliveredEmptyCacheType pins the startup half of the shared Normalization step
+// through the door that validates: an enabled root cache whose type was delivered empty is
+// filled with redis instead of refused.
+func TestLoadFillsADeliveredEmptyCacheType(t *testing.T) {
+	clearEnvironmentVariables()
+	t.Setenv("CACHE_ENABLED", "true")
+	t.Setenv("CACHE_TYPE", "")
+	t.Setenv("CACHE_REDIS_HOST", "redis.internal")
 
-	require.NoError(t, normalizeCache(&cfg, false))
-	require.NoError(t, checkCache(&cfg))
-	assert.Equal(t, "redis", cfg.Type)
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	assert.Equal(t, "redis", cfg.Cache.Type)
+}
+
+func TestNormalizeCacheLeavesADisabledSectionTypeEmpty(t *testing.T) {
+	cfg := CacheConfig{}
+
+	require.NoError(t, normalizeCache(&cfg, true))
+	assert.Empty(t, cfg.Type)
 }
 
 func TestResolveCacheSectionForKeyIsIdempotent(t *testing.T) {
@@ -1134,4 +1148,26 @@ func TestResolveCacheSectionForKeyIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, *once, *twice)
+}
+
+// TestCloneCacheSectionCopiesEveryReferenceField fails the day a cache section gains a pointer,
+// slice or map field other than Redis.KeyPrefix, which cloneCacheSection would then share.
+func TestCloneCacheSectionCopiesEveryReferenceField(t *testing.T) {
+	referenceKinds := []reflect.Kind{reflect.Pointer, reflect.Slice, reflect.Map, reflect.Interface, reflect.Func, reflect.Chan}
+	var refs []string
+	var walk func(reflect.Type, string)
+	walk = func(typ reflect.Type, path string) {
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			kind := field.Type.Kind()
+			if kind == reflect.Struct {
+				walk(field.Type, path+field.Name+".")
+			} else if slices.Contains(referenceKinds, kind) {
+				refs = append(refs, path+field.Name)
+			}
+		}
+	}
+	walk(reflect.TypeFor[CacheConfig](), "")
+
+	assert.Equal(t, []string{"Redis.KeyPrefix"}, refs)
 }
