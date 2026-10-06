@@ -585,6 +585,7 @@ func TestConfigValidate(t *testing.T) {
 	})
 }
 
+// TestConfigAddress tests the Address method of the Config struct.
 func TestConfigAddress(t *testing.T) {
 	cfg := &Config{
 		Host: "redis.example.com",
