@@ -11,7 +11,7 @@ database 0, username, database range, pool size, the three timeouts and the TLS 
 live once in `internal/redisrules.Check`, which returns the first violation in that fixed order
 with a relative field and config wording. The client door calls it once and heads the field with
 `redis.`, appending a closed set to the message because `cache.ConfigError` has no Action. The
-door stays load-bearing for the one input that reaches it alone, a hand-built `redis.Config`.
+door stays load-bearing: it is the only check a hand-built `redis.Config` passes through.
 Its messages move to config wording (`[C72.22]`); `loadtimeout` stays outside the rule set, since
 it never reaches the transport.
 

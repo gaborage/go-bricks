@@ -40,7 +40,7 @@ type Violation struct {
 // Check returns the first violation in a fixed order — host, port, mode,
 // cluster needs database 0, username, database range, poolsize, dial, read,
 // write, TLS structure — or nil when the endpoint is valid. An empty Mode is
-// standalone. It fills nothing and reads no files.
+// standalone. It fills nothing, mutates nothing and reads no files.
 func Check(e *Endpoint) *Violation {
 	if e.Host == "" {
 		return &Violation{Field: "host", Message: "required", Missing: true}
