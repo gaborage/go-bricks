@@ -669,11 +669,54 @@ messaging:
 		assert.Equal(t, "tok-pub", cfg.KeyStore.Keys["tokens"].Public.Value)
 	})
 
+	t.Run("map_over_map_boots", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, "keystore:\n  keys:\n    tokens:\n      our:\n        public: {value: our-pub}\n",
+			"messaging:\n  seal:\n    active:\n      payments-sign: v1\n",
+			map[string]string{"KEYSTORE_KEYS_TOKENS_PEER_PUBLIC_VALUE": "peer-pub"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"tokens.our", "tokens.peer"}, slices.Sorted(maps.Keys(cfg.KeyStore.Keys)))
+	})
+
 	// A sequence elsewhere is no keystore or selector node: it is not recorded.
 	t.Run("sequence_outside_both_subtrees_boots", func(t *testing.T) {
 		_, err := loadKeystoreYAML(t, "log:\n  sensitivefields: [pan]\nkeystore:\n  other: [x]\n", "", nil)
 		require.NoError(t, err)
 	})
+}
+
+// TestLoadKeystoreLayerPrecedence: a dotted entry is one koanf path, so the
+// three operator layers override it leaf by leaf exactly as any other key —
+// environment over the env overlay over the base file — and the presence
+// record sees the variable's leaf.
+func TestLoadKeystoreLayerPrecedence(t *testing.T) {
+	cfg, err := loadKeystoreYAML(t, `
+app:
+  env: development
+keystore:
+  keys:
+    tokens:
+      our:
+        public:
+          file: base-pub.der
+        private:
+          value: base-priv
+`, `
+keystore:
+  keys:
+    tokens:
+      our:
+        public:
+          file: overlay-pub.der
+`, map[string]string{"KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE": "env-priv"})
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]KeyPairConfig{"tokens.our": {
+		Public:  KeySourceConfig{File: "overlay-pub.der"},
+		Private: KeySourceConfig{Value: "env-priv"},
+	}}, cfg.KeyStore.Keys)
+	assert.True(t, cfg.delivered("keystore.keys.tokens.our.private.value"))
+	assert.True(t, cfg.delivered("keystore.keys.tokens.our.public.file"))
+	assert.False(t, cfg.delivered("keystore.keys.tokens.our.private.file"))
 }
 
 // TestLoadFromMapDottedKeys: LoadFromMap unflattens only its top-level keys,
@@ -747,5 +790,82 @@ func FuzzKeystoreEnvRoundTrip(f *testing.F) {
 		flat, err := readKeyTree(keysTree)
 		require.NoError(t, err)
 		require.Equal(t, map[string]any{name: map[string]any{"public": map[string]any{"value": "v"}}}, flat)
+	})
+}
+
+// nestNames writes a set of entry names into one keystore.keys tree, each entry
+// a public value carrying its own name.
+func nestNames(names []string) map[string]any {
+	tree := make(map[string]any)
+	for _, name := range names {
+		node := tree
+		for seg := range strings.SplitSeq(name, keyname.Sep) {
+			child, isMap := node[seg].(map[string]any)
+			if !isMap {
+				child = make(map[string]any)
+				node[seg] = child
+			}
+			node = child
+		}
+		node["public"] = map[string]any{"value": name}
+	}
+	return tree
+}
+
+// nameSetShape is the independent oracle for the set rules: whether any name
+// is a dotted prefix of another, and whether any two unmarked names share a
+// fold. A name with a Generation marker is left to checkKeyFamilies, as
+// checkKeyNameSet leaves it: a marked look-alike (a-v1 beside a.v1) is a
+// malformed name or a family look-alike, refused with that rule's message.
+func nameSetShape(sorted []string) (prefixFree, foldDistinct bool) {
+	prefixFree, foldDistinct = true, true
+	folds := make(map[string]bool, len(sorted))
+	for i, name := range sorted {
+		for _, other := range sorted[i+1:] {
+			prefixFree = prefixFree && !keyname.IsDottedPrefix(name, other)
+		}
+		if _, _, form := keyname.SplitGeneration(name); form != keyname.Ordinary {
+			continue
+		}
+		foldDistinct = foldDistinct && !folds[keyname.Fold(name)]
+		folds[keyname.Fold(name)] = true
+	}
+	return prefixFree, foldDistinct
+}
+
+// FuzzKeystoreTreeFlatten: a random set of valid names, nested into one tree,
+// decodes and checks back to exactly that set, or fails with the rule the set
+// breaks. It never succeeds with fewer names than it was given, which is the
+// silent loss probe E used to show.
+func FuzzKeystoreTreeFlatten(f *testing.F) {
+	for _, seed := range []string{"a,a.b", "a-b,a.b", "a-b.c,a.b-c", "a.v1,a.b", "a-v1,a.b.v1", "ab.c,ab.c0", "a", "a-v1,a.v1", "a-b-v1,a.b-v1"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		names := fuzzNames(raw)
+		if len(names) == 0 {
+			t.Skip()
+		}
+		cfg, err := loadKeyTree(t, nestNames(names))
+		if err == nil {
+			err = checkKeyStore(&cfg.KeyStore)
+		}
+
+		sorted := slices.Sorted(slices.Values(names))
+		prefixFree, foldDistinct := nameSetShape(sorted)
+		switch {
+		case !prefixFree:
+			require.ErrorContains(t, err, "and the parent of entry")
+		case !foldDistinct:
+			require.ErrorContains(t, err, "differ only in '-' versus '.'")
+		case checkKeyFamilies(sorted) != nil:
+			require.EqualError(t, err, checkKeyFamilies(sorted).Error())
+		default:
+			require.NoError(t, err)
+			require.Len(t, cfg.KeyStore.Keys, len(names))
+			for _, name := range names {
+				require.Equal(t, name, cfg.KeyStore.Keys[name].Public.Value)
+			}
+		}
 	})
 }
