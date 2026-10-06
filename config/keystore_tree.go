@@ -101,10 +101,15 @@ func rerootTreeErrors(err error, key string) {
 	}
 }
 
-// readKeysNode reads the node an entry map is decoded from. Anything that is
-// not a string-keyed map is passed through for mapstructure to judge, as
-// before.
+// readKeysNode reads the node an entry map is decoded from. A sequence is
+// refused: mapstructure's weak decoding would merge its maps into the entry
+// map and skip the walk, decoding a namespace as a phantom entry. Anything
+// else that is not a string-keyed map is passed through for mapstructure to
+// judge, as before.
 func readKeysNode(data any) (any, error) {
+	if isSequence(data) {
+		return nil, sequenceError(fieldKeystoreKeys, keysSequenceAction)
+	}
 	tree, isMap := stringMap(data)
 	if !isMap {
 		return data, nil
@@ -137,9 +142,9 @@ func checkEntryNode(data any) error {
 
 // replaceSelectorTree returns a shallow copy of a seal section with its
 // active child (matched as mapstructure matches a field name) replaced by the
-// flat selector map. data is never mutated: koanf owns it. Anything there that
-// is not a string-keyed map is passed through for mapstructure to judge, as
-// before.
+// flat selector map. data is never mutated: koanf owns it. A sequence there is
+// refused, as under keystore.keys; anything else that is not a string-keyed
+// map is passed through for mapstructure to judge, as before.
 func replaceSelectorTree(data any) (any, error) {
 	section, ok := stringMap(data)
 	if !ok {
@@ -149,6 +154,9 @@ func replaceSelectorTree(data any) (any, error) {
 	for _, key := range slices.Sorted(maps.Keys(section)) {
 		if !strings.EqualFold(key, sealActiveChild) {
 			continue
+		}
+		if isSequence(section[key]) {
+			return nil, sequenceError(fieldMessagingSealActive, selectorsSequenceAction)
 		}
 		tree, isMap := stringMap(section[key])
 		if !isMap {
@@ -167,6 +175,45 @@ func replaceSelectorTree(data any) (any, error) {
 		return data, nil
 	}
 	return out, nil
+}
+
+// isSequence reports whether node is a YAML sequence (any slice or array).
+func isSequence(node any) bool {
+	kind := reflect.ValueOf(node).Kind()
+	return kind == reflect.Slice || kind == reflect.Array
+}
+
+const (
+	keysSequenceAction      = "write the entries as a map, one key per name segment (keys: {tokens: {our: {public: …}}})"
+	selectorsSequenceAction = "write the selectors as a map, one key per name segment (active: {payments: {sign: v2}})"
+)
+
+func sequenceError(field, action string) *ConfigError {
+	return &ConfigError{
+		Category: errCategoryInvalid,
+		Field:    field,
+		Message:  "holds a sequence where a map was expected",
+		Action:   action,
+	}
+}
+
+// checkLayerSequences refuses a sequence an operator layer wrote under root (keystore.keys
+// or messaging.seal.active, recorded before the merge) that never reached decode. Decode
+// refuses a sequence that survives the merge; a map a later layer sets at the same path (the
+// env overlay, or a variable) replaces it instead, and the entries or selectors it held were
+// dropped in silence. A hand-built Config has no layers.
+func checkLayerSequences(cfg *Config, root, action string) error {
+	if cfg.src == nil {
+		return nil
+	}
+	for _, path := range slices.Sorted(maps.Keys(cfg.src.sequences)) {
+		if path == root || strings.HasPrefix(path, root+keyname.Sep) {
+			err := sequenceError(path, action)
+			err.Message += ", and a later layer replaced it, which would drop what it held"
+			return err
+		}
+	}
+	return nil
 }
 
 // readKeyTree flattens keystore.keys: every node with a field child (public,

@@ -112,6 +112,13 @@ func checkMessagingPublishTimeout(cfg *MessagingConfig) error {
 	return nil
 }
 
+// checkSealSelectorsBeyondSection runs the selector rules that need more than the messaging
+// section: a sequence an operator layer wrote that a later layer replaced
+// (checkLayerSequences). No check of the decoded section can see it.
+func checkSealSelectorsBeyondSection(cfg *Config) error {
+	return checkLayerSequences(cfg, fieldMessagingSealActive, selectorsSequenceAction)
+}
+
 // checkMessagingSeal judges the Activation selector's shape: every key is a
 // user-chosen section name (env-reachable, no '.'), every value a canonical
 // generation. Whether the key names a Logical kid the keystore holds is the
