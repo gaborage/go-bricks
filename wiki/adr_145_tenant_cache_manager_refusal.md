@@ -69,7 +69,7 @@ multi-tenant so the pool scales to `multitenant.limits.tenants`).
 
 - **Breaking.** A config file, overlay, `MULTITENANT_TENANTS_<ID>_CACHE_MANAGER_*`
   variable or hand-built `Config` that sets a static tenant's
-  `cache.manager.*` now fails `Validate` at startup. The block never had an
+  `cache.manager.*` to a non-zero value now fails `Validate` at startup. The block never had an
   effect, so deleting it changes no runtime behavior.
 - A tenant block whose every leaf is an explicit `0` equals the zero value and
   passes, as it does for the database.

@@ -12470,7 +12470,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `git grep -nE 'MULTITENANT_TENANTS_[A-Z0-9_]+_CACHE_MANAGER_'` over env files and deploy
   manifests, and `git grep -nE 'CacheManagerConfig\{|\.Cache\.Manager([^A-Za-z]|$)' -- '*.go'`,
   keeping only hits inside a `config.TenantEntry`'s `Cache: config.CacheConfig{…}` literal or on a
-  `Tenants[…].Cache.Manager` assignment.
+  `Tenants[…].Cache.Manager` assignment. Of those hits, drop a block whose every value is zero
+  (`0`, `0s`, or an empty `CacheManagerConfig{}`): it equals the zero value and passes.
 - scope: `config.Validate` refuses a static tenant cache whose `Manager` is not the zero
   `CacheManagerConfig{}`, judged as written before any fill, whether or not that tenant cache is
   enabled. It is judged only under `multitenant.enabled: true` with `source.type: static` (the
@@ -12480,8 +12481,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   an explicit `0` equals the zero value and passes. **Unchanged**: the root `cache.manager`, still
   accepted and filled (`idlettl` 15m, `cleanupinterval` 5m, `maxsize` 100 single-tenant, 0 kept in
   multi-tenant); dynamic-source tenant configs, which never reach `config.Validate`.
-- gate: match = a detect hit under a static tenant's `cache:` in a multi-tenant deployment with a
-  static source. no-match = no hit, or every hit sits in a tenants block that deployment does not
+- gate: match = a non-zero detect hit under a static tenant's `cache:` in a multi-tenant deployment
+  with a static source. no-match = no hit, or every hit sits in a tenants block that deployment does not
   consume.
 - before: the block was accepted and, for an enabled tenant cache, filled with `idlettl` and
   `cleanupinterval` defaults; the cache manager read only root `cache.manager`, so the tenant
@@ -12491,8 +12492,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `multitenant.tenants.<id>.cache.manager`, `Message` is
   `cache.manager.* is only supported on the root cache`, and `Action` is
   `remove the manager block from multitenant.tenants.<id>.cache; tune the shared pool via cache.manager.*`.
-- apply: delete the tenant `manager` block, its `MULTITENANT_TENANTS_<ID>_CACHE_MANAGER_*`
-  variables and any hand-built `TenantEntry.Cache.Manager` value; they never had an effect. To
+- apply: delete each matched tenant `manager` block, its non-zero
+  `MULTITENANT_TENANTS_<ID>_CACHE_MANAGER_*` variables and any non-zero hand-built
+  `TenantEntry.Cache.Manager` value; they never had an effect. An all-zero block passes and may stay. To
   tune the one pool every tenant shares, set root `cache.manager.*` instead.
 - verify: `go test ./...`  # then boot the app and confirm startup does not abort with an error
   containing `cache.manager.* is only supported on the root cache`.
