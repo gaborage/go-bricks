@@ -918,10 +918,13 @@ func TestResolveCacheSectionForKeyNormalizes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ResolveCacheSectionForKey(tt.section(), tt.key)
+			section := tt.section()
+
+			got, err := ResolveCacheSectionForKey(section, tt.key)
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, *got)
+			assert.Equal(t, tt.section(), section, "the input section must be untouched")
 		})
 	}
 }
@@ -1009,6 +1012,17 @@ func TestResolveCacheSectionForKeyRefuses(t *testing.T) {
 			wantAction: "must be one of: 1-65535",
 		},
 		{
+			name: "tenant_tls_file_and_value_both_set",
+			key:  "acme",
+			section: &CacheConfig{Enabled: true, Redis: RedisConfig{
+				Host: "redis.acme.internal",
+				TLS:  RedisTLSConfig{Enabled: true, CAFile: "/etc/ca.pem", CAValue: "inline"},
+			}},
+			wantField: "multitenant.tenants.acme.cache.redis.tls.cafile",
+			wantCat:   "invalid",
+			wantMsg:   "cafile and cavalue are mutually exclusive (exactly one)",
+		},
+		{
 			name:      "tenant_negative_loadtimeout",
 			key:       "acme",
 			section:   &CacheConfig{Enabled: true, Redis: RedisConfig{Host: "redis.acme.internal"}, LoadTimeout: -time.Second},
@@ -1073,19 +1087,6 @@ func TestResolveCacheSectionForKeyLeavesTLSFileReadToTheDial(t *testing.T) {
 	_, err := ResolveCacheSectionForKey(section, "acme")
 
 	assert.NoError(t, err)
-}
-
-func TestResolveCacheSectionForKeyChecksTLSShape(t *testing.T) {
-	section := &CacheConfig{Enabled: true, Redis: RedisConfig{
-		Host: "redis.acme.internal",
-		TLS:  RedisTLSConfig{Enabled: true, CAFile: "/etc/ca.pem", CAValue: "inline"},
-	}}
-
-	_, err := ResolveCacheSectionForKey(section, "acme")
-
-	var cfgErr *ConfigError
-	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, "multitenant.tenants.acme.cache.redis.tls.cafile", cfgErr.Field)
 }
 
 // TestNormalizeCacheFillsEmptyRootType pins the startup half of the shared Normalization

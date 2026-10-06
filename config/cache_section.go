@@ -99,7 +99,7 @@ func applyRedisDefaults(cfg *RedisConfig) {
 }
 
 // validateRedisCache is the startup door's Redis check. Beyond the connect door's rules
-// (checkRedisSection) it judges the keyprefix grammar and loads the TLS material, in that
+// (checkCacheSection) it judges the keyprefix grammar and loads the TLS material, in that
 // order around them so a section with several faults reports the same one it always did.
 func validateRedisCache(cfg *RedisConfig) error {
 	if err := validateRedisEndpoint(cfg); err != nil {
@@ -117,14 +117,18 @@ func validateRedisCache(cfg *RedisConfig) error {
 	return loadRedisTLS(&cfg.TLS)
 }
 
-// checkRedisSection is the connect door's Redis check: every rule validateRedisCache runs
-// except the two that stay at startup, the keyprefix grammar (namespacing owns it on the
-// connector path) and the TLS file read (the dial loads the material itself).
-func checkRedisSection(cfg *RedisConfig) error {
-	if err := validateRedisEndpoint(cfg); err != nil {
+// checkCacheSection is checkCache's connect-door twin for an enabled, normalized section: the
+// type, then every Redis rule validateRedisCache runs except the two that stay at startup, the
+// keyprefix grammar (namespacing owns it on the connector path) and the TLS file read (the
+// dial loads the material itself).
+func checkCacheSection(cfg *CacheConfig) error {
+	if err := checkCacheType(cfg); err != nil {
 		return err
 	}
-	return validateRedisClientSettings(cfg)
+	if err := validateRedisEndpoint(&cfg.Redis); err != nil {
+		return err
+	}
+	return validateRedisClientSettings(&cfg.Redis)
 }
 
 func validateRedisEndpoint(cfg *RedisConfig) error {
@@ -338,8 +342,8 @@ func redisTLSMaterial(cfg *RedisTLSConfig) clienttls.Material {
 //
 // It is the cache connect door, for sections config.Validate may never have seen: a custom
 // or dynamic resource source, a TenantStore.AddTenant tenant. The steps run in order: nil,
-// disabled, Normalization (the step Validate's normalizeCache shares), then Check — the
-// type and checkRedisSection. Unlike the database door it takes no strictness, since a
+// disabled, Normalization (the step Validate's normalizeCache shares), then Check
+// (checkCacheSection). Unlike the database door it takes no strictness, since a
 // cache section infers nothing; and it leaves the key namespace (keyprefix grammar, the
 // app.name default) to the connector that applies it.
 func ResolveCacheSectionForKey(section *CacheConfig, resourceKey string) (*CacheConfig, error) {
@@ -356,10 +360,7 @@ func ResolveCacheSectionForKey(section *CacheConfig, resourceKey string) (*Cache
 	if err := normalizeCacheSection(resolved); err != nil {
 		return nil, sec.qualify(err)
 	}
-	if err := checkCacheType(resolved); err != nil {
-		return nil, sec.qualify(err)
-	}
-	if err := checkRedisSection(&resolved.Redis); err != nil {
+	if err := checkCacheSection(resolved); err != nil {
 		return nil, sec.qualify(err)
 	}
 	return resolved, nil
