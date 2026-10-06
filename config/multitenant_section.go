@@ -244,9 +244,9 @@ func checkTenantMessagingReachable(tenants map[string]TenantEntry, msg *Messagin
 // fail-fast posture as the tenant database: an enabled-but-misconfigured
 // cache must crash at startup, not at the first per-request cache access (see
 // tenant_store.go CacheConfig). Per-tenant cache keys have no koanf defaults,
-// so the type defaults to redis here, then the Redis and load-timeout fills normalizeCache
-// applies. A manager block is refused as written, enabled or not, and never filled: the
-// cache manager reads the root's only (ADR-145).
+// so the type defaults to redis here, then the Redis and load-timeout defaults
+// fill. A manager block is refused as written, enabled or not, and never
+// filled: the cache manager reads the root's only (ADR-145).
 func normalizeTenantCache(tenantID string, cache *CacheConfig) error {
 	if cache.Manager != (CacheManagerConfig{}) {
 		sec := tenantCacheSection(tenantID)

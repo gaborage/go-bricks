@@ -90,8 +90,9 @@ func TestValidateRefusesTenantCacheManagerBlock(t *testing.T) {
 	})
 }
 
-// TestValidateLeavesTenantCacheManagerUnfilled guards the fill-order trap: a tenant cache
-// without a manager block passes, keeps a zero manager, and so passes a second Validate.
+// TestValidateLeavesTenantCacheManagerUnfilled pins that a tenant cache without a manager
+// block passes, keeps a zero manager, and so passes a second Validate: a refusal judged
+// after a manager fill would reject every tenant.
 func TestValidateLeavesTenantCacheManagerUnfilled(t *testing.T) {
 	cfg := tenantCacheConfig(&CacheConfig{Enabled: true, Redis: RedisConfig{Host: "acme.redis"}})
 

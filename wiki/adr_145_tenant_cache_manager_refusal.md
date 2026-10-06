@@ -46,8 +46,9 @@ so a second `Validate` over the same `Config` passes.
 **Only a tenants block the deployment consumes is judged.** The check runs in
 the static tenant walk, which `normalizeMultitenant` enters only under
 `multitenant.enabled: true` with `source.type: static` and a non-empty
-`multitenant.tenants` map. A leftover block under single-tenant mode or a
-dynamic source is inert, as ADR-051 already holds for tenant databases.
+`multitenant.tenants` map. A leftover block under single-tenant mode is inert,
+as ADR-051 already holds for tenant databases, and a dynamic source never
+enters the walk.
 
 **The root `cache.manager` is unchanged:** accepted and filled as before
 (`idlettl` 15m, `cleanupinterval` 5m, `maxsize` 100 single-tenant, 0 kept in
@@ -79,8 +80,8 @@ multi-tenant so the pool scales to `multitenant.limits.tenants`).
 **Out of scope:**
 
 - Dynamic-source tenant configs resolve at runtime and never reach
-  `config.Validate` (ADR-051's blind spot 2), so a dynamic tenant's `manager`
-  block stays unread and unrefused; that path is tracked in #2044.
+  `config.Validate`, and the #2044 connect door carries `Manager` untouched,
+  so a dynamic tenant's `manager` block stays unread and unrefused.
 - `config` and `cache.NewCacheManager` disagree on `cleanupinterval`
   (`cache/manager.go` replaces a non-positive value where config refuses a
   negative one); this change does not touch it.
