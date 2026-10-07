@@ -1871,7 +1871,7 @@ additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 ### [ADR-117: Cache Key Namespace and Cluster Mode](adr_117_cache_key_namespace_and_cluster_mode.md)
 
-**Date:** 2026-09-18 (amended 2026-10-05, #2045) | **Status:** Accepted | **Breaking:** `cache.redis.keyprefix` defaults to `app.name`, so namespacing is the DEFAULT and a cache-enabled deployment's keys move under it once on the upgrade — the explicit root opt-out `cache.redis.keyprefix: ""` keeps the old layout (`cache.redis.username` and `cache.redis.mode` are additive); per the amendment, a hand-built `redis.Config` reports its validation errors in config wording (`[C72.22]`)
+**Date:** 2026-09-18 (amended 2026-10-05, #2045) | **Status:** Accepted | **Breaking:** `cache.redis.keyprefix` defaults to `app.name`, so namespacing is the DEFAULT and a cache-enabled deployment's keys move under it once on the upgrade — the explicit root opt-out `cache.redis.keyprefix: ""` keeps the old layout (`cache.redis.username` and `cache.redis.mode` are additive); per the amendment, a hand-built `redis.Config` reports its validation errors in config wording (`[C72.22]`), the startup keyprefix grammar runs after the shared rules (`[C72.23]`) and two cache messages name their sibling key relatively (`[C72.24]`)
 
 The Redis cache dialed one address with one password, selected a database number, and wrote the
 key it was handed. A managed endpoint grants none of that: ElastiCache Serverless speaks cluster
