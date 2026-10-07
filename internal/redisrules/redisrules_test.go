@@ -40,6 +40,18 @@ func TestCheck(t *testing.T) {
 			mutate: func(e *Endpoint) { e.ReadTimeout, e.WriteTimeout = -1, -1 },
 		},
 		{
+			name:   "port_65535_valid",
+			mutate: func(e *Endpoint) { e.Port = 65535 },
+		},
+		{
+			name:   "database_15_valid",
+			mutate: func(e *Endpoint) { e.Database = 15 },
+		},
+		{
+			name:   "dialtimeout_zero_valid",
+			mutate: func(e *Endpoint) { e.DialTimeout = 0 },
+		},
+		{
 			name:   "password_alone_selects_default_user",
 			mutate: func(e *Endpoint) { e.Password = "secret" },
 		},

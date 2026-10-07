@@ -128,19 +128,51 @@ func TestRedisConfigCarriesNoInjectionTags(t *testing.T) {
 	}
 }
 
-// TestConfigValidateMapsRuleViolation pins the cache/redis adapter over the shared
-// rule set: the violation's relative field gains the "redis." head, and a closed
-// set travels in the message because cache.ConfigError has no Action.
+// TestConfigValidateMapsRuleViolation pins the cache/redis adapter over the shared rule set: the
+// violation's relative field gains the "redis." head, and a closed set travels in the message,
+// joined by ", ", because cache.ConfigError has no Action. A violation without one keeps its
+// message unchanged.
 func TestConfigValidateMapsRuleViolation(t *testing.T) {
-	cfg := Config{Host: "localhost", Port: 0, PoolSize: 10}
+	tests := []struct {
+		name        string
+		mutate      func(c *Config)
+		wantField   string
+		wantMessage string
+	}{
+		{
+			name:        "port_carries_its_range",
+			mutate:      func(c *Config) { c.Port = 0 },
+			wantField:   "redis.port",
+			wantMessage: "invalid value: 0 (must be one of: 1-65535)",
+		},
+		{
+			name:        "mode_carries_its_closed_set",
+			mutate:      func(c *Config) { c.Mode = "sentinel" },
+			wantField:   "redis.mode",
+			wantMessage: "'sentinel' is not supported (must be one of: standalone, cluster)",
+		},
+		{
+			name:        "poolsize_carries_no_set",
+			mutate:      func(c *Config) { c.PoolSize = 0 },
+			wantField:   "redis.poolsize",
+			wantMessage: "must be positive",
+		},
+	}
 
-	err := cfg.Validate()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Host: "localhost", Port: 6379, PoolSize: 10}
+			tt.mutate(&cfg)
 
-	var cfgErr *cache.ConfigError
-	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, "redis.port", cfgErr.Field)
-	assert.Equal(t, "invalid value: 0 (must be one of: 1-65535)", cfgErr.Message)
-	assert.NoError(t, cfgErr.Err)
+			err := cfg.Validate()
+
+			var cfgErr *cache.ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Equal(t, tt.wantMessage, cfgErr.Message)
+			assert.NoError(t, cfgErr.Err)
+		})
+	}
 }
 
 // TestConfigValidateJudgesLoadTimeoutAfterTheRules pins [C72.22]'s one ordering change: the

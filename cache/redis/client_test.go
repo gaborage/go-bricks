@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -490,10 +489,11 @@ func TestConfigValidate(t *testing.T) {
 		tests := []struct {
 			name string
 			port int
+			want string
 		}{
-			{"ZeroPort", 0},
-			{"NegativePort", -1},
-			{"PortTooHigh", 70000},
+			{"ZeroPort", 0, "redis.port: invalid value: 0"},
+			{"NegativePort", -1, "redis.port: invalid value: -1"},
+			{"PortTooHigh", 70000, "redis.port: invalid value: 70000"},
 		}
 
 		for _, tt := range tests {
@@ -505,7 +505,7 @@ func TestConfigValidate(t *testing.T) {
 
 				err := cfg.Validate()
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "redis.port: invalid value: "+strconv.Itoa(tt.port))
+				assert.Contains(t, err.Error(), tt.want)
 			})
 		}
 	})

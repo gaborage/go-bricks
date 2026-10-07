@@ -12546,7 +12546,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C72.22] a hand-built `cache/redis.Config` reports its validation errors in config wording · silent-behavior · when: match
 
-- detect: `git grep -nE 'host is required|invalid port|invalid mode|cannot be selected when redis[.]mode|cannot be whitespace-only|username requires redis[.]password|invalid database number|invalid pool size|(dial|read|write) timeout cannot be' -- '*.go'`
+- detect: `git grep -nE 'host is required|invalid port|invalid mode|cannot be selected when redis[.]mode|cannot be whitespace-only|username requires redis[.]password|invalid database number|invalid pool size|(dial|read|write) timeout cannot be|must be 0-15|must be > 0|less than -1|standalone or cluster' -- '*.go'`
   over your own modules, then keep only hits that compare the text of an error from
   `(*redis.Config).Validate` or `redis.NewClient` on a `Config` you build yourself.
 - scope: only the `Message` of a `*cache.ConfigError` changes; its `Field` (`redis.port`,

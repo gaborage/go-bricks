@@ -159,7 +159,7 @@ func (c *Config) validate() (clienttls.Material, error) {
 		TLS:          m,
 	}); v != nil {
 		msg := v.Message
-		if len(v.Allowed) > 0 {
+		if len(v.Allowed) != 0 {
 			msg += " (must be one of: " + strings.Join(v.Allowed, ", ") + ")"
 		}
 		return clienttls.Material{}, cache.NewConfigError("redis."+v.Field, msg, nil)
