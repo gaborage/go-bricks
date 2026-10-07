@@ -311,7 +311,7 @@ func checkEntry(name, setField string, entry map[string]any) error {
 // node is left for the source checks; a value of the wrong shape is refused
 // here, so the error names the path rather than mapstructure's type.
 func checkAgainstSchema(path, label string, node any, s *treeSchema) error {
-	if node == nil {
+	if node == nil || s.typed(node) {
 		return nil
 	}
 	sub, isMap := stringMap(node)
@@ -420,6 +420,16 @@ func checkTreeKey(root, prefix, key string) error {
 			Action:   "rename it with non-empty segments, written as nested keys",
 		}
 	}
+	if word, reserved := keyname.ReservedAfterDot(joinName(prefix, key)); reserved && root == fieldKeystoreKeys {
+		// The nested form would read the word as the entry's field, so only a rename works.
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    parent,
+			Message:  fmt.Sprintf("key %q is one YAML key containing '.'", key),
+			Action: fmt.Sprintf("rename it (e.g. %s, or another segment than %s): nested under a name, %s reads as that entry's field",
+				strings.ReplaceAll(joinName(prefix, key), keyname.Sep+word, "-"+word), word, word),
+		}
+	}
 	action := fmt.Sprintf("write it nested (%s)", nestedForm(key))
 	if envVar := envVarForKey(root + "." + joinName(prefix, key)); envVar != "" {
 		action += fmt.Sprintf("; the nested path is what %s reaches", envReach(root, envVar))
@@ -505,6 +515,7 @@ func stringMap(node any) (map[string]any, bool) {
 // treeSchema is the key tree a struct accepts: one field per mapstructure
 // tag, in declaration order; a non-struct field is a leaf with none.
 type treeSchema struct {
+	typ    reflect.Type
 	fields []schemaField
 }
 
@@ -514,7 +525,7 @@ type schemaField struct {
 }
 
 func schemaOf(t reflect.Type) *treeSchema {
-	s := &treeSchema{}
+	s := &treeSchema{typ: t}
 	if t.Kind() != reflect.Struct {
 		return s
 	}
@@ -529,6 +540,13 @@ func schemaOf(t reflect.Type) *treeSchema {
 }
 
 func (s *treeSchema) leaf() bool { return len(s.fields) == 0 }
+
+// typed reports whether node already is the field's Go type, or a pointer to it: a
+// LoadFromMap caller may hand over a typed source, which the decoder accepts as is.
+func (s *treeSchema) typed(node any) bool {
+	t := reflect.TypeOf(node)
+	return t == s.typ || (t.Kind() == reflect.Pointer && t.Elem() == s.typ)
+}
 
 // child returns the schema of key, matched as mapstructure matches a field
 // name (case-insensitively), or nil when the struct has no such field.
