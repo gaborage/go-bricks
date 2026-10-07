@@ -4,6 +4,22 @@
 **Date:** 2026-09-18
 **Issue:** #1727
 
+## Amendment (2026-10-05, #2045): the client-side copy becomes a call into one rule set
+
+The endpoint rules `(*redis.Config).Validate()` repeated — host, port, mode, cluster needs
+database 0, username, database range, pool size, the three timeouts and the TLS structure — now
+come from `internal/redisrules.Check`, which returns the first violation in that fixed order
+with a relative field and config wording. The client door calls it once and heads the field with
+`redis.`, appending a closed set to the message because `cache.ConfigError` has no Action. The
+door stays load-bearing: it is the only check a hand-built `redis.Config` passes through.
+Its messages move to config wording (`[C72.22]`); `loadtimeout` stays outside the rule set, since
+it never reaches the transport.
+
+The config layer calls the same rule set once, from `checkRedis`, at startup and at the cache
+connect door, heading the field with `cache.redis.` and turning a closed set into the Action. At
+startup the keyprefix grammar and the TLS material load run after it (`[C72.23]`), and the two
+messages that named a sibling key absolutely now name it relative to the block (`[C72.24]`).
+
 ## Context
 
 GoBricks' Redis cache dials one address with one password, selects a database number, and
