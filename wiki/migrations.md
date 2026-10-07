@@ -12492,8 +12492,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect:
   - (a) configs that boot on v0.71.1 and fail startup on v0.72.0. Read every YAML layer
-    (`config.yaml`/`.yml` and every `config.<env>.yaml`/`.yml`) with
-    `git grep -nE -A12 '^[[:space:]]*(keys|active)[[:space:]]*:' -- '*.yaml' '*.yml'`, and list
+    (`config.yaml`/`.yml` and every `config.<env>.yaml`/`.yml`) whole, with a YAML-aware reader
+    such as `yq '.keystore.keys, .messaging.seal.active' <file>`, which prints each complete
+    block (a fixed line window such as `git grep -A12` cuts a long block short), and list
     every `KEYSTORE_KEYS_*` and `MESSAGING_SEAL_ACTIVE_*` variable in deployment manifests and
     secret stores:
     - under `keystore.keys`, a key inside an entry other than `public`, `private`, `secret` or
