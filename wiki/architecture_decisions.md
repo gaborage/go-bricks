@@ -1871,7 +1871,7 @@ additions only. See [migrations.md](migrations.md) `[C66.4]`.
 
 ### [ADR-117: Cache Key Namespace and Cluster Mode](adr_117_cache_key_namespace_and_cluster_mode.md)
 
-**Date:** 2026-09-18 | **Status:** Accepted | **Breaking:** `cache.redis.keyprefix` defaults to `app.name`, so namespacing is the DEFAULT and a cache-enabled deployment's keys move under it once on the upgrade — the explicit root opt-out `cache.redis.keyprefix: ""` keeps the old layout (`cache.redis.username` and `cache.redis.mode` are additive)
+**Date:** 2026-09-18 (amended 2026-10-05, #2045) | **Status:** Accepted | **Breaking:** `cache.redis.keyprefix` defaults to `app.name`, so namespacing is the DEFAULT and a cache-enabled deployment's keys move under it once on the upgrade — the explicit root opt-out `cache.redis.keyprefix: ""` keeps the old layout (`cache.redis.username` and `cache.redis.mode` are additive); per the amendment, a hand-built `redis.Config` reports its validation errors in config wording (`[C72.22]`), the startup keyprefix grammar runs after the shared rules (`[C72.23]`) and two cache messages name their sibling key relatively (`[C72.24]`)
 
 The Redis cache dialed one address with one password, selected a database number, and wrote the
 key it was handed. A managed endpoint grants none of that: ElastiCache Serverless speaks cluster
@@ -3013,6 +3013,14 @@ key is a tenant — caches have no named siblings). `requalifyAction` reads the 
 hint rather than rebuilding it from `Field`, which is what lets the not-configured hint
 (`cache.enabled` under `Field` `cache`) travel; hints naming a key outside the field, and
 hand-written actions, are still untouched. Closes #1125.
+
+**Addendum (2026-10-05, `[C72.18]`–`[C72.21]`):** the cache CONNECT door joins the rule. A section
+`config.Validate` never saw (a custom or dynamic `ResourceSource`, `TenantStore.AddTenant`) reached
+the Redis client without Normalization. Every key now passes `config.ResolveCacheSectionForKey`
+before the dial — nil, disabled, the Normalization step startup shares, then the type and config's
+Redis rules minus the keyprefix grammar and the TLS file read — and gets an owned clone with its
+errors addressed by key (root byte-identical). No Strictness: a cache section infers nothing; the
+key namespace stays the connector's, after the dial. Closes #2044.
 
 ### [ADR-075: One Normalized Default per Scheduler Timeout Key](adr_075_scheduler_timeout_single_default.md)
 
