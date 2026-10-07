@@ -10,69 +10,46 @@ import (
 // These tables pin the grammar as config, keystore, jose and jose/sealed spelled
 // it before it moved here: every row is a verdict one of those copies gave.
 
-func TestValidSectionName(t *testing.T) {
+// TestPredicates pins the yes/no grammars in one table: the predicate is a column, so
+// each row reads as the verdict that predicate gives one input.
+func TestPredicates(t *testing.T) {
 	tests := []struct {
-		name string
-		in   string
-		want bool
+		name  string
+		valid func(string) bool
+		in    string
+		want  bool
 	}{
-		{name: "lowercase", in: "reportdb", want: true},
-		{name: "digits_and_hyphen", in: "report-db-2", want: true},
-		{name: "single_hyphen", in: "-", want: true},
-		{name: "empty", in: "", want: false},
-		{name: "underscore", in: "report_db", want: false},
-		{name: "uppercase", in: "ReportDB", want: false},
-		{name: "dot", in: "report.db", want: false},
-		{name: "trailing_newline", in: "reportdb\n", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, ValidSectionName(tt.in))
-		})
-	}
-}
+		{"section_lowercase", ValidSectionName, "reportdb", true},
+		{"section_digits_and_hyphen", ValidSectionName, "report-db-2", true},
+		{"section_single_hyphen", ValidSectionName, "-", true},
+		{"section_empty", ValidSectionName, "", false},
+		{"section_underscore", ValidSectionName, "report_db", false},
+		{"section_uppercase", ValidSectionName, "ReportDB", false},
+		{"section_dot", ValidSectionName, "report.db", false},
+		{"section_trailing_newline", ValidSectionName, "reportdb\n", false},
 
-func TestValidKid(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{name: "mixed_alphabet", in: "Svc_payments-sign-v1", want: true},
-		{name: "single_char", in: "a", want: true},
-		{name: "empty", in: "", want: false},
-		{name: "dot", in: "a.b", want: false},
-		{name: "colon", in: "family:jti", want: false},
-		{name: "space", in: "sign v1", want: false},
-		{name: "unicode", in: "kéy", want: false},
-		{name: "trailing_newline", in: "k\n", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, ValidKid(tt.in))
-		})
-	}
-}
+		{"kid_mixed_alphabet", ValidKid, "Svc_payments-sign-v1", true},
+		{"kid_single_char", ValidKid, "a", true},
+		{"kid_empty", ValidKid, "", false},
+		{"kid_dot", ValidKid, "a.b", false},
+		{"kid_colon", ValidKid, "family:jti", false},
+		{"kid_space", ValidKid, "sign v1", false},
+		{"kid_unicode", ValidKid, "kéy", false},
+		{"kid_trailing_newline", ValidKid, "k\n", false},
 
-func TestValidVersion(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{name: "v1", in: "v1", want: true},
-		{name: "v10", in: "v10", want: true},
-		{name: "zero", in: "v0", want: false},
-		{name: "leading_zero", in: "v01", want: false},
-		{name: "no_digits", in: "v", want: false},
-		{name: "no_v", in: "1", want: false},
-		{name: "uppercase_v", in: "V1", want: false},
-		{name: "hyphen_kept", in: "-v1", want: false},
-		{name: "trailing_newline", in: "v1\n", want: false},
+		{"version_v1", ValidVersion, "v1", true},
+		{"version_v10", ValidVersion, "v10", true},
+		{"version_zero", ValidVersion, "v0", false},
+		{"version_leading_zero", ValidVersion, "v01", false},
+		{"version_no_digits", ValidVersion, "v", false},
+		{"version_no_v", ValidVersion, "1", false},
+		{"version_uppercase_v", ValidVersion, "V1", false},
+		{"version_hyphen_kept", ValidVersion, "-v1", false},
+		{"version_trailing_newline", ValidVersion, "v1\n", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, ValidVersion(tt.in))
+			assert.Equal(t, tt.want, tt.valid(tt.in))
 		})
 	}
 }
