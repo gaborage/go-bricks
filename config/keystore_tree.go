@@ -243,6 +243,13 @@ func walkKeys(node map[string]any, prefix string, out map[string]any) error {
 // readKeyNode reads the node at name: an entry (recorded in out), a namespace
 // (walked), or a refusal.
 func readKeyNode(name string, child any, out map[string]any) error {
+	switch child.(type) {
+	case KeyPairConfig, *KeyPairConfig:
+		// A typed entry (LoadFromMap given map[string]KeyPairConfig) is an entry as it
+		// stands; mapstructure assigns it directly, as it did before the walk.
+		out[name] = child
+		return nil
+	}
 	if child == nil {
 		// A null entry reads as an empty one: an entry with no fields, so the
 		// source check still reports what it lacks.

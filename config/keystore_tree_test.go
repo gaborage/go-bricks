@@ -94,6 +94,17 @@ func TestKeystoreTreeAcceptsShapesThatBootToday(t *testing.T) {
 		}}}, check: func(t *testing.T, keys map[string]KeyPairConfig) {
 			assert.Equal(t, "VTS_P12_PASSWORD", keys["vts"].PKCS12.Password.Env)
 		}},
+		// A LoadFromMap caller may hand typed entries; mapstructure assigned them
+		// directly before the walk existed.
+		{name: "typed_entry", tree: map[string]any{"signing": KeyPairConfig{Public: KeySourceConfig{File: "pub.der"}}}, check: func(t *testing.T, keys map[string]KeyPairConfig) {
+			assert.Equal(t, "pub.der", keys["signing"].Public.File)
+		}},
+		{name: "typed_pointer_entry", tree: map[string]any{"signing": &KeyPairConfig{Public: KeySourceConfig{File: "pub.der"}}}, check: func(t *testing.T, keys map[string]KeyPairConfig) {
+			assert.Equal(t, "pub.der", keys["signing"].Public.File)
+		}},
+		{name: "typed_entry_under_namespace", tree: map[string]any{"tokens": map[string]KeyPairConfig{"our": {Public: KeySourceConfig{File: "pub.der"}}}}, check: func(t *testing.T, keys map[string]KeyPairConfig) {
+			assert.Equal(t, "pub.der", keys["tokens.our"].Public.File)
+		}},
 		{name: "null_field", tree: map[string]any{"tokens": map[string]any{"public": publicValue("x")["public"], "private": nil}}, check: func(t *testing.T, keys map[string]KeyPairConfig) {
 			assert.Empty(t, keys["tokens"].Private)
 		}},
@@ -103,6 +114,23 @@ func TestKeystoreTreeAcceptsShapesThatBootToday(t *testing.T) {
 			cfg, err := loadKeyTree(t, tt.tree)
 			require.NoError(t, err)
 			tt.check(t, cfg.KeyStore.Keys)
+		})
+	}
+}
+
+// TestLoadFromMapAcceptsATypedKeysMap: a LoadFromMap caller that builds
+// keystore.keys as a typed map, of entries or of pointers to them, decodes as
+// it did before the walk: each typed entry is an entry as it stands.
+func TestLoadFromMapAcceptsATypedKeysMap(t *testing.T) {
+	entry := KeyPairConfig{Public: KeySourceConfig{File: "pub.der"}}
+	for name, keys := range map[string]any{
+		"entries":  map[string]KeyPairConfig{"signing": entry},
+		"pointers": map[string]*KeyPairConfig{"signing": &entry},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := LoadFromMap(map[string]any{"keystore": map[string]any{"keys": keys}})
+			require.NoError(t, err)
+			assert.Equal(t, "pub.der", cfg.KeyStore.Keys["signing"].Public.File)
 		})
 	}
 }
