@@ -54,6 +54,12 @@ keystore:
           env: "VTS_P12_PASSWORD"               # the variable's NAME; or file: a mounted secret
 ```
 
+`${…}` marks a value the deployment renders into the file before startup (envsubst, a
+Helm template): `config.Load` does not expand it, so an unrendered file hands the keystore
+the literal placeholder. Without a rendering step, leave `value` out of the file and set the
+entry's variable instead (`KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE`; see
+[Entry names](#entry-names)).
+
 The entry name is the path below `keys`, joined with `.`: the YAML above defines
 `signing`, `tokens.our`, `tokens.peer`, `mac-key`, `mac-key-deployed` and `vts`. See
 [Entry names](#entry-names) for the grammar and the environment form.

@@ -4147,7 +4147,7 @@ keystore:
       private:
         file: "certs/signing_private.der"
 
-# EKS deployment (base64-encoded DER via env vars)
+# EKS deployment (base64-encoded DER): ${…} is rendered into the file before startup (config.Load does not expand it), or omit value and set KEYSTORE_KEYS_<NAME>_<FIELD>_VALUE
 keystore:
   secretminlength: 32          # absent -> 32; >=32 -> floor; below 32 (0 included) -> rejected at startup (ADR-095)
   keys:
