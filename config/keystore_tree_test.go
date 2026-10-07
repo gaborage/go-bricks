@@ -351,6 +351,11 @@ func TestKeystoreTreeReadsSelectors(t *testing.T) {
 	assert.Contains(t, cfgErr.Action, "the nested path is what MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches")
 	assert.NotContains(t, cfgErr.Action, "_*")
 
+	// Field words are reserved in keystore names only, so a selector keeps the nested advice.
+	_, err = loadSelectorTree(t, map[string]any{"orders.secret": "v2"})
+	cfgErr = requireTreeError(t, err, "messaging.seal.active", `key "orders.secret" is one YAML key containing '.'`)
+	assert.Contains(t, cfgErr.Action, "write it nested (orders: {secret: …})")
+
 	_, err = loadSelectorTree(t, map[string]any{"payments": map[string]any{"": "v2"}})
 	requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty key")
 }
