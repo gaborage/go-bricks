@@ -8,7 +8,7 @@ import (
 )
 
 // placement is where a resource kind's section sits in the configuration tree. It decides
-// whether the section may be absent, whether a manager block is allowed (database only), and
+// whether the section may be absent, whether a manager block is allowed (root only, ADR-145), and
 // how its errors are addressed. Not every kind uses every value: a cache section is never
 // placementNamed — unlike databases, caches have no named siblings.
 type placement int
