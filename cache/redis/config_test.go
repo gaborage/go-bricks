@@ -127,3 +127,67 @@ func TestRedisConfigCarriesNoInjectionTags(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigValidateMapsRuleViolation pins the cache/redis adapter over the shared rule set: the
+// violation's relative field gains the "redis." head, and a closed set travels in the message,
+// joined by ", ", because cache.ConfigError has no Action. A violation without one keeps its
+// message unchanged.
+func TestConfigValidateMapsRuleViolation(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(c *Config)
+		wantField   string
+		wantMessage string
+	}{
+		{
+			name:        "port_carries_its_range",
+			mutate:      func(c *Config) { c.Port = 0 },
+			wantField:   "redis.port",
+			wantMessage: "invalid value: 0 (must be one of: 1-65535)",
+		},
+		{
+			name:        "mode_carries_its_closed_set",
+			mutate:      func(c *Config) { c.Mode = "sentinel" },
+			wantField:   "redis.mode",
+			wantMessage: "'sentinel' is not supported (must be one of: standalone, cluster)",
+		},
+		{
+			name:        "poolsize_carries_no_set",
+			mutate:      func(c *Config) { c.PoolSize = 0 },
+			wantField:   "redis.poolsize",
+			wantMessage: "must be positive",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Host: "localhost", Port: 6379, PoolSize: 10}
+			tt.mutate(&cfg)
+
+			err := cfg.Validate()
+
+			var cfgErr *cache.ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Equal(t, tt.wantMessage, cfgErr.Message)
+			assert.NoError(t, cfgErr.Err)
+		})
+	}
+}
+
+// TestConfigValidateJudgesLoadTimeoutAfterTheRules pins [C72.22]'s one ordering change: the
+// load-timeout bound stays outside the shared rule set and runs after it, so a Config that
+// also breaks the TLS structure reports the TLS field.
+func TestConfigValidateJudgesLoadTimeoutAfterTheRules(t *testing.T) {
+	cfg := Config{
+		Host: "localhost", Port: 6379, PoolSize: 10,
+		LoadTimeout: -time.Millisecond,
+		TLS:         TLSConfig{CAFile: "/etc/ca.pem"},
+	}
+
+	err := cfg.Validate()
+
+	var cfgErr *cache.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "redis.tls.enabled", cfgErr.Field)
+}
