@@ -557,8 +557,8 @@ func TestKeySourceActionNamesTheVariables(t *testing.T) {
 		{name: "hyphen_fold_is_reserved", entry: "webhook-secret", want: "not by a POSIX export", notWant: "dotted name"},
 		{
 			name: "undotted_family_generation", entry: "audit-v1",
-			want:    "not by a POSIX export; a generation spelled without '-' belongs to another family, so moving to it is a family rename, drained before the cutover",
-			notWant: "dotted name",
+			want:    "not by a POSIX export; audit-v1 has no dotted spelling (audit.v1 is no generation",
+			notWant: "belongs to another family",
 		},
 		{name: "hyphen_family_generation", entry: "payments-sign-v1", want: "family rename", notWant: "payments.sign.v1"},
 		{name: "dotted_family_generation_with_hyphen", entry: "svc-a.sign.v1", want: "belongs to another family", notWant: "dotted name"},

@@ -297,9 +297,10 @@ Three message changes outside the table:
 - **`validateKeySource`'s Action** names the variables (`KEYSTORE_KEYS_TOKENS_OUR_PUBLIC_FILE` /
   `_VALUE`). When the name contains `-`, it adds that such a variable can be set from Docker or
   Kubernetes but not by a POSIX `export`, while the dotted name can be set from any shell. A
-  generation name gets no dotted spelling: its fold is malformed (`audit.v1`) or a generation
-  of another family (`payments.sign.v1`), so the Action says that moving it is a family rename,
-  drained before the cutover.
+  generation name gets no dotted spelling. When its fold is malformed (`audit.v1`), the Action
+  says a name any shell can set is a new family (`audit.<purpose>.v1`); when the fold is a
+  generation of another family (`payments.sign.v1`), it says moving to it is a family rename.
+  Either way the move is drained before the cutover.
 - **The keystore's not-found error** adds `configured "tokens-our" differs only in '-' versus '.'`
   when a fold matches.
 - **No change** to the ADR-090 hint machinery (`keyIsEnvUnreachable`, `missingFieldAction`,

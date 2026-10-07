@@ -389,9 +389,10 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 // with '-' is settable that way only where the runtime allows '-' in a variable
 // name (Docker, Kubernetes, env), never by a POSIX export, so the action also
 // names the dotted spelling any shell can set.
-// A generation has no such spelling: its fold is malformed (audit.v1) or a
-// generation of another family (payments.sign.v1), so moving it is a family
-// rename.
+// A generation has no such spelling: its fold is malformed (audit.v1), so a
+// shell-settable name is a new family, or a generation of another family
+// (payments.sign.v1), so moving to it is a family rename. Either way the move
+// is drained before the cutover.
 func keySourceAction(keyName, field string) string {
 	action := "set either 'file' (path) or 'value' (base64)"
 	fileVar, valueVar := envVarForKey(field+".file"), envVarForKey(field+".value")
@@ -403,7 +404,13 @@ func keySourceAction(keyName, field string) string {
 		return action
 	}
 	action += "; a name with '-' is settable that way from Docker or Kubernetes but not by a POSIX export"
-	if _, _, form := keyname.SplitGeneration(keyName); form != keyname.Ordinary {
+	if logical, version, form := keyname.SplitGeneration(keyName); form != keyname.Ordinary {
+		folded := keyname.Fold(keyName)
+		if _, _, foldedForm := keyname.SplitGeneration(folded); foldedForm == keyname.Malformed {
+			return action + fmt.Sprintf("; %s has no dotted spelling (%s is no generation: a family without '.' keeps -v<N>), "+
+				"so a name any shell can set is a new family (e.g. %s.<purpose>.%s), drained before the cutover",
+				keyName, folded, logical, version)
+		}
 		return action + "; a generation spelled without '-' belongs to another family, so moving to it is a family rename, drained before the cutover"
 	}
 	if dotted := keyname.Fold(keyName); keyname.ValidEntryName(dotted) {
