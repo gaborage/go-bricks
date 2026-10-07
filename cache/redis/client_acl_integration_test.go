@@ -239,7 +239,7 @@ func TestRealRedisACLCallerPasswordRuleCannotAddACredential(t *testing.T) {
 // show up in the other's result.
 //
 // The no_credentials case is the load-bearing one: an empty username with an
-// empty password passes Config.validateUsername (the shape rule only fires on a
+// empty password passes the redisrules username rule (it only fires on a
 // username without a password), so the client dials with no AUTH at all. Its
 // NOAUTH is the direct evidence that `default` is off, and therefore the license
 // for every positive assertion in this file. The other two cases pin that a
