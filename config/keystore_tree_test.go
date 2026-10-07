@@ -124,8 +124,10 @@ func TestKeystoreTreeAcceptsShapesThatBootToday(t *testing.T) {
 func TestLoadFromMapAcceptsATypedKeysMap(t *testing.T) {
 	entry := KeyPairConfig{Public: KeySourceConfig{File: "pub.der"}}
 	for name, keys := range map[string]any{
-		"entries":  map[string]KeyPairConfig{"signing": entry},
-		"pointers": map[string]*KeyPairConfig{"signing": &entry},
+		"entries":              map[string]KeyPairConfig{"signing": entry},
+		"pointers":             map[string]*KeyPairConfig{"signing": &entry},
+		"typed_source":         map[string]any{"signing": map[string]any{"public": KeySourceConfig{File: "pub.der"}}},
+		"typed_source_pointer": map[string]any{"signing": map[string]any{"public": &KeySourceConfig{File: "pub.der"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, err := LoadFromMap(map[string]any{"keystore": map[string]any{"keys": keys}})
@@ -152,6 +154,13 @@ func TestKeystoreTreeRefusals(t *testing.T) {
 			wantField: "keystore.keys",
 			wantMsg:   `key "tokens.our" is one YAML key containing '.'`,
 			wantInAct: "write it nested (tokens: {our: …}); the nested path is what KEYSTORE_KEYS_TOKENS_OUR_* reaches",
+		},
+		{
+			name:      "quoted_reserved_word",
+			tree:      map[string]any{"webhook.secret": publicValue("x")},
+			wantField: "keystore.keys",
+			wantMsg:   `key "webhook.secret" is one YAML key containing '.'`,
+			wantInAct: "rename it (e.g. webhook-secret, or another segment than secret): nested under a name, secret reads as that entry's field",
 		},
 		{
 			name:      "quoted_dotted_key_in_namespace",
@@ -341,6 +350,11 @@ func TestKeystoreTreeReadsSelectors(t *testing.T) {
 	// a selector below it instead.
 	assert.Contains(t, cfgErr.Action, "the nested path is what MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches")
 	assert.NotContains(t, cfgErr.Action, "_*")
+
+	// Field words are reserved in keystore names only, so a selector keeps the nested advice.
+	_, err = loadSelectorTree(t, map[string]any{"orders.secret": "v2"})
+	cfgErr = requireTreeError(t, err, "messaging.seal.active", `key "orders.secret" is one YAML key containing '.'`)
+	assert.Contains(t, cfgErr.Action, "write it nested (orders: {secret: …})")
 
 	_, err = loadSelectorTree(t, map[string]any{"payments": map[string]any{"": "v2"}})
 	requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty key")
