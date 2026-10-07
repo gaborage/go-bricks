@@ -17,12 +17,7 @@ import (
 // cache.manager.* defaults, and a disabled cache's negative manager value is
 // CreateCacheManager's to reject (ADR-054), not Validate's.
 func normalizeCache(cfg *CacheConfig, multitenant bool) error {
-	applyRedisDefaults(&cfg.Redis)
-
-	// Unconditional, like the Redis defaults above: the load-through bound belongs to
-	// the resolved cache instance, and a hand-built enabled cache must not inherit a
-	// zero here. A negative value is rejected rather than normalized.
-	if err := applyNonNegativeDefault(&cfg.LoadTimeout, defaultCacheLoadTimeout, "cache.loadtimeout"); err != nil {
+	if err := normalizeCacheSection(cfg); err != nil {
 		return err
 	}
 
@@ -32,6 +27,22 @@ func normalizeCache(cfg *CacheConfig, multitenant bool) error {
 	return nil
 }
 
+// normalizeCacheSection is the Normalization step both cache doors share: Validate's
+// normalizeCache and the connect door, ResolveCacheSectionForKey. It fills the section's own
+// fields only, so re-running it on a normalized section changes nothing. The type is filled
+// only for an enabled section, the gating the tenant default always had.
+func normalizeCacheSection(cfg *CacheConfig) error {
+	if cfg.Enabled && cfg.Type == "" {
+		cfg.Type = CacheTypeRedis
+	}
+	applyRedisDefaults(&cfg.Redis)
+
+	// Unconditional, like the Redis defaults above: the load-through bound belongs to
+	// the resolved cache instance, and a hand-built enabled cache must not inherit a
+	// zero here. A negative value is rejected rather than normalized.
+	return applyNonNegativeDefault(&cfg.LoadTimeout, defaultCacheLoadTimeout, "cache.loadtimeout")
+}
+
 // checkCache rejects an enabled cache's type and Redis fields; a disabled
 // cache is not checked.
 func checkCache(cfg *CacheConfig) error {
@@ -39,11 +50,18 @@ func checkCache(cfg *CacheConfig) error {
 		return nil
 	}
 
+	if err := checkCacheType(cfg); err != nil {
+		return err
+	}
+	return validateRedisCache(&cfg.Redis)
+}
+
+func checkCacheType(cfg *CacheConfig) error {
 	validTypes := []string{CacheTypeRedis}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return NewInvalidFieldError("cache.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
 	}
-	return validateRedisCache(&cfg.Redis)
+	return nil
 }
 
 // applyRedisDefaults fills in production-safe Redis defaults for any unset
@@ -81,8 +99,39 @@ func applyRedisDefaults(cfg *RedisConfig) {
 	}
 }
 
-// validateRedisCache validates Redis-specific cache configuration.
+// validateRedisCache is the startup door's Redis check: checkCacheSection's Redis rules plus
+// the keyprefix grammar and the TLS material load.
 func validateRedisCache(cfg *RedisConfig) error {
+	if err := checkRedisEndpoint(cfg); err != nil {
+		return err
+	}
+
+	if err := validateRedisKeyPrefix(cfg); err != nil {
+		return err
+	}
+
+	if err := checkRedisClientSettings(cfg); err != nil {
+		return err
+	}
+
+	return loadRedisTLS(&cfg.TLS)
+}
+
+// checkCacheSection is checkCache's connect-door twin for an enabled, normalized section: the
+// type, then every Redis rule validateRedisCache runs except the two that stay at startup, the
+// keyprefix grammar (namespacing owns it on the connector path) and the TLS file read (the
+// dial loads the material itself).
+func checkCacheSection(cfg *CacheConfig) error {
+	if err := checkCacheType(cfg); err != nil {
+		return err
+	}
+	if err := checkRedisEndpoint(&cfg.Redis); err != nil {
+		return err
+	}
+	return checkRedisClientSettings(&cfg.Redis)
+}
+
+func checkRedisEndpoint(cfg *RedisConfig) error {
 	if cfg.Host == "" {
 		return NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
 	}
@@ -91,14 +140,10 @@ func validateRedisCache(cfg *RedisConfig) error {
 		return NewInvalidFieldError("cache.redis.port", fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
 	}
 
-	if err := validateRedisMode(cfg); err != nil {
-		return err
-	}
+	return validateRedisMode(cfg)
+}
 
-	if err := validateRedisKeyPrefix(cfg); err != nil {
-		return err
-	}
-
+func checkRedisClientSettings(cfg *RedisConfig) error {
 	if err := validateRedisUsername(cfg); err != nil {
 		return err
 	}
@@ -123,7 +168,7 @@ func validateRedisCache(cfg *RedisConfig) error {
 		return NewValidationError("cache.redis.writetimeout", "must be >= -1")
 	}
 
-	return validateRedisTLS(&cfg.TLS)
+	return checkRedisTLSMaterial(&cfg.TLS)
 }
 
 // validateRedisMode checks the transport selector and the one setting it
@@ -250,20 +295,37 @@ const fieldCacheRedisTLSPrefix = "cache.redis.tls."
 // loader, matching the spelling cache/redis uses for the same material.
 const cacheRedisTLSErrPrefix = "cache: redis: tls:"
 
-// validateRedisTLS checks TLS material configuration in two passes. The first is
-// structural (staged material under a disabled block, mutual exclusivity of
-// file/value sources, cert/key pairing, min-version enum); its rules live in
-// clienttls, beside the loader that consumes the same material, and this only
+// checkRedisTLSMaterial is the structural TLS check (staged material under a disabled
+// block, mutual exclusivity of file/value sources, cert/key pairing, min-version enum); its
+// rules live in clienttls, beside the loader that consumes the same material, and this only
 // maps a violation onto the cache.redis.tls.* keys.
-//
-// The second pass actually loads the material, which means this validation reads
-// files — unusual here, and deliberate. Unlike server.tls, whose material is read
-// at Start() one hop later, a Redis client is created lazily per tenant on first
-// use, so config validation is the only door at which a missing or corrupt bundle
-// can fail the boot rather than a request hours later. The dial loads it again;
-// the two loads are a startup gate and a use-time one, not a cache.
-func validateRedisTLS(cfg *RedisTLSConfig) error {
-	m := clienttls.Material{
+func checkRedisTLSMaterial(cfg *RedisTLSConfig) error {
+	m := redisTLSMaterial(cfg)
+	if v := clienttls.ValidateMaterial(&m, cfg.Enabled); v != nil {
+		return NewValidationError(fieldCacheRedisTLSPrefix+v.Field, v.Message)
+	}
+	return nil
+}
+
+// loadRedisTLS actually loads the material, which means this validation reads files —
+// unusual here, and deliberate. Unlike server.tls, whose material is read at Start() one hop
+// later, a Redis client is created lazily per tenant on first use, so config validation is
+// the only door at which a missing or corrupt bundle can fail the boot rather than a request
+// hours later. The dial loads it again; the two loads are a startup gate and a use-time one,
+// not a cache. It assumes checkRedisTLSMaterial passed.
+func loadRedisTLS(cfg *RedisTLSConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	m := redisTLSMaterial(cfg)
+	if _, err := clienttls.Build(cacheRedisTLSErrPrefix, &m); err != nil {
+		return NewValidationError(strings.TrimSuffix(fieldCacheRedisTLSPrefix, "."), err.Error())
+	}
+	return nil
+}
+
+func redisTLSMaterial(cfg *RedisTLSConfig) clienttls.Material {
+	return clienttls.Material{
 		CertFile:   cfg.CertFile,
 		CertValue:  cfg.CertValue,
 		KeyFile:    cfg.KeyFile,
@@ -273,14 +335,39 @@ func validateRedisTLS(cfg *RedisTLSConfig) error {
 		ServerName: cfg.ServerName,
 		MinVersion: cfg.MinVersion,
 	}
-	if v := clienttls.ValidateMaterial(&m, cfg.Enabled); v != nil {
-		return NewValidationError(fieldCacheRedisTLSPrefix+v.Field, v.Message)
+}
+
+// ResolveCacheSectionForKey returns a normalized, checked, owned clone of
+// section, with errors addressed to resourceKey. It never mutates section.
+// It is the cache connect door, for sections Validate may never have seen. It leaves the key
+// namespace to the connector that applies it.
+func ResolveCacheSectionForKey(section *CacheConfig, resourceKey string) (*CacheConfig, error) {
+	sec := kindCache(resourceKey)
+	if section == nil {
+		return nil, sec.qualify(NewValidationError(fieldCache,
+			fmt.Sprintf("configuration is nil for key '%s'", resourceKey)))
 	}
-	if !cfg.Enabled {
-		return nil
+	if !section.Enabled {
+		return nil, sec.qualify(NewNotConfiguredError(fieldCache, "CACHE_ENABLED", "cache.enabled"))
 	}
-	if _, err := clienttls.Build(cacheRedisTLSErrPrefix, &m); err != nil {
-		return NewValidationError(strings.TrimSuffix(fieldCacheRedisTLSPrefix, "."), err.Error())
+
+	resolved := cloneCacheSection(section)
+	if err := normalizeCacheSection(resolved); err != nil {
+		return nil, sec.qualify(err)
 	}
-	return nil
+	if err := checkCacheSection(resolved); err != nil {
+		return nil, sec.qualify(err)
+	}
+	return resolved, nil
+}
+
+// cloneCacheSection copies section so the copy shares no memory with it; KeyPrefix is the
+// one reference field.
+func cloneCacheSection(section *CacheConfig) *CacheConfig {
+	clone := *section
+	if section.Redis.KeyPrefix != nil {
+		prefix := *section.Redis.KeyPrefix
+		clone.Redis.KeyPrefix = &prefix
+	}
+	return &clone
 }
