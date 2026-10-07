@@ -347,7 +347,7 @@ func validateRedisACLUsernames(acl *RedisACL) error {
 		// server's own ACL-file grammar splits the same directive on whitespace. NUL
 		// joins them: it terminates the C string the server compares against, so a
 		// name carrying one is not the name the caller wrote. This is wider than
-		// cache/redis's own Config.validateUsername, which refuses only the
+		// the shared Redis username rule (internal/redisrules), which refuses only the
 		// whitespace-only form because an AUTH argument is not a config token.
 		switch {
 		case u.Username == "" || strings.ContainsFunc(u.Username, func(r rune) bool { return unicode.IsSpace(r) || r == 0 }):
