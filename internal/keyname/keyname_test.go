@@ -46,6 +46,19 @@ func TestPredicates(t *testing.T) {
 		{"version_uppercase_v", ValidVersion, "V1", false},
 		{"version_hyphen_kept", ValidVersion, "-v1", false},
 		{"version_trailing_newline", ValidVersion, "v1\n", false},
+
+		{"name_one_segment", ValidName, "webhook-signing", true},
+		{"name_dotted", ValidName, "tokens.our", true},
+		{"name_mixed", ValidName, "a.b-c.d", true},
+		{"name_reserved_word_alone", ValidName, "secret", true},
+		{"name_reserved_word_after_dot", ValidName, "webhook.secret", true},
+		{"name_empty", ValidName, "", false},
+		{"name_leading_dot", ValidName, ".x", false},
+		{"name_trailing_dot", ValidName, "x.", false},
+		{"name_double_dot", ValidName, "x..y", false},
+		{"name_uppercase", ValidName, "Tokens.our", false},
+		{"name_underscore", ValidName, "tokens_our", false},
+		{"name_trailing_newline", ValidName, "tokens.our\n", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -128,32 +141,6 @@ func TestGenerationName(t *testing.T) {
 	assert.Equal(t, Generation, form)
 	assert.Equal(t, "payments-sign", logical)
 	assert.Equal(t, "v12", version)
-}
-
-func TestValidName(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{name: "one_segment", in: "webhook-signing", want: true},
-		{name: "dotted", in: "tokens.our", want: true},
-		{name: "mixed", in: "a.b-c.d", want: true},
-		{name: "reserved_word_alone", in: "secret", want: true},
-		{name: "reserved_word_after_dot", in: "webhook.secret", want: true},
-		{name: "empty", in: "", want: false},
-		{name: "leading_dot", in: ".x", want: false},
-		{name: "trailing_dot", in: "x.", want: false},
-		{name: "double_dot", in: "x..y", want: false},
-		{name: "uppercase", in: "Tokens.our", want: false},
-		{name: "underscore", in: "tokens_our", want: false},
-		{name: "trailing_newline", in: "tokens.our\n", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, ValidName(tt.in))
-		})
-	}
 }
 
 func TestReservedAfterDot(t *testing.T) {
