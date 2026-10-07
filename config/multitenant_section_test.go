@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +34,7 @@ func TestValidateMultitenantTenantsCacheDefaults(t *testing.T) {
 		"tenant cache without explicit port must default to 6379 and persist to the tenants map")
 	assert.Equal(t, 10, tenant.Cache.Redis.PoolSize,
 		"tenant cache without explicit poolsize must default to 10 and persist to the tenants map")
+	assert.Equal(t, 500*time.Millisecond, tenant.Cache.LoadTimeout)
 }
 
 // TestValidateMultitenantTenantsCacheMisconfigFailsFast proves the HARDEN
@@ -45,6 +47,82 @@ func TestValidateMultitenantTenantsCacheMisconfigFailsFast(t *testing.T) {
 	err := Validate(cfg)
 	require.Error(t, err, "enabled tenant cache without a host must fail at startup")
 	assert.Contains(t, err.Error(), "cache.redis.host")
+}
+
+// TestValidateRefusesTenantCacheManagerBlock pins ADR-145: the cache manager reads
+// cache.manager from the root only, so a tenant's manager block is refused, enabled or not.
+func TestValidateRefusesTenantCacheManagerBlock(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		manager CacheManagerConfig
+	}{
+		{name: "enabled_tenant_cache", enabled: true, manager: CacheManagerConfig{MaxSize: 50}},
+		{name: "disabled_tenant_cache", enabled: false, manager: CacheManagerConfig{MaxSize: 50}},
+		{name: "idlettl_only", enabled: true, manager: CacheManagerConfig{IdleTTL: time.Minute}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tenantCacheConfig(&CacheConfig{
+				Enabled: tt.enabled,
+				Redis:   RedisConfig{Host: "acme.redis"},
+				Manager: tt.manager,
+			})
+
+			err := Validate(cfg)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "invalid", cfgErr.Category)
+			assert.Equal(t, "multitenant.tenants.acme.cache.manager", cfgErr.Field)
+		})
+	}
+
+	t.Run("root_manager_block_accepted", func(t *testing.T) {
+		cfg := tenantCacheConfig(&CacheConfig{Enabled: true, Redis: RedisConfig{Host: "acme.redis"}})
+		cfg.Cache = CacheConfig{
+			Enabled: true,
+			Type:    CacheTypeRedis,
+			Redis:   RedisConfig{Host: "localhost"},
+			Manager: CacheManagerConfig{MaxSize: 50},
+		}
+
+		require.NoError(t, Validate(cfg))
+		assert.Equal(t, 50, cfg.Cache.Manager.MaxSize)
+	})
+}
+
+// TestValidateLeavesTenantCacheManagerUnfilled pins that a tenant cache without a manager
+// block passes, keeps a zero manager, and so passes a second Validate: a refusal judged
+// after a manager fill would reject every tenant.
+func TestValidateLeavesTenantCacheManagerUnfilled(t *testing.T) {
+	cfg := tenantCacheConfig(&CacheConfig{Enabled: true, Redis: RedisConfig{Host: "acme.redis"}})
+
+	require.NoError(t, Validate(cfg))
+	assert.Equal(t, CacheManagerConfig{}, cfg.Multitenant.Tenants["acme"].Cache.Manager)
+	require.NoError(t, Validate(cfg))
+}
+
+// TestValidateFillsRootCacheManagerDefaults pins that the root cache.manager keeps its
+// defaults while tenant manager blocks are no longer filled.
+func TestValidateFillsRootCacheManagerDefaults(t *testing.T) {
+	rootCache := CacheConfig{Enabled: true, Type: CacheTypeRedis, Redis: RedisConfig{Host: "localhost"}}
+
+	t.Run("single_tenant", func(t *testing.T) {
+		cfg := singleTenantFixture()
+		cfg.Cache = rootCache
+
+		require.NoError(t, Validate(cfg))
+		assert.Equal(t, CacheManagerConfig{MaxSize: 100, IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}, cfg.Cache.Manager)
+	})
+
+	t.Run("multi_tenant", func(t *testing.T) {
+		cfg := tenantCacheConfig(&CacheConfig{Enabled: true, Redis: RedisConfig{Host: "acme.redis"}})
+		cfg.Cache = rootCache
+
+		require.NoError(t, Validate(cfg))
+		assert.Equal(t, CacheManagerConfig{MaxSize: 0, IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}, cfg.Cache.Manager)
+	})
 }
 
 // TestValidateMultitenantTenantsCacheTLSMisconfigIsTenantAddressed proves the
