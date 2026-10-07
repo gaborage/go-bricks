@@ -4,6 +4,21 @@
 - **Date**: 2026-08-20
 - **Related**: [ADR-047](adr_047_database_absence_vs_misconfiguration.md) (absence vs misconfiguration, which is what the root section's placement rule encodes) · [ADR-051](adr_051_delivered_empty_database_identity.md) (the delivered-empty check, whose key spelling this now matches)
 
+> **Addendum (2026-10-05, the cache CONNECT door):** the runtime cache door addressed its
+> errors by key but checked only nil, disabled, type and host, so a section `config.Validate`
+> never saw — a custom or dynamic `ResourceSource`, a `TenantStore.AddTenant` tenant — reached
+> `redis.NewClient` with a zero port, pool size and timeouts, which the client refused in its
+> own wording or filled with go-redis's defaults. Every key, the root included, now passes
+> `config.ResolveCacheSectionForKey` before the dial: nil → disabled → Normalization (the step
+> startup's `normalizeCache` shares) → Check (the type and config's Redis rules, minus the
+> keyprefix grammar and the TLS file read, which stay at startup). It returns an owned clone and
+> addresses every error through the same engine as `QualifyCacheConfigErrorForKey`, so a root
+> error stays byte-identical. Unlike the database door it takes no Strictness, since a cache
+> section infers nothing, and the key namespace stays the connector's, after the dial.
+> Migration: [C72.18–C72.21](migrations.md).
+
+<!-- -->
+
 > **Amended (2026-08-31, one engine for every kind):** the database placement logic and the
 > cache addendum below were independent reimplementations of the same root/named/tenant
 > rewrite; `cache_section.go`'s 35 lines are now one unexported `section` type in

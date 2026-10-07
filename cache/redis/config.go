@@ -8,23 +8,20 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/internal/clienttls"
+	"github.com/gaborage/go-bricks/internal/redisrules"
 )
-
-// tlsFieldPrefix namespaces a clienttls.Violation's relative key (e.g.
-// "cafile") into this package's config-error field.
-const tlsFieldPrefix = "redis.tls."
 
 // Connection modes selecting which protocol the client speaks.
 const (
 	// ModeStandalone dials one server and speaks the single-node protocol. It is
 	// the default, and the empty Mode means exactly this.
-	ModeStandalone = "standalone"
+	ModeStandalone = redisrules.ModeStandalone
 
 	// ModeCluster speaks the cluster protocol against the single configured
 	// address, which the client treats as a seed and follows the slot map from.
 	// Required by endpoints that answer MOVED to a single-node client, such as
 	// Amazon ElastiCache Serverless.
-	ModeCluster = "cluster"
+	ModeCluster = redisrules.ModeCluster
 )
 
 // Config holds Redis-specific configuration options. Nothing decodes it: the app
@@ -141,89 +138,31 @@ func (c *Config) Validate() error {
 	return err
 }
 
-// validateMode checks the transport selector and the one setting it forecloses:
-// under ModeCluster the database must be 0. The second error is addressed to
-// redis.database, because that is the value that cannot be honored, and names
-// redis.mode so the operator knows which of the two to change. It runs before
-// the 0-15 range check, since under cluster the range does not apply at all.
-func (c *Config) validateMode() error {
-	if c.Mode != "" && c.Mode != ModeStandalone && c.Mode != ModeCluster {
-		return cache.NewConfigError("redis.mode",
-			fmt.Sprintf("invalid mode: %q (must be %s or %s)", c.Mode, ModeStandalone, ModeCluster), nil)
-	}
-
-	if c.Mode == ModeCluster && c.Database != 0 {
-		return cache.NewConfigError("redis.database",
-			fmt.Sprintf("database %d cannot be selected when redis.mode is %s: the cluster client has no database selection",
-				c.Database, ModeCluster), nil)
-	}
-
-	return nil
-}
-
-// validateUsername checks the ACL identity. Empty is the default user;
-// whitespace-only is a typo that would travel as an AUTH argument no ACL rule
-// can match, and is checked first so a name that is both blank and
-// unaccompanied is reported as the typo it is.
-//
-// A name with no password never authenticates: go-redis builds the HELLO
-// handshake's AUTH clause inside `if password != ""`, and gates the legacy AUTH
-// fallback the same way, so nothing is sent and the dial runs as whatever
-// identity the server hands an unauthenticated client. Refused here rather than
-// dialed, mirroring config.validateRedisCache, because a hand-built Config
-// reaches this door without passing through the config layer. A password alone
-// is the legacy form that selects the implicit "default" user and stands.
-func (c *Config) validateUsername() error {
-	if c.Username != "" && strings.TrimSpace(c.Username) == "" {
-		return cache.NewConfigError("redis.username", "username cannot be whitespace-only", nil)
-	}
-
-	if c.Username != "" && c.Password == "" {
-		return cache.NewConfigError("redis.username",
-			"username requires redis.password: the client sends no AUTH without one, "+
-				"so the connection would silently run as the default user", nil)
-	}
-
-	return nil
-}
-
 // validate is Validate plus the TLS material projection it built on the way,
-// so a caller that needs both — NewClient — pays for the projection once.
+// so a caller that needs both — NewClient — pays for the projection once. The
+// endpoint rules come from redisrules, because a hand-built Config reaches this
+// door without passing through config.
 func (c *Config) validate() (clienttls.Material, error) {
-	if c.Host == "" {
-		return clienttls.Material{}, cache.NewConfigError("redis.host", "host is required", nil)
-	}
-
-	if c.Port <= 0 || c.Port > 65535 {
-		return clienttls.Material{}, cache.NewConfigError("redis.port", fmt.Sprintf("invalid port: %d", c.Port), nil)
-	}
-
-	if err := c.validateMode(); err != nil {
-		return clienttls.Material{}, err
-	}
-
-	if err := c.validateUsername(); err != nil {
-		return clienttls.Material{}, err
-	}
-
-	if c.Database < 0 || c.Database > 15 {
-		return clienttls.Material{}, cache.NewConfigError("redis.database", fmt.Sprintf("invalid database number: %d (must be 0-15)", c.Database), nil)
-	}
-
-	if c.PoolSize <= 0 {
-		return clienttls.Material{}, cache.NewConfigError("redis.poolsize", fmt.Sprintf("invalid pool size: %d (must be > 0)", c.PoolSize), nil)
-	}
-
-	if c.DialTimeout < 0 {
-		return clienttls.Material{}, cache.NewConfigError("redis.dialtimeout", "dial timeout cannot be negative", nil)
-	}
-
-	if c.ReadTimeout < -1 {
-		return clienttls.Material{}, cache.NewConfigError("redis.readtimeout", "read timeout cannot be less than -1", nil)
-	}
-
-	if c.WriteTimeout < -1 {
-		return clienttls.Material{}, cache.NewConfigError("redis.writetimeout", "write timeout cannot be less than -1", nil)
+	m := c.TLS.material()
+	if v := redisrules.Check(&redisrules.Endpoint{
+		Host:         c.Host,
+		Mode:         c.Mode,
+		Username:     c.Username,
+		Password:     c.Password,
+		Port:         c.Port,
+		Database:     c.Database,
+		PoolSize:     c.PoolSize,
+		DialTimeout:  c.DialTimeout,
+		ReadTimeout:  c.ReadTimeout,
+		WriteTimeout: c.WriteTimeout,
+		TLSEnabled:   c.TLS.Enabled,
+		TLS:          m,
+	}); v != nil {
+		msg := v.Message
+		if len(v.Allowed) != 0 {
+			msg += " (must be one of: " + strings.Join(v.Allowed, ", ") + ")"
+		}
+		return clienttls.Material{}, cache.NewConfigError("redis."+v.Field, msg, nil)
 	}
 
 	// Zero stays valid: it means "unset", and LoadThrough then uses its own fallback. A
@@ -236,22 +175,6 @@ func (c *Config) validate() (clienttls.Material, error) {
 		return clienttls.Material{}, cache.NewConfigError("loadtimeout", "load timeout cannot be negative", nil)
 	}
 
-	return c.TLS.validate()
-}
-
-// validate checks the structural TLS rules without touching the filesystem:
-// material staged under a disabled block, a piece configured from two sources,
-// a half client-certificate pair, and the min-version enum. The rules
-// themselves live in clienttls, beside the loader that consumes the same
-// material; reading and parsing the PEM happens when the client dials.
-//
-// It returns the projection it validated so the dial path can reuse it instead
-// of building a second, identical one.
-func (t *TLSConfig) validate() (clienttls.Material, error) {
-	m := t.material()
-	if v := clienttls.ValidateMaterial(&m, t.Enabled); v != nil {
-		return clienttls.Material{}, cache.NewConfigError(tlsFieldPrefix+v.Field, v.Message, nil)
-	}
 	return m, nil
 }
 
