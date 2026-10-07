@@ -829,8 +829,8 @@ func TestCheckStaticTenantMapEmptyMapErrorIsNotAConfigError(t *testing.T) {
 // TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed proves both ACL
 // user rules reach the tenant mirror with the tenant-qualified spelling, so a
 // consumer matching on ConfigError.Field learns whose cache carries the fault.
-// The message stays root-spelled — qualification rewrites the field, not the
-// prose — so the remedy it names is the key relative to the tenant's own cache.
+// The message names its sibling key relative to the Redis block, so it reads
+// the same for the root and for every tenant.
 func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) {
 	const wantField = "multitenant.tenants.acme.cache.redis.username"
 
@@ -854,8 +854,8 @@ func TestValidateMultitenantTenantsCacheUsernameIsTenantAddressed(t *testing.T) 
 // TestValidateMultitenantTenantsCacheModeIsTenantAddressed proves both mode
 // rules reach the tenant mirror with the tenant-qualified spelling, so a
 // consumer matching on ConfigError.Field learns whose cache carries the fault.
-// The messages stay root-spelled — qualification rewrites the field, not the
-// prose — so the key they name is the one relative to the tenant's own cache.
+// The messages name their sibling key relative to the Redis block, so they read
+// the same for the root and for every tenant.
 func TestValidateMultitenantTenantsCacheModeIsTenantAddressed(t *testing.T) {
 	t.Run("unknown_mode", func(t *testing.T) {
 		cfgErr := tenantCacheValidationError(t,

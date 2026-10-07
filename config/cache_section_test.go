@@ -1254,6 +1254,11 @@ func TestValidateRedisCacheOutputAcrossTheRuleMove(t *testing.T) {
 			name: "keyprefix_with_whitespace", mutate: func(r *RedisConfig) { r.KeyPrefix = new("a b") },
 			before: "cache config: config_invalid: cache.redis.keyprefix must not contain whitespace",
 		},
+		{
+			name:   "tls_material_does_not_load",
+			mutate: func(r *RedisConfig) { r.TLS = RedisTLSConfig{Enabled: true, CAValue: "bm90LXBlbQ=="} },
+			before: "cache config: config_invalid: cache.redis.tls cache: redis: tls: ca: no CERTIFICATE block found",
+		},
 	}
 
 	var changed []string
@@ -1293,4 +1298,19 @@ func TestValidateRedisCacheJudgesKeyPrefixAfterTheRules(t *testing.T) {
 	var cfgErr *ConfigError
 	require.ErrorAs(t, err, &cfgErr)
 	assert.Equal(t, "cache.redis.username", cfgErr.Field)
+}
+
+// TestValidateRedisCacheJudgesKeyPrefixBeforeTheTLSLoad pins the other half of [C72.23]'s
+// order: the keyprefix grammar still runs before the TLS material is read, so a section with
+// a bad keyprefix and unloadable material reports the keyprefix.
+func TestValidateRedisCacheJudgesKeyPrefixBeforeTheTLSLoad(t *testing.T) {
+	err := validateRedisCache(&RedisConfig{
+		Host: "localhost", Port: 6379, PoolSize: 10,
+		KeyPrefix: new("a b"),
+		TLS:       RedisTLSConfig{Enabled: true, CAValue: "bm90LXBlbQ=="},
+	})
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "cache.redis.keyprefix", cfgErr.Field)
 }

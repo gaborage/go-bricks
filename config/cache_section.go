@@ -150,7 +150,7 @@ func checkRedis(cfg *RedisConfig) error {
 	switch {
 	case v.Missing:
 		return NewMissingFieldError(field, keyToEnvVar(field), field)
-	case len(v.Allowed) > 0:
+	case len(v.Allowed) != 0:
 		return NewInvalidFieldError(field, v.Message, v.Allowed)
 	default:
 		return NewValidationError(field, v.Message)
