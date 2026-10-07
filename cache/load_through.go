@@ -12,9 +12,10 @@ import (
 )
 
 // fallbackCacheLegTimeout bounds a cache leg only when the deployment cannot say: the
-// caller passed no WithCacheTimeout AND the Cache does not implement LoadTimeoutProvider.
-// Every framework cache carries `cache.loadtimeout` (default 500ms) and therefore never
-// reaches this; it exists so a hand-written Cache cannot produce an unbounded leg.
+// caller passed no WithCacheTimeout AND the Cache reports no positive LoadTimeout.
+// Every cache the default connector builds carries `cache.loadtimeout` (default 500ms, filled
+// wherever config normalizes a cache section, the connect door included), so it never reaches
+// this; it exists so a hand-written Cache cannot produce an unbounded leg.
 // Deliberately unexported: the configurable bound is the supported surface.
 const fallbackCacheLegTimeout = 500 * time.Millisecond
 
