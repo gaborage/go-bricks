@@ -46,6 +46,19 @@ func TestPredicates(t *testing.T) {
 		{"version_uppercase_v", ValidVersion, "V1", false},
 		{"version_hyphen_kept", ValidVersion, "-v1", false},
 		{"version_trailing_newline", ValidVersion, "v1\n", false},
+
+		{"name_one_segment", ValidName, "webhook-signing", true},
+		{"name_dotted", ValidName, "tokens.our", true},
+		{"name_mixed", ValidName, "a.b-c.d", true},
+		{"name_reserved_word_alone", ValidName, "secret", true},
+		{"name_reserved_word_after_dot", ValidName, "webhook.secret", true},
+		{"name_empty", ValidName, "", false},
+		{"name_leading_dot", ValidName, ".x", false},
+		{"name_trailing_dot", ValidName, "x.", false},
+		{"name_double_dot", ValidName, "x..y", false},
+		{"name_uppercase", ValidName, "Tokens.our", false},
+		{"name_underscore", ValidName, "tokens_our", false},
+		{"name_trailing_newline", ValidName, "tokens.our\n", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -128,4 +141,96 @@ func TestGenerationName(t *testing.T) {
 	assert.Equal(t, Generation, form)
 	assert.Equal(t, "payments-sign", logical)
 	assert.Equal(t, "v12", version)
+}
+
+func TestReservedAfterDot(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       string
+		wantWord string
+		wantBad  bool
+	}{
+		{name: "after_dot", in: "webhook.secret", wantWord: "secret", wantBad: true},
+		{name: "deep", in: "a.b.pkcs12.c", wantWord: "pkcs12", wantBad: true},
+		{name: "first_of_two", in: "a.public.private", wantWord: "public", wantBad: true},
+		{name: "first_segment", in: "secret.x", wantBad: false},
+		{name: "one_segment", in: "private", wantBad: false},
+		{name: "near_miss", in: "webhook.secrets", wantBad: false},
+		{name: "hyphen_joined", in: "webhook-secret", wantBad: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			word, bad := ReservedAfterDot(tt.in)
+			assert.Equal(t, tt.wantBad, bad)
+			assert.Equal(t, tt.wantWord, word)
+		})
+	}
+}
+
+func TestValidEntryName(t *testing.T) {
+	assert.True(t, ValidEntryName("tokens.our"))
+	assert.True(t, ValidEntryName("secret"), "a first segment is never a field")
+	assert.False(t, ValidEntryName("webhook.secret"))
+	assert.False(t, ValidEntryName("tokens_our"))
+}
+
+func TestFirstFoldClashAndDottedPrefix(t *testing.T) {
+	earlier, later, found := FirstFoldClash([]string{"a", "a-b.c", "a.b-c", "tokens-our", "tokens.our"})
+	assert.True(t, found)
+	assert.Equal(t, "a-b.c", earlier)
+	assert.Equal(t, "a.b-c", later)
+	_, _, found = FirstFoldClash([]string{"tokens-our", "tokens.ours"})
+	assert.False(t, found)
+
+	prefix, name, found := FirstDottedPrefix([]string{"a", "b", "b.c", "b.c.d"})
+	assert.True(t, found)
+	assert.Equal(t, "b", prefix)
+	assert.Equal(t, "b.c", name)
+	prefix, name, found = FirstDottedPrefix([]string{"x.y", "x"})
+	assert.True(t, found, "order does not hide a prefix")
+	assert.Equal(t, "x", prefix)
+	assert.Equal(t, "x.y", name)
+	_, _, found = FirstDottedPrefix([]string{"tokens", "tokens-our", "token.s"})
+	assert.False(t, found)
+}
+
+// TestFirstFoldedPrefix: a pair nests when one fold is a dotted prefix of the
+// other's and either name contains '.'. Two names without '.' are exempt, so
+// families that boot today (payments-sign beside payments-sign-eu) stay valid.
+func TestFirstFoldedPrefix(t *testing.T) {
+	tests := []struct {
+		name       string
+		names      []string
+		wantPrefix string
+		wantName   string
+	}{
+		{name: "hyphen_beside_dotted", names: []string{"payments-sign", "payments.sign.eu"}, wantPrefix: "payments-sign", wantName: "payments.sign.eu"},
+		{name: "dotted_beside_hyphen", names: []string{"payments-sign-eu", "payments.sign"}, wantPrefix: "payments.sign", wantName: "payments-sign-eu"},
+		{name: "raw_prefix", names: []string{"payments", "payments.sign"}, wantPrefix: "payments", wantName: "payments.sign"},
+		{name: "order_does_not_hide_it", names: []string{"x.y.z", "x-y"}, wantPrefix: "x-y", wantName: "x.y.z"},
+		{name: "first_pair_in_order", names: []string{"a-b", "a.b.c", "d", "d.e"}, wantPrefix: "a-b", wantName: "a.b.c"},
+		{name: "hyphen_only_pair_is_exempt", names: []string{"payments-sign", "payments-sign-eu"}},
+		{name: "no_nesting", names: []string{"payments.sign", "payments.signer", "tokens-our"}},
+		{name: "equal_folds_do_not_nest", names: []string{"tokens-our", "tokens.our"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix, name, found := FirstFoldedPrefix(tt.names)
+			assert.Equal(t, tt.wantPrefix != "", found)
+			assert.Equal(t, tt.wantPrefix, prefix)
+			assert.Equal(t, tt.wantName, name)
+		})
+	}
+}
+
+func TestFoldAndDottedPrefix(t *testing.T) {
+	assert.Equal(t, "tokens.our", Fold("tokens-our"))
+	assert.Equal(t, Fold("a-b.c"), Fold("a.b-c"))
+	assert.Equal(t, "tokens.our", Fold("tokens.our"))
+
+	assert.True(t, IsDottedPrefix("tokens", "tokens.our"))
+	assert.True(t, IsDottedPrefix("a.b", "a.b.c"))
+	assert.False(t, IsDottedPrefix("token", "tokens.our"))
+	assert.False(t, IsDottedPrefix("tokens", "tokens-our"))
+	assert.False(t, IsDottedPrefix("tokens", "tokens"))
 }
