@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -12,9 +13,10 @@ import (
 	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
-// A keystore.keys entry name is a dotted path of segments (ADR-144). YAML
-// writes it as nested maps and the environment reaches the same path through
-// the unchanged transform: KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE and
+// A keystore.keys entry name, and a messaging.seal.active selector key, is a
+// dotted path of segments (ADR-144). YAML writes it as nested maps and the
+// environment reaches the same path through the unchanged transform:
+// KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE and
 // keystore.keys: {tokens: {our: {private: {value: …}}}} are one koanf path, so
 // they are one entry, "tokens.our". mapstructure would decode that path into
 // a phantom entry "tokens" and drop "our" in silence (ErrorUnused is off), so
@@ -22,29 +24,80 @@ import (
 // names first, and mapstructure decodes that map exactly as before.
 //
 // The walk lives in decode because decode is the only place the nested tree
-// exists. The rules that judge the final name set live in checkKeyStore, so a
-// hand-built Config meets them too (ADR-064).
+// exists. The rules that judge the final name set live in checkKeyStore and
+// checkMessagingSeal, so a hand-built Config meets them too (ADR-064).
+
+// sealActiveChild is SealConfig's selector field, matched as mapstructure
+// matches a field name.
+const sealActiveChild = "active"
 
 var (
-	keysMapType = reflect.TypeFor[map[string]KeyPairConfig]()
+	keysMapType       = reflect.TypeFor[map[string]KeyPairConfig]()
+	keysPtrMapType    = reflect.TypeFor[map[string]*KeyPairConfig]()
+	keyPairConfigType = reflect.TypeFor[KeyPairConfig]()
+	sealConfigType    = reflect.TypeFor[SealConfig]()
 	// keyEntrySchema is the key tree one keystore entry may hold, read from the
 	// mapstructure tags of KeyPairConfig and its source structs, so a field
 	// added there is accepted here without a second list.
 	keyEntrySchema = schemaOf(reflect.TypeFor[KeyPairConfig]())
 )
 
-// keystoreTreeHook is the decode hook that reads the keystore.keys subtree as
-// dotted names. mapstructure runs it at every nested decode, so it fires
-// wherever the target is the entry map (map[string]KeyPairConfig): Load,
-// LoadFromMap and Config.Unmarshal of the keystore section or of its keys map
-// alike, and no exported type changes. Every refusal is a *ConfigError;
-// mapstructure wraps it in a DecodeError that unwraps, so errors.As reaches it.
+// keystoreTreeHook is the decode hook that reads the keystore.keys and
+// messaging.seal.active subtrees as dotted names. mapstructure runs it at
+// every nested decode, so it fires wherever the target is an entry map
+// (map[string]KeyPairConfig, or of pointers), one KeyPairConfig, or a
+// SealConfig: Load, LoadFromMap and Config.Unmarshal of the keystore section,
+// of its keys map, of one entry or of the seal section alike, and no exported
+// type changes. A map[string]string is no keystore type, so Unmarshal of the
+// selector map itself is not read here; mapstructure refuses a nested
+// selector there (a map where a string belongs) rather than dropping it.
+// Every refusal is a *ConfigError; mapstructure wraps it in a DecodeError that
+// unwraps, so errors.As reaches it. Its Field is named from the root Load
+// meets (keystore.keys, messaging.seal.active); Config.Unmarshal rewrites it
+// to the path it decoded (rerootTreeErrors).
 func keystoreTreeHook() mapstructure.DecodeHookFuncType {
 	return func(_, to reflect.Type, data any) (any, error) {
-		if to == keysMapType {
+		switch to {
+		case keysMapType, keysPtrMapType:
 			return readKeysNode(data)
+		case keyPairConfigType:
+			return data, checkEntryNode(data)
+		case sealConfigType:
+			return replaceSelectorTree(data)
 		}
 		return data, nil
+	}
+}
+
+// treeNodes are the paths where Load hands keystoreTreeHook its nodes, and so the roots its
+// refusals are named from: the entry map (and one entry) at keystore.keys, and the seal
+// section at messaging.seal, whose active child the walk reads.
+var treeNodes = []string{fieldKeystoreKeys, strings.TrimSuffix(fieldMessagingSealActive, keyname.Sep+sealActiveChild)}
+
+// rerootTreeErrors rewrites the Field of every tree-reader refusal in err from the root Load
+// meets it at to the path Config.Unmarshal decoded: the hook fires on its types at any path
+// (custom.keys, keystore.keys.tokens), and mapstructure's DecodeError names the node it was
+// given, relative to key. A refusal is a fresh *ConfigError per decode, so it is rewritten in
+// place.
+func rerootTreeErrors(err error, key string) {
+	var joined interface{ Unwrap() []error }
+	if errors.As(err, &joined) {
+		for _, inner := range joined.Unwrap() {
+			rerootTreeErrors(inner, key)
+		}
+		return
+	}
+	var decodeErr *mapstructure.DecodeError
+	var cfgErr *ConfigError
+	if !errors.As(err, &decodeErr) || !errors.As(decodeErr.Unwrap(), &cfgErr) {
+		return
+	}
+	decoded := strings.Trim(key+keyname.Sep+decodeErr.Name(), keyname.Sep)
+	for _, node := range treeNodes {
+		if rest, found := strings.CutPrefix(cfgErr.Field, node); found {
+			cfgErr.Field = decoded + rest
+			return
+		}
 	}
 }
 
@@ -57,6 +110,63 @@ func readKeysNode(data any) (any, error) {
 		return data, nil
 	}
 	return readKeyTree(tree)
+}
+
+// checkEntryNode refuses a node decoded into one KeyPairConfig that holds a
+// child no entry field names. Through an entry map every entry was already
+// read by the walk, which refuses such a child; what is left is
+// Config.Unmarshal of a namespace's path (keystore.keys.tokens, which holds
+// tokens.our), which would decode as an empty entry with "our" dropped.
+func checkEntryNode(data any) error {
+	node, isMap := stringMap(data)
+	if !isMap {
+		return nil
+	}
+	for _, key := range slices.Sorted(maps.Keys(node)) {
+		if keyEntrySchema.child(key) == nil {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldKeystoreKeys,
+				Message:  fmt.Sprintf("a keystore entry was decoded from a node holding %q, which is no entry field (%s)", key, fieldList(keyEntrySchema)),
+				Action:   "unmarshal an entry by its full dotted path (e.g. keystore.keys.tokens.our), or the keys map, which reads nested names",
+			}
+		}
+	}
+	return nil
+}
+
+// replaceSelectorTree returns a shallow copy of a seal section with its
+// active child (matched as mapstructure matches a field name) replaced by the
+// flat selector map. data is never mutated: koanf owns it. Anything there that
+// is not a string-keyed map is passed through for mapstructure to judge, as
+// before.
+func replaceSelectorTree(data any) (any, error) {
+	section, ok := stringMap(data)
+	if !ok {
+		return data, nil
+	}
+	var out map[string]any
+	for _, key := range slices.Sorted(maps.Keys(section)) {
+		if !strings.EqualFold(key, sealActiveChild) {
+			continue
+		}
+		tree, isMap := stringMap(section[key])
+		if !isMap {
+			continue
+		}
+		flat, err := readSelectorTree(tree)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = maps.Clone(section)
+		}
+		out[key] = flat
+	}
+	if out == nil {
+		return data, nil
+	}
+	return out, nil
 }
 
 // readKeyTree flattens keystore.keys: every node with a field child (public,
@@ -190,6 +300,45 @@ func checkAgainstSchema(path, label string, node any, s *treeSchema) error {
 		if err := checkAgainstSchema(path+"."+key, key, sub[key], childSchema); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// readSelectorTree flattens messaging.seal.active: a scalar or null leaf at
+// path p is the selector for family join(p, "."), and every non-empty map is
+// a namespace. An empty map is refused: it is neither. The flat spelling of
+// today (payments-sign: v2) is a one-segment leaf and reads unchanged.
+func readSelectorTree(tree map[string]any) (map[string]any, error) {
+	out := make(map[string]any)
+	if err := walkSelectors(tree, "", out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func walkSelectors(node map[string]any, prefix string, out map[string]any) error {
+	for _, key := range slices.Sorted(maps.Keys(node)) {
+		if err := checkTreeKey(fieldMessagingSealActive, prefix, key); err != nil {
+			return err
+		}
+		name := joinName(prefix, key)
+		if sub, isMap := stringMap(node[key]); isMap {
+			if len(sub) == 0 {
+				// Neither a selector nor a namespace: walking it would drop the
+				// key in silence, where mapstructure refused it before ADR-144.
+				return &ConfigError{
+					Category: errCategoryInvalid,
+					Field:    fieldMessagingSealActive + "." + name,
+					Message:  "holds an empty map where a generation or a further name segment was expected",
+					Action:   "set the selector to a generation (v<N>), or remove the key",
+				}
+			}
+			if err := walkSelectors(sub, name, out); err != nil {
+				return err
+			}
+			continue
+		}
+		out[name] = node[key]
 	}
 	return nil
 }

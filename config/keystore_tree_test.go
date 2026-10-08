@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -21,6 +23,12 @@ import (
 func loadKeyTree(t *testing.T, tree map[string]any) (*Config, error) {
 	t.Helper()
 	return LoadFromMap(map[string]any{"keystore": map[string]any{"keys": tree}})
+}
+
+// loadSelectorTree decodes a messaging.seal.active subtree the same way.
+func loadSelectorTree(t *testing.T, tree map[string]any) (*Config, error) {
+	t.Helper()
+	return LoadFromMap(map[string]any{"messaging": map[string]any{"seal": map[string]any{"active": tree}}})
 }
 
 func publicValue(v string) map[string]any {
@@ -266,6 +274,7 @@ func TestTreeKeyWithAnEmptySegment(t *testing.T) {
 		value any
 	}{
 		{name: "keystore", field: "keystore.keys", load: loadKeyTree, value: publicValue("x")},
+		{name: "selectors", field: "messaging.seal.active", load: loadSelectorTree, value: "v1"},
 	}
 	for _, root := range roots {
 		for _, key := range []string{".", "tokens..our", ".tokens", "tokens."} {
@@ -318,6 +327,187 @@ func TestKeystoreTreeFirstErrorIsDeterministic(t *testing.T) {
 	requireTreeError(t, first, "keystore.keys.aa.b.privkey", `unknown field "privkey"`)
 }
 
+// TestKeystoreTreeReadsSelectors: a scalar leaf at a nested path is the
+// selector for the dotted family, the flat hyphenated spelling reads
+// unchanged, and a literal dotted key or an empty key is refused.
+func TestKeystoreTreeReadsSelectors(t *testing.T) {
+	cfg, err := loadSelectorTree(t, map[string]any{
+		"payments":     map[string]any{"sign": "v2", "encrypt": map[string]any{"core": "v1"}},
+		"svc-sign":     "v3",
+		"unset-family": nil,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"payments.sign":         "v2",
+		"payments.encrypt.core": "v1",
+		"svc-sign":              "v3",
+		"unset-family":          "",
+	}, cfg.Messaging.Seal.Active)
+
+	_, err = loadSelectorTree(t, map[string]any{"payments.sign": "v2"})
+	cfgErr := requireTreeError(t, err, "messaging.seal.active", `key "payments.sign" is one YAML key containing '.'`)
+	// A selector is a leaf: one exact variable reaches it, and VAR_* would reach
+	// a selector below it instead.
+	assert.Contains(t, cfgErr.Action, "the nested path is what MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches")
+	assert.NotContains(t, cfgErr.Action, "_*")
+
+	// Field words are reserved in keystore names only, so a selector keeps the nested advice.
+	_, err = loadSelectorTree(t, map[string]any{"orders.secret": "v2"})
+	cfgErr = requireTreeError(t, err, "messaging.seal.active", `key "orders.secret" is one YAML key containing '.'`)
+	assert.Contains(t, cfgErr.Action, "write it nested (orders: {secret: …})")
+
+	_, err = loadSelectorTree(t, map[string]any{"payments": map[string]any{"": "v2"}})
+	requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty key")
+}
+
+// TestKeystoreTreeRefusesAnEmptySelectorNamespace: an empty map in the
+// selector tree selects nothing and names no further segment. Before ADR-144
+// mapstructure refused it ('messaging.seal.active[payments]' expected type
+// 'string', got unconvertible type 'map[string]interface {}'); the walk must
+// not drop it in silence, and refuses it at its own path instead.
+func TestKeystoreTreeRefusesAnEmptySelectorNamespace(t *testing.T) {
+	tests := []struct {
+		name      string
+		tree      map[string]any
+		wantField string
+	}{
+		{name: "one_segment", tree: map[string]any{"payments": map[string]any{}}, wantField: "messaging.seal.active.payments"},
+		{name: "nested", tree: map[string]any{"payments": map[string]any{"sign": map[string]any{}}}, wantField: "messaging.seal.active.payments.sign"},
+		{
+			name:      "beside_a_selector",
+			tree:      map[string]any{"payments": map[string]any{"sign": "v2", "encrypt": map[string]any{}}},
+			wantField: "messaging.seal.active.payments.encrypt",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadSelectorTree(t, tt.tree)
+			cfgErr := requireTreeError(t, err, tt.wantField, "holds an empty map where a generation or a further name segment was expected")
+			assert.Equal(t, "set the selector to a generation (v<N>), or remove the key", cfgErr.Action)
+		})
+	}
+
+	// The real Load reaches the same walk from a YAML file, and a variable's
+	// scalar on the same path is dropped over the map, not merged into it.
+	t.Run("yaml_through_load", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, "messaging:\n  seal:\n    active:\n      payments: {}\n", "", nil)
+		requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty map")
+	})
+	t.Run("yaml_under_a_variable_scalar", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, "messaging:\n  seal:\n    active:\n      payments: {}\n", "",
+			map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS": "v2"})
+		requireTreeError(t, err, "messaging.seal.active.payments", "holds an empty map")
+	})
+}
+
+// TestConfigUnmarshalReadsTheKeystoreTree: the public Config.Unmarshal door
+// decodes with the same tree reader as Load, for either struct, and its
+// refusal is a *ConfigError errors.As reaches through mapstructure's
+// DecodeError (v2.5.0 unwraps it and joins field errors with errors.Join).
+func TestConfigUnmarshalReadsTheKeystoreTree(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{
+		"keystore": map[string]any{"keys": map[string]any{"tokens": map[string]any{"our": publicValue("pub")}}},
+		"custom": map[string]any{
+			"ks":   map[string]any{"keys": map[string]any{"tokens": map[string]any{"public": map[string]any{"value": "x"}, "our": publicValue("y")}}},
+			"seal": map[string]any{"active": map[string]any{"payments": map[string]any{"sign": "v2"}}},
+		},
+	})
+	require.NoError(t, err)
+
+	var ks KeyStoreConfig
+	require.NoError(t, cfg.Unmarshal("keystore", &ks))
+	assert.Equal(t, "pub", ks.Keys["tokens.our"].Public.Value)
+
+	var seal SealConfig
+	require.NoError(t, cfg.Unmarshal("custom.seal", &seal))
+	assert.Equal(t, map[string]string{"payments.sign": "v2"}, seal.Active)
+
+	err = cfg.Unmarshal("custom.ks", &KeyStoreConfig{})
+	requireTreeError(t, err, "custom.ks.keys.tokens", `(it sets public) and the parent of entry "tokens.our"`)
+}
+
+// TestConfigUnmarshalKeysMapReadsTheTree: Unmarshal straight into the keys
+// map, rather than into KeyStoreConfig, reads the same dotted names. Before,
+// the hook fired on the struct only, so the map door decoded the namespace
+// "tokens" as a phantom entry and dropped "our" in silence. A pointer map and
+// a refusal take the same path.
+func TestConfigUnmarshalKeysMapReadsTheTree(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{
+		"keystore": map[string]any{"keys": map[string]any{"tokens": map[string]any{"our": publicValue("pub")}}},
+		"custom": map[string]any{"keys": map[string]any{"tokens": map[string]any{
+			"public": map[string]any{"value": "x"},
+			"our":    publicValue("y"),
+		}}},
+	})
+	require.NoError(t, err)
+
+	var keys map[string]KeyPairConfig
+	require.NoError(t, cfg.Unmarshal("keystore.keys", &keys))
+	assert.Equal(t, map[string]KeyPairConfig{"tokens.our": {Public: KeySourceConfig{Value: "pub"}}}, keys)
+
+	var ptrKeys map[string]*KeyPairConfig
+	require.NoError(t, cfg.Unmarshal("keystore.keys", &ptrKeys))
+	require.Equal(t, []string{"tokens.our"}, slices.Sorted(maps.Keys(ptrKeys)))
+	assert.Equal(t, "pub", ptrKeys["tokens.our"].Public.Value)
+
+	err = cfg.Unmarshal("custom.keys", &map[string]KeyPairConfig{})
+	requireTreeError(t, err, "custom.keys.tokens", `(it sets public) and the parent of entry "tokens.our"`)
+}
+
+// TestConfigUnmarshalEntryRefusesANamespace: a dotted entry is read by its
+// full path; the path of its namespace decoded as one entry used to yield an
+// empty KeyPairConfig with "our" dropped, and is refused instead.
+func TestConfigUnmarshalEntryRefusesANamespace(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{
+		"keystore": map[string]any{"keys": map[string]any{"tokens": map[string]any{"our": publicValue("pub")}}},
+	})
+	require.NoError(t, err)
+
+	var entry KeyPairConfig
+	require.NoError(t, cfg.Unmarshal("keystore.keys.tokens.our", &entry))
+	assert.Equal(t, KeyPairConfig{Public: KeySourceConfig{Value: "pub"}}, entry)
+
+	err = cfg.Unmarshal("keystore.keys.tokens", &KeyPairConfig{})
+	cfgErr := requireTreeError(t, err, "keystore.keys.tokens", `a keystore entry was decoded from a node holding "our", which is no entry field`)
+	assert.Equal(t, "unmarshal an entry by its full dotted path (e.g. keystore.keys.tokens.our), or the keys map, which reads nested names", cfgErr.Action)
+}
+
+// TestConfigUnmarshalNamesTheDecodedPath: the tree reader fires on its types
+// wherever Config.Unmarshal meets them, so a refusal names the path that was
+// decoded, not the keystore.keys or messaging.seal.active root Load meets.
+// A custom section that holds one entry beside its own metadata is refused,
+// as a keystore entry is: the reader cannot tell a sibling from a name.
+func TestConfigUnmarshalNamesTheDecodedPath(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{
+		"custom": map[string]any{
+			"partner": map[string]any{"public": map[string]any{"value": "x"}, "kid": "partner-2026"},
+			"vendor":  map[string]any{"keys": map[string]any{"a": map[string]any{"public": map[string]any{"value": "x"}, "label": "y"}}},
+			"seal":    map[string]any{"active": map[string]any{"payments": map[string]any{}}},
+		},
+	})
+	require.NoError(t, err)
+
+	err = cfg.Unmarshal("custom.partner", &KeyPairConfig{})
+	requireTreeError(t, err, "custom.partner", `a keystore entry was decoded from a node holding "kid"`)
+
+	err = cfg.Unmarshal("custom.vendor.keys", &map[string]KeyPairConfig{})
+	requireTreeError(t, err, "custom.vendor.keys.a.label", `unknown field "label" in entry "a"`)
+
+	var vendor struct {
+		Keys map[string]KeyPairConfig `koanf:"keys"`
+	}
+	err = cfg.Unmarshal("custom.vendor", &vendor)
+	requireTreeError(t, err, "custom.vendor.keys.a.label", `unknown field "label" in entry "a"`)
+
+	err = cfg.Unmarshal("custom.seal", &SealConfig{})
+	requireTreeError(t, err, "custom.seal.active.payments", "holds an empty map")
+
+	err = cfg.Unmarshal("custom", &struct {
+		Seal SealConfig `koanf:"seal"`
+	}{})
+	requireTreeError(t, err, "custom.seal.active.payments", "holds an empty map")
+}
+
 // TestKeyEntryFieldsArePinnedToKeyPairConfig: keyname.FieldSegments is the set
 // a dotted name may not use after a '.', and the tree reader recognizes an
 // entry by KeyPairConfig's tags. A field added to the struct without the
@@ -329,6 +519,35 @@ func TestKeyEntryFieldsArePinnedToKeyPairConfig(t *testing.T) {
 	}
 	assert.ElementsMatch(t, keyname.FieldSegments, tags)
 	assert.ElementsMatch(t, keyname.FieldSegments, keyEntrySchema.names())
+}
+
+// loadKeystoreYAML runs the real Load in a fresh directory holding config.yaml
+// (and the optional development overlay), with no ambient keystore or
+// selector variable, then the variables env sets. Variable names may carry
+// '-', as Docker and Kubernetes allow and a POSIX export does not.
+func loadKeystoreYAML(t *testing.T, base, overlay string, env map[string]string) (*Config, error) {
+	t.Helper()
+	clearEnvironmentVariables()
+	t.Cleanup(clearEnvironmentVariables)
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "KEYSTORE_KEYS_") || strings.HasPrefix(name, "MESSAGING_SEAL_ACTIVE_") {
+			t.Setenv(name, "")
+			require.NoError(t, os.Unsetenv(name))
+		}
+	}
+	dir := t.TempDir()
+	if base != "" {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(base), 0o600))
+	}
+	if overlay != "" {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.development.yaml"), []byte(overlay), 0o600))
+	}
+	t.Chdir(dir)
+	for name, value := range env {
+		t.Setenv(name, value)
+	}
+	return Load()
 }
 
 // TestLoadFromMapDottedKeys: LoadFromMap unflattens only its top-level keys,

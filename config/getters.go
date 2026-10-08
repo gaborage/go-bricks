@@ -240,7 +240,9 @@ func (c *Config) Unmarshal(key string, out any) error {
 	// rejected here too; empty Tag keeps koanf's "koanf" TagName (field-name fallback).
 	// unmarshalDecoderConfig (no slice hook) preserves koanf's default string -> []string
 	// single-element wrap on this public seam.
-	return k.UnmarshalWithConf(key, out, koanf.UnmarshalConf{DecoderConfig: unmarshalDecoderConfig()})
+	err := k.UnmarshalWithConf(key, out, koanf.UnmarshalConf{DecoderConfig: unmarshalDecoderConfig()})
+	rerootTreeErrors(err, key)
+	return err
 }
 
 // Exists checks if a configuration key exists.
