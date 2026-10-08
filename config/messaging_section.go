@@ -5,19 +5,12 @@ import (
 	"maps"
 	"math"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
-)
 
-// sealGenerationPattern is the Activation selector's value grammar: a
-// generation marker without its hyphen, a positive integer with no leading
-// zero. It mirrors keystore.generationVersionPattern — keep in sync — so a
-// selector can only ever spell a generation the way the keystore names it.
-// config is the lower layer, so the keystore's vocabulary is not exported
-// from here; the keystore re-checks its own copy at resolution.
-var sealGenerationPattern = regexp.MustCompile(`^v[1-9]\d*$`)
+	"github.com/gaborage/go-bricks/internal/keyname"
+)
 
 // normalizeMessaging shapes messaging configuration: reconnect/publisher pool
 // defaults (multitenant and the messaging tenancy select the Publisher.IdleTTL
@@ -136,7 +129,9 @@ func checkMessagingSeal(cfg *SealConfig) error {
 		if err := checkSectionName(field, logical); err != nil {
 			return err
 		}
-		if gen := cfg.Active[logical]; !sealGenerationPattern.MatchString(gen) {
+		// keyname.ValidVersion is the grammar the keystore names its generations
+		// by, so a selector can only ever spell one the way the keystore does.
+		if gen := cfg.Active[logical]; !keyname.ValidVersion(gen) {
 			err := NewValidationError(field, fmt.Sprintf("generation %q must be v<N> with N a positive integer without leading zeros (v1, not v0 or v01)", gen))
 			err.Action = "name the generation exactly as the keystore.keys entry suffix spells it"
 			return err

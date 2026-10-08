@@ -3,6 +3,8 @@ package keystore
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
 // ActiveGeneration resolves the producer's Activation for one Logical kid:
@@ -41,7 +43,7 @@ func ActiveGeneration(store FamilyEnumerator, active map[string]string, logical 
 	// config.Validate holds the selector to this grammar; repeated here for a
 	// hand-built config that skipped it, so a malformed selector is named
 	// rather than reported as merely unprovisioned.
-	if !generationVersionPattern.MatchString(selector) {
+	if !keyname.ValidVersion(selector) {
 		return Generation{}, fmt.Errorf("keystore: messaging.seal.active.%s = %q is not a generation (v1, not v0 or v01)", logical, selector)
 	}
 	for _, gen := range gens {

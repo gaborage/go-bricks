@@ -2,22 +2,19 @@ package jose
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	jose "github.com/go-jose/go-jose/v4"
+
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
-// kidPattern restricts key identifiers to ASCII alphanumerics, underscore, and hyphen.
-// Mirrors the validation strictness of database/internal/columns/parser.go to prevent
-// any character that could be misinterpreted by header processing or logging sinks.
-var kidPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
 // ValidKid reports whether s is a well-formed key identifier: one or more ASCII
-// alphanumerics, underscores, or hyphens. Exported so every kid check in the module
-// (struct tags today, sealed messaging and the keystore next) shares this one grammar.
+// alphanumerics, underscores, or hyphens, so no character can be misread by header
+// processing or logging sinks. The grammar lives in internal/keyname, which the
+// keystore and sealed messaging share.
 func ValidKid(s string) bool {
-	return kidPattern.MatchString(s)
+	return keyname.ValidKid(s)
 }
 
 const TagName = "jose"

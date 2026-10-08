@@ -3,59 +3,44 @@ package sealed
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 
-	"github.com/gaborage/go-bricks/jose"
+	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
 // MaxLogicalKidLen caps a Logical kid; the concrete Generation name adds `-v<N>` on top.
-const MaxLogicalKidLen = 64
-
-var (
-	// anyGenerationSuffix is the marker a Logical kid may never end in (G4): any `-v<digits>`,
-	// leading zeros included, so `x-v01` is refused as a family name even though it is not
-	// a well-formed Generation either.
-	anyGenerationSuffix = regexp.MustCompile(`-v\d+$`)
-	// generationKid splits a concrete kid into family and Generation. Generations are
-	// positive integers without leading zeros (#1309 resolution 9).
-	generationKid = regexp.MustCompile(`^(.+)-v([1-9]\d*)$`)
-)
+const MaxLogicalKidLen = keyname.MaxLogicalLen
 
 // CheckLogicalKid reports why s is not a Logical kid, or nil when it is one: the jose kid
 // grammar `^[A-Za-z0-9_-]+$`, at most MaxLogicalKidLen characters, and not ending in the
-// Generation marker `-v<digits>`.
+// Generation marker `-v<digits>` — leading zeros included, so `x-v01` is refused as a
+// family name even though it is not a well-formed Generation either.
 func CheckLogicalKid(s string) error {
-	if !jose.ValidKid(s) {
+	switch keyname.CheckLogical(s) {
+	case keyname.LogicalNotKid:
 		return errors.New("must match ^[A-Za-z0-9_-]+$")
-	}
-	if len(s) > MaxLogicalKidLen {
+	case keyname.LogicalTooLong:
 		return fmt.Errorf("exceeds %d characters", MaxLogicalKidLen)
-	}
-	if anyGenerationSuffix.MatchString(s) {
+	case keyname.LogicalEndsInMarker:
 		return errors.New("must not end in -v<digits> (that is a generation name)")
+	default:
+		return nil
 	}
-	return nil
 }
 
 // SplitGenerationKid parses a concrete kid `<logical>-v<N>` into its family and Generation.
 // ok is false when the suffix is not `-v[1-9][0-9]*` or the family part is not itself a
-// Logical kid — so `x-v1-v2` is no Generation of anything, and `x-v0`/`x-v01` are refused.
-//
-// keystore.generationSuffixPattern / generationVersionPattern (and
-// config.sealGenerationPattern for the Activation selector) accept exactly this language;
-// keystore must stay free of go-jose, so the grammar is spelled twice — keep in sync.
+// Logical kid — so `x-v1-v2` is no Generation of anything, and `x-v0`/`x-v01` are refused
+// (#1309 resolution 9). ok is also false when N overflows an int: the keystore never
+// parses N, so it admits a generation this function refuses.
 func SplitGenerationKid(kid string) (family string, generation int, ok bool) {
-	m := generationKid.FindStringSubmatch(kid)
-	if m == nil {
+	family, version, form := keyname.SplitGeneration(kid)
+	if form != keyname.Generation {
 		return "", 0, false
 	}
-	if CheckLogicalKid(m[1]) != nil {
-		return "", 0, false
-	}
-	n, err := strconv.Atoi(m[2])
+	n, err := strconv.Atoi(version[1:])
 	if err != nil {
 		return "", 0, false
 	}
-	return m[1], n, true
+	return family, n, true
 }
