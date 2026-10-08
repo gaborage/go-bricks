@@ -771,6 +771,15 @@ keystore:
     webhook-hmac:
       secret:
         file: certs/webhook_hmac.key    # Raw bytes; or value: (base64) via env var
+    tokens:                             # Nested names: entries "tokens.our" and "tokens.peer" (ADR-144)
+      our:
+        private:
+          value: ""  # Set via KEYSTORE_KEYS_TOKENS_OUR_PRIVATE_VALUE — a dotted name is POSIX-exportable
+        public:
+          file: certs/tokens_our_public.der
+      peer:
+        public:
+          file: certs/tokens_peer_public.der
     vts:
       pkcs12:
         file: certs/vts.p12             # Password-protected PKCS#12 bundle; or value: (base64)

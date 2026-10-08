@@ -169,6 +169,10 @@ keystore:
     #     value: "${ENCRYPTION_PUBLIC_KEY_BASE64}"
     #   private:
     #     value: "${ENCRYPTION_PRIVATE_KEY_BASE64}"
+    # webhook:                                   # A name may be a dotted path, written nested (ADR-144):
+    #   hmac:                                    #   this is entry "webhook.hmac", Secret("webhook.hmac"),
+    #     secret:                                #   reached by KEYSTORE_KEYS_WEBHOOK_HMAC_SECRET_VALUE from any shell.
+    #       value: "${WEBHOOK_HMAC_BASE64}"      # A field name (public/private/secret/pkcs12) may not follow a '.'.
 
 # Bearer credential verification (OPTIONAL - JWT access tokens)
 # Unset entirely when the service verifies no credentials; the keys below carry

@@ -15,6 +15,15 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-10-04, [ADR-144](adr_144_dotted_keystore_entry_names.md)):** in §3's
+> generation grammar and Env door, Logical kids may contain interior dots; a dotted family names
+> its generations `<family>.v<N>`, a family without one keeps `-v<N>`, so the marker is a function
+> of the family and `Generation.Kid()` stays pure. Selector keys are written nested, so
+> `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN` reaches family `payments.sign` from any shell. No per-key
+> rewrite was added. A hyphenated kid's selector is not YAML-only, as §3 says: `env` can pass
+> `MESSAGING_SEAL_ACTIVE_SVC-PAYMENTS-SIGN=v2` to a child process; only a POSIX shell assignment
+> or `export` cannot set it.
+>
 > **Amended (2026-10-03, #1897):** rule 10 now also requires **no clear case-fold twin of the
 > Subject**. The case-fold rule the 2026-09-04 amendment ran on the serialized bytes for the
 > sealer now runs for every opener door as well — `Open`, `OpenDocument` and `Verify` — because

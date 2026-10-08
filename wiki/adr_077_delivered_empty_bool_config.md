@@ -60,6 +60,11 @@ hook, and the CLI applies its byte-identical mirror:
 `tenantDecoderConfig` — which keeps a byte-identical copy of the hook rather than
 importing it, kept honest by the source-comparison test in `internal/configdecode`.
 
+> **Amended by [ADR-144](adr_144_dotted_keystore_entry_names.md) (v0.72.0):** the CLI keeps
+> no copy. It decodes its file through `config.LoadFromMap`, so the shared hook reaches it
+> at the go-bricks version it pins, and the source-comparison test is gone (see the same
+> note on [ADR-074](adr_074_delivered_empty_numeric_config.md)).
+
 YAML **null** stays absence, exactly as in ADR-074: koanf delivers a nil value there,
 not `""`, so `critical:` with nothing after it still takes the default. A test pins
 that boundary for bool as it does for numeric.

@@ -2400,6 +2400,23 @@ the error says the fix is configuration, not a re-run.
 
 ---
 
+### [ADR-144: Keystore Entry Names Are Dotted Paths, Written Nested](adr_144_dotted_keystore_entry_names.md)
+
+**Date:** 2026-10-04 | **Status:** Accepted | **Breaking:** a key under a keystore entry that is not a field or source, or an entry nested under another entry, now fails startup instead of being dropped
+
+A `keystore.keys` name may be a dotted path written as nested YAML, so `KEYSTORE_KEYS_TOKENS_OUR_*`
+reaches entry `tokens.our` from any shell; the joined path is the name verbatim, the JOSE kid on
+the wire and, for a generation, the sealed kid and inbox family. Entries must be prefix-free and
+fold-distinct (`-` versus `.`); a dotted family names generations `<family>.v<N>`, an undotted one
+keeps `-v<N>`, so `Generation.Kid` stays pure and no existing kid, inbox key or vector moves. One
+`internal/keyname` grammar replaces four copies. Amends ADR-090 (`keystore.keys` only) and
+ADR-097 (generation grammar and the selector env door). See [migrations.md](migrations.md)
+`[C72.17]`.
+
+**Key Benefits:** POSIX-settable key names and selectors without a second naming grammar.
+
+---
+
 ### [ADR-145: A Tenant Cache Refuses a `manager` Block](adr_145_tenant_cache_manager_refusal.md)
 
 **Date:** 2026-10-05 | **Status:** Accepted | **Breaking:** `config.Validate` refuses a static tenant's `multitenant.tenants.<id>.cache.manager` block, enabled or not, where it was accepted and never read
@@ -2592,6 +2609,8 @@ is greenfield. Deep dive: [sealing.md](sealing.md).
 shared by both sides, rotation without touching a tag, and a dedup key no header can forge.
 Amended by ADR-139: `RegisterSealCodec`, `ConfigureSealing` and `SealingRuntime()` are deleted;
 the blank import registers, the app configures, and modules read the facts from `ModuleDeps`.
+Amended by ADR-144: a dotted family names its generations `<family>.v<N>`, and a selector for
+it is written nested or set as `MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN=v2`.
 
 ---
 
@@ -2618,7 +2637,9 @@ is read only when someone is already looking.
 
 **Key Benefits:** a section that cannot be driven from the environment can no longer reach
 production, and the silent-sibling collision becomes a startup error naming the offending key.
-**Migration:** [migrations.md](migrations.md) `[C61.22]`.
+**Migration:** [migrations.md](migrations.md) `[C61.22]`. Amended by ADR-144: a `keystore.keys`
+name may be a dotted path of `[a-z0-9-]` segments, written nested; `databases` and
+`multitenant.tenants` keep `^[a-z0-9-]+$`.
 
 ---
 

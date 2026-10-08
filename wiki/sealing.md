@@ -93,7 +93,7 @@ and a sealed event by accident. A declaration is a sentinel plus exactly one Sub
 
 ```go
 type PaymentAuthorized struct {
-    _        struct{} `seal:"sign=svc-payments-sign,encrypt=aud-core-encrypt"`
+    _        struct{} `seal:"sign=svc.payments.sign,encrypt=aud-core-encrypt"`
     OrderID  string   `json:"order_id"  validate:"required"`
     Amount   int64    `json:"amount"    validate:"gt=0"`
     Card     Card     `json:"card"      seal:"subject"` // its json name is the sp entry
@@ -125,8 +125,8 @@ type PaymentAuthorized struct {
 
 | Term | Where it lives | Rule |
 | --- | --- | --- |
-| Logical kid | the tag | jose kid alphabet `^[A-Za-z0-9_-]+$`, ≤64 chars (`sealed.MaxLogicalKidLen`), narrowed to `^[a-z0-9-]+$` by the env-reachability rule (ADR-090), never ending in `-v<digits>` |
-| Generation | keystore entry `<logical>-v<N>` | `N` a positive integer without leading zeros (`v1`, not `v0`/`v01`); ordering is integer comparison; `keystore.Generation.Kid()` is the wire kid |
+| Logical kid | the tag | jose kid alphabet (runs of `[A-Za-z0-9_-]` joined by single dots), ≤64 chars (`sealed.MaxLogicalKidLen`), narrowed to dotted `[a-z0-9-]` segments by the env-reachability rule (ADR-090, ADR-144), never ending in a generation marker (`-v<digits>`, or a final `v<digits>` segment) |
+| Generation | keystore entry `<logical>.v<N>` when the family contains `.`, `<logical>-v<N>` when it does not (ADR-144) | `N` a positive integer without leading zeros (`v1`, not `v0`/`v01`); ordering is integer comparison; the family fixes the marker for life; `keystore.Generation.Kid()` is the wire kid and the inner `iss` |
 | Accept set | the consumer's keystore | exactly the provisioned generations of the family in the inherited role (`keystore.FamilyEnumerator`); provisioning is the sole trust act — no accept-list config exists |
 | Activation | `messaging.seal.active.<logical>: v<N>` on the producer | resolved by `keystore.ActiveGeneration` at startup for every Logical kid the producer resolves, sign and encrypt alike: one generation auto-activates, several with no selector refuse startup, a selector naming an unprovisioned generation refuses startup |
 | Family pin | the opener | the wire `kid` must be a Generation of the declared family (`SEAL_KID_FAMILY_MISMATCH`) AND resolve locally (`SEAL_KID_UNKNOWN_GENERATION`, recoverable) |
@@ -139,24 +139,49 @@ which role tag resolved each entry (`keystore.RoleTagJoseRoute` from the server'
 wiring, `keystore.RoleTagSeal` from `messaging/sealed`) and WARNs at startup, naming the
 entry, when one entry serves both.
 
-The env door for the selector is narrower than YAML: `MESSAGING_SEAL_ACTIVE_<KID>` reaches a
-kid spelled in `[a-z0-9]` everywhere, a hyphenated kid only where the runtime allows `-` in
-a variable name (Docker and Kubernetes manifests yes, POSIX `export` no), otherwise the
-selector is YAML-only ([keystore.md](keystore.md#activation-messagingsealactive)).
+A dotted family is written nested in YAML and set from any shell:
+`MESSAGING_SEAL_ACTIVE_SVC_PAYMENTS_SIGN=v2` selects for family `svc.payments.sign`, and
+`KEYSTORE_KEYS_SVC_PAYMENTS_SIGN_V2_PRIVATE_FILE` provisions its `v2`. A hyphenated family is
+settable by variable only where the runtime allows `-` in a variable name: a container
+manifest, or `env` passing the variable to a child process, but never a POSIX shell assignment
+or `export` ([keystore.md](keystore.md#activation-messagingsealactive)). A selector that differs from a
+provisioned family only in `-` versus `.` fails `config.Validate`, because it would select
+nothing. So do two families, or two selectors, that nest once `-` is read as `.`
+(`payments-sign` beside `payments.sign.eu`): a POSIX flip of the first selector lands on the
+path that holds the second, and the merge drops it in silence. Two families without `.`
+(`payments-sign`, `payments-sign-eu`) are exempt, as before. Two selectors that nest as written
+(`payments.sign`, `payments.sign.eu`) fail too when they come from different YAML files or
+variables: the merge keeps only one, so each layer's selectors are judged before it.
 
 ```yaml
 keystore:
   keys:
-    svc-payments-sign-v1: { private: { file: certs/payments-sign-v1.der } }   # producer
-    aud-core-encrypt-v1:  { public:  { file: certs/core-encrypt-v1.der } }    # producer
+    svc:
+      payments:
+        sign:
+          v1:                                                      # producer: entry svc.payments.sign.v1
+            public: { file: certs/payments-sign-v1-pub.der }       # public is required
+            private: { file: certs/payments-sign-v1.der }
+    aud-core-encrypt-v1: { public: { file: certs/core-encrypt-v1.der } }   # a hyphenated family keeps -v<N>
 messaging:
   seal:
     active:
-      svc-payments-sign: v1
+      svc:
+        payments:
+          sign: v1                # family svc.payments.sign
       aud-core-encrypt: v1
 ```
 
+The tag names the families verbatim: `seal:"sign=svc.payments.sign,encrypt=aud-core-encrypt"`.
+A generation name in the tag (`sign=svc.payments.sign.v1`) is refused with "names a generation;
+the tag takes the family". The inbox key of a dotted family is `svc.payments.sign:<jti>`.
+
 ## Rotation runbooks
+
+Below, `<logical>.v<N>` stands for the generation `N` of a family: `<logical>.v<N>` when the
+family contains `.`, `<logical>-v<N>` when it does not. A rotation never changes the marker:
+`payments.sign.v1` rotates to `payments.sign.v2`, and `payments-sign-v1` to
+`payments-sign-v2`, never to `payments-sign.v2`, which `config.Validate` refuses.
 
 Every step requires ordering, never simultaneity; both sides keep verifying and decrypting
 throughout because each message names the generation that sealed it. The drain gate is the
@@ -171,7 +196,7 @@ DLQ spike of `SEAL_KID_UNKNOWN_GENERATION`.
 
 ### Sign family (`sign=<logical>`)
 
-1. Provision `<logical>-v<N+1>` **PUBLIC** to every consumer — the accept set widens; harmless,
+1. Provision `<logical>.v<N+1>` **PUBLIC** to every consumer — the accept set widens; harmless,
    no such traffic yet.
 2. Provision the `v<N+1>` **PRIVATE** to the producer — inert, `v<N>` is still active.
 3. Flip `messaging.seal.active.<logical>: v<N+1>` on the producer and redeploy. New traffic
@@ -187,7 +212,7 @@ DLQ spike of `SEAL_KID_UNKNOWN_GENERATION`.
 
 The roles invert, so the order does too (G3):
 
-1. Provision `<logical>-v<N+1>` **PRIVATE** to every consumer first — they can decrypt
+1. Provision `<logical>.v<N+1>` **PRIVATE** to every consumer first — they can decrypt
    `v<N+1>` before any exists.
 2. Provision the `v<N+1>` **PUBLIC** to the producer.
 3. Flip `messaging.seal.active.<logical>: v<N+1>` on the producer and redeploy.
@@ -197,6 +222,27 @@ The roles invert, so the order does too (G3):
    `PublishSealed` keeps admitting `v<N>` bytes until the entry is gone. Destroy the retired
    privates — until the last one is gone, captured and persisted
    ciphertext stays readable (no forward secrecy, no revocation).
+
+### Renaming a family
+
+A family name is on the wire (the sealed kid and the inner `iss`) and in the inbox ledger
+(`<family>:<jti>`), so renaming one — `payments-sign` to `payments.sign`, typically to make it
+POSIX-settable — is **not** a rotation (ADR-144). The two names are two families: a consumer
+declaring one refuses a body sealed under the other with `SEAL_KID_FAMILY_MISMATCH`, which is
+not recoverable, and a keystore holding generations of both is refused at startup because
+they differ only in `-` versus `.`. Rename by draining:
+
+1. Stop the producers sealing under the old family, or let them seal until the cutover window.
+2. Drain gate (above): queue depth, outbox retention, DLQ replay, inbox parks and every
+   producer-owned sealed-bytes store hold no body under the old family.
+3. In one coordinated deploy, change the tag on producers and consumers, replace the
+   keystore entries with the new family's generations, and move the selector.
+4. A body still sealed under the old family is refused with `SEAL_KID_FAMILY_MISMATCH` and
+   parked, never processed twice: its inbox key (`<old family>:<jti>`) can never equal a key
+   under the new family. Old ledger rows age out through retention.
+
+Leave a live family alone unless its name must become POSIX-settable; new families can start
+dotted.
 
 ### Provisioning a consumer N+1
 
@@ -424,11 +470,14 @@ go install github.com/gaborage/go-bricks/cmd/seal-event@latest
 
 Generate DER fixture keys with openssl. The CLI holds the PRODUCER role: the sign PRIVATE
 half and the encrypt PUBLIC half. The consumer holds the mirror image — the sign public and
-the encrypt private — under the same generation names.
+the encrypt private — under the same generation names. The examples below mint for the
+families the [Keys](#keys) YAML declares: the dotted `svc.payments.sign` (generation
+`svc.payments.sign.v1`) and the hyphenated `aud-core-encrypt` (generation
+`aud-core-encrypt-v1`), so they show both marker shapes.
 
 ```sh
 # Sign pair — the PUBLIC half is what the consumer provisions as
-# svc-payments-sign-v1 in its keystore
+# svc.payments.sign.v1 in its keystore
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out sign.der
 openssl pkey -inform DER -in sign.der -pubout -outform DER -out sign.pub.der
 
@@ -444,7 +493,7 @@ Seal one event body and publish it:
 echo '{"order_id":"o-1","amount":100,"card":{"pan":"4111111111111111","expiry":"12/30"}}' \
   | seal-event \
     -sign-key-file sign.der -encrypt-key-file enc.pub.der \
-    -sign-kid svc-payments-sign-v1 -encrypt-kid aud-core-encrypt-v1 \
+    -sign-kid svc.payments.sign.v1 -encrypt-kid aud-core-encrypt-v1 \
     -subject card -event-type payment.authorized -tenant-id t1 > body.txt
 
 rabbitmqadmin publish exchange=payments routing_key=payment.authorized \
@@ -465,9 +514,12 @@ Consumer-side rejections — the publish succeeds, the open refuses:
 - `-event-type` must equal the consumer declaration's `EventType` — the signed `etyp` is
   compared verbatim (`SEAL_EVENT_TYPE_MISMATCH`).
 - Both kids must be provisioned Generations of the tag's families on the consumer:
-  `<logical>-v<N>`, never the bare Logical kid. A wrong family is
-  `SEAL_KID_FAMILY_MISMATCH`; a right family the consumer has not provisioned is the
-  recoverable `SEAL_KID_UNKNOWN_GENERATION`.
+  `<logical>.v<N>` for a dotted family, `<logical>-v<N>` for a family without `.`, never the
+  bare Logical kid, as `svc.payments.sign.v1` and `aud-core-encrypt-v1` above show. The CLI
+  refuses a family passed alone (`is a family, not a generation: pass svc.payments.sign.v<N>`)
+  and the marker the family does not take (`family "svc.payments.sign" takes the marker of
+  svc.payments.sign.v1`). A wrong family is `SEAL_KID_FAMILY_MISMATCH`; a right family the
+  consumer has not provisioned is the recoverable `SEAL_KID_UNKNOWN_GENERATION`.
 
 PS256 only — there is no `-sig-alg`; the opener also accepts RS256, but the CLI never
 emits it.
@@ -488,7 +540,7 @@ with the same `SEAL_*` code.
 go install github.com/gaborage/go-bricks/cmd/open-event@latest
 
 open-event -sign-key-file sign.pub.der -encrypt-key-file enc.der \
-  -sign-kid svc-payments-sign-v1 -encrypt-kid aud-core-encrypt-v1 \
+  -sign-kid svc.payments.sign.v1 -encrypt-kid aud-core-encrypt-v1 \
   -subject card -event-type payment.authorized \
   -tenancy shared -tenant-id t1 body.txt
 ```
@@ -498,8 +550,8 @@ JTI:        3f2a6c18-7b91-4d0e-9c3a-5e8b1d24af77
 IssuedAt:   2026-09-13T09:14:22Z
 EventType:  payment.authorized
 TenantID:   t1
-SignKid:    svc-payments-sign-v1
-SignFamily: svc-payments-sign
+SignKid:    svc.payments.sign.v1
+SignFamily: svc.payments.sign
 EncKid:     aud-core-encrypt-v1
 
 {"order_id":"o-1","amount":100,"card":"<redacted>"}
