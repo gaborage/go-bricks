@@ -281,6 +281,45 @@ func malformedGenerationError(name, logical, version string) *ConfigError {
 	return err
 }
 
+// checkSealSelectorFamilies is the cross-section rule between
+// messaging.seal.active and keystore.keys: a selector whose spelling differs
+// from a provisioned family's only in '-' versus '.' selects nothing, so the
+// flip it was meant to make never happens and the old generation keeps
+// sealing. MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN reaches payments.sign, never
+// payments-sign. A selector naming nothing provisioned is still accepted; the
+// keystore judges it when sealing resolves.
+func checkSealSelectorFamilies(cfg *Config) error {
+	if len(cfg.Messaging.Seal.Active) == 0 || len(cfg.KeyStore.Keys) == 0 {
+		return nil
+	}
+	families := generationFamilies(slices.Sorted(maps.Keys(cfg.KeyStore.Keys)))
+	byFold := make(map[string]string, len(families))
+	for family := range families {
+		byFold[keyname.Fold(family)] = family
+	}
+	for _, selector := range slices.Sorted(maps.Keys(cfg.Messaging.Seal.Active)) {
+		if _, provisioned := families[selector]; provisioned {
+			continue
+		}
+		family, lookalike := byFold[keyname.Fold(selector)]
+		if !lookalike {
+			continue
+		}
+		msg := fmt.Sprintf("selects %q, which is not provisioned; %q is (%s)", selector, family, strings.Join(families[family], ", "))
+		if envVar := envVarForKey(fieldMessagingSealActive + "." + selector); envVar != "" {
+			msg += fmt.Sprintf("; %s reaches only %s", envVar, selector)
+		}
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldMessagingSealActive + "." + selector,
+			Message:  msg,
+			Action: fmt.Sprintf("set the %s selector in YAML or as %s, or rename the family",
+				family, keyToEnvVar(fieldMessagingSealActive+"."+family)),
+		}
+	}
+	return nil
+}
+
 // validateKeyEntry validates a single keystore entry. An entry is exactly one
 // of an RSA pair (public required, private optional), a symmetric secret, or a
 // PKCS#12 bundle — a mixed entry is a structural error detected here without

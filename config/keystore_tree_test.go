@@ -603,6 +603,80 @@ func loadKeystoreYAML(t *testing.T, base, overlay string, env map[string]string)
 	return Load()
 }
 
+// TestLoadRefusesASelectorFlipLostUnderANestedSelector: a POSIX variable for a
+// hyphen family's selector reaches its folded path, and when YAML holds a
+// map there (a dotted selector below the fold) the merge drops the variable
+// without a word. Families and selectors that nest once '-' reads as '.' are
+// refused, so the flip can never vanish; two hyphen-only names that fold-nest
+// are exempt, since neither has a nested path, and they keep booting.
+func TestLoadRefusesASelectorFlipLostUnderANestedSelector(t *testing.T) {
+	const hyphenFamily = `
+keystore:
+  keys:
+    payments-sign-v1:
+      public: {value: v1-pub}
+    payments-sign-v2:
+      public: {value: v2-pub}
+`
+	const dottedFamily = `
+    payments:
+      sign:
+        eu:
+          v1:
+            public: {value: eu-pub}
+`
+	flip := map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN": "v2"}
+
+	t.Run("nested_dotted_family_and_selector", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, hyphenFamily+dottedFamily+`
+messaging:
+  seal:
+    active:
+      payments-sign: v1
+      payments:
+        sign:
+          eu: v1
+`, "", flip)
+		requireTreeError(t, err, "messaging.seal.active.payments.sign.eu", `selectors "payments-sign" and "payments.sign.eu" nest when '-' is read as '.'`)
+	})
+
+	t.Run("stale_nested_selector_for_nothing_provisioned", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, hyphenFamily+`
+messaging:
+  seal:
+    active:
+      payments-sign: v1
+      payments:
+        sign:
+          eu: v1
+`, "", flip)
+		requireTreeError(t, err, "messaging.seal.active.payments.sign.eu", `selectors "payments-sign" and "payments.sign.eu" nest`)
+	})
+
+	t.Run("both_selectors_from_the_environment", func(t *testing.T) {
+		_, err := loadKeystoreYAML(t, hyphenFamily+dottedFamily, "", map[string]string{
+			"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN":    "v2",
+			"MESSAGING_SEAL_ACTIVE_PAYMENTS_SIGN_EU": "v1",
+		})
+		requireTreeError(t, err, "keystore.keys", `families "payments-sign" and "payments.sign.eu" nest when '-' is read as '.'`)
+	})
+
+	t.Run("hyphen_only_families_that_fold_nest_boot", func(t *testing.T) {
+		cfg, err := loadKeystoreYAML(t, hyphenFamily+`
+    payments-sign-eu-v1:
+      public: {value: eu-pub}
+messaging:
+  seal:
+    active:
+      payments-sign: v2
+      payments-sign-eu: v1
+`, "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"payments-sign": "v2", "payments-sign-eu": "v1"}, cfg.Messaging.Seal.Active)
+		assert.Len(t, cfg.KeyStore.Keys, 3)
+	})
+}
+
 // TestLoadRefusesASequenceALaterLayerReplaced: a sequence under keystore.keys
 // or messaging.seal.active is refused at decode, but only one that survives the
 // merge reaches decode. A map from a later layer (the env overlay, or a
@@ -687,6 +761,14 @@ messaging:
 			base:       selectorSequence,
 			overlay:    "messaging:\n  seal:\n    active:\n      orders: v1\n",
 			wantField:  "messaging.seal.active",
+			wantAction: selectorsAction,
+			wantWrap:   "messaging config: ",
+		},
+		{
+			name:       "nested_selector_sequence_under_a_variable",
+			base:       "messaging:\n  seal:\n    active:\n      payments:\n        - sign: v2\n",
+			env:        map[string]string{"MESSAGING_SEAL_ACTIVE_PAYMENTS_ENCRYPT": "v1"},
+			wantField:  "messaging.seal.active.payments",
 			wantAction: selectorsAction,
 			wantWrap:   "messaging config: ",
 		},

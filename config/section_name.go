@@ -7,10 +7,12 @@ import (
 	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
-// checkSectionName holds every USER-CHOSEN section key to one grammar,
-// keyname.ValidSectionName (^[a-z0-9-]+$): entries under databases,
-// multitenant.tenants and keystore.keys. It is the resolver's tenant-ID
-// grammar without the length bound, which stays the resolver's.
+// checkSectionName holds the USER-CHOSEN section keys under databases and
+// multitenant.tenants to one grammar, keyname.ValidSectionName (^[a-z0-9-]+$).
+// It is the resolver's tenant-ID grammar without the length bound, which stays
+// the resolver's. A keystore.keys entry name and a messaging.seal.active
+// selector key are dotted paths of such segments instead, written nested and
+// reached by the same transform (keyname.ValidName, ADR-144).
 //
 // The reason is reachability, not taste. Load maps an environment variable to
 // a config key by lowercasing it and turning '_' into '.', which is not
