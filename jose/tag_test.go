@@ -27,6 +27,20 @@ func TestParseTagOutboundValid(t *testing.T) {
 	assert.Equal(t, "visa-encrypt", p.EncryptKid)
 }
 
+// TestParseTagDottedKids: a dotted keystore entry name is a kid as written
+// (ADR-144), so a tag names it verbatim and the policy carries that exact string.
+func TestParseTagDottedKids(t *testing.T) {
+	p, err := ParseTag("decrypt=tokens.our,verify=tokens.peer", DirectionInbound)
+	require.NoError(t, err)
+	assert.Equal(t, "tokens.our", p.DecryptKid)
+	assert.Equal(t, "tokens.peer", p.VerifyKid)
+
+	p, err = ParseTag("sign=tokens.our,encrypt=tokens.peer", DirectionOutbound)
+	require.NoError(t, err)
+	assert.Equal(t, "tokens.our", p.SignKid)
+	assert.Equal(t, "tokens.peer", p.EncryptKid)
+}
+
 func TestParseTagAlgorithmOverrides(t *testing.T) {
 	p, err := ParseTag("decrypt=ours,verify=peer,sig_alg=PS256", DirectionInbound)
 	require.NoError(t, err)
@@ -54,7 +68,9 @@ func TestParseTagInvalid(t *testing.T) {
 		{name: "unknown_key", tag: "decrypt=ours,frobnicate=true", dir: DirectionInbound, wantCode: "JOSE_TAG_UNKNOWN_KEY"},
 		{name: "empty_value", tag: "decrypt=ours,verify=", dir: DirectionInbound, wantCode: "JOSE_TAG_EMPTY_VALUE"},
 		{name: "kid_special_chars", tag: "decrypt=ours,verify=peer kid", dir: DirectionInbound, wantCode: "JOSE_TAG_KID_INVALID"},
-		{name: "kid_with_dot", tag: "decrypt=ours,verify=peer.kid", dir: DirectionInbound, wantCode: "JOSE_TAG_KID_INVALID"},
+		{name: "kid_with_double_dot", tag: "decrypt=tokens..our,verify=peer", dir: DirectionInbound, wantCode: "JOSE_TAG_KID_INVALID"},
+		{name: "kid_with_leading_dot", tag: "decrypt=ours,verify=.peer", dir: DirectionInbound, wantCode: "JOSE_TAG_KID_INVALID"},
+		{name: "kid_with_trailing_dot", tag: "decrypt=ours,verify=peer.", dir: DirectionInbound, wantCode: "JOSE_TAG_KID_INVALID"},
 		{name: "disallowed_sig_alg", tag: "decrypt=ours,verify=peer,sig_alg=HS256", dir: DirectionInbound, wantCode: "JOSE_ALGORITHM_DISALLOWED"},
 		{name: "disallowed_key_alg", tag: "decrypt=ours,verify=peer,key_alg=RSA1_5", dir: DirectionInbound, wantCode: "JOSE_ALGORITHM_DISALLOWED"},
 		{name: "inbound_missing_decrypt", tag: "verify=peer", dir: DirectionInbound, wantCode: "JOSE_POLICY_INCOMPLETE"},
@@ -86,7 +102,10 @@ func TestValidKid(t *testing.T) {
 		"empty":         {"", false},
 		"space":         {"sign v1", false},
 		"colon":         {"family:jti", false},
-		"dot":           {"a.b", false},
+		"interior_dot":  {"tokens.our", true},
+		"leading_dot":   {".a", false},
+		"trailing_dot":  {"a.", false},
+		"double_dot":    {"a..b", false},
 		"unicode":       {"kéy", false},
 		"newline":       {"k\n", false},
 		"leading_slash": {"/k", false},

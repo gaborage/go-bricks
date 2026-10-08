@@ -9,9 +9,10 @@ import (
 	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
-// ValidKid reports whether s is a well-formed key identifier: one or more ASCII
-// alphanumerics, underscores, or hyphens, so no character can be misread by header
-// processing or logging sinks. The grammar lives in internal/keyname, which the
+// ValidKid reports whether s is a well-formed key identifier: one or more runs of ASCII
+// alphanumerics, underscores, or hyphens, joined by single dots (ADR-144), so no character
+// can be misread by header processing or logging sinks and a dotted keystore entry name
+// ("tokens.our") is a kid as written. The grammar lives in internal/keyname, which the
 // keystore and sealed messaging share.
 func ValidKid(s string) bool {
 	return keyname.ValidKid(s)
@@ -154,7 +155,7 @@ func applyKid(p *Policy, key, val string) error {
 		return &Error{
 			Sentinel: ErrTagInvalid,
 			Code:     codeTagKidInvalid,
-			Message:  fmt.Sprintf("kid %q contains disallowed characters", val),
+			Message:  fmt.Sprintf("kid %q is not a key identifier: runs of A-Z a-z 0-9 _ - joined by single dots, with no empty run", val),
 			Kid:      val,
 		}
 	}

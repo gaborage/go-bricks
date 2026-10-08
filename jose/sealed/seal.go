@@ -41,9 +41,11 @@ const (
 // producer's ACTIVE Generations of the two Logical kids the Spec names — resolving
 // Activation is the caller's job (messaging/sealed), keeping this package keystore-agnostic.
 type Options struct {
-	// SignKid is the concrete sign Generation (`<Spec.SignLogical>-v<N>`); its PRIVATE key signs.
+	// SignKid is the concrete sign Generation (`<Spec.SignLogical>.v<N>` for a dotted family,
+	// `<Spec.SignLogical>-v<N>` otherwise); its PRIVATE key signs.
 	SignKid string
-	// EncryptKid is the concrete encrypt Generation (`<Spec.EncryptLogical>-v<N>`); its PUBLIC key wraps the CEK.
+	// EncryptKid is the concrete encrypt Generation (`<Spec.EncryptLogical>.v<N>` for a dotted
+	// family, `<Spec.EncryptLogical>-v<N>` otherwise); its PUBLIC key wraps the CEK.
 	EncryptKid string
 	// EventType is the publisher declaration's EventType, written as `etyp`. Required.
 	EventType string

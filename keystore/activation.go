@@ -29,7 +29,7 @@ func ActiveGeneration(store FamilyEnumerator, active map[string]string, logical 
 	}
 	gens := store.Generations(logical)
 	if len(gens) == 0 {
-		return Generation{}, fmt.Errorf("keystore: logical kid %q has no provisioned generation (expected a keystore.keys entry named %s-v<N>)", logical, logical)
+		return Generation{}, fmt.Errorf("keystore: logical kid %q has no provisioned generation (expected a keystore.keys entry named %s)", logical, keyname.GenerationName(logical, "v<N>"))
 	}
 
 	selector, selected := active[logical]

@@ -24,7 +24,10 @@ func TestValidateLogicalGrammarTable(t *testing.T) {
 		{name: "valid_underscore_and_upper", logical: "Svc_Payments"},
 		{name: "valid_64_chars", logical: strings.Repeat("a", 64)},
 		{name: "invalid_65_chars", logical: strings.Repeat("a", 65), wantErr: "is 65 characters, maximum is 64"},
-		{name: "invalid_dot", logical: "svc.payments", wantErr: "is not a valid jose kid"},
+		{name: "valid_dotted", logical: "svc.payments"},
+		{name: "invalid_double_dot", logical: "svc..payments", wantErr: "is not a valid jose kid"},
+		{name: "invalid_trailing_dot", logical: "svc.", wantErr: "is not a valid jose kid"},
+		{name: "invalid_trailing_segment_generation", logical: "svc.sign.v3", wantErr: "must not end in the generation marker -v<digits> or .v<digits>"},
 		{name: "invalid_empty", logical: "", wantErr: "is not a valid jose kid"},
 		{name: "invalid_trailing_generation", logical: "svc-sign-v3", wantErr: "must not end in the generation marker"},
 		{name: "valid_v_without_digits", logical: "svc-v"},
@@ -54,6 +57,9 @@ func TestSplitGeneration(t *testing.T) {
 		{name: "generation_entry", entry: "svc-payments-sign-v2", wantLogical: "svc-payments-sign", wantVersion: "v2", wantOK: true},
 		{name: "last_marker_wins", entry: "x-v1-v2", wantLogical: "x-v1", wantVersion: "v2", wantOK: true},
 		{name: "bare_marker_empty_logical", entry: "-v1", wantLogical: "", wantVersion: "v1", wantOK: true},
+		{name: "dotted_generation_entry", entry: "payments.sign.v2", wantLogical: "payments.sign", wantVersion: "v2", wantOK: true},
+		{name: "wrong_marker_is_still_a_marker", entry: "payments.sign-v1", wantLogical: "payments.sign", wantVersion: "v1", wantOK: true},
+		{name: "dotted_ordinary_entry", entry: "tokens.our", wantOK: false},
 		{name: "leading_zero_is_still_a_marker", entry: "x-v01", wantLogical: "x", wantVersion: "v01", wantOK: true},
 		{name: "ordinary_entry", entry: "signing", wantOK: false},
 		{name: "v_without_digits_is_ordinary", entry: "svc-v", wantOK: false},
@@ -82,6 +88,10 @@ func TestFamilyOfRefusals(t *testing.T) {
 		{name: "zero_version", entry: "x-v0", wantErr: `key "x-v0": generation "v0" must be a positive integer without leading zeros`},
 		{name: "empty_family", entry: "-v1", wantErr: `key "-v1": logical kid "" is not a valid jose kid`},
 		{name: "family_too_long", entry: strings.Repeat("a", 65) + "-v1", wantErr: "is 65 characters"},
+		{name: "dotted_family_hyphen_marker", entry: "payments.sign-v1", wantErr: `key "payments.sign-v1": a dotted family names its generations with a final v<N> segment: rename it payments.sign.v1`},
+		{name: "undotted_family_segment_marker", entry: "audit.v1", wantErr: `key "audit.v1": family "audit" has no '.', so its generations are named audit-v<N>: rename it audit-v1, or give the family a second segment`},
+		{name: "segment_family_ends_in_marker", entry: "x.v1.v2", wantErr: `logical kid "x.v1" must not end in the generation marker`},
+		{name: "segment_zero_version", entry: "x.y.v0", wantErr: `generation "v0" must be a positive integer`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,6 +111,21 @@ func TestFamilyOfAcceptsCanonicalVersions(t *testing.T) {
 		assert.Equal(t, Generation{Logical: "fam", Version: version, Role: RolePublicOnly}, gen)
 		assert.Equal(t, "fam-"+version, gen.Kid())
 	}
+}
+
+// TestFamilyOfDottedFamilies: a dotted family names its generations with a
+// final segment, and Kid() spells them back the same way, so the wire kid of
+// a dotted entry is the entry name verbatim (ADR-144).
+func TestFamilyOfDottedFamilies(t *testing.T) {
+	for _, name := range []string{"payments.sign.v1", "svc.payments-sign.v12", "a.b.c.v3"} {
+		gen, ok, err := familyOf(name, &keyEntry{public: &rsa.PublicKey{}})
+		require.NoError(t, err, name)
+		require.True(t, ok, name)
+		assert.Equal(t, name, gen.Kid())
+		assert.Contains(t, gen.Logical, ".")
+	}
+	assert.Equal(t, "payments.sign.v2", Generation{Logical: "payments.sign", Version: "v2"}.Kid())
+	assert.Equal(t, "payments-sign-v2", Generation{Logical: "payments-sign", Version: "v2"}.Kid())
 }
 
 func TestFamilyOfOrdinaryEntryIsNotJudged(t *testing.T) {

@@ -90,3 +90,25 @@ func TestActiveGenerationAgainstRealStore(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no messaging.seal.active.svc-mac selector")
 }
+
+// TestActiveGenerationDottedFamily: a dotted family resolves through the same
+// store and selector, its generation is named with a final segment, and the
+// no-generation error spells the entry the operator must add in that shape.
+func TestActiveGenerationDottedFamily(t *testing.T) {
+	s, err := newStore(map[string]config.KeyPairConfig{
+		"payments.mac.v1": secretCfg('a'),
+		"payments.mac.v2": secretCfg('b'),
+	}, config.DefaultKeyStoreSecretMinLength)
+	require.NoError(t, err)
+
+	got, err := ActiveGeneration(s, map[string]string{"payments.mac": "v2"}, "payments.mac")
+	require.NoError(t, err)
+	assert.Equal(t, Generation{Logical: "payments.mac", Version: "v2", Role: RoleSecret}, got)
+	assert.Equal(t, "payments.mac.v2", got.Kid())
+
+	_, err = ActiveGeneration(s, nil, "payments.sign")
+	require.EqualError(t, err, `keystore: logical kid "payments.sign" has no provisioned generation (expected a keystore.keys entry named payments.sign.v<N>)`)
+
+	_, err = ActiveGeneration(s, nil, "svc-sign")
+	require.EqualError(t, err, `keystore: logical kid "svc-sign" has no provisioned generation (expected a keystore.keys entry named svc-sign-v<N>)`)
+}

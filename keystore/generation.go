@@ -37,18 +37,21 @@ func (r Role) String() string {
 }
 
 // Generation is one provisioned key of a Logical kid's family: the entry
-// named <Logical>-<Version> and the role its material grants.
+// named by Kid and the role its material grants. The family fixes the marker
+// (ADR-144): a family containing '.' names its generations
+// <Logical>.<Version>, a family without one <Logical>-<Version>.
 type Generation struct {
 	// Logical is the family name the sealing declaration carries.
 	Logical string
-	// Version is the generation marker without the hyphen, e.g. "v2".
+	// Version is the generation marker without its separator, e.g. "v2".
 	Version string
 	// Role is what the entry's material permits.
 	Role Role
 }
 
-// Kid is the full entry name, e.g. "svc-payments-sign-v2" — the value that
-// travels on the wire and the name the store's accessors take.
+// Kid is the full entry name, e.g. "payments.sign.v2" or
+// "svc-payments-sign-v2" — the value that travels on the wire and the name
+// the store's accessors take. It is a function of Logical and Version alone.
 func (g Generation) Kid() string {
 	return keyname.GenerationName(g.Logical, g.Version)
 }
@@ -84,23 +87,25 @@ func splitGeneration(name string) (logical, version string, ok bool) {
 
 // validateLogical enforces the Logical kid grammar (spec G4): the jose kid
 // alphabet, at most keyname.MaxLogicalLen characters, and never itself ending
-// in the generation marker, so every entry belongs to exactly one family.
+// in a generation marker, so every entry belongs to exactly one family.
 func validateLogical(logical string) error {
 	switch keyname.CheckLogical(logical) {
 	case keyname.LogicalNotKid:
-		return fmt.Errorf("logical kid %q is not a valid jose kid (allowed: A-Z a-z 0-9 _ -)", logical)
+		return fmt.Errorf("logical kid %q is not a valid jose kid (allowed: A-Z a-z 0-9 _ -, and '.' between non-empty runs)", logical)
 	case keyname.LogicalTooLong:
 		return fmt.Errorf("logical kid %q is %d characters, maximum is %d", logical, len(logical), keyname.MaxLogicalLen)
 	case keyname.LogicalEndsInMarker:
-		return fmt.Errorf("logical kid %q must not end in the generation marker -v<digits>", logical)
+		return fmt.Errorf("logical kid %q must not end in the generation marker -v<digits> or .v<digits>", logical)
 	default:
 		return nil
 	}
 }
 
 // familyOf classifies one loaded entry. Ordinary entries return ok=false and
-// no error; a generation entry whose family or version fails the grammar is
-// refused, which newStore turns into a startup failure.
+// no error; a generation entry whose family or version fails the grammar, or
+// whose marker is not the one its family fixes, is refused with the rename,
+// which newStore turns into a startup failure. config.Validate refuses the
+// same names first; this covers a Config that skipped it.
 func familyOf(name string, entry *keyEntry) (Generation, bool, error) {
 	logical, version, ok := splitGeneration(name)
 	if !ok {
@@ -112,7 +117,18 @@ func familyOf(name string, entry *keyEntry) (Generation, bool, error) {
 	if !keyname.ValidVersion(version) {
 		return Generation{}, false, fmt.Errorf("keystore: key %q: generation %q must be a positive integer without leading zeros (v1, not v0 or v01)", name, version)
 	}
+	if want := keyname.GenerationName(logical, version); want != name {
+		return Generation{}, false, fmt.Errorf("keystore: key %q: %s", name, markerMismatch(logical, want))
+	}
 	return Generation{Logical: logical, Version: version, Role: roleOf(entry)}, true, nil
+}
+
+// markerMismatch names the marker a family fixes and the rename to it.
+func markerMismatch(logical, want string) string {
+	if strings.Contains(logical, keyname.Sep) {
+		return "a dotted family names its generations with a final v<N> segment: rename it " + want
+	}
+	return fmt.Sprintf("family %q has no '.', so its generations are named %s-v<N>: rename it %s, or give the family a second segment", logical, logical, want)
 }
 
 func roleOf(entry *keyEntry) Role {

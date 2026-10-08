@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/gaborage/go-bricks/internal/keyname"
 	"github.com/gaborage/go-bricks/jose"
 )
 
@@ -246,13 +247,19 @@ func applyKid(spec *Spec, key, val string) error {
 }
 
 // checkSentinelKid refuses a Logical kid for the sign or encrypt position with the scan's
-// own code and the offending kid attached; NewDocumentSpec reports the same failures.
+// own code and the offending kid attached; NewDocumentSpec reports the same failures. A
+// well-formed Generation name is the likeliest mistake — the keystore entry copied into the
+// tag — so its refusal names the family the tag takes instead.
 func checkSentinelKid(key, val string) error {
 	if err := CheckLogicalKid(val); err != nil {
+		msg := fmt.Sprintf("logical kid %q for %s: %v", val, key, err)
+		if family, _, form := keyname.SplitGeneration(val); form == keyname.Generation {
+			msg = fmt.Sprintf("logical kid %q for %s names a generation; the tag takes the family %q", val, key, family)
+		}
 		return &jose.Error{
 			Sentinel: ErrTagInvalid,
 			Code:     CodeTagKidInvalid,
-			Message:  fmt.Sprintf("logical kid %q for %s: %v", val, key, err),
+			Message:  msg,
 			Kid:      val,
 		}
 	}
