@@ -359,13 +359,14 @@ func tryLoadYAMLFile(s *configSource, baseName string) error {
 }
 
 // buildDecoderConfig is the decoder for Load: it replicates koanf's default Unmarshal
-// decoder (knadh/koanf/v2 koanf.go:265-272) plus the delivered-empty scalar guard, the
-// numeric-duration guard and the comma-split slice hook (so a single env var can express
-// a []string). koanf fills in
-// Result and TagName at unmarshal time.
+// decoder (knadh/koanf/v2 koanf.go:265-272) plus the keystore tree reader (dotted
+// keystore.keys names, ADR-144), the delivered-empty scalar guard, the numeric-duration
+// guard and the comma-split slice hook (so a single env var can express a []string).
+// koanf fills in Result and TagName at unmarshal time.
 func buildDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			keystoreTreeHook(),
 			configdecode.EmptyStringToScalarGuardHookFunc(),
 			configdecode.NumericToDurationGuardHookFunc(),
 			stringToTrimmedSliceHookFunc(listSeparator),
@@ -378,8 +379,9 @@ func buildDecoderConfig() *mapstructure.DecoderConfig {
 
 // unmarshalDecoderConfig is the decoder for the public Config.Unmarshal. It mirrors koanf's
 // default Unmarshal decoder (StringToTimeDurationHookFunc + text-unmarshaler + WeaklyTypedInput)
-// plus the delivered-empty scalar guard and the numeric-duration guard — deliberately
-// WITHOUT the comma-split slice hook, so
+// plus the keystore tree reader (so Unmarshal of the keystore section or its keys map
+// reads dotted names as Load does), the delivered-empty scalar guard and the
+// numeric-duration guard — deliberately WITHOUT the comma-split slice hook, so
 // string -> []string keeps koanf's default single-element wrap on this public seam instead of
 // silently comma-splitting. (koanf's default uses its own unexported textUnmarshalerHookFunc;
 // the exported mapstructure.TextUnmarshallerHookFunc is the closest public equivalent and
@@ -387,6 +389,7 @@ func buildDecoderConfig() *mapstructure.DecoderConfig {
 func unmarshalDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			keystoreTreeHook(),
 			configdecode.EmptyStringToScalarGuardHookFunc(),
 			configdecode.NumericToDurationGuardHookFunc(),
 			mapstructure.StringToTimeDurationHookFunc(),
