@@ -134,8 +134,14 @@ func check(cfg *Config) error {
 		return fmt.Errorf("messaging config: %w", err)
 	}
 
-	if err := checkKeyStore(&cfg.KeyStore); err != nil {
+	if err := checkKeyStoreWithLayers(cfg); err != nil {
 		return fmt.Errorf("keystore config: %w", err)
+	}
+
+	// Beyond the section: a selector sequence that a later layer replaced is judged from
+	// the layers Load recorded, which no check of the decoded section can see.
+	if err := checkSealSelectorsBeyondSection(cfg); err != nil {
+		return fmt.Errorf("messaging config: %w", err)
 	}
 
 	if err := checkAuth(&cfg.Auth); err != nil {
