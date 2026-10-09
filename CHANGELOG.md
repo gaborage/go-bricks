@@ -1,5 +1,94 @@
 # Changelog
 
+## [0.72.0](https://github.com/gaborage/go-bricks/compare/v0.71.1...v0.72.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** judge seal selectors from every layer before the merge ([#2071](https://github.com/gaborage/go-bricks/issues/2071))
+* **config:** refuse a malformed keystore generation name at Validate ([#2067](https://github.com/gaborage/go-bricks/issues/2067))
+* **config:** refuse sequences under keystore.keys and seal selectors ([#2066](https://github.com/gaborage/go-bricks/issues/2066))
+* **migrate:** decode --source-config with the framework's own decoder ([#2065](https://github.com/gaborage/go-bricks/issues/2065))
+* **config:** read seal selectors and keystore Unmarshal doors as trees ([#2064](https://github.com/gaborage/go-bricks/issues/2064))
+* **config:** refuse junk and quoted dotted keys under keystore.keys ([#2063](https://github.com/gaborage/go-bricks/issues/2063))
+* **config:** refuse cache.manager outside the root cache section ([#2054](https://github.com/gaborage/go-bricks/issues/2054))
+* **migration:** refuse two tenants that resolve to one migration target ([#2020](https://github.com/gaborage/go-bricks/issues/2020))
+* **messaging:** refuse dead-letter routes Validate can see drop ([#2030](https://github.com/gaborage/go-bricks/issues/2030))
+* **observability:** keep UpDownCounters and gauges cumulative on delta ([#2012](https://github.com/gaborage/go-bricks/issues/2012))
+* **jose/sealed:** refuse a clear case-fold twin of the subject on open ([#2014](https://github.com/gaborage/go-bricks/issues/2014))
+* **messaging:** PublishSealed admits only a sign kid it holds privately ([#2017](https://github.com/gaborage/go-bricks/issues/2017))
+* **messaging:** move the seal runtime to root internal, drop its doors ([#2013](https://github.com/gaborage/go-bricks/issues/2013))
+* **server:** trust server.trustedproxies for X-Forwarded-Host ([#2018](https://github.com/gaborage/go-bricks/issues/2018))
+* **multitenant:** believe X-Forwarded-Host only from a trusted peer ([#2015](https://github.com/gaborage/go-bricks/issues/2015))
+* **observability:** honor parent sampling decisions ([#2000](https://github.com/gaborage/go-bricks/issues/2000))
+* **observability:** keep OTLP/gRPC on TLS when env says insecure ([#1995](https://github.com/gaborage/go-bricks/issues/1995))
+* **observability:** make OTLP/HTTP endpoint and TLS config authoritative ([#1994](https://github.com/gaborage/go-bricks/issues/1994))
+* **observability:** reject malformed OTLP endpoints ([#1991](https://github.com/gaborage/go-bricks/issues/1991))
+
+### Added
+
+* **config:** accept dotted keystore.keys entry names (ADR-144) ([#2068](https://github.com/gaborage/go-bricks/issues/2068)) ([592e99c](https://github.com/gaborage/go-bricks/commit/592e99c0305a858478420a511961da49e130864c))
+* **config:** accept dotted messaging.seal.active selectors (ADR-144) ([#2070](https://github.com/gaborage/go-bricks/issues/2070)) ([ec55d20](https://github.com/gaborage/go-bricks/commit/ec55d2077a219d75ec64b3b7eadb96001ada69f0))
+* **config:** decode nested keystore.keys paths as dotted entry names ([#2062](https://github.com/gaborage/go-bricks/issues/2062)) ([6e6e8ac](https://github.com/gaborage/go-bricks/commit/6e6e8acc818e81f62b79b1c2762c12d0c25db344))
+* **config:** name a missing source's variables; document ADR-144 ([#2072](https://github.com/gaborage/go-bricks/issues/2072)) ([88802e7](https://github.com/gaborage/go-bricks/commit/88802e7da68329aad5280ba43179ae23bbce7917))
+* **config:** read seal selectors and keystore Unmarshal doors as trees ([#2064](https://github.com/gaborage/go-bricks/issues/2064)) ([f3579ed](https://github.com/gaborage/go-bricks/commit/f3579ed83fda9a39d24faf72d2795803e3189fb2))
+* **database:** add AssertAllExpectationsMet and unify the no-rows hint ([#2033](https://github.com/gaborage/go-bricks/issues/2033)) ([a0c722a](https://github.com/gaborage/go-bricks/commit/a0c722ade7bb3840ca5d9d33116d576fe4cd813b))
+* **database:** record BeginTx options and add WillFailBegin ([#2031](https://github.com/gaborage/go-bricks/issues/2031)) ([b1e88e6](https://github.com/gaborage/go-bricks/commit/b1e88e62327d83a339462313eb35580adccabf5f))
+* **jose:** accept dotted kids; a dotted family takes a .v&lt;N&gt; marker ([#2059](https://github.com/gaborage/go-bricks/issues/2059)) ([e483ffa](https://github.com/gaborage/go-bricks/commit/e483ffacc88c7abfce791914ef9169f838002359))
+* **keystore:** name the '-'/'.' look-alike when a key is not found ([#2060](https://github.com/gaborage/go-bricks/issues/2060)) ([51e110d](https://github.com/gaborage/go-bricks/commit/51e110d971f2564e6b08acfde5d9b397757da73e))
+* **messaging:** opt-in at-least-once dead-lettering for DLQ queues ([#2025](https://github.com/gaborage/go-bricks/issues/2025)) ([5e4f149](https://github.com/gaborage/go-bricks/commit/5e4f149e409532b083419ddb6fa79630ad0e2937))
+* **migrate:** add --shared-migrator to go-bricks-migrate ([#2023](https://github.com/gaborage/go-bricks/issues/2023)) ([851eb48](https://github.com/gaborage/go-bricks/commit/851eb487f5a71d4e537043e09c36d97760bdc913))
+* **migrate:** add the shared-migrator env resolver and type guard ([#2021](https://github.com/gaborage/go-bricks/issues/2021)) ([d4305f7](https://github.com/gaborage/go-bricks/commit/d4305f74f499016eb2643ce5b8ccc039d5f79b08))
+* **migration:** opt-in SCRAM-SHA-256 role passwords for PGRoleSpec ([#2028](https://github.com/gaborage/go-bricks/issues/2028)) ([d99f749](https://github.com/gaborage/go-bricks/commit/d99f749951d17e3954c42b07727570f43c0288e7))
+* **multitenant:** ForEachTenant runs a sweep one lease scope per tenant ([#2032](https://github.com/gaborage/go-bricks/issues/2032)) ([415df12](https://github.com/gaborage/go-bricks/commit/415df1220cbe90314d34106dd8404b1742a6a67e))
+* **observability:** add metrics.cardinalitylimit key ([#1997](https://github.com/gaborage/go-bricks/issues/1997)) ([9a34474](https://github.com/gaborage/go-bricks/commit/9a3447472dce223c9029c0fe581792cfab8e7f5a))
+* **observability:** add metrics.max.batch.size export batching ([#1990](https://github.com/gaborage/go-bricks/issues/1990)) ([d2cccfa](https://github.com/gaborage/go-bricks/commit/d2cccfaea1b31d1a77877e8a14dedcb134369d24))
+* **sealcli:** accept dotted generations; name the kid to pass ([#2061](https://github.com/gaborage/go-bricks/issues/2061)) ([7100fe0](https://github.com/gaborage/go-bricks/commit/7100fe0f8e63922a254f045570d2dd7c82c7b3af))
+
+
+### Fixed
+
+* **config:** add ResolveCacheSectionForKey, the cache connect door ([#2055](https://github.com/gaborage/go-bricks/issues/2055)) ([db10edd](https://github.com/gaborage/go-bricks/commit/db10edd36d521fda2087d045f394946a144ab4f1))
+* **config:** apply cache-section defaults at the connect door ([#2056](https://github.com/gaborage/go-bricks/issues/2056)) ([f684660](https://github.com/gaborage/go-bricks/commit/f684660e8e8e89b45f9aa0e010cb38efe666cd5a))
+* **config:** judge seal selectors from every layer before the merge ([#2071](https://github.com/gaborage/go-bricks/issues/2071)) ([00e43b0](https://github.com/gaborage/go-bricks/commit/00e43b0f573ad69eacb60c0e1cb1e1224faf76b0))
+* **config:** refuse a malformed keystore generation name at Validate ([#2067](https://github.com/gaborage/go-bricks/issues/2067)) ([5384158](https://github.com/gaborage/go-bricks/commit/53841585da2b193f8b515124ce6fea5db812f7fa))
+* **config:** refuse cache.manager outside the root cache section ([#2054](https://github.com/gaborage/go-bricks/issues/2054)) ([6095eba](https://github.com/gaborage/go-bricks/commit/6095eba1dab10b76cea5bbf256cb79212ad7c639))
+* **config:** refuse junk and quoted dotted keys under keystore.keys ([#2063](https://github.com/gaborage/go-bricks/issues/2063)) ([f16c1c5](https://github.com/gaborage/go-bricks/commit/f16c1c567f69905c12587af0fb456fa35a42e796))
+* **config:** refuse sequences under keystore.keys and seal selectors ([#2066](https://github.com/gaborage/go-bricks/issues/2066)) ([333e0ad](https://github.com/gaborage/go-bricks/commit/333e0ad098cea18e3c674c85ad66447e9f32e8be))
+* **deps:** bump OpenTelemetry Go to v1.47.0 with stable logs ([#1983](https://github.com/gaborage/go-bricks/issues/1983)) ([2267c82](https://github.com/gaborage/go-bricks/commit/2267c82e613bc3b6ea83e7e39173c523ac675978))
+* **deps:** update aws-sdk-go-v2 monorepo ([#2073](https://github.com/gaborage/go-bricks/issues/2073)) ([319a935](https://github.com/gaborage/go-bricks/commit/319a935b24f0be3246ce503e2fb27968570d4a59))
+* **deps:** update framework and migration tool dependencies ([#2053](https://github.com/gaborage/go-bricks/issues/2053)) ([7eb758c](https://github.com/gaborage/go-bricks/commit/7eb758c7ab193cf221f4bf5f2bae5a1feadb0d97))
+* **deps:** update module github.com/fxamacker/cbor/v2 to v2.9.6 ([#2074](https://github.com/gaborage/go-bricks/issues/2074)) ([e03e9f1](https://github.com/gaborage/go-bricks/commit/e03e9f1d983720f5a24a39bc3aa3ad4bf2ea59c5))
+* **jose/sealed:** refuse a clear case-fold twin of the subject on open ([#2014](https://github.com/gaborage/go-bricks/issues/2014)) ([6408053](https://github.com/gaborage/go-bricks/commit/6408053ffd45597cd1ab6f14c7573cc656b1ebeb))
+* **messaging:** give shared tenancy the single-tenant publisher defaults ([#2026](https://github.com/gaborage/go-bricks/issues/2026)) ([2bd6a04](https://github.com/gaborage/go-bricks/commit/2bd6a046a24c712717a04df373766303b18e2049))
+* **messaging:** move the seal runtime to root internal, drop its doors ([#2013](https://github.com/gaborage/go-bricks/issues/2013)) ([db41ba4](https://github.com/gaborage/go-bricks/commit/db41ba43e59c7ed7d35b2e2657ad46eeb2d7d3b1))
+* **messaging:** PublishSealed admits only a sign kid it holds privately ([#2017](https://github.com/gaborage/go-bricks/issues/2017)) ([bf0c2ac](https://github.com/gaborage/go-bricks/commit/bf0c2acb39e973f2983eb3aea619e79562f10207))
+* **messaging:** refuse dead-letter routes Validate can see drop ([#2030](https://github.com/gaborage/go-bricks/issues/2030)) ([28bf875](https://github.com/gaborage/go-bricks/commit/28bf875ba784fbe8857ef18d2a62c519b396dbf7))
+* **migrate:** decode --source-config with the framework's own decoder ([#2065](https://github.com/gaborage/go-bricks/issues/2065)) ([ff85d1d](https://github.com/gaborage/go-bricks/commit/ff85d1dc99484fb43e57be796c5c4cbc09433530))
+* **migration:** export audit log records as action logs ([#1998](https://github.com/gaborage/go-bricks/issues/1998)) ([f6e63d5](https://github.com/gaborage/go-bricks/commit/f6e63d54fda74db4abea4a57df89c67108edd29e))
+* **migration:** refuse two tenants that resolve to one migration target ([#2020](https://github.com/gaborage/go-bricks/issues/2020)) ([6c06b9c](https://github.com/gaborage/go-bricks/commit/6c06b9cc43a4f82b28e697d0dec33f7f4a28bf45))
+* **multitenant:** believe X-Forwarded-Host only from a trusted peer ([#2015](https://github.com/gaborage/go-bricks/issues/2015)) ([17ec6b2](https://github.com/gaborage/go-bricks/commit/17ec6b264744571a16a8558fd649520b821232dd))
+* **observability:** honor parent sampling decisions ([#2000](https://github.com/gaborage/go-bricks/issues/2000)) ([cae7e3d](https://github.com/gaborage/go-bricks/commit/cae7e3d15aa31252a59cb0211b9bc6aa919b4291))
+* **observability:** honor path-bearing OTLP/HTTP endpoints ([#1989](https://github.com/gaborage/go-bricks/issues/1989)) ([97fe3f0](https://github.com/gaborage/go-bricks/commit/97fe3f0e5b5cff9f5ce8f52d2bb08d67be802a71))
+* **observability:** keep OTLP/gRPC on TLS when env says insecure ([#1995](https://github.com/gaborage/go-bricks/issues/1995)) ([d1cacb0](https://github.com/gaborage/go-bricks/commit/d1cacb0a577d8b15df10a8f5c2e2bcb67394930b))
+* **observability:** keep UpDownCounters and gauges cumulative on delta ([#2012](https://github.com/gaborage/go-bricks/issues/2012)) ([9804052](https://github.com/gaborage/go-bricks/commit/9804052d8b61259aa2b882e4ea5cb6d764dd628c))
+* **observability:** make OTLP/HTTP endpoint and TLS config authoritative ([#1994](https://github.com/gaborage/go-bricks/issues/1994)) ([c0fcc39](https://github.com/gaborage/go-bricks/commit/c0fcc3977d5529f4055c70ae63d1893e66061035))
+* **observability:** reject malformed OTLP endpoints ([#1991](https://github.com/gaborage/go-bricks/issues/1991)) ([e00af08](https://github.com/gaborage/go-bricks/commit/e00af08026a1198aae4b5ce697a9f43b5c41f77b))
+* **resourcepool:** waiters woke before displaced resources closed ([#2008](https://github.com/gaborage/go-bricks/issues/2008)) ([923541e](https://github.com/gaborage/go-bricks/commit/923541e750a4d134be336655eb8afab62bd91c2e))
+* **server:** trust server.trustedproxies for X-Forwarded-Host ([#2018](https://github.com/gaborage/go-bricks/issues/2018)) ([7d3c330](https://github.com/gaborage/go-bricks/commit/7d3c3300f7774becc8511819bfd94dcaa6dcbebf))
+
+
+### Changed
+
+* **cache:** move the cache/redis endpoint rules into redisrules ([#2075](https://github.com/gaborage/go-bricks/issues/2075)) ([6ab3804](https://github.com/gaborage/go-bricks/commit/6ab3804cfe8d474d4ac81f79515d96c5e5403fd1))
+* **config:** check Redis endpoints through redisrules ([#2076](https://github.com/gaborage/go-bricks/issues/2076)) ([6e5471f](https://github.com/gaborage/go-bricks/commit/6e5471f2fa11aaf98ba0b01f5de4a840142bbad6))
+* consolidate semconv imports on v1.43.0 ([#1984](https://github.com/gaborage/go-bricks/issues/1984)) ([3dd9271](https://github.com/gaborage/go-bricks/commit/3dd9271b7cd32f2367f2a8abddbcfbf9e3392c9f))
+* **keyname:** add the dotted-name rules ADR-144 judges names by ([#2058](https://github.com/gaborage/go-bricks/issues/2058)) ([3a80c24](https://github.com/gaborage/go-bricks/commit/3a80c24b9b9e76e2a2d9b087c752d22efa0a3668))
+* **keystore:** one key-name grammar package ([#2047](https://github.com/gaborage/go-bricks/issues/2047)) ([528932c](https://github.com/gaborage/go-bricks/commit/528932c90bb63400e28ffc144f97f41584b9bd67))
+* **messaging:** add a private AMQP topic-pattern matcher ([#2029](https://github.com/gaborage/go-bricks/issues/2029)) ([6099e2f](https://github.com/gaborage/go-bricks/commit/6099e2fece4ff8b4dd00b6510655465025daaa5e))
+* **migration:** add the per-run migration target key and claim set ([#2016](https://github.com/gaborage/go-bricks/issues/2016)) ([ad57710](https://github.com/gaborage/go-bricks/commit/ad577102958009478468254f09157831d2080ce4))
+* **migration:** add the SCRAM-SHA-256 verifier for role passwords ([#2024](https://github.com/gaborage/go-bricks/issues/2024)) ([ad69749](https://github.com/gaborage/go-bricks/commit/ad69749866015f9302dea2dd01eec1d0af5e811f))
+
 ## [0.71.1](https://github.com/gaborage/go-bricks/compare/v0.71.0...v0.71.1) (2026-10-03)
 
 
