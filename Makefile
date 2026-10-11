@@ -12,8 +12,9 @@ INTEGRATION_PKGS = $(shell go list -tags=integration ./... | grep -vE '/(tools)(
 # renovate: datasource=go depName=golang.org/x/vuln
 GOVULNCHECK_VERSION := v1.8.0
 # Keep in sync with the other module's Makefile.
+# pseudo-version until gosec > v2.29.0 is released
 # renovate: datasource=go depName=github.com/securego/gosec/v2
-GOSEC_VERSION := v2.29.0
+GOSEC_VERSION := v2.29.1-0.20261009120814-7b1b5cebe007
 # gosec is INSTALLED, not `go run`, and the path carries the version so a pin
 # bump cannot be served a stale binary. Why not `go run`: wiki/linting.md.
 GOSEC_DIR := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)
