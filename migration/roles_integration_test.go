@@ -1610,7 +1610,9 @@ func requireRuntimeRoleSeparation(ctx context.Context, t *testing.T, migratorDB,
 // provisions, so a plaintext-mode emission could not pass the recompute; a
 // plaintext-mode control on the same session proves the setting took effect.
 func TestPGRolesSCRAMModeStoresTheVerifier(t *testing.T) {
-	env := newIntegrationEnv(t)
+	// Private container: the ALTER SYSTEM below outlives the test and would
+	// store every later shared-container test's passwords as md5.
+	env := newPrivateIntegrationEnv(t)
 	ctx, cancel := testCtx(t)
 	defer cancel()
 	admin := env.adminDB(t)
