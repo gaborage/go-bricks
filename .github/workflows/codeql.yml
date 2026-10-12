@@ -112,7 +112,7 @@ jobs:
       # test or go vet.
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}

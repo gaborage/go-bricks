@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec install-gosec verify-mod mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration integration-leg test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec install-gosec verify-mod mutate mutate-baseline release release-cli
 # verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
 # -j check` that would race lint/test reading the same module files. Force
 # check's prerequisites to run serially regardless of -j.
@@ -92,6 +92,41 @@ test-alloc: ## Enforce ADR-026 alloc-stability guards WITHOUT -race (the detecto
 test-integration: docker-check ## Run integration tests (requires Docker)
 	@echo "Running integration tests with testcontainers..."
 	go test -v -race -count=1 -tags=integration $(INTEGRATION_PKGS)
+
+# ci-v2.yml's framework-integration-test legs. INTEGRATION_LEGS names the legs
+# that run a fixed package group, each listed in INTEGRATION_LEG_<name> in the
+# order go test starts them; leg rest runs every other integration package, so
+# a new package lands there. Moving a package between legs is an edit here;
+# adding or renaming a leg also edits the workflow's matrix.leg list, which must
+# keep two or more legs (download-artifact extracts a lone pattern match flat,
+# failing SonarCloud's proof; the Flyway save assumes leg db holds ./migration).
+# SonarCloud then proves each package ran in exactly one leg.
+INTEGRATION_LEGS := db
+INTEGRATION_LEG_db := ./migration ./migration/provisioning ./database/oracle ./inbox ./database/postgresql
+
+# Prints LEG's import paths, a named leg's in listed order. Fails on a group
+# named rest, a go list error, an unknown LEG, a directory that is not exactly
+# one integration package of ./... or is listed in two legs, or an empty leg.
+integration-leg: ## Print one CI integration leg's import paths (LEG=rest or an INTEGRATION_LEGS name)
+	@$(if $(filter rest,$(INTEGRATION_LEGS)),$(error integration-leg: rest cannot be an INTEGRATION_LEGS name))
+	@all="$$(go list -e -tags=integration ./...)" && [ -n "$$all" ] \
+		|| { echo "integration-leg: go list -e -tags=integration ./... failed or found nothing" >&2; exit 1; }; \
+	case " rest $(strip $(INTEGRATION_LEGS)) " in *" $(LEG) "*) ;; *) \
+		echo "integration-leg: unknown LEG '$(LEG)': rest or an INTEGRATION_LEGS name" >&2; exit 1;; esac; \
+	own=; out=; for e in $(foreach l,$(INTEGRATION_LEGS),$(addprefix $(l):,$(INTEGRATION_LEG_$(l)))); do \
+		l="$${e%%:*}"; p="$${e#*:}"; \
+		ip="$$(go list -e -tags=integration "$$p")" || exit 1; \
+		[ "$$(printf '%s\n' "$$all" | grep -cxF -- "$$ip")" = 1 ] \
+			|| { echo "integration-leg: $$p is not exactly one integration package of ./..." >&2; exit 1; }; \
+		case "$$own " in *" $$ip "*) echo "integration-leg: $$p is listed twice across the legs" >&2; exit 1;; esac; \
+		own="$$own $$ip"; \
+		if [ "$$l" = "$(LEG)" ]; then out="$$out $$ip"; fi; \
+	done; \
+	if [ "$(LEG)" = rest ]; then \
+		out="$$(printf '%s\n' "$$all" | awk -v own="$$own" 'BEGIN { n = split(own, o, " "); for (i = 1; i <= n; i++) skip[o[i]] } !($$0 in skip)')"; \
+	fi; \
+	[ -n "$$out" ] || { echo "integration-leg: leg $(LEG) is empty" >&2; exit 1; }; \
+	printf '%s\n' $$out
 
 test-all: test test-integration ## Run all tests (unit + integration)
 
@@ -197,7 +232,7 @@ clean: ## Clean build cache and test artifacts
 # `sec` is not redundant with `lint`: golangci-lint's gosec runs under the
 # common-false-positives preset, so classes like G304 are suppressed there and
 # reported only by the standalone scanner CI runs. Leaving it out of `check` meant
-# a clean local run could still fail the security-framework job.
+# a clean local run could still fail lint-framework's gosec step.
 check: check-tags fmt lint lint-md test test-alloc vuln sec verify-mod ## Run the build-tag guard, fmt, lint, markdownlint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
 
 check-tags: ## Fail when a //go:build tag appears that no lint or security pass reads (#1757)

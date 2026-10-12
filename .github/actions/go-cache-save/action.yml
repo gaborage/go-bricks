@@ -1,0 +1,46 @@
+# A go-cache family writer's save. When go-cache restored an older generation
+# it left a marker and back-dated every build-cache entry; each entry this run
+# used or wrote is newer than the marker. Of the rest, the directories (go run
+# executables) and the files over 256 KiB (older generations' archives, which
+# carry the bytes) are deleted first. Smaller stale files are kept: a -vet=off
+# warm-up never reads the srcfiles lists and cover or cgo files a vet-on
+# reader reuses. They remain until a Go version or ImageOS change makes the
+# family save cold. With no marker the save is unchanged.
+name: Go cache save
+description: >-
+  When go-cache left a prune marker, deletes the Go build-cache directories
+  and files over 256 KiB this run did not use, then saves path under key with
+  actions/cache/save.
+
+inputs:
+  path:
+    description: The go-cache paths output.
+    required: true
+  key:
+    description: The go-cache primary-key output.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        marker="$RUNNER_TEMP/go-cache-prune.marker"
+        [ -f "$marker" ] || { echo "go-cache-save: no prune marker; nothing to prune"; exit 0; }
+        gc="$(go env GOCACHE)"
+        gc="${gc//\\//}"
+        # Depth-2 entries only: <2hex>/<id>-a files and <id>-d outputs, which
+        # are directories for go run executables (-size sees only the inode).
+        entries() {
+          find "$gc" -mindepth 2 -maxdepth 2 -path "$gc/[0-9a-f][0-9a-f]/*" \( -name '*-a' -o -name '*-d' \) "$@"
+        }
+        report() { echo "go-cache-save: $1: $(entries | wc -l) entries, $(du -sb "$gc" | cut -f1) bytes"; }
+        report before
+        entries ! -newer "$marker" \( -type d -o -size +256k \) -exec rm -rf {} +
+        report after
+
+    - uses: actions/cache/save@v6
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}
