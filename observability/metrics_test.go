@@ -510,26 +510,24 @@ func TestRuntimeReadFloor(t *testing.T) {
 	}
 }
 
-// TestRuntimeReadFloorOptionsOnThePinnedRuntimeVersion pins the ProducerOption assertion on the
+// TestRuntimeReadFloorOptionOnThePinnedRuntimeVersion pins the ProducerOption assertion on the
 // pinned contrib version, so a bump that breaks it fails here instead of at startup.
-func TestRuntimeReadFloorOptionsOnThePinnedRuntimeVersion(t *testing.T) {
-	startOpt, producerOpt, err := runtimeReadFloorOptions(10 * time.Second)
+func TestRuntimeReadFloorOptionOnThePinnedRuntimeVersion(t *testing.T) {
+	_, err := runtimeReadFloorOption(10 * time.Second)
 	require.NoError(t, err)
-	assert.NotNil(t, startOpt)
-	assert.NotNil(t, producerOpt)
 }
 
 // TestRuntimeMetricsReadFreshInsideTheExportInterval collects twice, 0.75 interval apart, on a
 // reader that cannot tick: each collect must carry a fresh runtime/metrics read.
 func TestRuntimeMetricsReadFreshInsideTheExportInterval(t *testing.T) {
 	const interval = 400 * time.Millisecond
-	startOpt, producerOpt, err := runtimeReadFloorOptions(interval)
+	floorOpt, err := runtimeReadFloorOption(interval)
 	require.NoError(t, err)
 
-	reader := sdkmetric.NewManualReader(sdkmetric.WithProducer(runtime.NewProducer(producerOpt)))
+	reader := sdkmetric.NewManualReader(sdkmetric.WithProducer(runtime.NewProducer(floorOpt)))
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
-	require.NoError(t, runtime.Start(startOpt, runtime.WithMeterProvider(mp)))
+	require.NoError(t, runtime.Start(floorOpt, runtime.WithMeterProvider(mp)))
 
 	first := collectRuntimeSample(t, reader)
 	spawnBlockedGoroutines(t, 50)

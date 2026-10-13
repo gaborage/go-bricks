@@ -27,14 +27,15 @@ func runtimeReadFloor(interval time.Duration) time.Duration {
 	return interval / 2
 }
 
-// runtimeReadFloorOptions types the read floor for runtime.Start and runtime.NewProducer.
-func runtimeReadFloorOptions(interval time.Duration) (runtime.Option, runtime.ProducerOption, error) {
+// runtimeReadFloorOption types the read floor for runtime.NewProducer; a ProducerOption is
+// also a runtime.Option, so runtime.Start takes the same value.
+func runtimeReadFloorOption(interval time.Duration) (runtime.ProducerOption, error) {
 	opt := newRuntimeReadFloorOption(runtimeReadFloor(interval))
 	producerOpt, ok := opt.(runtime.ProducerOption)
 	if !ok {
-		return nil, nil, fmt.Errorf("runtime read floor option %T is not a runtime.ProducerOption", opt)
+		return nil, fmt.Errorf("runtime read floor option %T is not a runtime.ProducerOption", opt)
 	}
-	return opt, producerOpt, nil
+	return producerOpt, nil
 }
 
 // initMeterProvider initializes the OpenTelemetry meter provider.
@@ -45,7 +46,7 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
-	runtimeOpt, runtimeProducerOpt, err := runtimeReadFloorOptions(p.config.Metrics.Interval)
+	runtimeOpt, err := runtimeReadFloorOption(p.config.Metrics.Interval)
 	if err != nil {
 		return fmt.Errorf("failed to configure runtime metrics: %w", err)
 	}
@@ -69,7 +70,7 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 		sdkmetric.WithInterval(p.config.Metrics.Interval),
 		sdkmetric.WithTimeout(p.config.Metrics.Export.Timeout),
 		sdkmetric.WithMaxExportBatchSize(p.config.Metrics.Max.Batch.Size),
-		sdkmetric.WithProducer(runtime.NewProducer(runtimeProducerOpt)),
+		sdkmetric.WithProducer(runtime.NewProducer(runtimeOpt)),
 	)
 
 	// Create meter provider with optional histogram view
