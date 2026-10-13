@@ -18,6 +18,10 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 **Go Runtime Metrics:** Auto-exports memory, goroutines, GOMAXPROCS, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
 
+- **Freshness:** every periodic export carries a fresh `runtime/metrics` read. GoBricks sets the runtime read floor to half of `observability.metrics.interval` for both the `go.*` instruments and the `go.schedule.duration` producer, instead of upstream's 15s default, which would repeat a sample at any interval below 15s.
+- A ForceFlush, including the final collect at Shutdown, within half an interval of the last export repeats that export's runtime values; the periodic cadence restarts from the flush, so later exports stay fresh.
+- **Deprecated runtime metrics:** with `OTEL_GO_X_DEPRECATED_RUNTIME_METRICS=true`, the same floor drives `runtime.ReadMemStats`, a stop-the-world call, once per export.
+
 **Export Timeout Configuration:** GoBricks gates export timeouts on `observability.environment` and the signal's endpoint, balancing fail-fast feedback against network resilience:
 
 - **`observability.environment: development` (the default) or `endpoint: stdout`:** 10s (quick failure detection for debugging)
