@@ -102,7 +102,7 @@ test-integration: docker-check ## Run integration tests (requires Docker)
 # failing SonarCloud's proof; the Flyway save assumes leg db holds ./migration).
 # SonarCloud then proves each package ran in exactly one leg.
 INTEGRATION_LEGS := db
-INTEGRATION_LEG_db := ./migration ./migration/provisioning ./database/oracle ./inbox ./database/postgresql
+INTEGRATION_LEG_db := ./migration ./messaging ./database/oracle ./inbox ./database ./migration/provisioning ./database/postgresql
 
 # Prints LEG's import paths, a named leg's in listed order. Fails on a group
 # named rest, a go list error, an unknown LEG, a directory that is not exactly

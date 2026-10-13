@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,11 +51,10 @@ func testCtx(t *testing.T) (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
 }
 
-// integrationEnv bundles a per-test PG container plus the on-disk Flyway
+// integrationEnv bundles a per-test PG database plus the on-disk Flyway
 // scaffolding (config file + migrations dir). One env can host multiple
 // tenant databases — call createTenantDB to provision additional ones.
 type integrationEnv struct {
-	container     *containers.PostgreSQLContainer
 	flywayPath    string
 	configPath    string
 	migrationsDir string
@@ -65,11 +66,32 @@ type integrationEnv struct {
 	logger        logger.Logger
 }
 
-// newIntegrationEnv starts a PG testcontainer + scaffolds a per-test Flyway
-// config and migrations directory. The Flyway-or-skip check is deferred
-// until flywayConfig() / migrator() is called so PG-only role-separation
-// tests don't require Flyway on PATH.
+// newIntegrationEnv provisions a fresh database on the package's shared PG
+// container (pkgPG, ADR-020) + scaffolds a per-test Flyway config and
+// migrations directory. The Flyway-or-skip check is deferred until
+// flywayConfig() / migrator() is called so PG-only role-separation tests
+// don't require Flyway on PATH.
+//
+// Roles are cluster-scoped, so dropping the test's database does not reclaim
+// them; sweepNewRoles drops every role created while the test ran. That
+// sweep makes this package's integration tests serial by contract: none may
+// call t.Parallel (so -parallel is a no-op here), because one test's sweep
+// would drop the roles of a test running alongside it. A test that changes
+// cluster-wide settings (ALTER SYSTEM) uses newPrivateIntegrationEnv instead.
 func newIntegrationEnv(t *testing.T) *integrationEnv {
+	t.Helper()
+
+	pg := pkgPG.Get(t)
+	// Registered before NewDatabase so cleanups (last in, first out) run the
+	// sweep after the DROP DATABASE, when the test's roles own nothing.
+	sweepNewRoles(t, pg.ConnectionString())
+	return newEnvFor(t, pg.NewDatabase(t))
+}
+
+// newPrivateIntegrationEnv starts a PG container for this test alone, for a
+// test whose cluster-wide changes (ALTER SYSTEM) no sweep restores and would
+// otherwise leak into every later test on pkgPG.
+func newPrivateIntegrationEnv(t *testing.T) *integrationEnv {
 	t.Helper()
 
 	parent, cancelParent := testCtx(t)
@@ -77,13 +99,80 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	t.Cleanup(cancel)
 
-	cfg := containers.DefaultPostgreSQLConfig()
-	pg := containers.MustStartPostgreSQLContainer(ctx, t, cfg).WithCleanup(t)
+	pg := containers.MustStartPostgreSQLContainer(ctx, t, nil).WithCleanup(t)
+	return newEnvFor(t, pg.NewDatabase(t))
+}
 
-	host, err := pg.Host(ctx)
-	require.NoError(t, err, "pg container host")
-	port, err := pg.MappedPort(ctx)
-	require.NoError(t, err, "pg container port")
+// sweepNewRoles snapshots pg_roles now and registers a cleanup that drops,
+// in one statement, every role created since, so the next test on the shared
+// container starts with the bootstrap role set. adminDSN must address the
+// container's own database: the test's database is gone when the sweep runs.
+// A failed sweep fails the test rather than leaking roles into the next one.
+func sweepNewRoles(t *testing.T, adminDSN string) {
+	t.Helper()
+	db, err := sql.Open("pgx", adminDSN)
+	require.NoError(t, err, "open admin connection for the role sweep")
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	before, err := roleNames(ctx, db)
+	require.NoError(t, err, "snapshot pg_roles")
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		after, err := roleNames(ctx, db)
+		if err != nil {
+			t.Errorf("list pg_roles for the role sweep: %v", err)
+			return
+		}
+		var created []string
+		for name := range after {
+			if _, ok := before[name]; !ok {
+				created = append(created, quotePGIdent(name))
+			}
+		}
+		if len(created) == 0 {
+			return
+		}
+		slices.Sort(created)
+		roles := strings.Join(created, ", ")
+		// SECURITY: Manual SQL review completed - DROP ROLE takes no bind
+		// parameters, so the names are interpolated. Each comes from the
+		// pg_roles catalog, not from caller input, and quotePGIdent wraps it as
+		// a PostgreSQL delimited identifier with embedded quotes doubled, which
+		// also keeps mixed-case names such as "Public" intact.
+		if _, err := db.ExecContext(ctx, "DROP ROLE "+roles); err != nil { // NOSONAR: catalog role names, PG-identifier-quoted; DROP ROLE takes no bind parameters
+			t.Errorf("drop roles created during the test (%s): %v", roles, err)
+		}
+	})
+}
+
+// roleNames returns the name of every role in the cluster.
+func roleNames(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
+	rows, err := db.QueryContext(ctx, `SELECT rolname FROM pg_roles`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	names := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names[name] = struct{}{}
+	}
+	return names, rows.Err()
+}
+
+// newEnvFor scaffolds a per-test Flyway config and migrations directory
+// targeting db, whose credentials become the env's admin user.
+func newEnvFor(t *testing.T, db *containers.PostgreSQLDatabase) *integrationEnv {
+	t.Helper()
 
 	dir := t.TempDir()
 	migrationsDir := filepath.Join(dir, "migrations")
@@ -98,43 +187,52 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 			"flyway.user=${env.DB_USER}\n"+
 			"flyway.password=${env.DB_PASSWORD}\n"+
 			"flyway.cleanDisabled=false\n",
-		host, port,
+		db.Host, db.Port,
 	)
 	require.NoError(t, os.WriteFile(configPath, []byte(conf), 0o600))
 
 	return &integrationEnv{
-		container:     pg,
 		configPath:    configPath,
 		migrationsDir: migrationsDir,
-		host:          host,
-		port:          port,
-		adminUser:     cfg.Username,
-		adminPassword: cfg.Password,
-		defaultDB:     cfg.Database,
+		host:          db.Host,
+		port:          db.Port,
+		adminUser:     db.Username,
+		adminPassword: db.Password,
+		defaultDB:     db.Database,
 		logger:        logger.New("disabled", true),
 	}
 }
 
 // createTenantDB creates an additional PG database on the running container
-// for tests that exercise per-tenant isolation. Returns a *config.DatabaseConfig
-// pointing at the new database with the container admin credentials.
+// for tests that exercise per-tenant isolation, dropped when the test ends
+// because callers pass fixed, cluster-scoped names. Returns a
+// *config.DatabaseConfig pointing at the new database with the container
+// admin credentials.
 func (e *integrationEnv) createTenantDB(t *testing.T, dbName string) *config.DatabaseConfig {
 	t.Helper()
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-		e.adminUser, e.adminPassword, e.host, e.port, e.defaultDB)
-	db, err := sql.Open("pgx", dsn)
-	require.NoError(t, err, "open admin connection")
-	t.Cleanup(func() { _ = db.Close() })
+	db := e.adminDB(t)
 
 	ctx, cancel := testCtx(t)
 	defer cancel()
 	// %q here is Go string-literal quoting, not PostgreSQL identifier
 	// quoting — coincidentally compatible for the ASCII test tenant names
 	// callers pass. Do not extend to caller-controlled input.
-	if _, err = db.ExecContext(ctx,
+	if _, err := db.ExecContext(ctx,
 		fmt.Sprintf(`CREATE DATABASE %q`, dbName)); err != nil {
 		t.Fatalf("create database %q: %v", dbName, err)
 	}
+	t.Cleanup(func() {
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer dropCancel()
+		// SECURITY: Manual SQL review completed - same interpolated identifier
+		// as the CREATE above: dbName is a fixed [a-z_] test constant, over
+		// which Go's %q and PostgreSQL delimited-identifier quoting coincide; %q
+		// is Go quoting, so do not extend this site to external input. FORCE
+		// evicts a connection the test left open so it cannot block the drop.
+		if _, err := db.ExecContext(dropCtx, fmt.Sprintf(`DROP DATABASE IF EXISTS %q WITH (FORCE)`, dbName)); err != nil { // NOSONAR: fixed test identifier; DROP DATABASE takes no bind parameters
+			t.Errorf("drop database %q: %v", dbName, err)
+		}
+	})
 
 	return e.dbConfigFor(dbName)
 }

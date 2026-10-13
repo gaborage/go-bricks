@@ -18,6 +18,8 @@
 > on the first integration test that asks for it and a missing Docker skips only the
 > requesting test — the eager `os.Exit(0)` in TestMain would have silenced their unit
 > tests as well.
+>
+> **Amended (2026-10-11, `migration` joins):** `migration` shares one PostgreSQL container the same way, plus a per-test sweep that drops the cluster-scoped roles a test created; the one test that runs `ALTER SYSTEM` keeps a container of its own.
 
 ## Context
 
