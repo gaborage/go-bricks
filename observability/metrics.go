@@ -27,9 +27,9 @@ func runtimeReadFloor(interval time.Duration) time.Duration {
 	return interval / 2
 }
 
-// runtimeReadFloorOption types the read floor for runtime.NewProducer; a ProducerOption is
+// runtimeReadFloorProducerOption types the read floor for runtime.NewProducer; a ProducerOption is
 // also a runtime.Option, so runtime.Start takes the same value.
-func runtimeReadFloorOption(interval time.Duration) (runtime.ProducerOption, error) {
+func runtimeReadFloorProducerOption(interval time.Duration) (runtime.ProducerOption, error) {
 	opt := newRuntimeReadFloorOption(runtimeReadFloor(interval))
 	producerOpt, ok := opt.(runtime.ProducerOption)
 	if !ok {
@@ -46,7 +46,7 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
-	runtimeOpt, err := runtimeReadFloorOption(p.config.Metrics.Interval)
+	runtimeOpt, err := runtimeReadFloorProducerOption(p.config.Metrics.Interval)
 	if err != nil {
 		return fmt.Errorf("failed to configure runtime metrics: %w", err)
 	}

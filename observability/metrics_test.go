@@ -510,10 +510,10 @@ func TestRuntimeReadFloor(t *testing.T) {
 	}
 }
 
-// TestRuntimeReadFloorOptionOnThePinnedRuntimeVersion pins the ProducerOption assertion on the
+// TestRuntimeReadFloorProducerOptionOnThePinnedRuntimeVersion pins the ProducerOption assertion on the
 // pinned contrib version, so a bump that breaks it fails here instead of at startup.
-func TestRuntimeReadFloorOptionOnThePinnedRuntimeVersion(t *testing.T) {
-	_, err := runtimeReadFloorOption(10 * time.Second)
+func TestRuntimeReadFloorProducerOptionOnThePinnedRuntimeVersion(t *testing.T) {
+	_, err := runtimeReadFloorProducerOption(10 * time.Second)
 	require.NoError(t, err)
 }
 
@@ -521,7 +521,7 @@ func TestRuntimeReadFloorOptionOnThePinnedRuntimeVersion(t *testing.T) {
 // reader that cannot tick: each collect must carry a fresh runtime/metrics read.
 func TestRuntimeMetricsReadFreshInsideTheExportInterval(t *testing.T) {
 	const interval = 400 * time.Millisecond
-	floorOpt, err := runtimeReadFloorOption(interval)
+	floorOpt, err := runtimeReadFloorProducerOption(interval)
 	require.NoError(t, err)
 
 	reader := sdkmetric.NewManualReader(sdkmetric.WithProducer(runtime.NewProducer(floorOpt)))
@@ -542,12 +542,10 @@ func TestRuntimeMetricsReadFreshInsideTheExportInterval(t *testing.T) {
 // the floor injected: a door that misses the floor keeps upstream's 15s and repeats its sample.
 func TestInitMeterProviderPassesTheReadFloorToBothRuntimeDoors(t *testing.T) {
 	var derived []time.Duration
-	prevFloorOption := newRuntimeReadFloorOption
-	newRuntimeReadFloorOption = func(d time.Duration) runtime.Option {
+	swapRuntimeReadFloorOption(t, func(d time.Duration) runtime.Option {
 		derived = append(derived, d)
 		return runtime.WithMinimumReadMemStatsInterval(time.Nanosecond)
-	}
-	t.Cleanup(func() { newRuntimeReadFloorOption = prevFloorOption })
+	})
 
 	exporter := &runtimeSampleExporter{}
 	originalWrapper := getMetricExporterWrapper()
@@ -564,20 +562,23 @@ func TestInitMeterProviderPassesTheReadFloorToBothRuntimeDoors(t *testing.T) {
 
 	require.NoError(t, p.meterProvider.ForceFlush(context.Background()))
 	spawnBlockedGoroutines(t, 50)
+	// A 1ns floor needs the clock to move: Windows' monotonic clock advances in coarse ticks.
+	mark := time.Now()
+	require.Eventually(t, func() bool { return time.Since(mark) > 0 }, time.Second, time.Millisecond)
 	require.NoError(t, p.meterProvider.ForceFlush(context.Background()))
 
 	samples := exporter.recorded()
 	require.Len(t, samples, 2)
+	requireRuntimeSample(t, samples[0])
+	requireRuntimeSample(t, samples[1])
 	assert.Greater(t, samples[1].goroutines, samples[0].goroutines, "runtime.Start did not receive the read floor")
 	assert.True(t, samples[1].schedTime.After(samples[0].schedTime), "runtime.NewProducer did not receive the read floor")
 }
 
 func TestInitMeterProviderRejectsAReadFloorThatIsNotAProducerOption(t *testing.T) {
-	prevFloorOption := newRuntimeReadFloorOption
-	newRuntimeReadFloorOption = func(time.Duration) runtime.Option {
+	swapRuntimeReadFloorOption(t, func(time.Duration) runtime.Option {
 		return runtime.WithMeterProvider(metricnoop.NewMeterProvider())
-	}
-	t.Cleanup(func() { newRuntimeReadFloorOption = prevFloorOption })
+	})
 
 	p := newRuntimeFloorTestProvider()
 	err := p.initMeterProvider(context.Background())
@@ -638,9 +639,21 @@ func collectRuntimeSample(t *testing.T, reader *sdkmetric.ManualReader) runtimeS
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))
 	sample := runtimeSampleOf(&rm)
+	requireRuntimeSample(t, sample)
+	return sample
+}
+
+func requireRuntimeSample(t *testing.T, sample runtimeSample) {
+	t.Helper()
 	require.GreaterOrEqual(t, sample.goroutines, int64(0), "go.goroutine.count missing")
 	require.False(t, sample.schedTime.IsZero(), "go.schedule.duration missing")
-	return sample
+}
+
+func swapRuntimeReadFloorOption(t *testing.T, build func(time.Duration) runtime.Option) {
+	t.Helper()
+	prev := newRuntimeReadFloorOption
+	newRuntimeReadFloorOption = build
+	t.Cleanup(func() { newRuntimeReadFloorOption = prev })
 }
 
 func spawnBlockedGoroutines(t *testing.T, n int) {
