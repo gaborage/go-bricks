@@ -8,8 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -488,6 +490,186 @@ func (e *inMemoryMetricExporter) Shutdown(_ context.Context) error {
 
 func (e *inMemoryMetricExporter) GetMetrics() []metricdata.ResourceMetrics {
 	return e.metrics
+}
+
+func TestRuntimeReadFloor(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{name: "default_interval", interval: 10 * time.Second, want: 5 * time.Second},
+		{name: "sub_second_interval", interval: 300 * time.Millisecond, want: 150 * time.Millisecond},
+		{name: "odd_nanoseconds_round_down", interval: 3 * time.Nanosecond, want: time.Nanosecond},
+		{name: "zero_interval", interval: 0, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, runtimeReadFloor(tt.interval))
+		})
+	}
+}
+
+// TestRuntimeReadFloorOptionsOnThePinnedRuntimeVersion pins the ProducerOption assertion on the
+// pinned contrib version, so a bump that breaks it fails here instead of at startup.
+func TestRuntimeReadFloorOptionsOnThePinnedRuntimeVersion(t *testing.T) {
+	startOpt, producerOpt, err := runtimeReadFloorOptions(10 * time.Second)
+	require.NoError(t, err)
+	assert.NotNil(t, startOpt)
+	assert.NotNil(t, producerOpt)
+}
+
+// TestRuntimeMetricsReadFreshInsideTheExportInterval collects twice, 0.75 interval apart, on a
+// reader that cannot tick: each collect must carry a fresh runtime/metrics read.
+func TestRuntimeMetricsReadFreshInsideTheExportInterval(t *testing.T) {
+	const interval = 400 * time.Millisecond
+	startOpt, producerOpt, err := runtimeReadFloorOptions(interval)
+	require.NoError(t, err)
+
+	reader := sdkmetric.NewManualReader(sdkmetric.WithProducer(runtime.NewProducer(producerOpt)))
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	require.NoError(t, runtime.Start(startOpt, runtime.WithMeterProvider(mp)))
+
+	first := collectRuntimeSample(t, reader)
+	spawnBlockedGoroutines(t, 50)
+	time.Sleep(interval * 3 / 4)
+	second := collectRuntimeSample(t, reader)
+
+	assert.Greater(t, second.goroutines, first.goroutines, "go.goroutine.count repeated the previous read")
+	assert.True(t, second.schedTime.After(first.schedTime), "go.schedule.duration repeated the previous read's timestamp")
+}
+
+// TestInitMeterProviderPassesTheReadFloorToBothRuntimeDoors runs a reader too slow to tick with
+// the floor injected: a door that misses the floor keeps upstream's 15s and repeats its sample.
+func TestInitMeterProviderPassesTheReadFloorToBothRuntimeDoors(t *testing.T) {
+	var derived []time.Duration
+	prevFloorOption := newRuntimeReadFloorOption
+	newRuntimeReadFloorOption = func(d time.Duration) runtime.Option {
+		derived = append(derived, d)
+		return runtime.WithMinimumReadMemStatsInterval(time.Nanosecond)
+	}
+	t.Cleanup(func() { newRuntimeReadFloorOption = prevFloorOption })
+
+	exporter := &runtimeSampleExporter{}
+	originalWrapper := getMetricExporterWrapper()
+	setMetricExporterWrapper(func(inner sdkmetric.Exporter) sdkmetric.Exporter {
+		exporter.Exporter = inner
+		return exporter
+	})
+	t.Cleanup(func() { setMetricExporterWrapper(originalWrapper) })
+
+	p := newRuntimeFloorTestProvider()
+	require.NoError(t, p.initMeterProvider(context.Background()))
+	t.Cleanup(func() { _ = p.meterProvider.Shutdown(context.Background()) })
+	assert.Equal(t, []time.Duration{30 * time.Minute}, derived)
+
+	require.NoError(t, p.meterProvider.ForceFlush(context.Background()))
+	spawnBlockedGoroutines(t, 50)
+	require.NoError(t, p.meterProvider.ForceFlush(context.Background()))
+
+	samples := exporter.recorded()
+	require.Len(t, samples, 2)
+	assert.Greater(t, samples[1].goroutines, samples[0].goroutines, "runtime.Start did not receive the read floor")
+	assert.True(t, samples[1].schedTime.After(samples[0].schedTime), "runtime.NewProducer did not receive the read floor")
+}
+
+func TestInitMeterProviderRejectsAReadFloorThatIsNotAProducerOption(t *testing.T) {
+	prevFloorOption := newRuntimeReadFloorOption
+	newRuntimeReadFloorOption = func(time.Duration) runtime.Option {
+		return runtime.WithMeterProvider(metricnoop.NewMeterProvider())
+	}
+	t.Cleanup(func() { newRuntimeReadFloorOption = prevFloorOption })
+
+	p := newRuntimeFloorTestProvider()
+	err := p.initMeterProvider(context.Background())
+	if p.meterProvider != nil {
+		t.Cleanup(func() { _ = p.meterProvider.Shutdown(context.Background()) })
+	}
+
+	require.ErrorContains(t, err, "is not a runtime.ProducerOption")
+	assert.Nil(t, p.meterProvider)
+}
+
+func newRuntimeFloorTestProvider() *provider {
+	return &provider{
+		config: Config{
+			Service:     ServiceConfig{Name: "test-service", Version: "1.0.0"},
+			Environment: "test",
+			Metrics: MetricsConfig{
+				Enabled:              BoolPtr(true),
+				Endpoint:             EndpointStdout,
+				Interval:             time.Hour,
+				HistogramAggregation: HistogramAggregationExplicit,
+				Export:               MetricsExportConfig{Timeout: 10 * time.Second},
+			},
+		},
+	}
+}
+
+// runtimeSample holds the two values that show whether a collect re-read runtime/metrics.
+type runtimeSample struct {
+	goroutines int64
+	schedTime  time.Time
+}
+
+func runtimeSampleOf(rm *metricdata.ResourceMetrics) runtimeSample {
+	sample := runtimeSample{goroutines: -1}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch data := m.Data.(type) {
+			case metricdata.Sum[int64]:
+				if m.Name == "go.goroutine.count" && len(data.DataPoints) > 0 {
+					sample.goroutines = data.DataPoints[0].Value
+				}
+			case metricdata.Histogram[float64]:
+				if m.Name == "go.schedule.duration" && len(data.DataPoints) > 0 {
+					sample.schedTime = data.DataPoints[0].Time
+				}
+			}
+		}
+	}
+	return sample
+}
+
+func collectRuntimeSample(t *testing.T, reader *sdkmetric.ManualReader) runtimeSample {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	sample := runtimeSampleOf(&rm)
+	require.GreaterOrEqual(t, sample.goroutines, int64(0), "go.goroutine.count missing")
+	require.False(t, sample.schedTime.IsZero(), "go.schedule.duration missing")
+	return sample
+}
+
+func spawnBlockedGoroutines(t *testing.T, n int) {
+	t.Helper()
+	release := make(chan struct{})
+	for range n {
+		go func() { <-release }()
+	}
+	t.Cleanup(func() { close(release) })
+}
+
+// runtimeSampleExporter reads each export at Export time: the periodic reader reuses its
+// ResourceMetrics buffer, so a retained copy would alias the next collect.
+type runtimeSampleExporter struct {
+	sdkmetric.Exporter
+	mu      sync.Mutex
+	samples []runtimeSample
+}
+
+func (e *runtimeSampleExporter) Export(_ context.Context, rm *metricdata.ResourceMetrics) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.samples = append(e.samples, runtimeSampleOf(rm))
+	return nil
+}
+
+func (e *runtimeSampleExporter) recorded() []runtimeSample {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]runtimeSample(nil), e.samples...)
 }
 
 const otlpMetricsTemporalityPreferenceEnv = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"

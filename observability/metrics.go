@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -15,6 +16,23 @@ import (
 
 // metricInitHook allows tests to inject errors after exporter creation but before provider setup.
 var metricInitHook func() error
+
+// newRuntimeReadFloorOption builds the runtime read-floor option; tests swap it.
+var newRuntimeReadFloorOption = runtime.WithMinimumReadMemStatsInterval
+
+func runtimeReadFloor(time.Duration) time.Duration {
+	return 0
+}
+
+// runtimeReadFloorOptions types the read floor for runtime.Start and runtime.NewProducer.
+func runtimeReadFloorOptions(interval time.Duration) (runtime.Option, runtime.ProducerOption, error) {
+	opt := newRuntimeReadFloorOption(runtimeReadFloor(interval))
+	producerOpt, ok := opt.(runtime.ProducerOption)
+	if !ok {
+		return nil, nil, fmt.Errorf("runtime read floor option %T is not a runtime.ProducerOption", opt)
+	}
+	return opt, producerOpt, nil
+}
 
 // initMeterProvider initializes the OpenTelemetry meter provider.
 func (p *provider) initMeterProvider(ctx context.Context) error {
