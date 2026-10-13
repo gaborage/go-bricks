@@ -1,6 +1,8 @@
 # Restore only. A family's writer saves, on push to main, when the save output
-# is 'true'; on push a writer restores the exact key only, so a saving run
-# restored nothing and its entry is this run's own.
+# is 'true', through .github/actions/go-cache-save. Every restore stamps a fresh
+# trim.txt. A saving run that restored an older generation back-dates it and
+# empties the module cache, so go-cache-save can drop the large outputs this
+# run did not use and the saved modules are exactly this commit's.
 #
 # The writer rule: a saved entry holds build outputs and modules only, never a
 # test result or a vet verdict. A writer therefore saves before any go test or
@@ -11,8 +13,8 @@
 name: Go cache
 description: >-
   Restores one cache family's Go module and build cache. The family's writer
-  saves with actions/cache/save from the paths and primary-key outputs when
-  the save output is 'true'.
+  saves through .github/actions/go-cache-save from the paths and primary-key
+  outputs when the save output is 'true'.
 
 inputs:
   family:
@@ -24,8 +26,8 @@ inputs:
     required: true
   writer:
     description: >-
-      'true' only in the family's writer. On push a writer restores the exact
-      key only, so its save never re-saves an older generation.
+      'true' only in the family's writer. On push a writer whose exact key
+      missed restores the newest older entry, pruned before its save.
     required: false
     default: 'false'
 
@@ -90,5 +92,27 @@ runs:
       with:
         path: ${{ steps.env.outputs.paths }}
         key: ${{ steps.env.outputs.key }}
-        # The non-empty branch comes first: `cond && '' || x` always yields x.
-        restore-keys: ${{ steps.env.outputs.push-writer != 'true' && steps.env.outputs.prefix || '' }}
+        restore-keys: ${{ steps.env.outputs.prefix }}
+
+    # golang/go#69565: tar restores the saved trim.txt, and one older than a day
+    # lets the first go command delete every entry unused for 5d+1h. A saving
+    # run that restored an older generation then back-dates every entry 2h, so
+    # cmd/go's markUsed (which skips entries used within the hour) re-stamps
+    # each one this run uses; marks the start for go-cache-save's prune; and
+    # empties the module cache for this run's go commands to refill.
+    - shell: bash
+      env:
+        RESEED: >-
+          ${{ steps.env.outputs.push-writer == 'true' && steps.restore.outputs.cache-hit != 'true'
+          && steps.restore.outputs.cache-matched-key != '' }}
+      run: |
+        set -euo pipefail
+        gc="$(go env GOCACHE)"
+        gc="${gc//\\//}"
+        mkdir -p "$gc"
+        date +%s > "$gc/trim.txt"
+        [ "$RESEED" = true ] || exit 0
+        find "$gc" -mindepth 2 -maxdepth 2 -path "$gc/[0-9a-f][0-9a-f]/*" \( -name '*-a' -o -name '*-d' \) \
+          -exec touch -d '2 hours ago' {} +
+        touch "$RUNNER_TEMP/go-cache-prune.marker"
+        go clean -modcache

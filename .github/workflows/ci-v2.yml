@@ -249,7 +249,7 @@ jobs:
 
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}
@@ -461,7 +461,7 @@ jobs:
 
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}
@@ -472,9 +472,18 @@ jobs:
     needs: changes
     # Gates on `code` so integration coverage is part of every merged report.
     if: needs.changes.outputs.code == 'true'
+    # Leg db runs ./migration (serial per-test PostgreSQL boots plus the Flyway
+    # JVM) with other PostgreSQL- or Oracle-bound packages, leg rest the
+    # remainder, to balance the legs. The Makefile's INTEGRATION_LEGS owns the
+    # split; a new package lands in rest.
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [db, rest]
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
+      INTEG_LEG: ${{ matrix.leg }}
       # Provides the real Flyway binary the integration test runs against; the
       # migration/testdata/flyway files are captured JSON-output samples used by
       # the parser unit tests. Flyway 12.x and later ship only from Redgate's own
@@ -516,12 +525,16 @@ jobs:
           # renovate: datasource=docker depName=gvenzl/oracle-free
           docker pull gvenzl/oracle-free:23.26.3-slim &
           pids="$pids $!"
+          # Leg db starts PostgreSQL and Oracle only; testcontainers pulls any
+          # other image on demand.
+          if [ "$INTEG_LEG" != db ]; then
           # renovate: datasource=docker depName=rabbitmq
           docker pull rabbitmq:4.3.6-management-alpine &
           pids="$pids $!"
           # renovate: datasource=docker depName=redis
           docker pull redis:8.10.2-alpine &
           pids="$pids $!"
+          fi
           rc=0
           for pid in $pids; do
             wait "$pid" || rc=1
@@ -542,19 +555,20 @@ jobs:
         uses: ./.github/actions/go-cache
         with:
           family: fw-integ
-          writer: 'true'
+          writer: ${{ matrix.leg == 'rest' }}
 
       - *go-mod-download
 
       # Compile only, so the save stores no test result or vet verdict (the
-      # writer rule in .github/actions/go-cache).
+      # writer rule in .github/actions/go-cache). Leg rest writes fw-integ,
+      # warming every leg's packages.
       - name: Warm the build cache (compile only)
         if: steps.gocache.outputs.save == 'true'
         run: go test -c -vet=off -race -tags=integration -covermode=atomic -coverpkg=./... -o /dev/null ./migration ./...
 
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}
@@ -588,9 +602,10 @@ jobs:
           fi
           tar -xzf /tmp/flyway.tar.gz -C /tmp
 
-      # Only push runs save, so pull requests never store a copy of their own.
+      # Only push runs save, so pull requests never store a copy of their own,
+      # and only one leg, so the legs never race to reserve the key.
       - name: Save Flyway CLI
-        if: github.event_name == 'push' && steps.cache-flyway.outputs.cache-hit != 'true'
+        if: matrix.leg == 'db' && github.event_name == 'push' && steps.cache-flyway.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: /tmp/flyway-${{ env.FLYWAY_VERSION }}
@@ -609,23 +624,27 @@ jobs:
           set -euo pipefail
           docker info >/dev/null 2>&1 || { echo "Docker is not running"; exit 1; }
           echo "Running integration tests with testcontainers..."
-          # ./migration, the slowest package, is listed first so it starts first;
-          # go test drops the duplicate ./... match. The guard fails the job if
-          # the list ever matches a different package set than ./... alone; -e
+          # integration-leg fails closed; the Makefile lists the cases. -e
           # leaves package load errors to go test's per-package report.
-          pkgs=(./migration ./...)
-          want="$(go list -e -tags=integration ./... | sort -u)"
-          got="$(go list -e -tags=integration "${pkgs[@]}" | sort -u)"
-          if [ "$got" != "$want" ]; then
-            echo "::error::integration packages (${pkgs[*]}) differ from ./..."
-            diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") || true
-            exit 1
-          fi
-          # Build tag controls which tests run - only integration tests will execute.
+          # SonarCloud checks integ-full.txt and every leg's integ-ran.txt.
+          make -s --no-print-directory integration-leg LEG="$INTEG_LEG" > integ-leg.txt
+          mapfile -t pkgs < integ-leg.txt
+          go list -e -tags=integration ./... | LC_ALL=C sort > integ-full.txt
+          # The integration tag adds the integration tests to each package's
+          # unit tests; both run.
           # -timeout 15m is an interim safeguard for the ADR-020 rollout window;
           # revert (or hold at 15m) once schema-per-test proves stable across
           # 20 consecutive green runs (issue #404).
-          go test -race -parallel 2 -timeout 15m -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out "${pkgs[@]}"
+          go test -race -parallel 2 -timeout 15m -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out "${pkgs[@]}" | tee go-test.log
+          # Each package of the leg reports once: `ok`, `?` (no test files), or
+          # a tab-led coverage-only line (no tests, under -coverpkg).
+          awk -F'\t' '$1 ~ /^(ok|\?) *$/ || ($1 == "" && $3 == "" && $4 ~ /^coverage:/) { print $2 }' go-test.log \
+            | LC_ALL=C sort > integ-ran.txt
+          if ! LC_ALL=C sort integ-leg.txt | cmp -s - integ-ran.txt; then
+            echo "::error::the packages that reported a result differ from leg $INTEG_LEG's list"
+            diff <(LC_ALL=C sort integ-leg.txt) integ-ran.txt || true
+            exit 1
+          fi
           # Collapse the per-test-binary block copies and check the result against
           # go test's own profile, as framework-test does.
           awk -f scripts/cover-dedup.awk coverage-integration.out > coverage-integration.out.dedup
@@ -648,8 +667,11 @@ jobs:
       - name: Upload integration test coverage artifact
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-integration
-          path: coverage-integration.out
+          name: coverage-integration-${{ matrix.leg }}
+          path: |
+            coverage-integration.out
+            integ-full.txt
+            integ-ran.txt
           retention-days: 7
           overwrite: true
 
@@ -709,7 +731,7 @@ jobs:
       # in the entry. No step after this point reaches the saved entry.
       - name: Save Go cache
         if: ${{ !cancelled() && steps.gocache.outputs.save == 'true' && steps.build.outcome == 'success' }}
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}
@@ -979,7 +1001,7 @@ jobs:
 
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}
@@ -1114,7 +1136,7 @@ jobs:
 
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}
@@ -1196,13 +1218,15 @@ jobs:
         with:
           family: mt-build
 
-      # security-framework aliases the anchored gosec steps; each job's
+      # lint-framework aliases the anchored gosec steps; each job's
       # working directory picks the Makefile. The key hashes the binary rule's
       # recipe, which carries the pinned version, so a bump or an edited rule
-      # never reuses a binary; exact key only.
+      # never reuses a binary; exact key only. Each step gates on the previous
+      # gosec step, not on the job, so a lint failure still gets a scan.
       - &gosec-key
         name: Gosec cache key
         id: gosec-key
+        if: ${{ !cancelled() && steps.gocache.outcome == 'success' }}
         run: |
           set -euo pipefail
           bin="$(echo "gosec-cache-bin: ; @echo \$(GOSEC_BIN)" \
@@ -1221,6 +1245,7 @@ jobs:
       - &gosec-restore
         name: Restore gosec
         id: gosec-restore
+        if: ${{ !cancelled() && steps.gosec-key.outcome == 'success' }}
         uses: actions/cache/restore@v6
         with:
           path: ${{ steps.gosec-key.outputs.bin }}
@@ -1230,7 +1255,7 @@ jobs:
       # file a failed restore left behind.
       - &gosec-drop-partial
         name: Drop a partial gosec restore
-        if: steps.gosec-restore.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.gosec-key.outcome == 'success' && steps.gosec-restore.outputs.cache-hit != 'true' }}
         env:
           GOSEC_PATH: ${{ steps.gosec-key.outputs.bin }}
         run: rm -f "$GOSEC_PATH"
@@ -1239,6 +1264,8 @@ jobs:
       # install-gosec nothing to do.
       - &gosec-install
         name: Install gosec
+        id: gosec-install
+        if: ${{ !cancelled() && steps.gosec-key.outcome == 'success' }}
         run: |
           for delay in 15 30; do
             make install-gosec && exit 0
@@ -1247,13 +1274,16 @@ jobs:
           done
           make install-gosec
 
-      - name: Run gosec (migrate tool)
+      - &gosec-run
+        name: Run gosec
+        id: gosec-run
+        if: ${{ !cancelled() && steps.gosec-install.outcome == 'success' }}
         run: make sec
 
       # After the scan, so the saved binary has run.
       - &gosec-save
         name: Save gosec
-        if: github.event_name == 'push' && steps.gosec-restore.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.gosec-run.outcome == 'success' && github.event_name == 'push' && steps.gosec-restore.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.gosec-key.outputs.bin }}
@@ -1335,33 +1365,13 @@ jobs:
       # go test or go vet, so the entry holds build output and modules only.
       - name: Save Go cache
         if: steps.gocache.outputs.save == 'true'
-        uses: actions/cache/save@v6
+        uses: ./.github/actions/go-cache-save
         with:
           path: ${{ steps.gocache.outputs.paths }}
           key: ${{ steps.gocache.outputs.primary-key }}
 
-  security-framework:
-    permissions:
-      contents: read
-    needs: changes
-    if: needs.changes.outputs.framework == 'true'
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: ./.github/actions/go-toolchain
-        with:
-          go-version-file: go.mod
-
-      - name: Restore Go cache
-        id: gocache
-        uses: ./.github/actions/go-cache
-        with:
-          family: fw-light
-
+      # gosec, once a job of its own, runs after the save so the fw-light
+      # entry holds none of its build; a lint failure does not skip it.
       - *gosec-key
 
       - *gosec-restore
@@ -1370,8 +1380,7 @@ jobs:
 
       - *gosec-install
 
-      - name: Run gosec (framework)
-        run: make sec
+      - *gosec-run
 
       - *gosec-save
 
@@ -1513,9 +1522,10 @@ jobs:
 
       # All three coverage jobs gate on `code`, so on any non-doc change they
       # all ran and uploaded their artifacts. Download them unconditionally — a
-      # missing artifact fails its download step. The producers keep them 7
-      # days, so re-running this job alone finds them. They unpack under
-      # runner.temp and only the three profiles are copied into the checkout:
+      # missing named artifact fails its download step; a pattern that matches
+      # nothing does not, so the proof below counts the integration legs. The
+      # producers keep them 7 days, so re-running this job alone finds them.
+      # They unpack under runner.temp and only the profiles reach the checkout:
       # this job holds SONAR_TOKEN, so no other file an artifact carries may
       # land in the tree the merge and the scan run from. Each download retries
       # once for a transient artifact-service error.
@@ -1538,7 +1548,9 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v8
         with: &dl-integration
-          name: coverage-integration
+          # One subdirectory per leg's artifact (two or more legs; a lone match
+          # lands flat and fails the proof below).
+          pattern: coverage-integration-*
           path: ${{ runner.temp }}/cov/integration
 
       - name: Download integration test coverage (retry)
@@ -1584,14 +1596,46 @@ jobs:
             return 1
           }
           passed coverage-unit "$UNIT" "$UNIT_RETRY"
-          passed coverage-integration "$INTEGRATION" "$INTEGRATION_RETRY"
+          passed 'coverage-integration-*' "$INTEGRATION" "$INTEGRATION_RETRY"
           passed migrate-tool-coverage-report "$MIGRATE" "$MIGRATE_RETRY"
+
+      # Data only: the lists are compared, never run. Every leg lists the same
+      # full package set, and each package reported a result in exactly one.
+      - name: Prove every integration package ran in exactly one leg
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          [ ! -e "$RUNNER_TEMP/cov/integration/integ-full.txt" ] \
+            || { echo "::error::a lone coverage-integration-* artifact was extracted flat; the matrix needs two or more legs"; exit 1; }
+          legs=("$RUNNER_TEMP"/cov/integration/coverage-integration-*/)
+          [ -d "${legs[0]}" ] || { echo "::error::no coverage-integration-* artifact was downloaded"; exit 1; }
+          for d in "${legs[@]}"; do
+            for f in coverage-integration.out integ-full.txt integ-ran.txt; do
+              [ -s "$d$f" ] || { echo "::error::$d$f is missing or empty"; exit 1; }
+            done
+            cmp -s "${legs[0]}integ-full.txt" "${d}integ-full.txt" \
+              || { echo "::error::${legs[0]} and $d list different full package sets"; exit 1; }
+          done
+          ran="$(sort "${legs[@]/%/integ-ran.txt}")"
+          twice="$(printf '%s\n' "$ran" | uniq -d)"
+          [ -z "$twice" ] || { echo "::error::packages that ran in more than one leg: $(echo $twice)"; exit 1; }
+          full="$(sort -u "${legs[0]}integ-full.txt")"
+          if [ "$ran" != "$full" ]; then
+            echo "::error::the legs' ran lists are not the full integration package set"
+            diff <(printf '%s\n' "$full") <(printf '%s\n' "$ran") || true
+            exit 1
+          fi
+          echo "${#legs[@]} legs; each of $(printf '%s\n' "$ran" | wc -l) packages ran exactly once"
 
       - name: Stage coverage profiles
         run: |
           set -euo pipefail
           cp "$RUNNER_TEMP/cov/unit/coverage.out" coverage.out
-          cp "$RUNNER_TEMP/cov/integration/coverage-integration.out" coverage-integration.out
+          # The legs' profiles as one: one mode line, then cover-dedup.awk sums
+          # the blocks they share, so the split leaves every count unchanged.
+          legs=("$RUNNER_TEMP"/cov/integration/coverage-integration-*/coverage-integration.out)
+          { head -n 1 "${legs[0]}"; for f in "${legs[@]}"; do tail -n +2 "$f"; done; } \
+            | awk -f scripts/cover-dedup.awk > coverage-integration.out
           cp "$RUNNER_TEMP/cov/migrate/coverage.out" tools/migration/coverage.out
           for f in coverage.out coverage-integration.out tools/migration/coverage.out; do
             test -s "$f" || { echo "::error::downloaded coverage profile $f is empty"; exit 1; }
@@ -1670,7 +1714,7 @@ jobs:
             fi
           fi
 
-          # Validate integration coverage (deduped by its producer too: ~19.1k
+          # Validate integration coverage (deduped across legs at staging: ~19.1k
           # distinct blocks today; under 1000 means the -coverpkg=./... set
           # collapsed or the profile is near-empty, not that tests went missing)
           if [ "$has_framework_integration" = true ]; then
@@ -1819,6 +1863,9 @@ jobs:
   # upstreams are listed here too.) Never add a job here whose `needs:`
   # reference a job that is not — that job's failure would reach this gate only
   # as a tolerated 'skipped'.
+  # One exception: on the code path framework-integration-test and sonarcloud
+  # must be 'success', since the exactly-once proof over the integration legs
+  # runs in sonarcloud.
   # vuln-weekly is schedule-only and intentionally absent.
   # When you add a new PR job, add it to `needs:` here or it stays unenforced;
   # lint-docs fails the PR when one is missing (a new schedule-only job goes in
@@ -1844,7 +1891,6 @@ jobs:
       - migrate-tool-build
       - security-migrate-tool
       - lint-framework
-      - security-framework
       - lint-docs
       - llms-version
       - sonarcloud
@@ -1875,6 +1921,12 @@ jobs:
                 | jq -e 'all(.[]; .result != "failure")' >/dev/null; then
               echo "::notice::ci-ok failed only on cancelled jobs (a newer run of this PR, a manual cancel, or a timeout). If the newest ci-ok on this commit is green, leave this run alone: re-running it cancels the live run. If it is red or missing, re-run the newest run."
             fi
+            exit 1
+          fi
+          skipped="$(printf '%s' "$NEEDS_JSON" | jq -r 'select(.changes.outputs.code == "true")
+            | ("framework-integration-test", "sonarcloud") as $j | select(.[$j].result != "success") | $j')"
+          if [ -n "$skipped" ]; then
+            echo "::error::code changed, so these jobs must succeed, not skip: $(printf '%s ' $skipped)"
             exit 1
           fi
           echo "✅ All required jobs passed (or were skipped on a doc-only PR)."
