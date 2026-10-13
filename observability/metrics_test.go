@@ -615,21 +615,24 @@ type runtimeSample struct {
 
 func runtimeSampleOf(rm *metricdata.ResourceMetrics) runtimeSample {
 	sample := runtimeSample{goroutines: -1}
+	if sum, ok := metricData(rm, "go.goroutine.count").(metricdata.Sum[int64]); ok && len(sum.DataPoints) > 0 {
+		sample.goroutines = sum.DataPoints[0].Value
+	}
+	if hist, ok := metricData(rm, "go.schedule.duration").(metricdata.Histogram[float64]); ok && len(hist.DataPoints) > 0 {
+		sample.schedTime = hist.DataPoints[0].Time
+	}
+	return sample
+}
+
+func metricData(rm *metricdata.ResourceMetrics, name string) metricdata.Aggregation {
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
-			switch data := m.Data.(type) {
-			case metricdata.Sum[int64]:
-				if m.Name == "go.goroutine.count" && len(data.DataPoints) > 0 {
-					sample.goroutines = data.DataPoints[0].Value
-				}
-			case metricdata.Histogram[float64]:
-				if m.Name == "go.schedule.duration" && len(data.DataPoints) > 0 {
-					sample.schedTime = data.DataPoints[0].Time
-				}
+			if m.Name == name {
+				return m.Data
 			}
 		}
 	}
-	return sample
+	return nil
 }
 
 func collectRuntimeSample(t *testing.T, reader *sdkmetric.ManualReader) runtimeSample {

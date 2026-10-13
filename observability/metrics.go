@@ -20,8 +20,11 @@ var metricInitHook func() error
 // newRuntimeReadFloorOption builds the runtime read-floor option; tests swap it.
 var newRuntimeReadFloorOption = runtime.WithMinimumReadMemStatsInterval
 
-func runtimeReadFloor(time.Duration) time.Duration {
-	return 0
+// runtimeReadFloor keeps the runtime/metrics read floor below the export interval: each
+// export runs its callback after a variable delay, so a floor equal to the interval would
+// skip roughly every other export. Upstream resets a zero floor to its 15s default.
+func runtimeReadFloor(interval time.Duration) time.Duration {
+	return interval / 2
 }
 
 // runtimeReadFloorOptions types the read floor for runtime.Start and runtime.NewProducer.
@@ -40,6 +43,11 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 	res, err := p.createResource(ctx)
 	if err != nil {
 		return fmt.Errorf(errCreateResourceFmt, err)
+	}
+
+	runtimeOpt, runtimeProducerOpt, err := runtimeReadFloorOptions(p.config.Metrics.Interval)
+	if err != nil {
+		return fmt.Errorf("failed to configure runtime metrics: %w", err)
 	}
 
 	exporter, err := p.createMetricExporter(ctx)
@@ -61,7 +69,7 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 		sdkmetric.WithInterval(p.config.Metrics.Interval),
 		sdkmetric.WithTimeout(p.config.Metrics.Export.Timeout),
 		sdkmetric.WithMaxExportBatchSize(p.config.Metrics.Max.Batch.Size),
-		sdkmetric.WithProducer(runtime.NewProducer()),
+		sdkmetric.WithProducer(runtime.NewProducer(runtimeProducerOpt)),
 	)
 
 	// Create meter provider with optional histogram view
@@ -83,20 +91,13 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 
 	p.meterProvider = sdkmetric.NewMeterProvider(meterOpts...)
 
-	// Start Go runtime metrics collection (memory, GC, goroutines, GOMAXPROCS, config)
-	// This automatically exports metrics when the periodic reader triggers:
-	//   - go.memory.used, go.memory.limit, go.memory.allocated, go.memory.allocations
-	//   - go.memory.gc.goal
-	//   - go.goroutine.count
-	//   - go.processor.limit (GOMAXPROCS)
-	//   - go.config.gogc
-	// Default ReadMemStats interval: 15 seconds (performance-safe)
-	//
-	// Note: runtime.Start() can be called multiple times safely - the meter provider's
-	// RegisterCallback() handles duplicate registrations internally. Any error returned
-	// indicates a genuine issue with metric instrumentation setup.
+	// runtime.Start emits:
+	//   - go.memory.used, go.memory.limit (if set), go.memory.allocated, go.memory.allocations
+	//   - go.memory.gc.goal, go.goroutine.count, go.processor.limit (GOMAXPROCS), go.config.gogc
+	// runtime.Start and the producer above read runtime/metrics at most once per
+	// runtimeReadFloor (half the export interval), so every periodic export reads fresh values.
 	debugLogger.Println("Starting Go runtime metrics collection")
-	err = runtime.Start(runtime.WithMeterProvider(p.meterProvider))
+	err = runtime.Start(runtimeOpt, runtime.WithMeterProvider(p.meterProvider))
 	if err != nil {
 		return fmt.Errorf("failed to start runtime metrics: %w", err)
 	}
