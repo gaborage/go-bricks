@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"sort"
 	"time"
 
@@ -62,6 +64,8 @@ type Relay struct {
 	// Init (their tenant set is not enumerable at registration time).
 	tenants []string
 
+	// tenantAttr reports whether outbox.relay.cycles declares the tenant attribute, so
+	// a cycle names its tenant only when the Counter can carry it (see relayCounters).
 	tenantAttr bool
 }
 
@@ -101,33 +105,162 @@ func newRelay(store Store, cfg *config.OutboxConfig, getDB func(context.Context)
 	}
 }
 
-// Execute runs one relay cycle per configured tenant. In single-tenant mode this is a
-// single pass with no tenant in context; in static multi-tenant mode it fans out across
-// the configured tenants, resolving each tenant's database and broker independently.
-// Per-tenant failures are collected so one unhealthy tenant does not block the others.
+// Execute runs one relay cycle per configured tenant, reporting no counts.
 func (r *Relay) Execute(jobCtx scheduler.JobContext) error {
+	return r.run(jobCtx, discardSink{})
+}
+
+// The relay's window Counters, the outcomes the scheduler sums per window and exports
+// as one metric each, with the attributes and values they declare.
+const (
+	counterCycles     = "outbox.relay.cycles"
+	counterLed        = "outbox.relay.led"
+	counterRecords    = "outbox.relay.records"
+	counterUnrecorded = "outbox.relay.unrecorded"
+
+	attrRole    = "role"
+	attrTenant  = "tenant"
+	attrOutcome = "outcome"
+	attrLane    = "lane"
+
+	roleLeader      = "leader"
+	roleFollower    = "follower"
+	roleUnavailable = "unavailable"
+
+	outcomeValuePublished    = "published"
+	outcomeValueFailed       = "failed"
+	outcomeValueParked       = "parked"
+	outcomeValueDeadLettered = "deadlettered"
+
+	// laneUnknown is the lane a row naming a lane this build lacks reports under.
+	laneUnknown = "unknown"
+
+	// maxCounterSeries is the scheduler's per-Counter series cap.
+	maxCounterSeries = 1999
+)
+
+var (
+	cycleRoles     = []string{roleLeader, roleFollower, roleUnavailable}
+	recordOutcomes = []string{outcomeValuePublished, outcomeValueFailed, outcomeValueParked, outcomeValueDeadLettered}
+
+	// attrValuePattern is the scheduler's rule for a declared attribute value, which it
+	// does not export. Checked here in full, not by length alone: a tenant key that
+	// skipped config.Validate must drop the attribute, not fail the registration.
+	attrValuePattern = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+)
+
+// relaySink receives one tenant cycle's Counter calls; *scheduler.Recorder satisfies it.
+type relaySink interface {
+	Count(name string, n int64, attrs ...attribute.KeyValue)
+	Fail(name string, n int64, attrs ...attribute.KeyValue)
+}
+
+// discardSink drops every call, for a run outside a window.
+type discardSink struct{}
+
+func (discardSink) Count(string, int64, ...attribute.KeyValue) {}
+func (discardSink) Fail(string, int64, ...attribute.KeyValue)  {}
+
+// relayCounters declares the relay's window Counters over its tenants and lanes.
+// outbox.relay.cycles carries the tenant attribute only when the scheduler can declare
+// the tenant list; otherwise dropReason says why, except for the single "" key of a
+// single-tenant or shared ledger, which has no tenant to name.
+func relayCounters(tenants, lanes []string) (counters []scheduler.Counter, tenantAttr bool, dropReason string) {
+	cycles := []scheduler.AttrSet{{Key: attrRole, Values: cycleRoles}}
+	tenantAttr, dropReason = declarableTenants(tenants)
+	if tenantAttr {
+		cycles = append(cycles, scheduler.AttrSet{Key: attrTenant, Values: tenants})
+	}
+	return []scheduler.Counter{
+		{Name: counterCycles, Attrs: cycles},
+		{Name: counterLed},
+		{Name: counterRecords, Attrs: []scheduler.AttrSet{
+			{Key: attrOutcome, Values: recordOutcomes},
+			{Key: attrLane, Values: append(slices.Clip(lanes), laneUnknown)},
+		}},
+		{Name: counterUnrecorded},
+	}, tenantAttr, dropReason
+}
+
+// declarableTenants reports whether tenants can be a declared attribute's values: each a
+// valid value, and one series per role and tenant within the cap.
+func declarableTenants(tenants []string) (ok bool, reason string) {
+	if len(tenants) == 1 && tenants[0] == "" {
+		return false, ""
+	}
+	if series := len(cycleRoles) * len(tenants); series > maxCounterSeries {
+		return false, fmt.Sprintf("%d tenants make %d role and tenant series, over the %d a Counter may declare",
+			len(tenants), series, maxCounterSeries)
+	}
+	for _, tenantID := range tenants {
+		if !attrValuePattern.MatchString(tenantID) {
+			return false, fmt.Sprintf("tenant %q does not match %s", tenantID, attrValuePattern)
+		}
+	}
+	return true, ""
+}
+
+// tenantCycle is one tenant's relay cycle as its Counters see it: the role the tenant's
+// relay took, and what it did with its batch.
+type tenantCycle struct {
+	role string
+	res  relayBatchResult
+}
+
+// run relays one cycle per configured tenant. In single-tenant mode this is a single pass
+// with no tenant in context; in static multi-tenant mode it fans out across the configured
+// tenants, resolving each tenant's database and broker independently. Per-tenant failures
+// are collected so one unhealthy tenant does not block the others. Each cycle reaches sink
+// as soon as it returns: the relay recovers no panic, so a later tenant's panic must find
+// the earlier tenants' counts already reported.
+func (r *Relay) run(jobCtx scheduler.JobContext, sink relaySink) error {
 	log := jobCtx.Logger()
 	var errs []error
 	for _, tenantID := range r.tenants {
 		ctx := multitenant.SetTenant(jobCtx, tenantID)
-		if err := r.relayTenant(ctx, log, tenantID); err != nil {
+		cycle, err := r.relayTenant(ctx, log, tenantID)
+		r.project(sink, tenantID, &cycle)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("outbox relay: tenant %q: %w", tenantID, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-type relaySink interface {
-	Count(name string, n int64, attrs ...attribute.KeyValue)
-	Fail(name string, n int64, attrs ...attribute.KeyValue)
+// project reports one tenant's cycle on sink: the cycle under its role, a lead, each
+// lane's record outcomes and the unrecorded deliveries. A zero count is not reported.
+func (r *Relay) project(sink relaySink, tenantID string, cycle *tenantCycle) {
+	attrs := []attribute.KeyValue{attribute.String(attrRole, cycle.role)}
+	if r.tenantAttr {
+		attrs = append(attrs, attribute.String(attrTenant, tenantID))
+	}
+	if cycle.role == roleUnavailable {
+		sink.Fail(counterCycles, 1, attrs...)
+	} else {
+		sink.Count(counterCycles, 1, attrs...)
+	}
+	if cycle.role == roleLeader {
+		sink.Count(counterLed, 1)
+	}
+	for lane, counts := range cycle.res.byLane {
+		if !slices.Contains(r.laneOrder, lane) {
+			lane = laneUnknown
+		}
+		laneAttr := attribute.String(attrLane, lane)
+		reportRecords(sink.Count, outcomeValuePublished, counts.published, laneAttr)
+		reportRecords(sink.Fail, outcomeValueFailed, counts.failed, laneAttr)
+		reportRecords(sink.Fail, outcomeValueParked, counts.parked, laneAttr)
+		reportRecords(sink.Fail, outcomeValueDeadLettered, counts.deadlettered, laneAttr)
+	}
+	if cycle.res.unrecorded > 0 {
+		sink.Fail(counterUnrecorded, int64(cycle.res.unrecorded))
+	}
 }
 
-func (r *Relay) run(jobCtx scheduler.JobContext, _ relaySink) error {
-	return r.Execute(jobCtx)
-}
-
-func relayCounters(_, _ []string) (counters []scheduler.Counter, tenantAttr bool, dropReason string) {
-	return nil, false, ""
+func reportRecords(report func(string, int64, ...attribute.KeyValue), outcome string, n int, lane attribute.KeyValue) {
+	if n > 0 {
+		report(counterRecords, int64(n), attribute.String(attrOutcome, outcome), lane)
+	}
 }
 
 // publishOutcome is the per-record result the relay loop uses to decide bookkeeping
@@ -141,8 +274,10 @@ const (
 	outcomeDeadLettered                              // poison exhausted MaxRetries; parked as status=failed
 )
 
-// relayTenant runs a single relay cycle for the given (tenant-scoped) context.
-func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID string) error {
+// relayTenant runs a single relay cycle for the given (tenant-scoped) context. The
+// cycle's role comes from the path it returns by, never from its error: a cycle that
+// lost the lead mid-batch still led, and its error wraps ErrNotLeader.
+func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID string) (tenantCycle, error) {
 	// Install a per-tenant lease scope so this tenant's DB and messaging handles are released
 	// at the end of its relay cycle rather than pinned until the whole fan-out job ends
 	// (ADR-032). This bounds the working set to ~one tenant, so a large multi-tenant relay
@@ -153,10 +288,10 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 
 	db, err := r.getDB(ctx)
 	if err != nil {
-		return fmt.Errorf("database not available: %w", err)
+		return tenantCycle{role: roleUnavailable}, fmt.Errorf("database not available: %w", err)
 	}
 	if db == nil {
-		return errors.New("database not available")
+		return tenantCycle{role: roleUnavailable}, errors.New("database not available")
 	}
 
 	// One relay instance per ledger drains at a time: the leader row is held FOR UPDATE
@@ -167,19 +302,20 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	if err != nil {
 		if errors.Is(err, ErrNotLeader) {
 			log.Debug().Msg("Outbox relay: another instance leads this ledger; skipping cycle")
-			return nil
+			return tenantCycle{role: roleFollower}, nil
 		}
-		return fmt.Errorf("leader: %w", err)
+		return tenantCycle{role: roleUnavailable}, fmt.Errorf("leader: %w", err)
 	}
 	defer func() { _ = lead.Release(ctx) }()
 
 	records, err := r.store.FetchPending(ctx, db, r.config.BatchSize)
 	if err != nil {
-		return fmt.Errorf("fetch failed: %w", err)
+		return tenantCycle{role: roleUnavailable}, fmt.Errorf("fetch failed: %w", err)
 	}
+	cycle := tenantCycle{role: roleLeader}
 	if len(records) == 0 {
 		// No undelivered work — an idle relay is not a failure even if a lane is down.
-		return nil
+		return cycle, nil
 	}
 
 	// Pre-flight each lane ONCE. A lane that reports itself unusable takes only its own
@@ -187,40 +323,40 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	// other, and a row on a lane this build does not know needs no broker at all.
 	downLanes, laneErr := r.preflight(ctx)
 
-	var res relayBatchResult
+	res := &cycle.res
 	// Outage path: a lane that is unreachable/not-ready still has pending events on it.
 	// Advance every such record's retry_count (the operator's "still retrying" signal)
 	// without a publish call, so an outage no longer freezes the count, and report the
 	// failure at the job level rather than silently succeeding forever. With no lane down
 	// the split hands every row back as runnable and outages nothing.
 	runnable, outaged := splitOnDownLanes(records, downLanes)
-	r.markOutage(ctx, log, db, lead, outaged, &res)
+	r.markOutage(ctx, log, db, lead, outaged, res)
 	if len(runnable) == 0 {
-		r.logCycle(log, tenantID, &res, len(records))
+		r.logCycle(log, tenantID, res, len(records))
 		// Leadership loss first, same priority the mixed-lane return below gives it: it is
 		// a database-side failure and wrapping it as the lane's outage would send an
 		// operator to the wrong system.
 		if res.leadershipErr != nil {
-			return res.leadershipErr
+			return cycle, res.leadershipErr
 		}
-		return laneErr
+		return cycle, laneErr
 	}
 
-	r.runRelayLoop(ctx, log, db, lead, runnable, &res)
+	r.runRelayLoop(ctx, log, db, lead, runnable, res)
 
-	r.logCycle(log, tenantID, &res, len(records))
+	r.logCycle(log, tenantID, res, len(records))
 	// Leadership loss first: it is a database-side failure, and wrapping it as a broker
 	// outage would send an operator to the wrong system. The next tick re-leads.
 	if res.leadershipErr != nil {
-		return res.leadershipErr
+		return cycle, res.leadershipErr
 	}
 	if laneErr != nil {
-		return laneErr
+		return cycle, laneErr
 	}
 	if res.outageErr != nil {
-		return brokerUnavailableErr(res.outageErr)
+		return cycle, brokerUnavailableErr(res.outageErr)
 	}
-	return nil
+	return cycle, nil
 }
 
 // preflight asks each lane whether it is usable this cycle, returning the lanes that are

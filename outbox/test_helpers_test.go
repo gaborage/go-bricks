@@ -12,6 +12,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/publishdoor"
@@ -523,6 +524,11 @@ type recordingSink struct {
 	calls map[string]int64
 }
 
+var (
+	_ relaySink = (*scheduler.Recorder)(nil)
+	_ relaySink = (*recordingSink)(nil)
+)
+
 // newRecordingSink declares r's Counters and settles whether its cycles carry the
 // tenant attribute, as RegisterJobs does.
 func newRecordingSink(t *testing.T, r *Relay) *recordingSink {
@@ -574,4 +580,23 @@ func (s *recordingSink) declares(name string, n int64, attrs []attribute.KeyValu
 		seen[kv.Key] = true
 	}
 	return true
+}
+
+// newWindowScheduler is a real scheduler Module: registering a Windowed job with it
+// proves the scheduler accepts the declaration, which a fake registrar never checks.
+func newWindowScheduler(t *testing.T) *scheduler.Module {
+	t.Helper()
+	sched := scheduler.NewModule()
+	if err := sched.Init(&app.ModuleDeps{
+		Logger: logger.New("disabled", true),
+		Config: &config.Config{Scheduler: config.SchedulerConfig{
+			Timezone: config.DefaultTimezone,
+			Timeout:  config.SchedulerTimeoutConfig{Shutdown: time.Second, SlowJob: time.Minute},
+			Summary:  config.SchedulerSummaryConfig{Window: time.Hour},
+		}},
+	}); err != nil {
+		t.Fatalf("scheduler Init: %v", err)
+	}
+	t.Cleanup(func() { _ = sched.Shutdown() })
+	return sched
 }
