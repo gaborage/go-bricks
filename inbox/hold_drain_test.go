@@ -317,6 +317,14 @@ func TestDeclaredSeriesRejectsUndeclaredCalls(t *testing.T) {
 			name: "an_undeclared_value", counter: "inbox.hold.drain.tenants", n: 1,
 			attrs: []attribute.KeyValue{attribute.String("outcome", "dead_lettered")},
 		},
+		{
+			name: "an_attribute_on_the_attribute_less_counter", counter: "inbox.hold.drain.over_max_age", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "deferred")},
+		},
+		{
+			name: "the_attribute_less_counter_without_attributes", counter: "inbox.hold.drain.over_max_age", n: 2,
+			wantSeries: "inbox.hold.drain.over_max_age", wantOK: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			series, ok := declaredSeries(tc.counter, tc.n, tc.attrs)

@@ -13129,10 +13129,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   lease spent mid-batch` at WARN, and `Hold exceeds max age` was one WARN per leased over-age tenant
   per pass, so a stuck tenant that keeps yielding drew one every pass.
 - after: the drain is a `scheduler.Windowed` job (C72.28). Its per-pass action line and skip line
-  are DEBUG, which the default `observability.logs.samplingrate` of 0.0 keeps out of OTLP; the scheduler writes one `Job 'inbox-hold-drain' window
-  summary` line per `scheduler.summary.window` per replica, and a `failing edge` line when the job
-  turns failing (`new` if it was clean, `grew` if it was already failing); the panic stack line
-  stays ERROR only on a run that writes an edge. A deferral, a lost lease and an over-age tenant are
+  are DEBUG, which the default `observability.logs.samplingrate` of 0.0 keeps out of OTLP; the
+  scheduler writes one `Job 'inbox-hold-drain' window summary` line per `scheduler.summary.window`
+  per replica, and a `failing edge` line when a run fails on a series the job was not already
+  failing on (`new` if it was clean, `grew` if it was already failing on others); the panic stack
+  line stays ERROR only on a run that writes an edge. A deferral, a lost lease and an over-age tenant are
   each a Fail, so the window line is WARN every window while any recurs. `Hold lease spent
   mid-batch` is DEBUG. `Hold exceeds max age` is at most one WARN per window per replica, naming
   the oldest over-age tenant and `over_max_age_tenants`, the count in the pass that wrote it. Three

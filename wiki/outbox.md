@@ -752,7 +752,7 @@ inbox:
     tablename: gobricks_inbox_hold   # tenant table is "<tablename>_tenant"
     draininterval: 5s      # how often the drain looks for due tenants
     maxbackoff: 5m         # cap on the per-tenant retry backoff
-    maxage: 1h             # held longer: counted; the oldest gets one WARN per summary window
+    maxage: 1h             # held longer: counted; the oldest gets at most one WARN per summary window
     leaseduration: 60s     # one drainer's hold on a tenant, and the replay's time bound
 ```
 
@@ -870,10 +870,10 @@ values on the event lines.
 
 A turn that ends in an error — a store error, a failed lease handback, a
 recovered panic — records no outcome; the error reaches the window line's
-`run.error`. A Fail marks the run failing: the first deferral, lost lease or
-over-age sighting writes an edge line (`new` if the job was clean, `grew` if it
-was already failing), and the window line is WARN every window while any Fail
-recurs. "Hold exceeds max age" is written at most once per window per replica:
+`run.error`. A Fail marks the run failing: a run that fails on a series the job
+was not already failing on writes an edge line (`new` if the job was clean,
+`grew` if it was already failing on others), and the window line is WARN every
+window while any Fail recurs. "Hold exceeds max age" is written at most once per window per replica:
 the first pass in a window to find a tenant past `maxage` names the oldest
 (`consumer`, `tenant`, `held_for`, `attempts`) and `over_max_age_tenants`, the
 count in the pass that wrote the WARN, while `over_max_age` counts every
