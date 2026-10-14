@@ -336,6 +336,33 @@ Schedule methods: `FixedRate(duration)`, `DailyAt(time)`,
 `MonthlyAt(dayOfMonth, time)`. Jobs run in UTC by default
 (`scheduler.timezone` overrides; `-` = host-local).
 
+**Windowed job.** A high-frequency `FixedRate` job can report typed
+outcomes through a `Recorder`; the scheduler then writes one action line
+per `scheduler.summary.window` (default 5m) instead of one per run, an
+edge line when the job turns failing, and one metric per Counter
+([scheduler.md](wiki/scheduler.md#windowed-jobs)):
+
+```go
+func (m *Module) RegisterJobs(reg app.JobRegistrar) error {
+	job := scheduler.Windowed(m.relay, scheduler.Counter{
+		Name:  "relay.published",
+		Attrs: []scheduler.AttrSet{{Key: "lane", Values: []string{"orders", "refunds"}}},
+	})
+	return reg.FixedRate("relay", job, 5*time.Second) // FixedRate only
+}
+
+func (m *Module) relay(ctx scheduler.JobContext, rec *scheduler.Recorder) error {
+	sent, failed, err := m.publish(ctx, "orders")
+	if err != nil {
+		return err // failing key run.error
+	}
+	lane := attribute.String("lane", "orders") // declared key and value only
+	rec.Count("relay.published", sent, lane)   // relay.published.ok
+	rec.Fail("relay.published", failed, lane)  // failed > 0: key relay.published{lane=orders}
+	return nil
+}
+```
+
 **Tenant-sweeping job.** A job context carries no tenant, so under
 per-tenant tenancy `JobContext.DB()`/`Messaging()` return nil. Sweep with
 `multitenant.ForEachTenant`: each tenant runs in its own lease scope,
