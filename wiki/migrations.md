@@ -12996,10 +12996,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   UTC-aligned window of the new `scheduler.summary.window` (`SCHEDULER_SUMMARY_WINDOW`; unset
   takes 5m, a negative value or one under 1m or not dividing 24h fails startup), an edge line when
   it turns failing, and one `Int64Counter` per Counter; its per-run line and run-lock skip drop to
-  DEBUG, and so does its panic stack line unless that run writes an edge line. Declarations are validated at registration, and a Counter name holding a default
-  log-filter needle is refused. Plain jobs and every other schedule door are unchanged, and a
-  manual trigger keeps its per-run action line. Adopting it moves alerts keyed on the per-run line to the window and edge lines:
-  a `Fail`-only run returns nil and counts as a success in `/_sys/job` and `job.execution.total`.
+  DEBUG, and so does its panic stack line unless that run writes an edge line. Declarations are
+  validated at registration: a Counter name holding a default log-filter needle is refused, and
+  so is one declaring more than 1,999 series, alone or with the other Windowed jobs that declare
+  it. Plain jobs and every other schedule door are unchanged, and a manual trigger keeps its
+  per-run action line. Adopting it moves alerts keyed on the per-run line to the window and edge
+  lines: a `Fail`-only run returns nil and counts as a success in `/_sys/job` and
+  `job.execution.total`.
   Details: [scheduler.md](scheduler.md#windowed-jobs).
 - ref: gaborage/go-bricks#2098 · [ADR-146](adr_146_windowed_job_summary.md) ·
   `scheduler/windowed.go`, `scheduler/window.go`, `config/scheduler_section.go`

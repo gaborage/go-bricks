@@ -701,18 +701,91 @@ func TestEdgesFollowTheFailingSetAcrossWindows(t *testing.T) {
 	assert.Equal(t, int64(0), windows[3].fields["edges.suppressed"])
 }
 
+func TestFailingSetSettlesAtWindowClose(t *testing.T) {
+	t.Run("fail_then_clean_window_reads_clean", func(t *testing.T) {
+		log := newRecordingLogger()
+		clock := newFakeClock(windowTestStart)
+		module := newWindowedTestScheduler(t, clock, withLogger(log))
+		require.NoError(t, module.FixedRate("relay", scriptedJob([][]string{{"a"}, {}, {}}, Counter{Name: "a"}), windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+
+		module.runJobBody(entry, triggerScheduled)
+		module.runJobBody(entry, triggerScheduled)
+		clock.Advance(windowTestWidth)
+		module.runJobBody(entry, triggerScheduled)
+
+		windows := log.windowLines()
+		require.NotEmpty(t, windows)
+		assert.Equal(t, "clean", windows[0].fields["job.state"], "a window that opened clean and ended clean is clean")
+	})
+
+	t.Run("inflight_only_window_keeps_the_set", func(t *testing.T) {
+		log := newRecordingLogger()
+		clock := newFakeClock(windowTestStart)
+		module := newWindowedTestScheduler(t, clock, withLogger(log), withSlowJobThreshold(100*time.Hour))
+		var run atomic.Int64
+		job := Windowed(func(_ JobContext, rec *Recorder) error {
+			if run.Add(1) == 2 {
+				clock.Advance(2 * windowTestWidth)
+			}
+			rec.Fail("a", 1)
+			return nil
+		}, Counter{Name: "a"})
+		require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+
+		module.runJobBody(entry, triggerScheduled)
+		clock.Advance(windowTestWidth)
+		module.runJobBody(entry, triggerScheduled)
+
+		windows := log.windowLines()
+		require.Len(t, windows, 2)
+		assert.Equal(t, int64(1), windows[1].fields["runs.inflight"])
+		assert.Equal(t, "failing", windows[1].fields["job.state"], "no run completed, so the set is unchanged")
+		assert.Len(t, log.edgeLines(), 1, "the same key failing again after an in-flight-only window is no new edge")
+	})
+
+	t.Run("partial_window_settles_too", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		require.NoError(t, module.FixedRate("relay", scriptedJob([][]string{{"a"}, {}}, Counter{Name: "a"}), windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+
+		module.runJobBody(entry, triggerScheduled)
+		module.runJobBody(entry, triggerScheduled)
+		require.NoError(t, module.Shutdown())
+
+		windows := log.windowLines()
+		require.Len(t, windows, 1)
+		partial, _ := windows[0].fields["window.partial"].(bool)
+		assert.True(t, partial)
+		assert.Equal(t, "clean", windows[0].fields["job.state"])
+	})
+}
+
 func TestEdgeLevelFollowsTheRunKeys(t *testing.T) {
 	tests := []struct {
 		name      string
 		run       func(JobContext, *Recorder) error
 		wantLevel string
+		wantErr   any
+		wantKeys  []string
+		wantOK    int64
+		wantFail  int64
 	}{
 		{name: "fail_only_warns", run: func(_ JobContext, rec *Recorder) error {
+			rec.Count("published", 2)
 			rec.Fail("published", 1)
 			return nil
-		}, wantLevel: "warn"},
-		{name: "error_is_error", run: func(JobContext, *Recorder) error { return errors.New("relay failed") }, wantLevel: "error"},
-		{name: "panic_is_error", run: func(JobContext, *Recorder) error { panic("boom") }, wantLevel: "error"},
+		}, wantLevel: "warn", wantKeys: []string{"published"}, wantOK: 2, wantFail: 1},
+		{
+			name: "error_is_error", run: func(JobContext, *Recorder) error { return errors.New("relay failed") },
+			wantLevel: "error", wantErr: "relay failed", wantKeys: []string{keyRunError},
+		},
+		{name: "panic_is_error", run: func(_ JobContext, rec *Recorder) error {
+			rec.Count("published", 3)
+			panic("boom")
+		}, wantLevel: "error", wantErr: "panic (type: string)", wantKeys: []string{keyRunPanic}, wantOK: 3},
 	}
 
 	for _, tt := range tests {
@@ -725,8 +798,15 @@ func TestEdgeLevelFollowsTheRunKeys(t *testing.T) {
 
 			edges := log.edgeLines()
 			require.Len(t, edges, 1)
-			assert.Equal(t, tt.wantLevel, edges[0].level)
-			assert.False(t, edges[0].viaContext, "the edge line goes through the module logger")
+			edge := edges[0]
+			assert.Equal(t, tt.wantLevel, edge.level)
+			assert.False(t, edge.viaContext, "the edge line goes through the module logger")
+			assert.Equal(t, "relay", edge.fields["job.id"])
+			assert.Equal(t, tt.wantErr, edge.fields["error"], "the run's own error, a panic by type only")
+			assert.Equal(t, tt.wantKeys, edge.fields["failing.keys"])
+			assert.Equal(t, 0, edge.fields["failing.keys.more"])
+			assert.Equal(t, tt.wantOK, edge.fields["published.ok"], "the run's own counts")
+			assert.Equal(t, tt.wantFail, edge.fields["published.failing"])
 		})
 	}
 }

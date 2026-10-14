@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -71,8 +72,8 @@ func TestWindowedRegistrationValidatesEveryRule(t *testing.T) {
 		{name: "no_values", run: noopRun, counters: []Counter{{Name: "published", Attrs: lane()}}, wantField: "counters[0].Attrs[0].Values"},
 		{name: "invalid_value", run: noopRun, counters: []Counter{{Name: "published", Attrs: lane("Main")}}, wantField: "counters[0].Attrs[0].Values"},
 		{name: "duplicate_value", run: noopRun, counters: []Counter{{Name: "published", Attrs: lane("a", "a")}}, wantField: "counters[0].Attrs[0].Values"},
-		{name: "over_two_thousand_series", run: noopRun, counters: []Counter{{Name: "published", Attrs: []AttrSet{
-			{Key: "lane", Values: valuesN(50)}, {Key: "kind", Values: valuesN(41)},
+		{name: "two_thousand_series", run: noopRun, counters: []Counter{{Name: "published", Attrs: []AttrSet{
+			{Key: "lane", Values: valuesN(50)}, {Key: "kind", Values: valuesN(40)},
 		}}}, wantField: "counters[0].Attrs"},
 	}
 
@@ -100,8 +101,8 @@ func TestWindowedRegistrationAcceptsEachLimit(t *testing.T) {
 			{Key: "k" + strings.Repeat("e", 31), Values: []string{strings.Repeat("v", 64)}},
 		}}}},
 		{name: "name_merely_starting_with_a_reserved_word", counters: []Counter{{Name: "runsheet"}}},
-		{name: "two_thousand_series", counters: []Counter{{Name: "published", Attrs: []AttrSet{
-			{Key: "lane", Values: valuesN(50)}, {Key: "kind", Values: valuesN(40)},
+		{name: "one_thousand_nine_hundred_ninety_nine_series", counters: []Counter{{Name: "published", Attrs: []AttrSet{
+			{Key: "lane", Values: valuesN(maxCounterSeries)},
 		}}}},
 	}
 
@@ -325,4 +326,45 @@ func TestRecorderNeverWritesIntoTheCallersAttributes(t *testing.T) {
 
 	assert.Equal(t, attribute.KeyValue{}, spare[:3][2], "job.id must not land in the caller's spare capacity")
 	assert.Equal(t, map[string]int64{"job.id=relay,kind=x,lane=a": 1}, counterPoints(t, mp, "published"))
+}
+
+func TestSharedCounterNameCapsTheCombinedSeries(t *testing.T) {
+	lane := func(n int) Counter {
+		return Counter{Name: "published", Attrs: []AttrSet{{Key: "lane", Values: valuesN(n)}}}
+	}
+	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart))
+	require.NoError(t, module.FixedRate("relay", Windowed(noopRun, lane(1000)), windowTestInterval))
+
+	err := module.FixedRate("drain", Windowed(noopRun, lane(1000)), windowTestInterval)
+
+	var validation *ValidationError
+	require.ErrorAs(t, err, &validation, "1,000 + 1,000 series on one instrument is over the cap")
+	assert.Equal(t, "counters[0].Name", validation.Field)
+	require.NoError(t, module.FixedRate("sweep", Windowed(noopRun, lane(999)), windowTestInterval),
+		"a refused registration claims nothing, and 1,000 + 999 fits")
+	assert.ErrorAs(t, module.FixedRate("audit", Windowed(noopRun, lane(1)), windowTestInterval), &validation,
+		"the accepted job's series count toward the shared total")
+}
+
+func TestWindowedCounterMetricsCarryExemplarsNamingTheJobSpan(t *testing.T) {
+	tp := obtest.NewTestTraceProvider()
+	mp := obtest.NewTestMeterProvider()
+	t.Cleanup(func() {
+		require.NoError(t, tp.Shutdown(context.Background()))
+		require.NoError(t, mp.Shutdown(context.Background()))
+	})
+	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart),
+		withTracer(tp.Tracer("test-scheduler")), withMeterProvider(mp.MeterProvider))
+	require.NoError(t, module.FixedRate("relay", Windowed(func(_ JobContext, rec *Recorder) error {
+		rec.Count("published", 1)
+		return nil
+	}, Counter{Name: "published"}), windowTestInterval))
+
+	module.runJobBody(registeredEntry(t, module, "relay"), triggerScheduled)
+
+	span := jobExecuteSpan(t, tp).SpanContext
+	exemplars := obtest.SumExemplars[int64](t, mp.Collect(t), "published")
+	require.NotEmpty(t, exemplars, "the Counter point carries no exemplar")
+	assert.Equal(t, span.SpanID().String(), hex.EncodeToString(exemplars[0].SpanID),
+		"the exemplar names the run's job.execute span")
 }

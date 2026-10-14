@@ -104,7 +104,7 @@ not shorter than the window logs one startup WARN and registers.
 | `edges.suppressed` | Edges past the two a window writes |
 | `recorder.late` | `Count`/`Fail` calls made after their run returned, dropped |
 | `<name>.ok`, `<name>.failing` | Per Counter: the sum of `Count` and of `Fail` |
-| `error`, `traceparent`, `correlation_id` | The last completed run's (`error` only when that run failed); with none, no `error`, `traceparent` `""` and a fresh `correlation_id` |
+| `error`, `traceparent`, `correlation_id` | The last completed run's (`error` only when that run returned an error or panicked); with none, no `error`, `traceparent` `""` and a fresh `correlation_id` |
 
 The line is WARN when `runs.failing > 0` or the window only skipped (`runs == 0`,
 `runs.skipped > 0`), otherwise INFO. Its keys are fixed by the declaration: at most 82 fields at
@@ -144,7 +144,8 @@ created at registration, with the declared attributes plus `job.id`. `Count` and
 
 **Validation** runs at registration and returns a `ValidationError` naming the field:
 
-- at most 32 Counters, each with at most 2,000 attribute combinations;
+- at most 32 Counters, each with at most 1,999 attribute combinations, counted across every
+  Windowed job that declares the same Counter name (they share one instrument);
 - names match `^[a-z][a-z0-9_.]{0,62}$`, are unique, and are neither equal to nor under
   (`<word>.`) `job`, `run`, `runs`, `window`, `failing`, `edges`, `log`, `recorder` or `undeclared`;
 - names hold no needle of `logger.DefaultFilterConfig()`, case-insensitively, so `x.token.count`

@@ -75,7 +75,11 @@ type Module struct {
 	location  *time.Location   // Loaded once in Init; nil means the "-" host-local sentinel
 	scheduler gocron.Scheduler // Lazy-initialized on first job registration
 	jobs      map[string]*jobEntry
-	mu        sync.RWMutex // Protects scheduler and jobs map
+	mu        sync.RWMutex // Protects scheduler, jobs and counterSeries
+
+	// counterSeries totals the series every registered Windowed job declares per
+	// Counter name: jobs sharing a name record on one instrument and one limit.
+	counterSeries map[string]int
 
 	// now is the clock behind run durations and summary windows; tests replace it.
 	now func() time.Time
@@ -93,6 +97,7 @@ func NewModule() *Module {
 
 	return &Module{
 		jobs:           make(map[string]*jobEntry),
+		counterSeries:  make(map[string]int),
 		now:            time.Now,
 		shutdownCtx:    shutdownCtx,
 		shutdownCancel: shutdownCancel,
@@ -352,6 +357,36 @@ func (m *Module) FixedRate(jobID string, job any, interval time.Duration) error 
 	})
 }
 
+// checkSharedSeries refuses a Windowed job whose Counter names, added to every
+// registered job's, would declare more series than one instrument holds. Must be
+// called with m.mu held.
+func (m *Module) checkSharedSeries(window *windowState) error {
+	if window == nil {
+		return nil
+	}
+	for i := range window.spec.counters {
+		c := &window.spec.counters[i]
+		if total := m.counterSeries[c.name] + c.series; total > maxCounterSeries {
+			return &ValidationError{
+				Field:   counterField(i, ".Name"),
+				Message: fmt.Sprintf("%q is declared by other Windowed jobs too; together they declare %d series, over %d", c.name, total, maxCounterSeries),
+			}
+		}
+	}
+	return nil
+}
+
+// claimSharedSeries records a registered Windowed job's series. Must be called with
+// m.mu held.
+func (m *Module) claimSharedSeries(window *windowState) {
+	if window == nil {
+		return
+	}
+	for i := range window.spec.counters {
+		m.counterSeries[window.spec.counters[i].name] += window.spec.counters[i].series
+	}
+}
+
 // newJobWindow validates a Windowed job and builds its summary window.
 func (m *Module) newJobWindow(jobID string, job *windowedJob) (*windowState, error) {
 	width := m.config.Scheduler.Summary.Window
@@ -490,6 +525,10 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 		}
 	}
 
+	if err := m.checkSharedSeries(window); err != nil {
+		return err
+	}
+
 	// Validate schedule configuration (defensive check)
 	// This provides defense in depth - public methods validate at API boundary,
 	// and this validates before scheduling with gocron
@@ -523,6 +562,7 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 	entry.gocronJob = gocronJob
 
 	m.jobs[jobID] = entry
+	m.claimSharedSeries(window)
 
 	m.logger.Info().
 		Str("jobID", jobID).

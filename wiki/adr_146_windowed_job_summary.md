@@ -69,9 +69,11 @@ failing is run state, not a metric attribute. The reserved `job` word keeps a Co
 `^[a-z][a-z0-9_.]{0,62}$`, unique, neither equal to nor under (`<word>.`) `job run runs window
 failing edges log recorder undeclared`, and holding no needle of `logger.DefaultFilterConfig()`
 (case-insensitive substring, as the filter matches); keys `^[a-z][a-z0-9_]{0,31}$`; values
-`^[a-z0-9_-]{1,64}$`, unique and non-empty; at most 2,000 series per Counter; and a zero
-`Summary.Window` (a config that skipped `config.Validate`) fails the registration, naming
-`scheduler.summary.window`. `Init` gains no check.
+`^[a-z0-9_-]{1,64}$`, unique and non-empty; at most 1,999 series per Counter name, counting every
+Windowed job that declares it, since jobs sharing a name record on one instrument and sdk/metric's
+default cardinality limit of 2,000 spends its last series on the `otel.metric.overflow` point;
+and a zero `Summary.Window` (a config that skipped `config.Validate`) fails the registration,
+naming `scheduler.summary.window`. `Init` gains no check.
 
 ## Alternatives considered
 
@@ -90,7 +92,8 @@ failing edges log recorder undeclared`, and holding no needle of `logger.Default
 - **Not breaking.** Additive: a new door, a new config key with a default, and plain jobs and every
   other schedule unchanged.
 - Window and edge lines take `traceparent` from `jobTraceparent` and `correlation_id` from the ID
-  `executeJob` mints once per run (#2095); rewiring the plain per-run line stays with #2095.
+  `executeJob` mints once per run, the rule #2095 set for the plain per-run line (shipped as
+  #2102, atom C72.26).
 
 **Residual risks:**
 
@@ -103,9 +106,12 @@ failing edges log recorder undeclared`, and holding no needle of `logger.Default
    as a success. The failing signal is the window and edge lines and the Counter metric.
 4. The window and edge writes are guarded, so a consumer logger that panics drops that line
    instead of unwinding window accounting.
+5. An operator-configured cardinality limit below 2,000 (`observability.metrics.cardinalitylimit`
+   or `OTEL_GO_X_CARDINALITY_LIMIT`) is not checked at registration: a Counter whose declared
+   series reach it records the rest into `otel.metric.overflow`.
 
 **Out of scope:** empty-window back-fill, histograms, the relay and drain adopters
-(#2099, #2100), the trace-identity and bridge-ordering fixes (#2095, #2096), and trace
+(#2099, #2100), the bridge-ordering fix (#2096), and trace
 selection (#2101).
 
 ## References

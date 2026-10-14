@@ -321,8 +321,9 @@ func listFailingKeys(set map[string]bool) (listed []string, more int) {
 
 // counterFields adds <name>.ok and <name>.failing for every declared Counter.
 func counterFields(event logger.LogEvent, spec *windowedSpec, ok, failing []int64) logger.LogEvent {
-	for i, c := range spec.counters {
-		event = event.Int64(c.name+".ok", ok[i]).Int64(c.name+".failing", failing[i])
+	for i := range spec.counters {
+		name := spec.counters[i].name
+		event = event.Int64(name+".ok", ok[i]).Int64(name+".failing", failing[i])
 	}
 	return event
 }

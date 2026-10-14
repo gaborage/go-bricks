@@ -31,7 +31,9 @@ type AttrSet struct {
 
 const (
 	maxWindowedCounters = 32
-	maxCounterSeries    = 2000
+	// One under sdk/metric's default cardinality limit (2,000), whose last series
+	// is the otel.metric.overflow point.
+	maxCounterSeries = 1999
 
 	keyRunError   = "run.error"
 	keyRunSlow    = "run.slow"
@@ -91,8 +93,9 @@ type windowedExecutor interface {
 }
 
 type counterSpec struct {
-	name  string
-	attrs map[string]map[string]bool
+	name   string
+	attrs  map[string]map[string]bool
+	series int // the attribute combinations it declares
 
 	// Set by instrument; a nil instrument records nothing.
 	instrument metric.Int64Counter
@@ -140,12 +143,12 @@ func compileWindowed(j *windowedJob) (*windowedSpec, error) {
 		if _, dup := spec.index[c.Name]; dup {
 			return nil, &ValidationError{Field: counterField(i, ".Name"), Message: fmt.Sprintf("%q is declared twice", c.Name)}
 		}
-		attrs, err := compileAttrSets(i, c.Attrs)
+		attrs, series, err := compileAttrSets(i, c.Attrs)
 		if err != nil {
 			return nil, err
 		}
 		spec.index[c.Name] = i
-		spec.counters = append(spec.counters, counterSpec{name: c.Name, attrs: attrs})
+		spec.counters = append(spec.counters, counterSpec{name: c.Name, attrs: attrs, series: series})
 	}
 	return spec, nil
 }
@@ -170,28 +173,28 @@ func validateCounterName(i int, name string, needles []string) error {
 	return nil
 }
 
-func compileAttrSets(i int, sets []AttrSet) (map[string]map[string]bool, error) {
-	attrs := make(map[string]map[string]bool, len(sets))
-	series := 1
+func compileAttrSets(i int, sets []AttrSet) (attrs map[string]map[string]bool, series int, err error) {
+	attrs = make(map[string]map[string]bool, len(sets))
+	series = 1
 	for j, set := range sets {
 		keyField := counterField(i, fmt.Sprintf(".Attrs[%d].Key", j))
 		if !attrKeyPattern.MatchString(set.Key) {
-			return nil, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q must match %s", set.Key, attrKeyPattern)}
+			return nil, 0, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q must match %s", set.Key, attrKeyPattern)}
 		}
 		if _, dup := attrs[set.Key]; dup {
-			return nil, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q is declared twice", set.Key)}
+			return nil, 0, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q is declared twice", set.Key)}
 		}
 		values, err := compileAttrValues(counterField(i, fmt.Sprintf(".Attrs[%d].Values", j)), set.Values)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		series *= len(set.Values)
 		if series > maxCounterSeries {
-			return nil, &ValidationError{Field: counterField(i, ".Attrs"), Message: fmt.Sprintf("must declare at most %d series", maxCounterSeries)}
+			return nil, 0, &ValidationError{Field: counterField(i, ".Attrs"), Message: fmt.Sprintf("must declare at most %d series", maxCounterSeries)}
 		}
 		attrs[set.Key] = values
 	}
-	return attrs, nil
+	return attrs, series, nil
 }
 
 func compileAttrValues(field string, declared []string) (map[string]bool, error) {
