@@ -3,6 +3,7 @@ package inbox
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -473,6 +474,30 @@ func TestRegisterJobsAddsTheHoldDrain(t *testing.T) {
 	// The module has no replayer source here, so a pass would panic on its first
 	// line: an error back means Execute refused without running the drain.
 	assert.Error(t, executor.Execute(drainCtx(nil)), "a Windowed job runs only under the scheduler")
+}
+
+// TestInitBuildsTheHoldDrainOnTheSummaryWindow pins where the over-age WARN's
+// window comes from: scheduler.summary.window, the width the scheduler's own
+// window lines use, with no window claimed before the first WARN.
+func TestInitBuildsTheHoldDrainOnTheSummaryWindow(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) {
+		db := probeReadyDB()
+		db.ExpectQuery(`SELECT tenant_id`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+		return db, nil
+	}, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Scheduler: config.SchedulerConfig{Summary: config.SchedulerSummaryConfig{Window: 10 * time.Minute}},
+		Inbox: config.InboxConfig{
+			Enabled: true, Tenancy: config.TenancyShared,
+			Hold: config.InboxHoldConfig{Enabled: true},
+		},
+	}
+	require.NoError(t, m.Init(deps))
+
+	assert.Equal(t, 10*time.Minute, m.holdDrain.window)
+	assert.Equal(t, int64(math.MinInt64), m.holdDrain.warnedWindow)
 }
 
 // TestRegisterJobsRegistersTheHoldDrainWithTheScheduler pins the drain's Counter
