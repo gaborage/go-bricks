@@ -573,15 +573,10 @@ func TestOTelBridgeUnparsedCallerTraceFieldsNeverReplaceSpanContext(t *testing.T
 		FieldSpanID:   attribute.StringValue("fedcba9876543210"),
 		"trace_flags": attribute.Int64Value(1),
 	}
-	got := map[string][]attribute.Value{}
-	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
-		if _, tracked := want[string(kv.Key)]; tracked {
-			got[string(kv.Key)] = append(got[string(kv.Key)], kv.Value)
-		}
-		return true
-	})
 	for key, val := range want {
-		assert.Equal(t, []attribute.Value{val}, got[key], "%s must carry the span context's value exactly once", key)
+		got, found := recordAttrValue(&rec, key)
+		require.True(t, found, "%s missing", key)
+		assert.Equal(t, val, got, "%s must carry the span context's value", key)
 	}
 }
 

@@ -563,11 +563,9 @@ func bridgeLine(t *testing.T, n int, extra map[string]any) []byte {
 // caller fields outnumber the attribute cap. Losing log.type would default it to trace,
 // where the 0.0 sampling rate drops it, so every emit must reach the action exporter.
 func TestOTelBridgeOversizeActionLineRoutesToActionProcessor(t *testing.T) {
-	actionExp, traceExp := &fakeLogExporter{}, &fakeLogExporter{}
-	dual := NewDualModeLogProcessor(sdklog.NewSimpleProcessor(actionExp), sdklog.NewSimpleProcessor(traceExp), 0)
-	logProvider := sdklog.NewLoggerProvider(sdklog.WithProcessor(dual))
-	t.Cleanup(func() {
-		require.NoError(t, logProvider.Shutdown(context.Background()))
+	traceExp := &fakeLogExporter{}
+	logProvider, actionExp := wireProvider(t, func(_ *provider, exp sdklog.Exporter) sdklog.Processor {
+		return NewDualModeLogProcessor(sdklog.NewSimpleProcessor(exp), sdklog.NewSimpleProcessor(traceExp), 0)
 	})
 	bridge := logger.NewOTelBridge(logProvider)
 	require.NotNil(t, bridge)

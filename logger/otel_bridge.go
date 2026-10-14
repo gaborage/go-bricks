@@ -112,11 +112,8 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 }
 
 // emitRemapWarning emits a WARN naming the remapped keys, once per bridge
-// instance (the framework wires a single bridge per process).
-// It builds the record directly and emits via b.logger — never through zerolog
-// (the bridge sits inside zerolog's writer chain; logging through it recurses).
-// Because it bypasses the SensitiveDataFilter it carries key names only, never
-// field values.
+// instance (the framework wires a single bridge per process). It carries key
+// names only, never field values.
 func (b *OTelBridge) emitRemapWarning(ctx context.Context, remapped []string) {
 	sort.Strings(remapped)
 	keys := strings.Join(remapped, ",")
@@ -124,35 +121,32 @@ func (b *OTelBridge) emitRemapWarning(ctx context.Context, remapped []string) {
 	// returns the string unchanged when nothing was cut.
 	keys = strings.ToValidUTF8(keys[:min(len(keys), maxRemapWarnKeysLen)], "")
 
-	var rec log.Record
-	rec.SetTimestamp(time.Now())
-	rec.SetSeverity(log.SeverityWarn)
-	rec.SetSeverityText(LevelWarn)
-	rec.SetBody(attribute.StringValue(
-		"log fields shadow reserved resource attribute namespaces; remapped with \"" + callerAttrPrefix + "\" prefix"))
-	rec.AddAttributes(
-		attribute.String("reserved.keys", keys),
-		attribute.String(logTypeAttrKey, "trace"),
-	)
-	b.logger.Emit(ctx, rec)
+	b.emitWarning(ctx,
+		"log fields shadow reserved resource attribute namespaces; remapped with \""+callerAttrPrefix+"\" prefix",
+		attribute.String("reserved.keys", keys))
 }
 
 // emitTruncationWarning emits a WARN carrying the number of caller fields the
 // attribute cap dropped, once per bridge instance, on the first truncated
-// record. Like emitRemapWarning it emits via b.logger, never zerolog, and
-// because it bypasses the SensitiveDataFilter it carries the count only, never
-// a caller key or value.
+// record. It carries the count only, never a caller key or value.
 func (b *OTelBridge) emitTruncationWarning(ctx context.Context, dropped int) {
+	b.emitWarning(ctx,
+		"log fields exceed the "+strconv.Itoa(maxRecordAttributes)+"-attribute record cap; the lexicographically last were dropped",
+		attribute.Int(droppedAttrsKey, dropped))
+}
+
+// emitWarning builds a trace-routed WARN record directly and emits it via
+// b.logger — never through zerolog (the bridge sits inside zerolog's writer
+// chain; logging through it recurses). It bypasses the SensitiveDataFilter, so
+// callers must never pass caller field values.
+func (b *OTelBridge) emitWarning(ctx context.Context, body string, attrs ...attribute.KeyValue) {
 	var rec log.Record
 	rec.SetTimestamp(time.Now())
 	rec.SetSeverity(log.SeverityWarn)
 	rec.SetSeverityText(LevelWarn)
-	rec.SetBody(attribute.StringValue(
-		"log fields exceed the " + strconv.Itoa(maxRecordAttributes) + "-attribute record cap; the lexicographically last were dropped"))
-	rec.AddAttributes(
-		attribute.String(logTypeAttrKey, "trace"),
-		attribute.Int(droppedAttrsKey, dropped),
-	)
+	rec.SetBody(attribute.StringValue(body))
+	rec.AddAttributes(attribute.String(logTypeAttrKey, "trace"))
+	rec.AddAttributes(attrs...)
 	b.logger.Emit(ctx, rec)
 }
 
@@ -204,8 +198,8 @@ func buildLogRecord(entry map[string]any) (rec log.Record, ctx context.Context, 
 		rec.AddAttributes(attribute.String(logTypeAttrKey, "trace"))
 	}
 
-	// - String format (trace_id, span_id) enables text-based queries
-	// - Int format (trace_flags) enables fallback enrichment of canonical fields
+	// String trace_id/span_id enable text queries; Int trace_flags enables
+	// fallback enrichment of the canonical fields.
 	if hasTraceContext {
 		rec.AddAttributes(
 			attribute.String(FieldTraceID, traceIDStr),
