@@ -163,8 +163,8 @@ func (discardSink) Fail(string, int64, ...attribute.KeyValue)  {}
 
 // relayCounters declares the relay's window Counters over its tenants and lanes.
 // outbox.relay.cycles carries the tenant attribute only when the scheduler can declare
-// the tenant list; otherwise dropReason says why, except for the single "" key of a
-// single-tenant or shared ledger, which has no tenant to name.
+// the tenant list; otherwise dropReason says why, except for a ledger on the control-plane
+// key "", which has no tenant to name.
 func relayCounters(tenants, lanes []string) (counters []scheduler.Counter, tenantAttr bool, dropReason string) {
 	cycles := []scheduler.AttrSet{{Key: attrRole, Values: cycleRoles}}
 	tenantAttr, dropReason = declarableTenants(tenants)

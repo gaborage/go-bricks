@@ -1200,8 +1200,7 @@ func TestRelayRunReportsALeaderCycleOnTheSink(t *testing.T) {
 }
 
 // TestRelayRunReportsEachRolePathOnTheSink pins the role every relayTenant return takes,
-// whether the cycle counts as a success or a failure, and that run's error is the one the
-// path returned. Every path after a successful fetch led, whatever it then returned.
+// whether the cycle counts as a success or a failure, and that run's error is unchanged.
 func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1215,7 +1214,9 @@ func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
 				r.getDB = func(context.Context) (dbtypes.Interface, error) { return nil, errors.New("pool exhausted") }
 			},
 			calls: map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
-			check: func(t *testing.T, err error) { assert.ErrorContains(t, err, "database not available: pool exhausted") },
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": database not available: pool exhausted`)
+			},
 		},
 		{
 			name: "nil_database",
@@ -1223,7 +1224,9 @@ func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
 				r.getDB = func(context.Context) (dbtypes.Interface, error) { return nil, nil }
 			},
 			calls: map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
-			check: func(t *testing.T, err error) { assert.ErrorContains(t, err, "database not available") },
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": database not available`)
+			},
 		},
 		{
 			name:    "another_instance_leads",
@@ -1235,7 +1238,9 @@ func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
 			name:    "lead_error",
 			arrange: func(_ *Relay, store *fakeStore, _ *fakeShipper) { store.LeadErr = errors.New("lock timeout") },
 			calls:   map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
-			check:   func(t *testing.T, err error) { assert.ErrorContains(t, err, "leader: lock timeout") },
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": leader: lock timeout`)
+			},
 		},
 		{
 			name: "fetch_error",
@@ -1243,7 +1248,9 @@ func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
 				store.FetchPendingErr = errors.New("relation missing")
 			},
 			calls: map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
-			check: func(t *testing.T, err error) { assert.ErrorContains(t, err, "fetch failed: relation missing") },
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": fetch failed: relation missing`)
+			},
 		},
 		{
 			name:    "empty_batch",
@@ -1265,7 +1272,9 @@ func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
 				"count outbox.relay.led":                              1,
 				"fail outbox.relay.records{lane=amqp,outcome=failed}": 1,
 			},
-			check: func(t *testing.T, err error) { assert.ErrorContains(t, err, "broker unreachable") },
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": broker unreachable`)
+			},
 		},
 		{
 			name: "lead_lost_mid_cycle",
@@ -1281,7 +1290,11 @@ func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
 				"count outbox.relay.led":                                  1,
 				"count outbox.relay.records{lane=amqp,outcome=published}": 1,
 			},
-			check: func(t *testing.T, err error) { assert.ErrorIs(t, err, ErrNotLeader) },
+			check: func(t *testing.T, err error) {
+				require.ErrorIs(t, err, ErrNotLeader)
+				assert.EqualError(t, err, `outbox relay: tenant "": outbox: another relay instance leads this ledger: `+
+					`lost the leader row mid-cycle, database unreachable or the transaction was ended: connection reset`)
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -1328,8 +1341,8 @@ func TestRelayRunReportsEachTenantUnderItsOwnRole(t *testing.T) {
 	}, sink.calls)
 }
 
-// TestRelayRunReportsEarlierTenantsBeforeALaterOnePanics pins the reporting order: the
-// relay recovers no panic, so the scheduler keeps only what reached the sink before it.
+// TestRelayRunReportsEarlierTenantsBeforeALaterOnePanics pins that each tenant's counts
+// reach the sink before the next tenant runs.
 func TestRelayRunReportsEarlierTenantsBeforeALaterOnePanics(t *testing.T) {
 	r, _, _ := newRelayWithLanes(&fakeStore{})
 	r.tenants = []string{"t1", "t2"}
@@ -1391,8 +1404,7 @@ func TestRelayRunReportsUnrecordedDeliveries(t *testing.T) {
 }
 
 // TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan pins the declaration at its
-// edges, and registers each one with a real scheduler, which refuses a declaration a
-// fake would accept.
+// edges, each registered with a real scheduler.
 func TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan(t *testing.T) {
 	tenantsNamed := func(n int) []string {
 		ids := make([]string, n)
@@ -1407,7 +1419,7 @@ func TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan(t *testing.T) {
 		tenantAttr bool
 		reason     string
 	}{
-		{name: "single_or_shared_key", tenants: []string{""}},
+		{name: "control_plane_key", tenants: []string{""}},
 		{name: "static_tenants", tenants: []string{"t1", "t2"}, tenantAttr: true},
 		{name: "key_at_64_bytes", tenants: []string{strings.Repeat("k", 64)}, tenantAttr: true},
 		{name: "key_at_65_bytes", tenants: []string{strings.Repeat("k", 65)}, reason: "does not match ^[a-z0-9_-]{1,64}$"},

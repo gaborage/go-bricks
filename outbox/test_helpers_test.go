@@ -529,8 +529,7 @@ var (
 	_ relaySink = (*recordingSink)(nil)
 )
 
-// newRecordingSink declares r's Counters and settles whether its cycles carry the
-// tenant attribute, as RegisterJobs does.
+// newRecordingSink declares r's Counters and sets r.tenantAttr from that declaration.
 func newRecordingSink(t *testing.T, r *Relay) *recordingSink {
 	t.Helper()
 	counters, tenantAttr, _ := relayCounters(r.tenants, r.laneOrder)
