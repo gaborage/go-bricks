@@ -2,17 +2,21 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
@@ -20,6 +24,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // TestSchedulerModuleName verifies the module name
@@ -247,6 +252,130 @@ func TestJobExecutionPanicEmitsActionLogSummary(t *testing.T) {
 
 	// Exactly one summary line for this job's single execution — no double-emit.
 	assert.Equal(t, 1, strings.Count(out, `"job.id":"panic-job"`))
+}
+
+// jobSummaryFields decodes the run's summary line, the only line keyed job.id.
+func jobSummaryFields(t *testing.T, out, jobID string) map[string]any {
+	t.Helper()
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal([]byte(logLineWith(t, out, `"job.id":"`+jobID+`"`)), &fields))
+	return fields
+}
+
+func assertMintedCorrelationID(t *testing.T, got any) {
+	t.Helper()
+	id, _ := got.(string)
+	parsed, err := uuid.Parse(id)
+	require.NoError(t, err, "correlation_id %q must parse as a UUID", id)
+	assert.NotEqual(t, uuid.Nil, parsed, "correlation_id must not be all zeros")
+}
+
+// TestJobSummaryTraceparentCarriesTheSpanFlags pins traceparent to the run's real
+// span context: an unsampled run must not claim -01, and correlation_id is the
+// framework id, never the OTel trace id.
+func TestJobSummaryTraceparentCarriesTheSpanFlags(t *testing.T) {
+	tests := []struct {
+		name      string
+		sampler   sdktrace.Sampler
+		wantFlags string
+	}{
+		{name: "never_sample", sampler: sdktrace.NeverSample(), wantFlags: "00"},
+		{name: "always_sample", sampler: sdktrace.AlwaysSample(), wantFlags: "01"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(tt.sampler))
+			t.Cleanup(func() { require.NoError(t, tp.Shutdown(context.Background())) })
+
+			out := captureStdout(t, func() {
+				module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
+				runJobOnce(module, "flags-job", &slowJob{})
+				require.NoError(t, module.Shutdown())
+			})
+
+			line := jobSummaryFields(t, out, "flags-job")
+			traceID, _ := line[logger.FieldTraceID].(string)
+			spanID, _ := line[logger.FieldSpanID].(string)
+			require.NotEmpty(t, traceID)
+			require.NotEmpty(t, spanID)
+			assert.Equal(t, "00-"+traceID+"-"+spanID+"-"+tt.wantFlags, line["traceparent"])
+			assert.NotEqual(t, traceID, line[logger.FieldCorrelationID])
+			assertMintedCorrelationID(t, line[logger.FieldCorrelationID])
+		})
+	}
+}
+
+// TestJobSummaryWithoutAValidSpanContext pins the untraced run: traceparent stays
+// on the line as "", and correlation_id is a minted framework id, never zeros.
+func TestJobSummaryWithoutAValidSpanContext(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []testSchedulerOption
+	}{
+		{name: "noop_tracer", opts: []testSchedulerOption{withTracer(noop.NewTracerProvider().Tracer("test-scheduler"))}},
+		{name: "no_tracer"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				module, _ := newTestScheduler(t, 5*time.Second, tt.opts...)
+				runJobOnce(module, "untraced-job", &slowJob{})
+				require.NoError(t, module.Shutdown())
+			})
+
+			line := jobSummaryFields(t, out, "untraced-job")
+			require.Contains(t, line, "traceparent")
+			assert.Equal(t, "", line["traceparent"])
+			assertMintedCorrelationID(t, line[logger.FieldCorrelationID])
+		})
+	}
+}
+
+// TestJobSummaryCorrelationIDOnBothCallSites drives executeJob directly, so the
+// run's context can carry a framework id, and covers the normal-return and
+// panic-recovery summary calls.
+func TestJobSummaryCorrelationIDOnBothCallSites(t *testing.T) {
+	const contextID = "job-run-correlation-id"
+
+	tests := []struct {
+		name      string
+		job       Executor
+		contextID string
+	}{
+		{name: "normal_return_context_id", job: &slowJob{}, contextID: contextID},
+		{name: "panic_recovery_context_id", job: &panicJob{}, contextID: contextID},
+		{name: "normal_return_minted", job: &slowJob{}},
+		{name: "panic_recovery_minted", job: &panicJob{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				module, _ := newTestScheduler(t, 5*time.Second)
+
+				ctx := context.Background()
+				if tt.contextID != "" {
+					ctx = gobrickstrace.WithTraceID(ctx, tt.contextID)
+				}
+				entry := &jobEntry{
+					job:      tt.job,
+					metadata: &JobMetadata{JobID: "correlation-job", ScheduleType: "fixed-rate"},
+				}
+				module.executeJob(entry, newJobContext(ctx, entry.metadata.JobID, "manual", module.logger, nil, nil, module.config))
+
+				require.NoError(t, module.Shutdown())
+			})
+
+			got := jobSummaryFields(t, out, "correlation-job")[logger.FieldCorrelationID]
+			if tt.contextID != "" {
+				assert.Equal(t, tt.contextID, got)
+				return
+			}
+			assertMintedCorrelationID(t, got)
+		})
+	}
 }
 
 // TestJobSkippedDuringShutdown verifies jobs skip execution when shutdown is triggered
