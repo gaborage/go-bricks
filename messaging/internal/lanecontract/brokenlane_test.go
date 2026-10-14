@@ -164,6 +164,7 @@ func TestBrokenLaneFailsEveryTelemetryAssertion(t *testing.T) {
 	assert.Contains(t, failures, "the span is named <destination> receive on both lanes")
 	assert.Contains(t, failures, "a consume span is Consumer-kind")
 	assert.Contains(t, failures, "the consume span is a root")
+	assert.Contains(t, failures, "a normal delivery's consume span carries no link")
 	assert.Contains(t, failures, "span attribute messaging.system has the wrong value")
 	assert.Contains(t, failures, "not-rabbitmq", "the failure names the value the lane actually set")
 	// The broken lane reports 9999 bytes for a seven-byte body. Without this the

@@ -58,6 +58,7 @@ func AssertTelemetry(t T, lane *Lane, scenario *Scenario, observed *Observed) {
 	assert.Equal(t, oteltrace.SpanKindConsumer, span.SpanKind, "a consume span is Consumer-kind")
 	assert.False(t, span.Parent.IsValid(),
 		"the consume span is a root: re-parenting onto the producer is out of scope, so its exemplar names an orphan trace")
+	assert.Empty(t, span.Links, "a normal delivery's consume span carries no link")
 
 	assertSpanAttributes(t, lane, scenario, &span)
 	assertSpanErrorByType(t, scenario, &span)

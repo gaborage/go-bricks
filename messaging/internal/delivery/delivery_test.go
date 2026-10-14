@@ -469,6 +469,39 @@ func TestRunStartsARootSpanWhenOnlyAW3CHeaderTraveled(t *testing.T) {
 	assert.Equal(t, testTraceParent, tp)
 }
 
+// TestRunNestsTheConsumeSpanUnderTheCallerByDefault pins the default path the
+// replay flag must not touch: a caller's span stays the parent, and nothing is
+// linked.
+func TestRunNestsTheConsumeSpanUnderTheCallerByDefault(t *testing.T) {
+	h := newHarness(t)
+	callerCtx, caller := otel.Tracer("test-caller").Start(context.Background(), "caller")
+
+	Run(callerCtx, h.request(succeedingHandler))
+	caller.End()
+
+	consume := obtest.NewSpanCollector(t, h.exporter).WithName(testQueue + " receive").AssertCount(1).First()
+	assert.True(t, caller.SpanContext().Equal(consume.Parent), "the caller's span is the parent")
+	assert.Empty(t, consume.Links, "the default path links nothing")
+}
+
+// TestRunNewRootStartsARootLinkedToTheCaller pins the replay door: the consume
+// span is a root, and the caller's span is reachable through its one link.
+func TestRunNewRootStartsARootLinkedToTheCaller(t *testing.T) {
+	h := newHarness(t)
+	callerCtx, caller := otel.Tracer("test-caller").Start(context.Background(), "caller")
+
+	req := h.request(succeedingHandler)
+	req.NewRoot = true
+	Run(callerCtx, req)
+	caller.End()
+
+	consume := obtest.NewSpanCollector(t, h.exporter).WithName(testQueue + " receive").AssertCount(1).First()
+	assert.False(t, consume.Parent.IsValid(), "NewRoot starts a root")
+	assert.Equal(t, trace.SpanKindConsumer, consume.SpanKind)
+	require.Len(t, consume.Links, 1, "NewRoot links the caller's span")
+	assert.True(t, caller.SpanContext().Equal(consume.Links[0].SpanContext), "the link names the caller's span")
+}
+
 func TestRunStartsOneConsumerSpanPerMessage(t *testing.T) {
 	h := newHarness(t)
 

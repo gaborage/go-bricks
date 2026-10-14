@@ -495,6 +495,7 @@ func (r *consumerRunner) replay(ctx context.Context, msg *HeldMessage) error {
 				Properties: msg.Properties,
 			})
 		},
+		NewRoot: true,
 		LogOutcome: func(res *delivery.Result) {
 			r.logReplayOutcome(res, msg)
 		},
