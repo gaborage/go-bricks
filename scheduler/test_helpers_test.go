@@ -64,6 +64,10 @@ func withTimezone(tz string) testSchedulerOption {
 	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timezone = tz }
 }
 
+func withShutdownTimeout(timeout time.Duration) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timeout.Shutdown = timeout }
+}
+
 func withSummaryWindow(window time.Duration) testSchedulerOption {
 	return func(d *app.ModuleDeps) { d.Config.Scheduler.Summary.Window = window }
 }
@@ -88,12 +92,12 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// newWindowedTestScheduler builds a scheduler whose clock and summary window the
-// test owns. Tests drive runs through runJobBody, so register windowed jobs with an
+// newWindowedTestScheduler builds a scheduler with a windowTestWidth summary window
+// on the test's clock. Tests drive runs through runJobBody, so register windowed jobs with an
 // interval no real tick reaches during the test.
-func newWindowedTestScheduler(t *testing.T, window time.Duration, clock *fakeClock, opts ...testSchedulerOption) *Module {
+func newWindowedTestScheduler(t *testing.T, clock *fakeClock, opts ...testSchedulerOption) *Module {
 	t.Helper()
-	module, _ := newTestScheduler(t, 5*time.Second, append([]testSchedulerOption{withSummaryWindow(window)}, opts...)...)
+	module, _ := newTestScheduler(t, 5*time.Second, append([]testSchedulerOption{withSummaryWindow(windowTestWidth)}, opts...)...)
 	module.now = clock.Now
 	return module
 }

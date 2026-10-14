@@ -450,6 +450,7 @@ var derivedDefaultKeys = []string{
 	"cache.redis.minretrybackoff",
 	"cache.redis.maxretrybackoff",
 	"keystore.secretminlength",
+	"scheduler.summary.window",
 	"scheduler.timeout.shutdown",
 	"scheduler.timeout.slowjob",
 	"server.bodylimit",

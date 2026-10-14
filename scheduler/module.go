@@ -39,6 +39,9 @@ const (
 	jobPanicTypeAttr    = "job.panic_type"
 	jobScheduleTypeAttr = "job.schedule_type"
 
+	triggerScheduled = "scheduled"
+	logLevelWarn     = "warn"
+
 	// Error message for job type validation
 	errJobInterfaceMsg = "must implement scheduler.Executor interface, got %T"
 )
@@ -210,6 +213,7 @@ func (m *Module) Shutdown() error {
 	scheduler := m.scheduler
 	m.scheduler = nil
 	m.mu.Unlock()
+	defer m.sealWindows()
 
 	m.logger.Info().Msg("Initiating graceful scheduler shutdown")
 
@@ -339,10 +343,43 @@ func (m *Module) FixedRate(jobID string, job any, interval time.Duration) error 
 		}
 	}
 
-	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
+	var window *windowState
+	if wj, ok := schedulerJob.(windowedExecutor); ok {
+		if window, err = m.newJobWindow(jobID, wj.windowed()); err != nil {
+			return err
+		}
+	}
+
+	if err := m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:     ScheduleTypeFixedRate,
 		Interval: interval,
-	})
+	}, window); err != nil {
+		return err
+	}
+	if window != nil && interval >= window.width {
+		m.logger.Warn().
+			Str("jobID", jobID).
+			Dur("interval", interval).
+			Dur("window", window.width).
+			Msg("Windowed job interval is not shorter than scheduler.summary.window")
+	}
+	return nil
+}
+
+// newJobWindow validates a Windowed job and builds its summary window.
+func (m *Module) newJobWindow(jobID string, job *windowedJob) (*windowState, error) {
+	width := m.config.Scheduler.Summary.Window
+	if width <= 0 {
+		return nil, &ValidationError{
+			Field:   "scheduler.summary.window",
+			Message: "must be positive; run the config through config.Validate",
+		}
+	}
+	spec, err := compileWindowed(job)
+	if err != nil {
+		return nil, err
+	}
+	return newWindowState(jobID, spec, width), nil
 }
 
 // DailyAt implements JobRegistrar per FR-004. localTime is interpreted in the
@@ -359,7 +396,7 @@ func (m *Module) DailyAt(jobID string, job any, localTime time.Time) error {
 		Type:   ScheduleTypeDaily,
 		Hour:   hour,
 		Minute: minute,
-	})
+	}, nil)
 }
 
 // WeeklyAt implements JobRegistrar per FR-005. localTime is interpreted in the
@@ -377,7 +414,7 @@ func (m *Module) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTi
 		Hour:      hour,
 		Minute:    minute,
 		DayOfWeek: dayOfWeek,
-	})
+	}, nil)
 }
 
 // HourlyAt implements JobRegistrar per FR-006. The minute is taken within the
@@ -399,7 +436,7 @@ func (m *Module) HourlyAt(jobID string, job any, minute int) error {
 	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:   ScheduleTypeHourly,
 		Minute: minute,
-	})
+	}, nil)
 }
 
 // MonthlyAt implements JobRegistrar per FR-007. localTime is interpreted in the
@@ -425,13 +462,20 @@ func (m *Module) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time
 		Hour:       hour,
 		Minute:     minute,
 		DayOfMonth: dayOfMonth,
-	})
+	}, nil)
 }
 
 // registerJob is the internal method that handles job registration and scheduler setup.
 // Per FR-022: Validates unique job IDs.
 // Per FR-016: Lazy-initializes scheduler on first job registration.
-func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfiguration) error {
+func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfiguration, window *windowState) error {
+	if _, ok := job.(windowedExecutor); ok && schedule.Type != ScheduleTypeFixedRate {
+		return &ValidationError{
+			Field:   "job",
+			Message: "is Windowed. Register it with FixedRate.",
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -466,6 +510,7 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 	entry := &jobEntry{
 		job:      job,
 		schedule: schedule,
+		window:   window,
 		metadata: &JobMetadata{
 			JobID:          jobID,
 			ScheduleType:   string(schedule.Type),
@@ -577,7 +622,7 @@ func (m *Module) createJobWrapper(entry *jobEntry) func() {
 	return func() {
 		m.wg.Add(1)
 		defer m.wg.Done()
-		m.runJobBody(entry, "scheduled")
+		m.runJobBody(entry, triggerScheduled)
 	}
 }
 
@@ -601,9 +646,15 @@ func (m *Module) runJobBody(entry *jobEntry, triggerType string) {
 	default:
 	}
 
-	// Overlapping execution prevention per FR-026.
-	if !entry.tryLock() {
-		m.logger.Warn().
+	// Overlapping execution prevention per FR-026. A Windowed job's window line
+	// counts its scheduled skips, so the per-trigger line drops to DEBUG.
+	window := entry.windowFor(triggerType)
+	if !m.acquire(entry, window) {
+		skipped := m.logger.Warn()
+		if window != nil {
+			skipped = m.logger.Debug()
+		}
+		skipped.
 			Str("jobID", entry.metadata.JobID).
 			Str("triggerType", triggerType).
 			Msg("Job trigger skipped - job is already running")
@@ -653,6 +704,17 @@ func (m *Module) runJobBody(entry *jobEntry, triggerType string) {
 	m.executeJob(entry, jobCtx)
 }
 
+// acquire takes the per-job run lock. A scheduled trigger of a Windowed job rolls
+// its window first, so the first event past a boundary closes it.
+func (m *Module) acquire(entry *jobEntry, window *windowState) bool {
+	if window == nil {
+		return entry.tryLock()
+	}
+	acquired, closed := window.trigger(m.now(), entry.tryLock)
+	m.logWindow(closed)
+	return acquired
+}
+
 // executeJob executes the job with panic recovery, metadata updates, and observability instrumentation.
 // Per FR-021: Recover panics, log with stack trace, mark as failed.
 // Per FR-017 to FR-020: Create spans, record metrics, propagate trace context.
@@ -682,12 +744,16 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	// both summary calls report the same value.
 	correlationID := gobrickstrace.EnsureTraceID(ctx)
 
+	window := entry.windowFor(ctx.TriggerType())
+	rec := entry.newRecorder(window)
+
 	start := m.now()
 	var executionStatus string
 
 	// Panic recovery per FR-021
 	defer func() {
-		duration := m.now().Sub(start)
+		end := m.now()
+		duration := end.Sub(start)
 
 		if r := recover(); r != nil {
 			executionStatus = "panic"
@@ -704,6 +770,15 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			// Same rule, and the same reason, as httpclient's Do recovery.
 			panicType := fmt.Sprintf("%T", r)
 			panicErr := fmt.Errorf("panic (type: %s)", panicType)
+
+			line, closed := m.settleRun(window, rec, &finishedRun{
+				end: end, duration: duration, err: panicErr, panicked: true,
+				traceparent: jobTraceparent(span), correlationID: correlationID,
+			})
+			func() {
+				defer func() { _ = recover() }()
+				m.logWindow(closed)
+			}()
 
 			// The logger is consumer-supplied and its write can panic; `%T` cannot.
 			// This defer has already spent its recover(), so guard the log call
@@ -737,17 +812,24 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			// Emit the structured action log so the panic path also gets the
 			// advertised 100% job-execution sampling (the normal-return call
 			// below never runs when Execute panics).
-			m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, panicErr, span, correlationID)
+			m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, panicErr, span, line)
 		}
 	}()
 
 	// Execute the job with the original JobContext (span is already linked via context)
-	err := entry.job.Execute(ctx)
+	err := entry.execute(ctx, rec)
 
-	duration := m.now().Sub(start)
+	end := m.now()
+	duration := end.Sub(start)
+
+	line, closed := m.settleRun(window, rec, &finishedRun{
+		end: end, duration: duration, err: err,
+		traceparent: jobTraceparent(span), correlationID: correlationID,
+	})
+	m.logWindow(closed)
 
 	// Emit structured action log with operational counters and correlation
-	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, err, span, correlationID)
+	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, err, span, line)
 
 	// Update metadata and record observability based on result
 	if err != nil {
@@ -774,6 +856,71 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 
 		entry.metadata.incrementSuccess()
 		m.recordMetrics(ctx, entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
+	}
+}
+
+// finishedRun is how a run ended, as its summary window counts it.
+type finishedRun struct {
+	end           time.Time
+	duration      time.Duration
+	err           error
+	panicked      bool
+	traceparent   string
+	correlationID string
+}
+
+// summaryLine says how logJobResultSummary writes a run; the zero value is the
+// action line at the severity determineJobSeverity derives. It carries the run's
+// correlation ID too, which keeps logJobResultSummary at seven parameters.
+type summaryLine struct {
+	debug         bool // a Windowed run its window line reports
+	failing       bool // a failing run with no error still logs at WARN
+	correlationID string
+}
+
+// settleRun counts a finished scheduled run in its summary window, and returns how
+// the run's own summary line is written and the window its completion closed, if any.
+func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun) (summaryLine, *windowSnapshot) {
+	line := summaryLine{correlationID: run.correlationID}
+	if window == nil {
+		return line, nil
+	}
+	out := rec.outcome()
+	if run.panicked {
+		out.keys[keyRunPanic] = true
+	} else if run.err != nil {
+		out.keys[keyRunError] = true
+	}
+	if run.duration > m.config.Scheduler.Timeout.SlowJob {
+		out.keys[keyRunSlow] = true
+	}
+	out.err, out.traceparent, out.correlationID = run.err, run.traceparent, run.correlationID
+	closed, sealed := window.complete(run.end, out)
+	if sealed {
+		line.failing = len(out.keys) > 0
+		return line, closed
+	}
+	line.debug = true
+	return line, closed
+}
+
+// sealWindows closes every open summary window as partial. A run that completes
+// after the seal writes its own action line instead.
+func (m *Module) sealWindows() {
+	m.mu.RLock()
+	windows := make([]*windowState, 0, len(m.jobs))
+	for _, entry := range m.jobs {
+		if entry.window != nil {
+			windows = append(windows, entry.window)
+		}
+	}
+	m.mu.RUnlock()
+
+	now := m.now()
+	for _, window := range windows {
+		for _, closed := range window.seal(now) {
+			m.logWindow(closed)
+		}
 	}
 }
 
@@ -829,11 +976,16 @@ func (m *Module) logJobResultSummary(
 	duration time.Duration,
 	err error,
 	span trace.Span,
-	correlationID string,
+	line summaryLine,
 ) {
 	contextLog := m.logger.WithContext(ctx)
 
 	logLevel, resultCode := m.determineJobSeverity(duration, err)
+	if line.debug {
+		logLevel = "debug"
+	} else if line.failing && logLevel == "info" {
+		logLevel, resultCode = logLevelWarn, "WARN"
+	}
 
 	event := createJobLogEvent(contextLog, logLevel)
 	if err != nil {
@@ -852,15 +1004,17 @@ func (m *Module) logJobResultSummary(
 	amqpElapsed := logger.GetAMQPElapsed(ctx)
 
 	// Emit structured action log
+	if !line.debug {
+		event = event.Str("log.type", "action")
+	}
 	event.
-		Str("log.type", "action").
 		Str("job.id", jobID).
 		Str("job.schedule_type", scheduleType).
 		Str("job.trigger", ctx.TriggerType()).
 		Int64("job.execution.duration", duration.Nanoseconds()).
 		Str("job.status", jobStatusFromError(err)).
 		Str("result_code", resultCode).
-		Str(logger.FieldCorrelationID, correlationID).
+		Str(logger.FieldCorrelationID, line.correlationID).
 		Str("traceparent", jobTraceparent(span)).
 		Int64("db_queries", dbCount).
 		Int64("db_elapsed", dbElapsed).
@@ -891,7 +1045,7 @@ func (m *Module) determineJobSeverity(duration time.Duration, err error) (logLev
 
 	// WARN: Slow job (succeeded but exceeded scheduler.timeout.slowjob)
 	if duration > m.config.Scheduler.Timeout.SlowJob {
-		return "warn", "WARN"
+		return logLevelWarn, "WARN"
 	}
 
 	// INFO: Normal successful job
@@ -903,8 +1057,10 @@ func createJobLogEvent(log logger.Logger, level string) logger.LogEvent {
 	switch level {
 	case "error":
 		return log.Error()
-	case "warn":
+	case logLevelWarn:
 		return log.Warn()
+	case "debug":
+		return log.Debug()
 	default:
 		return log.Info()
 	}

@@ -161,13 +161,14 @@ const (
 	defaultStartupObservabilityTimeout = 15 * time.Second // OTLP provider initialization timeout
 )
 
-// Scheduler timeout defaults. Single source in the strict sense now: normalize applies
+// Scheduler timeout and summary-window defaults. Single source in the strict sense now: normalize applies
 // these, the koanf loader DERIVES its values from that (derivedDefaultKeys in config.go)
 // rather than rendering them a second time, and the scheduler module reads the normalized
 // config rather than mirroring them (#1029, #1023).
 const (
 	defaultSchedulerShutdownTimeout  = 30 * time.Second // Budget for in-flight jobs during graceful shutdown
 	defaultSchedulerSlowJobThreshold = 25 * time.Second // Successful jobs slower than this log at WARN
+	defaultSchedulerSummaryWindow    = 5 * time.Minute  // Width of a scheduler.Windowed job's summary window
 )
 
 // Database type constants

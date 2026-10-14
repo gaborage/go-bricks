@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-co-op/gocron/v2"
 )
@@ -34,6 +35,38 @@ type jobEntry struct {
 	// running tracks if this job is currently executing
 	// Checked under mutex lock to enforce overlapping prevention
 	running bool
+
+	// window is a Windowed job's summary window; nil for a plain job.
+	window *windowState
+}
+
+// windowFor returns the summary window a run of triggerType reports to: none for a
+// plain job or a manual trigger.
+func (e *jobEntry) windowFor(triggerType string) *windowState {
+	if e.window == nil || triggerType != triggerScheduled {
+		return nil
+	}
+	return e.window
+}
+
+// newRecorder returns the Recorder a Windowed job's run reports through; nil for a plain job.
+func (e *jobEntry) newRecorder(window *windowState) *Recorder {
+	if e.window == nil {
+		return nil
+	}
+	var late *atomic.Int64
+	if window != nil {
+		late = &window.late
+	}
+	return newRecorder(e.window.spec, late)
+}
+
+// execute runs the job: a Windowed job through its Recorder, a plain one through Execute.
+func (e *jobEntry) execute(ctx JobContext, rec *Recorder) error {
+	if rec == nil {
+		return e.job.Execute(ctx)
+	}
+	return e.window.spec.execute(ctx, rec)
 }
 
 // tryLock attempts to acquire the execution lock for this job.
