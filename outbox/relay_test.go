@@ -1169,3 +1169,30 @@ func TestRelayAllOutageCycleStillLogsItsCounts(t *testing.T) {
 	assert.Equal(t, int64(2), numbers["failed_amqp"], "both outaged rows are charged to the AMQP lane")
 	assert.Equal(t, int64(2), numbers["total"], "the cycle summary still reports every fetched row")
 }
+
+// --- the window counters ------------------------------------------------------
+
+// TestRelayRunReportsALeaderCycleOnTheSink pins one tenant's cycle as the Counter calls it
+// projects: each record outcome under its lane, the cycle under its role and tenant, and
+// the lead.
+func TestRelayRunReportsALeaderCycleOnTheSink(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+		{ID: "A2", Exchange: "ex", RoutingKey: "b"},
+		{ID: "A3", Exchange: "ex", RoutingKey: "b"}, // parks behind A2
+	}}
+	r, amqpLane, _ := newRelayWithLanes(store)
+	r.tenants = []string{"t1"}
+	amqpLane.Verdicts = []verdict{{Kind: shipDelivered}, {Kind: shipRetry, Err: errors.New("broker rejected")}}
+	sink := newRecordingSink(t, r)
+
+	require.NoError(t, r.run(newFakeJobCtx(dbtesting.NewTestDB("postgresql")), sink))
+
+	assert.Equal(t, map[string]int64{
+		"count outbox.relay.records{lane=amqp,outcome=published}": 1,
+		"fail outbox.relay.records{lane=amqp,outcome=failed}":     1,
+		"fail outbox.relay.records{lane=amqp,outcome=parked}":     1,
+		"count outbox.relay.cycles{role=leader,tenant=t1}":        1,
+		"count outbox.relay.led":                                  1,
+	}, sink.calls)
+}

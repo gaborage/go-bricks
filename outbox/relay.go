@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/leasescope"
@@ -59,6 +61,8 @@ type Relay struct {
 	// IDs. In per-tenant tenancy, dynamic multi-tenant sources are rejected at module
 	// Init (their tenant set is not enumerable at registration time).
 	tenants []string
+
+	tenantAttr bool
 }
 
 // laneFields is one lane's precomputed cycle-log field names.
@@ -111,6 +115,19 @@ func (r *Relay) Execute(jobCtx scheduler.JobContext) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+type relaySink interface {
+	Count(name string, n int64, attrs ...attribute.KeyValue)
+	Fail(name string, n int64, attrs ...attribute.KeyValue)
+}
+
+func (r *Relay) run(jobCtx scheduler.JobContext, _ relaySink) error {
+	return r.Execute(jobCtx)
+}
+
+func relayCounters(_, _ []string) (counters []scheduler.Counter, tenantAttr bool, dropReason string) {
+	return nil, false, ""
 }
 
 // publishOutcome is the per-record result the relay loop uses to decide bookkeeping
