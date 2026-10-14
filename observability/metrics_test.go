@@ -672,8 +672,9 @@ func spawnBlockedGoroutines(t *testing.T, n int) {
 		wg.Wait()
 		// wg.Done runs before a goroutine has exited. Eventually runs the condition on a
 		// goroutine of its own, hence baseline+1.
-		require.Eventually(t, func() bool { return goruntime.NumGoroutine() <= baseline+1 },
-			time.Second, time.Millisecond, "spawned goroutines outlived the test")
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			assert.LessOrEqual(c, goruntime.NumGoroutine(), baseline+1, "spawned goroutines outlived the test")
+		}, time.Second, time.Millisecond)
 	})
 }
 
