@@ -339,7 +339,8 @@ Schedule methods: `FixedRate(duration)`, `DailyAt(time)`,
 **Windowed job.** A high-frequency `FixedRate` job can report typed
 outcomes through a `Recorder`; the scheduler then writes one action line
 per `scheduler.summary.window` (default 5m) instead of one per run, an
-edge line when the job turns failing, and one metric per Counter
+edge line when the job turns failing (`new`) or a failing job fails on a
+new key (`grew`), and one metric per Counter
 ([scheduler.md](wiki/scheduler.md#windowed-jobs)):
 
 ```go

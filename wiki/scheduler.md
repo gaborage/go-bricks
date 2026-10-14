@@ -49,8 +49,8 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 A `FixedRate` job writes one `log.type=action` line per run, and action lines are never
 sampled: at 5s that is 17,280 lines a day per replica. `scheduler.Windowed` is the opt-in door for
 such jobs. The run reports typed outcomes through a `Recorder`, and the scheduler writes one line
-per window instead, an edge line when the job turns failing, and one metric per declared Counter
-([ADR-146](adr_146_windowed_job_summary.md)). Plain jobs are unchanged.
+per window instead, an edge line when the job turns failing or fails on a new key, and one metric
+per declared Counter ([ADR-146](adr_146_windowed_job_summary.md)). Plain jobs are unchanged.
 
 ```go
 func (m *Module) RegisterJobs(reg app.JobRegistrar) error {

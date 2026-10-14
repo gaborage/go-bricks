@@ -11969,7 +11969,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   while a run hung and an ERROR stack line per panic, and had no way to report domain outcomes.
   The opt-in `scheduler.Windowed` door hands the run a typed `Recorder`; the scheduler writes one
   fixed-key action line per UTC-aligned `scheduler.summary.window` (default 5m), an edge line when
-  the job turns failing, and one metric per declared Counter. Plain jobs are unchanged (C72.28).
+  the job turns failing or a failing job fails on a new key, and one metric per declared Counter.
+  Plain jobs are unchanged (C72.28).
   ADR-146.
 - gist: a hold replay runs under the drain job's context, so its consume span opened as a child of
   the `job.execute` span, the one path breaking ADR-068's rule that a consume span is a root. It now starts
@@ -12995,7 +12996,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `FixedRate` (any other schedule refuses it), the job writes one `log.type=action` line per
   UTC-aligned window of the new `scheduler.summary.window` (`SCHEDULER_SUMMARY_WINDOW`; unset
   takes 5m, a negative value or one under 1m or not dividing 24h fails startup), an edge line when
-  it turns failing, and one `Int64Counter` per Counter; its per-run line and run-lock skip drop to
+  it turns failing (`new`) or, already failing, fails on a new key (`grew`), and one
+  `Int64Counter` per Counter; its per-run line and run-lock skip drop to
   DEBUG, and so does its panic stack line unless that run writes an edge line. Declarations are
   validated at registration: a Counter name holding a default log-filter needle is refused, and
   so is one declaring more than 1,999 series, alone or with the other Windowed jobs that declare
