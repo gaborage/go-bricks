@@ -14,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // Module implements the GoBricks Module interface for transactional outbox.
@@ -61,7 +62,7 @@ type Module struct {
 
 	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
 
-	relay *Relay
+	relay *Relay // the relay RegisterJobs wraps in its Windowed job
 }
 
 // NewModule creates a new Module instance.
@@ -385,7 +386,14 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		}),
 	})
 
-	if err := registrar.FixedRate("outbox-relay", relay, m.cfg.PollInterval); err != nil {
+	counters, tenantAttr, dropReason := relayCounters(tenants, relay.laneOrder)
+	relay.tenantAttr = tenantAttr
+	if dropReason != "" {
+		m.logger.Warn().Str("reason", dropReason).Msg("Outbox relay counts outbox.relay.cycles without a tenant attribute")
+	}
+	m.relay = relay
+
+	if err := registrar.FixedRate("outbox-relay", scheduler.Windowed(relay.Run, counters...), m.cfg.PollInterval); err != nil {
 		return fmt.Errorf("outbox: failed to register relay job: %w", err)
 	}
 

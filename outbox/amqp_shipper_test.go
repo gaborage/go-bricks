@@ -316,7 +316,7 @@ func relayShipped(t *testing.T, rows ...Record) *fakeAMQP {
 	store := &fakeStore{FetchPendingResult: rows}
 	r := newRelayWithShippers(store, map[string]shipper{LaneAMQP: newAMQPShipperWithFake(f)})
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	require.Equal(t, len(rows), f.PublishCalls)
 	return f
 }

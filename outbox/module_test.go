@@ -836,9 +836,8 @@ func TestRegisterJobsSharedTenancySinglePass(t *testing.T) {
 	require.NoError(t, m.RegisterJobs(reg))
 	require.Len(t, reg.FixedRateCalls, 1, "relay registered exactly once")
 	assert.Equal(t, "outbox-relay", reg.FixedRateCalls[0].JobID)
-	require.NotNil(t, reg.FixedRateCalls[0].Job, "the registrar fake must capture the constructed relay")
-	relay, ok := reg.FixedRateCalls[0].Job.(*Relay)
-	require.True(t, ok, "the registered job must be a *Relay")
+	relay := m.relay
+	require.NotNil(t, relay, "RegisterJobs keeps the relay it registers")
 	assert.Equal(t, []string{""}, relay.tenants, "shared tenancy runs a single control-plane pass, not a fan-out")
 	assert.Equal(t, config.TenancyShared, relay.config.Tenancy,
 		"logCycle derives the tenancy stamp from the relay's config copy")
@@ -993,8 +992,8 @@ func TestModuleRegisterJobsWiresBothLaneShippers(t *testing.T) {
 	reg := &fakeRegistrar{}
 	require.NoError(t, m.RegisterJobs(reg))
 	require.Len(t, reg.FixedRateCalls, 1)
-	relay, ok := reg.FixedRateCalls[0].Job.(*Relay)
-	require.True(t, ok)
+	relay := m.relay
+	require.NotNil(t, relay)
 
 	require.Len(t, relay.shippers, 2, "one shipper per lane, and no more")
 	amqpLane, ok := relay.shippers[LaneAMQP].(*amqpShipper)
@@ -1416,19 +1415,13 @@ func TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			cfg := outboxTestConfig()
+			cfg.Multitenant = tt.multitenant
+			deps := initDeps(cfg, func(context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil })
 			log := newRecordingLogger()
+			deps.Logger = log
 			m := NewModule()
-			require.NoError(t, m.Init(&app.ModuleDeps{
-				MessagingConfigured: true,
-				Logger:              log,
-				Config: &config.Config{
-					Outbox:      config.OutboxConfig{Enabled: true},
-					Multitenant: tt.multitenant,
-					Messaging:   config.MessagingConfig{Broker: config.BrokerConfig{URL: "amqp://localhost"}},
-				},
-				DB:        func(context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },
-				Messaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
-			}))
+			require.NoError(t, m.Init(deps))
 
 			require.NoError(t, m.RegisterJobs(newWindowScheduler(t)))
 

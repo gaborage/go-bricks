@@ -384,8 +384,8 @@ func (l *recordingLogger) messages() []string {
 	return append([]string(nil), *l.lines...)
 }
 
-// numbers returns the numeric fields the recorded lines carried. logCycle's counts have
-// no other observable: Execute discards the result it summarizes.
+// numbers returns the numeric fields the recorded lines carried, which is how a test reads
+// logCycle's per-lane counts.
 func (l *recordingLogger) numbers() map[string]int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -438,6 +438,7 @@ func (e *recordingEvent) Str(key, value string) logger.LogEvent {
 	(*e.owner.texts)[key] = value
 	return e
 }
+
 func (e *recordingEvent) Int(key string, value int) logger.LogEvent {
 	return e.Int64(key, int64(value))
 }
@@ -548,6 +549,12 @@ var (
 	_ relaySink = (*scheduler.Recorder)(nil)
 	_ relaySink = (*recordingSink)(nil)
 )
+
+// runRelay runs one relay pass on a sink that checks every Counter call.
+func runRelay(t *testing.T, r *Relay, jobCtx scheduler.JobContext) error {
+	t.Helper()
+	return r.run(jobCtx, newRecordingSink(t, r))
+}
 
 // newRecordingSink declares r's Counters and sets r.tenantAttr from that declaration.
 func newRecordingSink(t *testing.T, r *Relay) *recordingSink {

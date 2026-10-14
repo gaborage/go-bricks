@@ -69,37 +69,37 @@ func newRelayWithLanes(store *fakeStore) (r *Relay, amqpLane, streamLane *fakeSh
 	}), amqpLane, streamLane
 }
 
-func TestRelayExecuteReturnsErrorWhenDBUnavailable(t *testing.T) {
+func TestRelayRunReturnsErrorWhenDBUnavailable(t *testing.T) {
 	r, _, _ := newRelayWithLanes(&fakeStore{})
 
-	err := r.Execute(newFakeJobCtx(nil))
+	err := runRelay(t, r, newFakeJobCtx(nil))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database not available")
 }
 
-func TestRelayExecuteWrapsFetchPendingError(t *testing.T) {
+func TestRelayRunWrapsFetchPendingError(t *testing.T) {
 	store := &fakeStore{FetchPendingErr: errors.New("network drop")}
 	r, _, _ := newRelayWithLanes(store)
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fetch failed")
 	assert.Contains(t, err.Error(), "network drop")
 }
 
-func TestRelayExecuteIsNoOpWhenNoPendingRecords(t *testing.T) {
+func TestRelayRunIsNoOpWhenNoPendingRecords(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: nil}
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.ReadyErr = errors.New("messaging not ready")
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))),
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))),
 		"an idle relay is not a failure even if a lane is down")
 	assert.Equal(t, 1, store.FetchPendingCalls)
 	assert.Equal(t, 0, store.MarkPublishedCalls)
 	assert.Equal(t, 0, store.MarkFailedCalls)
 }
 
-func TestRelayExecutePublishesPendingRecords(t *testing.T) {
+func TestRelayRunPublishesPendingRecords(t *testing.T) {
 	store := &fakeStore{
 		FetchPendingResult: []Record{
 			{ID: "evt-1", EventType: "order.created", Exchange: "orders", RoutingKey: "created", Payload: []byte(`{"id":1}`)},
@@ -108,13 +108,13 @@ func TestRelayExecutePublishesPendingRecords(t *testing.T) {
 	}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, []string{"evt-1", "evt-2"}, amqpLane.shippedIDs())
 	assert.Equal(t, 2, store.MarkPublishedCalls)
 	assert.Equal(t, 0, store.MarkFailedCalls)
 }
 
-func TestRelayExecuteCountsFailuresAndContinues(t *testing.T) {
+func TestRelayRunCountsFailuresAndContinues(t *testing.T) {
 	store := &fakeStore{
 		FetchPendingResult: []Record{
 			{ID: "evt-1", Exchange: "orders", RoutingKey: "created"},
@@ -124,8 +124,8 @@ func TestRelayExecuteCountsFailuresAndContinues(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.Verdicts = []verdict{{Kind: shipRetry, Err: errors.New("broker rejected")}} // evt-1
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))),
-		"Execute returns nil even when some publishes fail (per-record status is in the store)")
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))),
+		"run returns nil even when some publishes fail (per-record status is in the store)")
 	assert.Equal(t, []string{"evt-1", "evt-2"}, amqpLane.shippedIDs())
 	assert.Equal(t, 1, store.MarkPublishedCalls)
 	assert.Equal(t, "evt-2", store.MarkPublishedLastID)
@@ -160,7 +160,7 @@ func TestRelayInjectsOutboxMetadataHeaders(t *testing.T) {
 			}}
 			r, amqpLane, _ := newRelayWithLanes(store)
 
-			require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+			require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 			require.Len(t, amqpLane.Ships, 1)
 			assert.Equal(t, tt.want, amqpLane.Ships[0].Headers)
 		})
@@ -180,7 +180,7 @@ func TestRelayRehydratesTheTraceContextForTheShip(t *testing.T) {
 	}}}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 	require.Len(t, amqpLane.Ctxs, 1)
 	tp, ok := gobrickstrace.ParentFromContext(amqpLane.Ctxs[0])
@@ -204,7 +204,7 @@ func TestRelayDoesNotReEmitAPersistedMalformedTraceParent(t *testing.T) {
 	}}}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 	require.Len(t, amqpLane.Ships, 1)
 	headers := amqpLane.Ships[0].Headers
@@ -241,7 +241,7 @@ func TestRelayMovesTheShipmentStampOntoTheShipContext(t *testing.T) {
 				return shipment{Record: rec, Headers: headers, Key: rec.ID, Stamp: tt.stamp}
 			}
 
-			require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+			require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 			require.Len(t, amqpLane.Ctxs, 1)
 			got, ok := multitenant.GetTenant(amqpLane.Ctxs[0])
@@ -264,7 +264,7 @@ func TestRelayBoundsEachShipByThePublishTimeout(t *testing.T) {
 	r.config.PublishTimeout = 30 * time.Millisecond
 	amqpLane.Verdicts = []verdict{{Kind: shipRetry, Err: context.DeadlineExceeded}} // "stuck", then "healthy" delivers
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 	require.Len(t, amqpLane.Ctxs, 2, "the healthy record is still attempted after the stuck one")
 	deadline, ok := amqpLane.Ctxs[0].Deadline()
@@ -288,7 +288,7 @@ func TestRelayCountsADeliveredButUnrecordedRow(t *testing.T) {
 	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
 	ctx.log = log
 
-	require.NoError(t, r.Execute(ctx))
+	require.NoError(t, runRelay(t, r, ctx))
 
 	assert.Equal(t, 1, store.MarkPublishedCalls)
 	assert.Equal(t, 0, store.MarkFailedCalls,
@@ -315,7 +315,7 @@ func TestRelayDeadLettersUndecodableHeaders(t *testing.T) {
 			}}
 			r, amqpLane, _ := newRelayWithLanes(store)
 
-			require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+			require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 			assert.Empty(t, amqpLane.Ships, "undecodable headers never reach a lane")
 			assert.Equal(t, tt.wantDeadLettered, store.MarkDeadLetteredCalls)
@@ -349,7 +349,7 @@ func TestRelayDeadLettersAPoisonVerdictAtMaxRetries(t *testing.T) {
 			r, amqpLane, _ := newRelayWithLanes(store)
 			amqpLane.Verdicts = []verdict{{Kind: shipPoison, Err: errors.New("routing key is 256 bytes, limit is 255")}}
 
-			require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+			require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 			assert.Len(t, amqpLane.Ships, 1, "the record is attempted once this cycle")
 			assert.Equal(t, tt.wantDeadLettered, store.MarkDeadLetteredCalls)
@@ -372,7 +372,7 @@ func TestRelayNeverDeadLettersConnectivityEvenPastMaxRetries(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.Verdicts = []verdict{{Kind: shipRetry, Err: errors.New("confirmation timed out")}}
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, 1, store.MarkFailedCalls, "connectivity advances retry_count")
 	assert.Equal(t, 0, store.MarkDeadLetteredCalls, "connectivity never parks, no matter the count")
 }
@@ -387,7 +387,7 @@ func TestRelayAbortedShipDoesNotInflateRetryCount(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.Verdicts = []verdict{{Kind: shipAborted}}
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, 0, store.MarkFailedCalls, "shutdown must not inflate retry_count")
 	assert.Equal(t, 0, store.MarkDeadLetteredCalls)
 	assert.Equal(t, []string{"evt-1"}, amqpLane.shippedIDs(), "the batch stops at the first aborted record")
@@ -414,7 +414,7 @@ func TestRelayBrokerDownStopsTheCycleAndRoutesTheRemainder(t *testing.T) {
 	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
 	ctx.log = log
 
-	err := r.Execute(ctx)
+	err := runRelay(t, r, ctx)
 	require.Error(t, err, "the mid-batch outage surfaces as a job-level error, like the cycle-start path")
 	assert.Contains(t, err.Error(), "messaging not available")
 	require.ErrorIs(t, err, dropped)
@@ -443,7 +443,7 @@ func TestRelayBoundsTheErrorItPersists(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.Verdicts = []verdict{{Kind: shipRetry, Err: errors.New(oversized)}}
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 	require.Equal(t, 1, store.MarkFailedCalls)
 	assert.Greater(t, len(oversized), ledgererr.MaxBytes, "the fixture is actually oversized")
@@ -550,11 +550,11 @@ func TestDeadLetterPoisonReportsAFailedLedgerWrite(t *testing.T) {
 
 // --- tenants ------------------------------------------------------------------
 
-// TestRelayExecuteFansOutAcrossStaticTenants verifies the multi-tenant fix: the relay
+// TestRelayRunFansOutAcrossStaticTenants verifies the multi-tenant fix: the relay
 // resolves the database once per configured tenant (with that tenant injected into the
 // context) and relays each tenant's pending events — rather than the prior tenant-less
 // resolution that returned ErrNoTenantInContext and relayed nothing.
-func TestRelayExecuteFansOutAcrossStaticTenants(t *testing.T) {
+func TestRelayRunFansOutAcrossStaticTenants(t *testing.T) {
 	var resolved []string
 	store := &fakeStore{FetchPendingResult: []Record{{ID: "e1", Exchange: "ex", RoutingKey: "rk"}}}
 	r, amqpLane, _ := newRelayWithLanes(store)
@@ -565,15 +565,15 @@ func TestRelayExecuteFansOutAcrossStaticTenants(t *testing.T) {
 		return dbtesting.NewTestDB("postgresql"), nil
 	}
 
-	require.NoError(t, r.Execute(newFakeJobCtx(nil)))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(nil)))
 	assert.Equal(t, []string{"tenant-a", "tenant-b"}, resolved, "relay must resolve the DB once per configured tenant, in order")
 	assert.Equal(t, 2, store.FetchPendingCalls, "FetchPending runs once per tenant")
 	assert.Len(t, amqpLane.Ships, 2, "each tenant's pending record is published")
 }
 
-// TestRelayExecuteIsolatesPerTenantFailures verifies one unhealthy tenant does not block the
+// TestRelayRunIsolatesPerTenantFailures verifies one unhealthy tenant does not block the
 // others: its error is collected (naming the tenant) while healthy tenants still run.
-func TestRelayExecuteIsolatesPerTenantFailures(t *testing.T) {
+func TestRelayRunIsolatesPerTenantFailures(t *testing.T) {
 	store := &fakeStore{}
 	r, _, _ := newRelayWithLanes(store)
 	r.tenants = []string{"good", "bad"}
@@ -584,7 +584,7 @@ func TestRelayExecuteIsolatesPerTenantFailures(t *testing.T) {
 		return dbtesting.NewTestDB("postgresql"), nil
 	}
 
-	err := r.Execute(newFakeJobCtx(nil))
+	err := runRelay(t, r, newFakeJobCtx(nil))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `tenant "bad"`)
 	assert.Contains(t, err.Error(), "tenant db down")
@@ -600,7 +600,7 @@ func TestRelayNotLeaderSkipsCycle(t *testing.T) {
 	}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))),
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))),
 		"another instance leading is not a cycle failure")
 	assert.Zero(t, store.FetchPendingCalls, "a non-leader must not even fetch")
 	assert.Empty(t, amqpLane.Ships)
@@ -615,7 +615,7 @@ func TestRelayLeaderErrorFailsCycle(t *testing.T) {
 	}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "leader")
 	assert.Empty(t, amqpLane.Ships)
@@ -630,7 +630,7 @@ func TestRelayLeaderReleasedAfterCycle(t *testing.T) {
 	}
 	r, _, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, 1, store.LeadCalls)
 	assert.Equal(t, 1, store.ReleaseCalls)
 	assert.Equal(t, 2, store.ProbeCalls, "leadership is probed once per record")
@@ -648,7 +648,7 @@ func TestRelayLostLeadershipStopsBatch(t *testing.T) {
 	}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "messaging not available",
 		"the cause is the database, so it must not be reported as a broker outage")
@@ -668,7 +668,7 @@ func TestRelayOutagePathMarksUnderLeadership(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.ReadyErr = errors.New("messaging not ready")
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err)
 	assert.Equal(t, 1, store.LeadCalls, "marks are writes, so the outage path runs under leadership too")
 	assert.Equal(t, 2, store.MarkFailedCalls)
@@ -693,7 +693,7 @@ func TestRelayAllOutageLeadershipLossOutranksTheLaneError(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.ReadyErr = errors.New("messaging not ready")
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrNotLeader, "leadership loss must outrank the lane-down error")
 	require.ErrorIs(t, err, probeErr, "the scripted probe failure is the cause reported")
@@ -715,7 +715,7 @@ func TestRelayAdvancesRetryCountWhenALaneIsNotReady(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.ReadyErr = errors.New("messaging not ready")
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err, "a not-ready lane with pending work surfaces as a job error")
 	assert.Contains(t, err.Error(), "messaging not ready")
 	assert.Equal(t, 1, amqpLane.ReadyCalls, "the lane is probed once per cycle, not once per record")
@@ -737,7 +737,7 @@ func TestRelayOneLaneOutageDoesNotStallTheOther(t *testing.T) {
 	r, amqpLane, streamLane := newRelayWithLanes(store)
 	amqpLane.ReadyErr = errors.New("messaging not ready")
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err, "the AMQP half still failed, so the cycle still reports it")
 
 	assert.Equal(t, []string{"S1"}, streamLane.shippedIDs(), "the stream row published despite the AMQP outage")
@@ -778,7 +778,7 @@ func TestRelayBoundsEachPreflightReadinessCheck(t *testing.T) {
 	start := time.Now()
 	// The job ctx itself carries no deadline (as scheduler.JobContext builds it) — only the
 	// relay's own bound can make the hung Ready check return.
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	elapsed := time.Since(start)
 
 	require.Error(t, err, "a preflight check that never returns on its own must still surface as a lane failure")
@@ -809,7 +809,7 @@ func TestRelayZeroReadyTimeoutLeavesPreflightUnbounded(t *testing.T) {
 	}
 
 	// The job ctx itself carries no deadline (as scheduler.JobContext builds it).
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 
 	require.NoError(t, err)
 	assert.False(t, hasDeadline, "a zero readyTimeout must not add a deadline to the ready check's ctx")
@@ -824,7 +824,7 @@ func TestRelayResolvesTheEmptyLegacyLaneToTheAMQPShipper(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: []Record{{ID: "legacy", Exchange: "ex", RoutingKey: "rk"}}}
 	r, amqpLane, streamLane := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, []string{"legacy"}, amqpLane.shippedIDs())
 	assert.Empty(t, streamLane.Ships)
 }
@@ -838,7 +838,7 @@ func TestRelayDeadLettersAnUnknownLane(t *testing.T) {
 	}}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, 1, store.MarkDeadLetteredCalls)
 	assert.Equal(t, `unknown lane "carrier-pigeon"`, store.MarkDeadLetteredLastErr)
 	assert.Empty(t, amqpLane.Ships, "an unknown lane never reaches a broker")
@@ -854,7 +854,7 @@ func TestRelayUnknownLaneIsJudgedDuringALaneOutage(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.ReadyErr = errors.New("messaging not ready")
 
-	err := r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
+	err := runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql")))
 	require.Error(t, err, "the cycle still reports the AMQP outage")
 	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "an unknown lane is poison, outage or not")
 	assert.Zero(t, store.MarkFailedCalls, "it must not be marked as an outage casualty")
@@ -871,7 +871,7 @@ func TestRelayUnknownLanesDoNotParkEachOther(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	r.config.MaxRetries = 5 // both rows sit below the ceiling, so both take the failed path
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, 2, store.MarkFailedCalls, "each unknown-lane row is judged on its own; neither parks the other")
 	assert.Empty(t, amqpLane.Ships)
 }
@@ -887,7 +887,7 @@ func TestRelayUnknownLaneIsNotParkedBehindAnotherRow(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.Verdicts = []verdict{{Kind: shipRetry, Err: errors.New("broker rejected")}}
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, 1, store.MarkFailedCalls, "the AMQP row failed and parked its own key")
 	assert.Equal(t, 1, store.MarkDeadLetteredCalls,
 		"the unknown-lane row is classified the same cycle, not parked behind it")
@@ -906,7 +906,7 @@ func TestRelayFailedKeyParksLaterRowsOfThatKey(t *testing.T) {
 	r, amqpLane, _ := newRelayWithLanes(store)
 	amqpLane.Verdicts = []verdict{{Kind: shipRetry, Err: errors.New("broker rejected")}} // K1
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, []string{"K1", "J1"}, amqpLane.shippedIDs(), "K2 is parked behind K1; an unrelated key drains past it")
 	assert.Equal(t, 1, store.MarkFailedCalls)
 	assert.Equal(t, "K1", store.MarkFailedLastID)
@@ -922,10 +922,10 @@ func TestRelayNextCycleReattemptsParkedKeyInOrder(t *testing.T) {
 	amqpLane.Verdicts = []verdict{{Kind: shipRetry, Err: errors.New("broker rejected")}}
 	db := dbtesting.NewTestDB("postgresql")
 
-	require.NoError(t, r.Execute(newFakeJobCtx(db)))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(db)))
 	require.Equal(t, []string{"K1"}, amqpLane.shippedIDs())
 
-	require.NoError(t, r.Execute(newFakeJobCtx(db)))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(db)))
 	assert.Equal(t, []string{"K1", "K1", "K2"}, amqpLane.shippedIDs(),
 		"the parked row follows its predecessor, in sequence order, on the next cycle")
 }
@@ -942,7 +942,7 @@ func TestRelayUndecodableHeadersBelowMaxRetriesParkTheKey(t *testing.T) {
 	}}
 	r, amqpLane, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 
 	assert.Empty(t, amqpLane.shippedIDs(), "K2 waits behind a row that is still pending")
 	assert.Equal(t, 1, store.MarkFailedCalls, "only K1 advances retry_count; a parked row is untouched")
@@ -1007,7 +1007,7 @@ func TestRelayPoisonRowBehindParkedHeadIsHeldBack(t *testing.T) {
 			ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
 			ctx.log = log
 
-			require.NoError(t, r.Execute(ctx))
+			require.NoError(t, runRelay(t, r, ctx))
 
 			shipped := append(amqpLane.shippedIDs(), streamLane.shippedIDs()...)
 			assert.Equal(t, tt.wantShipped, shipped, "the held-back row is never handed to a lane")
@@ -1028,7 +1028,7 @@ func TestRelayDeadLetteredRowDoesNotPark(t *testing.T) {
 	}
 	r, _, _ := newRelayWithLanes(store)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
+	require.NoError(t, runRelay(t, r, newFakeJobCtx(dbtesting.NewTestDB("postgresql"))))
 	assert.Equal(t, 1, store.MarkDeadLetteredCalls)
 	assert.Equal(t, "K2", store.MarkPublishedLastID, "K2 is attempted, not parked behind a terminal row")
 }
@@ -1054,7 +1054,7 @@ func TestRelayScopeDownHoldsThatScopeOnly(t *testing.T) {
 	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
 	ctx.log = log
 
-	require.NoError(t, r.Execute(ctx))
+	require.NoError(t, runRelay(t, r, ctx))
 
 	assert.Equal(t, []string{"S1"}, streamLane.shippedIDs(),
 		"the later stream rows are left for the next cycle rather than paying the deadline again")
@@ -1086,7 +1086,7 @@ func TestRelayOneDownScopeDoesNotHoldTheOthers(t *testing.T) {
 	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
 	ctx.log = log
 
-	require.NoError(t, r.Execute(ctx))
+	require.NoError(t, runRelay(t, r, ctx))
 
 	assert.Equal(t, []string{"S1", "H1"}, streamLane.shippedIDs(),
 		"the healthy stream's row drains in the same cycle; the stalled one is attempted once, then held")
@@ -1130,7 +1130,7 @@ func TestRelayLogsPerLaneCounts(t *testing.T) {
 	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
 	ctx.log = log
 
-	require.NoError(t, r.Execute(ctx))
+	require.NoError(t, runRelay(t, r, ctx))
 
 	numbers := log.numbers()
 	assert.Equal(t, int64(1), numbers["published_amqp"])
@@ -1164,7 +1164,7 @@ func TestRelayAllOutageCycleStillLogsItsCounts(t *testing.T) {
 	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
 	ctx.log = log
 
-	err := r.Execute(ctx)
+	err := runRelay(t, r, ctx)
 	require.Error(t, err, "the lane error still surfaces at the job level")
 	assert.Contains(t, err.Error(), "messaging not ready")
 
@@ -1199,6 +1199,20 @@ func TestRelayRunReportsALeaderCycleOnTheSink(t *testing.T) {
 		"count outbox.relay.cycles{role=leader,tenant=t1}":        1,
 		"count outbox.relay.led":                                  1,
 	}, sink.calls)
+}
+
+// TestRelayLogsItsCycleSummaryAtDebug pins the cycle line's level: the window line and the
+// outbox.relay.* metrics carry the counts at INFO.
+func TestRelayLogsItsCycleSummaryAtDebug(t *testing.T) {
+	r, _, _ := newRelayWithLanes(&fakeStore{FetchPendingResult: []Record{{ID: "A1", Exchange: "ex", RoutingKey: "a"}}})
+	log := newRecordingLogger()
+	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
+	ctx.log = log
+
+	require.NoError(t, runRelay(t, r, ctx))
+
+	assert.Equal(t, []string{"DEBUG Outbox relay cycle completed"}, log.leveled())
+	assert.Equal(t, int64(1), log.numbers()["published_amqp"], "the line keeps its field set")
 }
 
 // TestRelayRunReportsEachRolePathOnTheSink pins the role every relayTenant return takes,
