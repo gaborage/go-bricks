@@ -1660,6 +1660,7 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 		"cache.redis.minretrybackoff": "8ms",
 		"cache.redis.maxretrybackoff": "512ms",
 		"keystore.secretminlength":    32,
+		"scheduler.summary.window":    "5m0s",
 		"scheduler.timeout.shutdown":  "30s",
 		"scheduler.timeout.slowjob":   "25s",
 		"server.bodylimit":            int64(10485760),
@@ -1694,6 +1695,7 @@ func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
 	assert.Equal(t, 512*time.Millisecond, cfg.Cache.Redis.MaxRetryBackoff)
 	require.NotNil(t, cfg.KeyStore.SecretMinLength)
 	assert.Equal(t, 32, *cfg.KeyStore.SecretMinLength)
+	assert.Equal(t, 5*time.Minute, cfg.Scheduler.Summary.Window)
 	assert.Equal(t, 30*time.Second, cfg.Scheduler.Timeout.Shutdown)
 	assert.Equal(t, 25*time.Second, cfg.Scheduler.Timeout.SlowJob)
 	assert.Equal(t, int64(10*1024*1024), cfg.Server.BodyLimit)

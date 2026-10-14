@@ -1109,3 +1109,16 @@ func TestJobExecutionPanicNeverDisclosesTheValue(t *testing.T) {
 	assert.Equal(t, int64(1), entry.metadata.snapshot().FailureCount,
 		"the job must still be recorded as failed")
 }
+
+func TestPlainJobTriggerSkipStillWarns(t *testing.T) {
+	log := newRecordingLogger()
+	module, _ := newTestScheduler(t, 5*time.Second, withLogger(log))
+	entry := &jobEntry{job: &slowJob{}, metadata: &JobMetadata{JobID: "plain-job"}}
+	require.True(t, entry.tryLock())
+
+	module.runJobBody(entry, triggerScheduled)
+
+	skips := log.messageLines("Job trigger skipped - job is already running")
+	require.Len(t, skips, 1)
+	assert.Equal(t, "warn", skips[0].level)
+}

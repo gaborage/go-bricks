@@ -101,6 +101,41 @@ func TestNormalizeSchedulerTimeoutDefaults(t *testing.T) {
 	}
 }
 
+// TestValidateSchedulerSummaryWindow pins scheduler.summary.window at startup: zero
+// becomes 5m, and a window that is negative, under 1m, or does not divide 24h fails.
+func TestValidateSchedulerSummaryWindow(t *testing.T) {
+	tests := []struct {
+		name    string
+		window  time.Duration
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "zero_becomes_five_minutes", want: 5 * time.Minute},
+		{name: "one_minute_floor_accepted", window: time.Minute, want: time.Minute},
+		{name: "one_day_accepted", window: 24 * time.Hour, want: 24 * time.Hour},
+		{name: "thirty_seconds_rejected", window: 30 * time.Second, wantErr: true},
+		{name: "seven_minutes_rejected", window: 7 * time.Minute, wantErr: true},
+		{name: "two_days_rejected", window: 48 * time.Hour, wantErr: true},
+		{name: "negative_rejected", window: -time.Minute, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := createValidFullConfig()
+			cfg.Scheduler.Summary.Window = tt.window
+
+			err := Validate(cfg)
+
+			if tt.wantErr {
+				assertValidationError(t, err, "scheduler.summary.window")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Scheduler.Summary.Window)
+		})
+	}
+}
+
 // A negative duration used to be absorbed by the scheduler module's use-time
 // fallback. With that fallback gone it would reach the module verbatim, so
 // normalization rejects it here instead.
@@ -163,7 +198,7 @@ func TestValidateSchedulerCIDRListRejectsAllInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &SchedulerConfig{Security: tt.security}
+			cfg := &SchedulerConfig{Security: tt.security, Summary: SchedulerSummaryConfig{Window: defaultSchedulerSummaryWindow}}
 			err := checkScheduler(cfg)
 			assertValidationError(t, err, tt.wantField)
 		})
@@ -184,7 +219,7 @@ func TestValidateSchedulerCIDRListAcceptsValidCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &SchedulerConfig{Security: tt.security}
+			cfg := &SchedulerConfig{Security: tt.security, Summary: SchedulerSummaryConfig{Window: defaultSchedulerSummaryWindow}}
 			require.NoError(t, checkScheduler(cfg))
 		})
 	}
