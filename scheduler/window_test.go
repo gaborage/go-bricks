@@ -280,36 +280,63 @@ func TestPanickingCompletionClosesTheWindow(t *testing.T) {
 	assert.Equal(t, int64(1), windows[0].fields["runs.inflight"])
 }
 
-// windowPanickingLogger panics on writing its first window line, the call the
-// panic path guards; later lines (Shutdown's seal) write normally.
-type windowPanickingLogger struct {
+// linePanickingLogger panics the first time it writes a line carrying one of its
+// armed keys; later lines, and every other line, write normally. Only Str keeps
+// the wrapper, so arm a key the line sets before any other method.
+type linePanickingLogger struct {
 	*recordingLogger
-	fired *atomic.Bool
+	armed map[string]*atomic.Bool
 }
 
-func (l windowPanickingLogger) Info() logger.LogEvent {
-	return windowPanickingEvent{l.recordingLogger.Info(), l.fired}
+func newLinePanickingLogger(keys ...string) linePanickingLogger {
+	armed := make(map[string]*atomic.Bool, len(keys))
+	for _, key := range keys {
+		armed[key] = &atomic.Bool{}
+	}
+	return linePanickingLogger{newRecordingLogger(), armed}
 }
 
-func (l windowPanickingLogger) Warn() logger.LogEvent {
-	return windowPanickingEvent{l.recordingLogger.Warn(), l.fired}
+func (l linePanickingLogger) wrap(event logger.LogEvent) logger.LogEvent {
+	return linePanickingEvent{event, l.armed}
 }
 
-type windowPanickingEvent struct {
+func (l linePanickingLogger) Info() logger.LogEvent  { return l.wrap(l.recordingLogger.Info()) }
+func (l linePanickingLogger) Warn() logger.LogEvent  { return l.wrap(l.recordingLogger.Warn()) }
+func (l linePanickingLogger) Error() logger.LogEvent { return l.wrap(l.recordingLogger.Error()) }
+func (l linePanickingLogger) Debug() logger.LogEvent { return l.wrap(l.recordingLogger.Debug()) }
+
+func (l linePanickingLogger) WithContext(any) logger.Logger { return l }
+
+type linePanickingEvent struct {
 	logger.LogEvent
-	fired *atomic.Bool
+	armed map[string]*atomic.Bool
 }
 
-func (e windowPanickingEvent) Str(key, value string) logger.LogEvent {
-	if key == "window.start" && e.fired.CompareAndSwap(false, true) {
+func (e linePanickingEvent) Str(key, value string) logger.LogEvent {
+	if fired, ok := e.armed[key]; ok && fired.CompareAndSwap(false, true) {
 		panic("logger write failed")
 	}
-	return windowPanickingEvent{e.LogEvent.Str(key, value), e.fired}
+	return linePanickingEvent{e.LogEvent.Str(key, value), e.armed}
+}
+
+func TestPanicAfterTheSettleCountsTheRunOnce(t *testing.T) {
+	// job.schedule_type is on the run's own summary line, written after its settle.
+	log := newLinePanickingLogger("job.schedule_type")
+	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+	require.NoError(t, module.FixedRate("relay", Windowed(noopRun), windowTestInterval))
+
+	require.NotPanics(t, func() { module.runJobBody(registeredEntry(t, module, "relay"), triggerScheduled) })
+	require.NoError(t, module.Shutdown())
+
+	windows := log.windowLines()
+	require.Len(t, windows, 1)
+	assert.Equal(t, int64(1), windows[0].fields["runs"], "the recovery defer must not settle a settled run again")
+	assert.Empty(t, windows[0].fields["failing.keys"])
 }
 
 func TestPanicPathSurvivesAPanickingWindowLine(t *testing.T) {
 	clock := newFakeClock(windowTestStart)
-	module := newWindowedTestScheduler(t, clock, withLogger(windowPanickingLogger{newRecordingLogger(), &atomic.Bool{}}))
+	module := newWindowedTestScheduler(t, clock, withLogger(newLinePanickingLogger("window.start")))
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	require.NoError(t, module.FixedRate("relay", gatedJob(started, release, func(*Recorder) error { panic("boom") }), windowTestInterval))
 	entry := registeredEntry(t, module, "relay")

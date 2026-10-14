@@ -746,6 +746,10 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 
 	window := entry.windowFor(ctx.TriggerType())
 	rec := entry.newRecorder(window)
+	// settled stops the recovery defer from counting a run twice when a panic
+	// follows the normal path's settle (a logger, metrics or span call).
+	var line summaryLine
+	settled := false
 
 	start := m.now()
 	var executionStatus string
@@ -771,11 +775,14 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			panicType := fmt.Sprintf("%T", r)
 			panicErr := fmt.Errorf("panic (type: %s)", panicType)
 
-			line, closed := m.settleRun(window, rec, &finishedRun{
-				end: end, duration: duration, err: panicErr, panicked: true,
-				traceparent: jobTraceparent(span), correlationID: correlationID,
-			})
-			m.logWindow(closed)
+			if !settled {
+				var closed *windowSnapshot
+				line, closed = m.settleRun(window, rec, &finishedRun{
+					end: end, duration: duration, err: panicErr, panicked: true,
+					traceparent: jobTraceparent(span), correlationID: correlationID,
+				})
+				m.logWindow(closed)
+			}
 
 			// The logger is consumer-supplied and its write can panic; `%T` cannot.
 			// This defer has already spent its recover(), so guard the log call
@@ -823,6 +830,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 		end: end, duration: duration, err: err,
 		traceparent: jobTraceparent(span), correlationID: correlationID,
 	})
+	settled = true
 	m.logWindow(closed)
 
 	// Emit structured action log with operational counters and correlation

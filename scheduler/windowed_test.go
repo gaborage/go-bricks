@@ -31,25 +31,40 @@ func countersN(n int) []Counter {
 	return counters
 }
 
+type windowedValidationCase struct {
+	name      string
+	run       func(JobContext, *Recorder) error
+	counters  []Counter
+	wantField string
+}
+
+// reservedWordCases refuses each reserved word as a Counter name, and a name under it.
+func reservedWordCases() []windowedValidationCase {
+	words := []string{"job", "run", "runs", "window", "failing", "edges", "log", "recorder", "undeclared"}
+	cases := make([]windowedValidationCase, 0, 2*len(words))
+	for _, word := range words {
+		cases = append(cases,
+			windowedValidationCase{name: "reserved_" + word, run: noopRun, counters: []Counter{{Name: word}}, wantField: "counters[0].Name"},
+			windowedValidationCase{name: "under_reserved_" + word, run: noopRun, counters: []Counter{{Name: word + ".x"}}, wantField: "counters[0].Name"},
+		)
+	}
+	return cases
+}
+
 func TestWindowedRegistrationValidatesEveryRule(t *testing.T) {
 	lane := func(values ...string) []AttrSet { return []AttrSet{{Key: "lane", Values: values}} }
-	tests := []struct {
-		name      string
-		run       func(JobContext, *Recorder) error
-		counters  []Counter
-		wantField string
-	}{
+	tests := []windowedValidationCase{
 		{name: "nil_run", counters: nil, wantField: "run"},
 		{name: "thirty_three_counters", run: noopRun, counters: countersN(33), wantField: "counters"},
 		{name: "uppercase_name", run: noopRun, counters: []Counter{{Name: "Published"}}, wantField: "counters[0].Name"},
 		{name: "empty_name", run: noopRun, counters: []Counter{{Name: ""}}, wantField: "counters[0].Name"},
 		{name: "sixty_four_char_name", run: noopRun, counters: []Counter{{Name: "a" + strings.Repeat("b", 63)}}, wantField: "counters[0].Name"},
 		{name: "duplicate_name", run: noopRun, counters: []Counter{{Name: "published"}, {Name: "published"}}, wantField: "counters[1].Name"},
-		{name: "reserved_runs", run: noopRun, counters: []Counter{{Name: "runs"}}, wantField: "counters[0].Name"},
-		{name: "under_reserved_runs", run: noopRun, counters: []Counter{{Name: "runs.failing"}}, wantField: "counters[0].Name"},
-		{name: "reserved_undeclared", run: noopRun, counters: []Counter{{Name: "undeclared"}}, wantField: "counters[0].Name"},
 		{name: "filter_needle", run: noopRun, counters: []Counter{{Name: "x.token.count"}}, wantField: "counters[0].Name"},
 		{name: "invalid_attr_key", run: noopRun, counters: []Counter{{Name: "published", Attrs: []AttrSet{{Key: "Lane", Values: []string{"a"}}}}}, wantField: "counters[0].Attrs[0].Key"},
+		{name: "thirty_three_char_attr_key", run: noopRun, counters: []Counter{{Name: "published", Attrs: []AttrSet{{Key: "k" + strings.Repeat("e", 32), Values: []string{"a"}}}}}, wantField: "counters[0].Attrs[0].Key"},
+		{name: "sixty_five_char_value", run: noopRun, counters: []Counter{{Name: "published", Attrs: lane(strings.Repeat("v", 65))}}, wantField: "counters[0].Attrs[0].Values"},
+		{name: "empty_value", run: noopRun, counters: []Counter{{Name: "published", Attrs: lane("")}}, wantField: "counters[0].Attrs[0].Values"},
 		{name: "duplicate_attr_key", run: noopRun, counters: []Counter{{Name: "published", Attrs: append(lane("a"), lane("b")...)}}, wantField: "counters[0].Attrs[1].Key"},
 		{name: "no_values", run: noopRun, counters: []Counter{{Name: "published", Attrs: lane()}}, wantField: "counters[0].Attrs[0].Values"},
 		{name: "invalid_value", run: noopRun, counters: []Counter{{Name: "published", Attrs: lane("Main")}}, wantField: "counters[0].Attrs[0].Values"},
@@ -59,7 +74,7 @@ func TestWindowedRegistrationValidatesEveryRule(t *testing.T) {
 		}}}, wantField: "counters[0].Attrs"},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range append(tests, reservedWordCases()...) {
 		t.Run(tt.name, func(t *testing.T) {
 			module := newWindowedTestScheduler(t, newFakeClock(windowTestStart))
 
@@ -79,6 +94,9 @@ func TestWindowedRegistrationAcceptsEachLimit(t *testing.T) {
 	}{
 		{name: "thirty_two_counters", counters: countersN(maxWindowedCounters)},
 		{name: "sixty_three_char_name", counters: []Counter{{Name: "a" + strings.Repeat("b", 62)}}},
+		{name: "thirty_two_char_attr_key_and_sixty_four_char_value", counters: []Counter{{Name: "published", Attrs: []AttrSet{
+			{Key: "k" + strings.Repeat("e", 31), Values: []string{strings.Repeat("v", 64)}},
+		}}}},
 		{name: "name_merely_starting_with_a_reserved_word", counters: []Counter{{Name: "runsheet"}}},
 		{name: "two_thousand_series", counters: []Counter{{Name: "published", Attrs: []AttrSet{
 			{Key: "lane", Values: valuesN(50)}, {Key: "kind", Values: valuesN(40)},

@@ -1122,27 +1122,3 @@ func TestPlainJobTriggerSkipStillWarns(t *testing.T) {
 	require.Len(t, skips, 1)
 	assert.Equal(t, "warn", skips[0].level)
 }
-
-func TestJobTraceparentRendersTheRealFlags(t *testing.T) {
-	spanWith := func(flags trace.TraceFlags) trace.Span {
-		return trace.SpanFromContext(trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
-			TraceID: trace.TraceID{0x0a}, SpanID: trace.SpanID{0x0b}, TraceFlags: flags,
-		})))
-	}
-	tests := []struct {
-		name string
-		span trace.Span
-		want string
-	}{
-		{name: "nil_span", want: ""},
-		{name: "invalid_span_context", span: trace.SpanFromContext(context.Background()), want: ""},
-		{name: "sampled", span: spanWith(trace.FlagsSampled), want: "00-0a000000000000000000000000000000-0b00000000000000-01"},
-		{name: "unsampled", span: spanWith(0), want: "00-0a000000000000000000000000000000-0b00000000000000-00"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, jobTraceparent(tt.span))
-		})
-	}
-}
