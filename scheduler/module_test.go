@@ -1109,3 +1109,40 @@ func TestJobExecutionPanicNeverDisclosesTheValue(t *testing.T) {
 	assert.Equal(t, int64(1), entry.metadata.snapshot().FailureCount,
 		"the job must still be recorded as failed")
 }
+
+func TestPlainJobTriggerSkipStillWarns(t *testing.T) {
+	log := newRecordingLogger()
+	module, _ := newTestScheduler(t, 5*time.Second, withLogger(log))
+	entry := &jobEntry{job: &slowJob{}, metadata: &JobMetadata{JobID: "plain-job"}}
+	require.True(t, entry.tryLock())
+
+	module.runJobBody(entry, triggerScheduled)
+
+	skips := log.messageLines("Job trigger skipped - job is already running")
+	require.Len(t, skips, 1)
+	assert.Equal(t, "warn", skips[0].level)
+}
+
+func TestJobTraceparentRendersTheRealFlags(t *testing.T) {
+	spanWith := func(flags trace.TraceFlags) trace.Span {
+		return trace.SpanFromContext(trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: trace.TraceID{0x0a}, SpanID: trace.SpanID{0x0b}, TraceFlags: flags,
+		})))
+	}
+	tests := []struct {
+		name string
+		span trace.Span
+		want string
+	}{
+		{name: "nil_span", want: ""},
+		{name: "invalid_span_context", span: trace.SpanFromContext(context.Background()), want: ""},
+		{name: "sampled", span: spanWith(trace.FlagsSampled), want: "00-0a000000000000000000000000000000-0b00000000000000-01"},
+		{name: "unsampled", span: spanWith(0), want: "00-0a000000000000000000000000000000-0b00000000000000-00"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, jobTraceparent(tt.span))
+		})
+	}
+}

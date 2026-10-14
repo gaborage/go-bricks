@@ -49,14 +49,15 @@ func (e *jobEntry) windowFor(triggerType string) *windowState {
 	return e.window
 }
 
-// newRecorder returns the Recorder a Windowed job's run reports through; nil for a plain job.
-func (e *jobEntry) newRecorder(window *windowState) *Recorder {
+// newRecorder returns the Recorder a Windowed job's run reports through; nil for a
+// plain job. runWindow is the window the run reports to, nil for a manual run.
+func (e *jobEntry) newRecorder(runWindow *windowState) *Recorder {
 	if e.window == nil {
 		return nil
 	}
 	var late *atomic.Int64
-	if window != nil {
-		late = &window.late
+	if runWindow != nil {
+		late = &runWindow.late
 	}
 	return newRecorder(e.window.spec, late)
 }

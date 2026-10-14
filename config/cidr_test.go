@@ -36,7 +36,10 @@ func TestLenientTrustedProxyKeysRejectEveryDefaultRouteSpelling(t *testing.T) {
 		})
 
 		t.Run("scheduler_"+safeSubtestName(entry), func(t *testing.T) {
-			cfg := &SchedulerConfig{Security: SchedulerSecurityConfig{TrustedProxies: []string{entry}}}
+			cfg := &SchedulerConfig{
+				Security: SchedulerSecurityConfig{TrustedProxies: []string{entry}},
+				Summary:  SchedulerSummaryConfig{Window: defaultSchedulerSummaryWindow},
+			}
 			err := checkScheduler(cfg)
 			require.Error(t, err, "a default route must not be accepted on scheduler.security.trustedproxies")
 			assert.Contains(t, err.Error(), "scheduler.security.trustedproxies")

@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
@@ -41,10 +40,10 @@ func TestWindowedJobSummarizesAThousandFailingRunsInOneWarnLine(t *testing.T) {
 	entry := registeredEntry(t, module, "relay")
 
 	for range 1000 {
-		module.runJobBody(entry, "scheduled")
+		module.runJobBody(entry, triggerScheduled)
 	}
 	clock.Advance(windowTestWidth)
-	module.runJobBody(entry, "scheduled")
+	module.runJobBody(entry, triggerScheduled)
 
 	action := log.actionLines()
 	require.Len(t, action, 1, "the window line is the only action line: no per-run action line")
@@ -523,6 +522,30 @@ func TestManualTriggerOfAWindowedJobKeepsTheActionLineAndLeavesTheWindow(t *test
 	assert.Equal(t, "info", action[0].level)
 }
 
+func TestReservedFailingKeysListFirst(t *testing.T) {
+	log := newRecordingLogger()
+	clock := newFakeClock(windowTestStart)
+	module := newWindowedTestScheduler(t, clock, withLogger(log), withSlowJobThreshold(time.Second))
+	counters := countersN(11)
+	job := Windowed(func(_ JobContext, rec *Recorder) error {
+		for _, c := range counters {
+			rec.Fail(c.Name, 1)
+		}
+		clock.Advance(2 * time.Second)
+		return errors.New("relay failed")
+	}, counters...)
+	require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+
+	module.runJobBody(registeredEntry(t, module, "relay"), triggerScheduled)
+	require.NoError(t, module.Shutdown())
+
+	windows := log.windowLines()
+	require.Len(t, windows, 1)
+	assert.Equal(t, []string{keyRunError, keyRunSlow, "c00", "c01", "c02", "c03", "c04", "c05", "c06", "c07"},
+		windows[0].fields["failing.keys"])
+	assert.Equal(t, 3, windows[0].fields["failing.keys.more"])
+}
+
 func TestRecorderCallAfterTheRunIsCountedLate(t *testing.T) {
 	log := newRecordingLogger()
 	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
@@ -541,41 +564,4 @@ func TestRecorderCallAfterTheRunIsCountedLate(t *testing.T) {
 	require.Len(t, windows, 1)
 	assert.Equal(t, int64(1), windows[0].fields["recorder.late"])
 	assert.Equal(t, int64(0), windows[0].fields["published.ok"], "a late call is dropped")
-}
-
-func TestPlainJobTriggerSkipStillWarns(t *testing.T) {
-	log := newRecordingLogger()
-	module, _ := newTestScheduler(t, 5*time.Second, withLogger(log))
-	entry := &jobEntry{job: &slowJob{}, metadata: &JobMetadata{JobID: "plain-job"}}
-	require.True(t, entry.tryLock())
-
-	module.runJobBody(entry, triggerScheduled)
-
-	skips := log.messageLines("Job trigger skipped - job is already running")
-	require.Len(t, skips, 1)
-	assert.Equal(t, "warn", skips[0].level)
-}
-
-func TestJobTraceparentRendersTheRealFlags(t *testing.T) {
-	spanWith := func(flags trace.TraceFlags) trace.Span {
-		return trace.SpanFromContext(trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
-			TraceID: trace.TraceID{0x0a}, SpanID: trace.SpanID{0x0b}, TraceFlags: flags,
-		})))
-	}
-	tests := []struct {
-		name string
-		span trace.Span
-		want string
-	}{
-		{name: "nil_span", want: ""},
-		{name: "invalid_span_context", span: trace.SpanFromContext(context.Background()), want: ""},
-		{name: "sampled", span: spanWith(trace.FlagsSampled), want: "00-0a000000000000000000000000000000-0b00000000000000-01"},
-		{name: "unsampled", span: spanWith(0), want: "00-0a000000000000000000000000000000-0b00000000000000-00"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, jobTraceparent(tt.span))
-		})
-	}
 }

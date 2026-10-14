@@ -37,6 +37,24 @@ const (
 	keyUndeclared = "undeclared"
 )
 
+// reservedFailingKeys lead failing.keys in this order, so the scheduler's own
+// failure reasons never fall into failing.keys.more.
+var reservedFailingKeys = []string{keyRunError, keyRunPanic, keyRunSlow, keyUndeclared}
+
+func failingKeyRank(key string) int {
+	if i := slices.Index(reservedFailingKeys, key); i >= 0 {
+		return i
+	}
+	return len(reservedFailingKeys)
+}
+
+func compareFailingKeys(a, b string) int {
+	if ra, rb := failingKeyRank(a), failingKeyRank(b); ra != rb {
+		return ra - rb
+	}
+	return strings.Compare(a, b)
+}
+
 var (
 	counterNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,62}$`)
 	attrKeyPattern     = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)

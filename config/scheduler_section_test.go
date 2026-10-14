@@ -198,7 +198,7 @@ func TestValidateSchedulerCIDRListRejectsAllInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &SchedulerConfig{Security: tt.security}
+			cfg := &SchedulerConfig{Security: tt.security, Summary: SchedulerSummaryConfig{Window: defaultSchedulerSummaryWindow}}
 			err := checkScheduler(cfg)
 			assertValidationError(t, err, tt.wantField)
 		})
@@ -219,7 +219,7 @@ func TestValidateSchedulerCIDRListAcceptsValidCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &SchedulerConfig{Security: tt.security}
+			cfg := &SchedulerConfig{Security: tt.security, Summary: SchedulerSummaryConfig{Window: defaultSchedulerSummaryWindow}}
 			require.NoError(t, checkScheduler(cfg))
 		})
 	}

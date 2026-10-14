@@ -183,7 +183,7 @@ func (m *Module) logWindow(s *windowSnapshot) {
 		level = logLevelWarn
 	}
 	keys := slices.AppendSeq(make([]string, 0, len(t.keys)), maps.Keys(t.keys))
-	slices.Sort(keys)
+	slices.SortFunc(keys, compareFailingKeys)
 	listed := keys[:min(len(keys), maxFailingKeysListed)]
 	inflight := int64(0)
 	if s.inflight {
@@ -192,8 +192,8 @@ func (m *Module) logWindow(s *windowSnapshot) {
 	event := createJobLogEvent(m.logger, level).
 		Str("log.type", "action").
 		Str(jobIDAttr, s.window.jobID).
-		Str("window.start", s.start.Format(time.RFC3339)).
-		Str("window.end", s.start.Add(s.window.width).Format(time.RFC3339)).
+		Str("window.start", s.start.Format(time.RFC3339Nano)).
+		Str("window.end", s.start.Add(s.window.width).Format(time.RFC3339Nano)).
 		Bool("window.partial", s.partial).
 		Int64("runs", t.runs).
 		Int64("runs.failing", t.failingRuns).
