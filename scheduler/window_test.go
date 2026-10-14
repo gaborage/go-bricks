@@ -114,6 +114,7 @@ func TestWindowedRunCountsInTheWindowItCompletesIn(t *testing.T) {
 
 			windows := log.windowLines()
 			require.Len(t, windows, 1)
+			assert.Equal(t, "info", windows[0].level, "a window holding only an in-flight run is not a warning")
 			assert.Equal(t, "2026-10-14T03:00:00Z", windows[0].fields["window.start"])
 			assert.Equal(t, "2026-10-14T04:00:00Z", windows[0].fields["window.end"])
 			assert.Equal(t, int64(0), windows[0].fields["runs"])
