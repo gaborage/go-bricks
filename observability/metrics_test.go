@@ -664,12 +664,8 @@ func spawnBlockedGoroutines(t *testing.T, n int) {
 	baseline := goruntime.NumGoroutine()
 	release := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(n)
 	for range n {
-		go func() {
-			defer wg.Done()
-			<-release
-		}()
+		wg.Go(func() { <-release })
 	}
 	t.Cleanup(func() {
 		close(release)
