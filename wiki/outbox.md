@@ -276,8 +276,9 @@ Consequences worth knowing:
   knobs together.
 - **A relay cycle that has pending work but cannot reach the broker returns a job error** (after
   advancing every record's `retry_count`), so the failure stays visible at the scheduler level —
-  under `run.error` on the [window and edge lines](#relay-window-line-and-metrics), whose `error`
-  names the affected tenant in multi-tenant mode. An idle relay (nothing pending) is not an error.
+  under `run.error` on the [edge line](#relay-window-line-and-metrics), whose `error` names the
+  affected tenant in multi-tenant mode (the window line's `error` is its last run's). An idle relay
+  (nothing pending) is not an error.
 - **`failed` rows accumulate:** `outbox-cleanup` purges only `published` events. Monitor and prune
   dead-lettered rows; they are intentionally never auto-deleted so they stay visible.
 
@@ -474,9 +475,13 @@ Counter is also an OTel `Int64Counter` of the same name carrying `job.id`:
   behind it ([Lanes and Ordering](#lanes-and-ordering)) does not. A row naming a lane this build
   lacks reports as `lane=unknown`, and a zero count is not reported.
 - **Per-tenant errors are still joined and returned**, so a cycle that fails lands under
-  `run.error`, its tenant named in `error`. A cycle whose rows fail without an outage (a NACK, a
+  `run.error`, its tenant named in the edge line's `error` (the window line's `error` is its last
+  run's). A cycle whose rows fail without an outage (a NACK, a
   poison row) returns nil: `/_sys/job` and `job.execution.total` count it a success, and only the
   `outbox.relay.records` failing key, `runs.failing` and the line's WARN level show it.
+
+An abridged window line (the `window.*`, other `runs.*`, `traceparent` and `correlation_id` keys,
+and the remaining Counter fields, are left out):
 
 ```json
 {"level":"warn","log.type":"action","job.id":"outbox-relay","runs":60,"runs.failing":3,
@@ -501,7 +506,7 @@ whenever that tenant's cycle is unavailable.
 **The per-cycle line** `Outbox relay cycle completed` is DEBUG (it was INFO), written for each
 tenant cycle that fetched rows, with its fields unchanged: `published`, `unrecorded`, `failed`,
 `deadlettered`, `parked`, `total`, `stall_wait_ms`, the per-lane `<outcome>_<lane>` fields, and
-`tenant` under fan-out or `tenancy=shared`. `stall_wait_ms` has no metric. The lost-leadership
+`tenant` under fan-out, or `tenancy=shared` on a shared ledger. `stall_wait_ms` has no metric. The lost-leadership
 WARNs are unchanged.
 
 **Heartbeat checks.** Metrics temporality is cumulative by default, and a cumulative counter never

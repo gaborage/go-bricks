@@ -105,7 +105,7 @@ func newRelay(store Store, cfg *config.OutboxConfig, getDB func(context.Context)
 	}
 }
 
-// Run is the relay's Windowed run: one relay cycle per configured tenant, each reported on rec.
+// Run is the run RegisterJobs wraps in scheduler.Windowed.
 func (r *Relay) Run(jobCtx scheduler.JobContext, rec *scheduler.Recorder) error {
 	return r.run(jobCtx, rec)
 }
@@ -697,8 +697,8 @@ func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.In
 	}
 }
 
-// logCycle emits the per-cycle delivery summary at DEBUG; the window line and the
-// outbox.relay.* metrics carry the counts above it. "unrecorded" counts events delivered to the
+// logCycle emits the per-cycle delivery summary at DEBUG; operators read the counts on the
+// window line and the outbox.relay.* metrics. "unrecorded" counts events delivered to the
 // broker whose MarkPublished failed (they re-deliver next cycle) — kept distinct from
 // "published" so the success count is not inflated by stuck-but-delivered records.
 // stall_wait_ms is what the cycle paid to discover a down lane or scope, zero when none did.
