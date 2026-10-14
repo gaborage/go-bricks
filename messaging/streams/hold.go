@@ -487,6 +487,7 @@ func (r *consumerRunner) replay(ctx context.Context, msg *HeldMessage) error {
 		},
 		Metrics: tracking.StreamConsumeAttributes(msg.Stream),
 		Log:     r.log,
+		NewRoot: true,
 		Handle: func(msgCtx context.Context, _ logger.Logger, _ string) error {
 			return r.handler(multitenant.SetTenant(msgCtx, msg.TenantID), &Message{
 				Data:       msg.Data,

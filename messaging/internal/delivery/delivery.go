@@ -151,6 +151,9 @@ type Request struct {
 	// stamp that is present but unusable, whoever the consumer is.
 	TenantOptional bool
 
+	// NewRoot starts the consume span as a new root linked to the caller's span.
+	NewRoot bool
+
 	// LogOutcome writes the lane's own line for the finished delivery. It runs
 	// while the span is open and the lease scope still holds, so a handle the
 	// handler borrowed outlives the line.
@@ -222,7 +225,15 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 
 	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, req.Carrier)
 
-	msgCtx, span := tracer().Start(msgCtx, req.Destination+" "+spanOperationReceive, consumerSpanOpts...)
+	spanOpts := consumerSpanOpts
+	if req.NewRoot {
+		spanOpts = []trace.SpanStartOption{
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithNewRoot(),
+			trace.WithLinks(trace.LinkFromContext(ctx)),
+		}
+	}
+	msgCtx, span := tracer().Start(msgCtx, req.Destination+" "+spanOperationReceive, spanOpts...)
 	span.SetAttributes(spanAttributes(req)...)
 
 	// Install the per-message lease scope (ADR-032): per-tenant handles borrowed

@@ -166,7 +166,12 @@ func reportBrokenTelemetry() {
 
 	// DEFECT 10: the wrong name, the wrong kind, an undeclared attribute, and a
 	// body size that matches no scenario.
-	_, span := tracer.Start(parented, brokenSpanName, oteltrace.WithSpanKind(oteltrace.SpanKindInternal))
+	// DEFECT 15: a link, which only the hold replay's consume span may carry.
+	_, span := tracer.Start(parented, brokenSpanName,
+		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
+		oteltrace.WithLinks(oteltrace.Link{SpanContext: oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID: brokenOtherTraceID, SpanID: brokenSpanID, TraceFlags: oteltrace.FlagsSampled, Remote: true,
+		})}))
 	span.SetAttributes(
 		attribute.String("messaging.system", "not-rabbitmq"),
 		attribute.String("undeclared.attribute", "x"),
