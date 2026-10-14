@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
@@ -1454,4 +1455,45 @@ func TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan(t *testing.T) {
 				scheduler.Windowed(func(scheduler.JobContext, *scheduler.Recorder) error { return nil }, counters...), time.Hour))
 		})
 	}
+}
+
+// TestRecordingSinkRejectsUndeclaredCalls is the fake sink's negative control: a check that
+// accepted every call would let every projection test above pass vacuously.
+func TestRecordingSinkRejectsUndeclaredCalls(t *testing.T) {
+	r, _, _ := newRelayWithLanes(&fakeStore{})
+	sink := newRecordingSink(t, r)
+	tests := []struct {
+		name  string
+		named string
+		n     int64
+		attrs []attribute.KeyValue
+	}{
+		{name: "undeclared_counter", named: "outbox.relay.cycle", n: 1, attrs: []attribute.KeyValue{attribute.String("role", "leader")}},
+		{name: "negative_count", named: "outbox.relay.led", n: -1},
+		{
+			name: "tenant_under_the_control_plane_key", named: "outbox.relay.cycles", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("role", "leader"), attribute.String("tenant", "t1")},
+		},
+		{name: "missing_key", named: "outbox.relay.records", n: 1, attrs: []attribute.KeyValue{attribute.String("outcome", "published")}},
+		{
+			name: "undeclared_key", named: "outbox.relay.records", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "published"), attribute.String("role", "leader")},
+		},
+		{
+			name: "repeated_key", named: "outbox.relay.records", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "published"), attribute.String("outcome", "failed")},
+		},
+		{
+			name: "undeclared_value", named: "outbox.relay.records", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "dead_lettered"), attribute.String("lane", "amqp")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, sink.declares(tt.named, tt.n, tt.attrs))
+		})
+	}
+	assert.True(t, sink.declares("outbox.relay.records", 0,
+		[]attribute.KeyValue{attribute.String("lane", "amqp"), attribute.String("outcome", "published")}),
+		"a declared call in any key order, with n == 0, passes")
 }
