@@ -151,8 +151,8 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 // them to until it registers as a Windowed job.
 type noopHoldSink struct{}
 
-func (noopHoldSink) Count(string, int64, ...attribute.KeyValue) {}
-func (noopHoldSink) Fail(string, int64, ...attribute.KeyValue)  {}
+func (noopHoldSink) Count(string, int64, ...attribute.KeyValue) { /* dropped: no Recorder yet */ }
+func (noopHoldSink) Fail(string, int64, ...attribute.KeyValue)  { /* dropped: no Recorder yet */ }
 
 // run is one pass. Each consumer's outcomes reach sink as soon as its pass
 // returns, so a later consumer's panic keeps them; a panic in a consumer's own
