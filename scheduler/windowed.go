@@ -237,9 +237,8 @@ func (c *counterSpec) add(ctx context.Context, n int64, attrs []attribute.KeyVal
 		c.instrument.Add(ctx, n, c.jobOnly)
 		return
 	}
-	kvs := make([]attribute.KeyValue, 0, len(attrs)+1)
-	kvs = append(append(kvs, attrs...), c.job)
-	c.instrument.Add(ctx, n, metric.WithAttributes(kvs...))
+	// The full slice expression makes append copy, never writing into the caller's array.
+	c.instrument.Add(ctx, n, metric.WithAttributes(append(attrs[:len(attrs):len(attrs)], c.job)...))
 }
 
 // failingKey renders name{k=v,...} with the attributes sorted by key.

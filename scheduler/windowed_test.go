@@ -308,3 +308,21 @@ func TestWindowedCounterMetricsSumCountAndFail(t *testing.T) {
 	}, counterPoints(t, mp, "published"), "Count and Fail both add; an undeclared value adds nothing")
 	assert.Equal(t, map[string]int64{"job.id=relay": 4}, counterPoints(t, mp, "parked"), "a late call adds nothing")
 }
+
+func TestRecorderNeverWritesIntoTheCallersAttributes(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	t.Cleanup(func() { require.NoError(t, mp.Shutdown(context.Background())) })
+	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withMeterProvider(mp.MeterProvider))
+	spare := make([]attribute.KeyValue, 2, 3)
+	spare[0], spare[1] = laneA, kindX
+	job := Windowed(func(_ JobContext, rec *Recorder) error {
+		rec.Count("published", 1, spare[:2]...)
+		return nil
+	}, Counter{Name: "published", Attrs: []AttrSet{{Key: "lane", Values: []string{"a"}}, {Key: "kind", Values: []string{"x"}}}})
+	require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+
+	module.runJobBody(registeredEntry(t, module, "relay"), triggerScheduled)
+
+	assert.Equal(t, attribute.KeyValue{}, spare[:3][2], "job.id must not land in the caller's spare capacity")
+	assert.Equal(t, map[string]int64{"job.id=relay,kind=x,lane=a": 1}, counterPoints(t, mp, "published"))
+}
