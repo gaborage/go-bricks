@@ -1117,18 +1117,42 @@ func TestTallyIfTooOldCountsOnlyPastTheThreshold(t *testing.T) {
 
 	drain.tallyIfTooOld(pass, &HoldTenant{TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour - time.Second), Attempts: 4})
 	assert.Equal(t, overAgeTally{
-		count: 1, consumer: testHoldConsumer, tenant: testHoldTenant, heldFor: time.Hour + time.Second, attempts: 4,
+		count: 1, consumer: testHoldConsumer, tenant: testHoldTenant,
+		heldSince: now.Add(-time.Hour - time.Second), heldFor: time.Hour + time.Second, attempts: 4,
 	}, pass.overAge, "a second past it is one sighting")
 }
 
 // TestOverAgeTallyKeepsTheFirstOfTwoEquallyOldTenants pins the tie: the WARN names
 // one tenant, and which one must not depend on more than the order they were seen.
 func TestOverAgeTallyKeepsTheFirstOfTwoEquallyOldTenants(t *testing.T) {
+	heldSince := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	var tally overAgeTally
-	tally.merge(&overAgeTally{count: 1, consumer: testHoldConsumer, tenant: testHoldTenant, heldFor: time.Hour})
-	tally.merge(&overAgeTally{count: 1, consumer: testHoldConsumer, tenant: otherHoldTenant, heldFor: time.Hour})
+	tally.merge(&overAgeTally{count: 1, consumer: testHoldConsumer, tenant: testHoldTenant, heldSince: heldSince})
+	tally.merge(&overAgeTally{count: 1, consumer: testHoldConsumer, tenant: otherHoldTenant, heldSince: heldSince})
 
 	assert.Equal(t, testHoldTenant, tally.tenant)
+	assert.Equal(t, int64(2), tally.count)
+}
+
+// TestOverAgeTallyNamesTheTenantHeldFirst pins what "oldest" means: the earliest
+// HeldSince. A tenant sighted later in a pass reads a later clock, so a slow
+// replay in between can give a younger tenant the longer age.
+func TestOverAgeTallyNamesTheTenantHeldFirst(t *testing.T) {
+	heldSince := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	var tally overAgeTally
+	tally.merge(&overAgeTally{
+		count: 1, consumer: testHoldConsumer, tenant: testHoldTenant, heldSince: heldSince, heldFor: time.Hour,
+	})
+	// Held a second later, but sighted three seconds later: its age reads longer.
+	tally.merge(&overAgeTally{
+		count: 1, consumer: testHoldConsumer, tenant: otherHoldTenant,
+		heldSince: heldSince.Add(time.Second), heldFor: time.Hour + 2*time.Second,
+	})
+	// A consumer whose pass saw no tenant over age changes nothing.
+	tally.merge(&overAgeTally{})
+
+	assert.Equal(t, testHoldTenant, tally.tenant, "the tenant held first is the oldest")
+	assert.Equal(t, time.Hour, tally.heldFor, "and its own age is the one reported")
 	assert.Equal(t, int64(2), tally.count)
 }
 

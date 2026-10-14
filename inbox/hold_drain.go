@@ -150,19 +150,26 @@ type holdPass struct {
 // overAgeTally counts the leased tenants found held past maxage, and keeps the
 // oldest of them for the WARN.
 type overAgeTally struct {
-	count    int64
-	consumer string
-	tenant   string
-	heldFor  time.Duration
-	attempts int
+	count     int64
+	consumer  string
+	tenant    string
+	heldSince time.Time
+	heldFor   time.Duration
+	attempts  int
 }
 
-// merge adds other's sightings, keeping whichever oldest tenant is older.
+// merge adds other's sightings, keeping whichever oldest tenant was held first.
+// HeldSince decides, not heldFor: a tenant sighted later in a pass reads a later
+// clock, so its age can exceed an older tenant's.
 func (t *overAgeTally) merge(other *overAgeTally) {
-	t.count += other.count
-	if other.heldFor > t.heldFor {
-		t.consumer, t.tenant, t.heldFor, t.attempts = other.consumer, other.tenant, other.heldFor, other.attempts
+	if other.count == 0 {
+		return
 	}
+	if t.count == 0 || other.heldSince.Before(t.heldSince) {
+		t.consumer, t.tenant, t.heldSince, t.heldFor, t.attempts =
+			other.consumer, other.tenant, other.heldSince, other.heldFor, other.attempts
+	}
+	t.count += other.count
 }
 
 // heldTenant is one tenant's turn under a lease: the ledger's row for it, and the
@@ -489,7 +496,8 @@ func (d *HoldDrain) tallyIfTooOld(pass *holdPass, tenant *HoldTenant) {
 		return
 	}
 	pass.overAge.merge(&overAgeTally{
-		count: 1, consumer: pass.consumer, tenant: tenant.TenantID, heldFor: held, attempts: tenant.Attempts,
+		count: 1, consumer: pass.consumer, tenant: tenant.TenantID,
+		heldSince: tenant.HeldSince, heldFor: held, attempts: tenant.Attempts,
 	})
 }
 
