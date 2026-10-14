@@ -43,6 +43,7 @@ const (
 	logLevelWarn     = "warn"
 	logLevelDebug    = "debug"
 	logLevelInfo     = "info"
+	logLevelError    = "error"
 
 	// Error message for job type validation
 	errJobInterfaceMsg = "must implement scheduler.Executor interface, got %T"
@@ -74,7 +75,11 @@ type Module struct {
 	location  *time.Location   // Loaded once in Init; nil means the "-" host-local sentinel
 	scheduler gocron.Scheduler // Lazy-initialized on first job registration
 	jobs      map[string]*jobEntry
-	mu        sync.RWMutex // Protects scheduler and jobs map
+	mu        sync.RWMutex // Protects scheduler, jobs and counterSeries
+
+	// counterSeries totals the series every registered Windowed job declares per
+	// Counter name: jobs sharing a name record on one instrument and one limit.
+	counterSeries map[string]int
 
 	// now is the clock behind run durations and summary windows; tests replace it.
 	now func() time.Time
@@ -92,6 +97,7 @@ func NewModule() *Module {
 
 	return &Module{
 		jobs:           make(map[string]*jobEntry),
+		counterSeries:  make(map[string]int),
 		now:            time.Now,
 		shutdownCtx:    shutdownCtx,
 		shutdownCancel: shutdownCancel,
@@ -351,6 +357,36 @@ func (m *Module) FixedRate(jobID string, job any, interval time.Duration) error 
 	})
 }
 
+// checkSharedSeries refuses a Windowed job whose Counter names, added to every
+// registered job's, would declare more series than one instrument holds. Must be
+// called with m.mu held.
+func (m *Module) checkSharedSeries(window *windowState) error {
+	if window == nil {
+		return nil
+	}
+	for i := range window.spec.counters {
+		c := &window.spec.counters[i]
+		if total := m.counterSeries[c.name] + c.series; total > maxCounterSeries {
+			return &ValidationError{
+				Field:   counterField(i, ".Name"),
+				Message: fmt.Sprintf("%q is declared by other Windowed jobs too; together they declare %d series, over %d", c.name, total, maxCounterSeries),
+			}
+		}
+	}
+	return nil
+}
+
+// claimSharedSeries records a registered Windowed job's series. Must be called with
+// m.mu held.
+func (m *Module) claimSharedSeries(window *windowState) {
+	if window == nil {
+		return
+	}
+	for i := range window.spec.counters {
+		m.counterSeries[window.spec.counters[i].name] += window.spec.counters[i].series
+	}
+}
+
 // newJobWindow validates a Windowed job and builds its summary window.
 func (m *Module) newJobWindow(jobID string, job *windowedJob) (*windowState, error) {
 	width := m.config.Scheduler.Summary.Window
@@ -363,6 +399,9 @@ func (m *Module) newJobWindow(jobID string, job *windowedJob) (*windowState, err
 	spec, err := compileWindowed(job)
 	if err != nil {
 		return nil, err
+	}
+	if m.meterProvider != nil {
+		spec.instrument(m.meterProvider.Meter("scheduler"), jobID)
 	}
 	return newWindowState(jobID, spec, width), nil
 }
@@ -486,6 +525,10 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 		}
 	}
 
+	if err := m.checkSharedSeries(window); err != nil {
+		return err
+	}
+
 	// Validate schedule configuration (defensive check)
 	// This provides defense in depth - public methods validate at API boundary,
 	// and this validates before scheduling with gocron
@@ -519,6 +562,7 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 	entry.gocronJob = gocronJob
 
 	m.jobs[jobID] = entry
+	m.claimSharedSeries(window)
 
 	m.logger.Info().
 		Str("jobID", jobID).
@@ -745,10 +789,11 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	correlationID := gobrickstrace.EnsureTraceID(ctx)
 
 	window := entry.windowFor(ctx.TriggerType())
-	rec := entry.newRecorder(window)
+	rec := entry.newRecorder(ctx, window)
 	// settled stops the recovery defer from counting a run twice when a panic
 	// follows the normal path's settle (a logger, metrics or span call).
 	var line summaryLine
+	var edged bool
 	settled := false
 
 	start := m.now()
@@ -776,26 +821,13 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			panicErr := fmt.Errorf("panic (type: %s)", panicType)
 
 			if !settled {
-				var closed *windowSnapshot
-				line, closed = m.settleRun(window, rec, &finishedRun{
+				line, edged = m.settleRun(window, rec, &finishedRun{
 					end: end, duration: duration, err: panicErr, panicked: true,
 					traceparent: jobTraceparent(span), correlationID: correlationID,
 				})
-				m.logWindow(closed)
 			}
 
-			// The logger is consumer-supplied and its write can panic; `%T` cannot.
-			// This defer has already spent its recover(), so guard the log call
-			// alone — otherwise that panic escapes and skips the accounting below,
-			// leaving the job counted as neither success nor failure.
-			func() {
-				defer func() { _ = recover() }()
-				m.logger.WithContext(ctx).Error().
-					Str("jobID", entry.metadata.JobID).
-					Str("panic_type", panicType).
-					Str("stackTrace", string(debug.Stack())).
-					Msg("Job panicked - recovered and marked as failed")
-			}()
+			m.logPanicStack(ctx, entry.metadata.JobID, panicType, panicStackLevel(rec != nil, edged))
 
 			// Record panic in span (if span exists)
 			if span != nil {
@@ -826,12 +858,11 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	end := m.now()
 	duration := end.Sub(start)
 
-	line, closed := m.settleRun(window, rec, &finishedRun{
+	line, edged = m.settleRun(window, rec, &finishedRun{
 		end: end, duration: duration, err: err,
 		traceparent: jobTraceparent(span), correlationID: correlationID,
 	})
 	settled = true
-	m.logWindow(closed)
 
 	// Emit structured action log with operational counters and correlation
 	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, err, span, line)
@@ -864,6 +895,33 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	}
 }
 
+// panicStackLevel is ERROR, except for a Windowed run that wrote no edge: the edge
+// line carries the failure signal, so that run's stack drops to DEBUG.
+func panicStackLevel(windowed, edged bool) string {
+	if windowed && !edged {
+		return logLevelDebug
+	}
+	return logLevelError
+}
+
+// logPanicStack writes a recovered panic's stack line. The logger is
+// consumer-supplied and its write can panic; `%T` cannot. The caller's defer has
+// already spent its recover(), so the write is guarded here — otherwise that panic
+// escapes and skips the accounting after it, leaving the job counted as neither
+// success nor failure. The stack is captured only when the level is enabled.
+func (m *Module) logPanicStack(ctx JobContext, jobID, panicType, level string) {
+	defer func() { _ = recover() }()
+	event := createJobLogEvent(m.logger.WithContext(ctx), level)
+	if !event.Enabled() {
+		return
+	}
+	event.
+		Str("jobID", jobID).
+		Str("panic_type", panicType).
+		Str("stackTrace", string(debug.Stack())).
+		Msg("Job panicked - recovered and marked as failed")
+}
+
 // finishedRun is how a run ended, as its summary window counts it.
 type finishedRun struct {
 	end           time.Time
@@ -883,12 +941,13 @@ type summaryLine struct {
 	correlationID string
 }
 
-// settleRun counts a finished scheduled run in its summary window, and returns how
-// the run's own summary line is written and the window its completion closed, if any.
-func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun) (summaryLine, *windowSnapshot) {
-	line := summaryLine{correlationID: run.correlationID}
+// settleRun counts a finished scheduled run in its summary window, writes the
+// window its completion closed and the edge it emitted, if any, and returns how
+// the run's own summary line is written and whether it wrote an edge.
+func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun) (line summaryLine, edged bool) {
+	line = summaryLine{correlationID: run.correlationID}
 	if window == nil {
-		return line, nil
+		return line, false
 	}
 	out := rec.outcome()
 	if run.panicked {
@@ -900,13 +959,15 @@ func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun)
 		out.keys[keyRunSlow] = true
 	}
 	out.err, out.traceparent, out.correlationID = run.err, run.traceparent, run.correlationID
-	closed, sealed := window.complete(run.end, out)
+	closed, edge, sealed := window.complete(run.end, out)
+	m.logWindow(closed)
 	if sealed {
 		line.failing = len(out.keys) > 0
-		return line, closed
+		return line, false
 	}
+	m.logEdge(edge)
 	line.debug = true
-	return line, closed
+	return line, edge != nil
 }
 
 // sealWindows closes every open summary window as partial. A run that completes
@@ -1045,7 +1106,7 @@ func jobTraceparent(span trace.Span) string {
 func (m *Module) determineJobSeverity(duration time.Duration, err error) (logLevel, resultCode string) {
 	// ERROR: Job failed
 	if err != nil {
-		return "error", "ERROR"
+		return logLevelError, "ERROR"
 	}
 
 	// WARN: Slow job (succeeded but exceeded scheduler.timeout.slowjob)
@@ -1065,7 +1126,7 @@ func (m *Module) isSlow(duration time.Duration) bool {
 // createJobLogEvent creates a log event with the specified severity.
 func createJobLogEvent(log logger.Logger, level string) logger.LogEvent {
 	switch level {
-	case "error":
+	case logLevelError:
 		return log.Error()
 	case logLevelWarn:
 		return log.Warn()

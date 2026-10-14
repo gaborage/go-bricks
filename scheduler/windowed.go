@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -29,7 +31,9 @@ type AttrSet struct {
 
 const (
 	maxWindowedCounters = 32
-	maxCounterSeries    = 2000
+	// One under sdk/metric's default cardinality limit (2,000), whose last series
+	// is the otel.metric.overflow point.
+	maxCounterSeries = 1999
 
 	keyRunError   = "run.error"
 	keyRunSlow    = "run.slow"
@@ -89,8 +93,14 @@ type windowedExecutor interface {
 }
 
 type counterSpec struct {
-	name  string
-	attrs map[string]map[string]bool
+	name   string
+	attrs  map[string]map[string]bool
+	series int // the attribute combinations it declares
+
+	// Set by instrument; a nil instrument records nothing.
+	instrument metric.Int64Counter
+	job        attribute.KeyValue
+	jobOnly    metric.AddOption // the job.id set an attribute-less Counter records under
 }
 
 // windowedSpec is a validated Windowed job.
@@ -98,6 +108,21 @@ type windowedSpec struct {
 	run      func(JobContext, *Recorder) error
 	counters []counterSpec
 	index    map[string]int
+}
+
+// instrument creates one Int64Counter per declared Counter, named after it on the
+// scheduler's meter and recorded with its declared attributes plus job.id.
+func (s *windowedSpec) instrument(meter metric.Meter, jobID string) {
+	job := attribute.String(jobIDAttr, jobID)
+	jobOnly := metric.WithAttributeSet(attribute.NewSet(job))
+	for i := range s.counters {
+		c := &s.counters[i]
+		c.instrument, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
+			c.name,
+			metric.WithDescription("Outcomes a Windowed job reported, Count and Fail alike"),
+		)
+		c.job, c.jobOnly = job, jobOnly
+	}
 }
 
 func counterField(i int, rest string) string { return fmt.Sprintf("counters[%d]%s", i, rest) }
@@ -118,12 +143,12 @@ func compileWindowed(j *windowedJob) (*windowedSpec, error) {
 		if _, dup := spec.index[c.Name]; dup {
 			return nil, &ValidationError{Field: counterField(i, ".Name"), Message: fmt.Sprintf("%q is declared twice", c.Name)}
 		}
-		attrs, err := compileAttrSets(i, c.Attrs)
+		attrs, series, err := compileAttrSets(i, c.Attrs)
 		if err != nil {
 			return nil, err
 		}
 		spec.index[c.Name] = i
-		spec.counters = append(spec.counters, counterSpec{name: c.Name, attrs: attrs})
+		spec.counters = append(spec.counters, counterSpec{name: c.Name, attrs: attrs, series: series})
 	}
 	return spec, nil
 }
@@ -148,28 +173,28 @@ func validateCounterName(i int, name string, needles []string) error {
 	return nil
 }
 
-func compileAttrSets(i int, sets []AttrSet) (map[string]map[string]bool, error) {
-	attrs := make(map[string]map[string]bool, len(sets))
-	series := 1
+func compileAttrSets(i int, sets []AttrSet) (attrs map[string]map[string]bool, series int, err error) {
+	attrs = make(map[string]map[string]bool, len(sets))
+	series = 1
 	for j, set := range sets {
 		keyField := counterField(i, fmt.Sprintf(".Attrs[%d].Key", j))
 		if !attrKeyPattern.MatchString(set.Key) {
-			return nil, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q must match %s", set.Key, attrKeyPattern)}
+			return nil, 0, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q must match %s", set.Key, attrKeyPattern)}
 		}
 		if _, dup := attrs[set.Key]; dup {
-			return nil, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q is declared twice", set.Key)}
+			return nil, 0, &ValidationError{Field: keyField, Message: fmt.Sprintf("%q is declared twice", set.Key)}
 		}
 		values, err := compileAttrValues(counterField(i, fmt.Sprintf(".Attrs[%d].Values", j)), set.Values)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		series *= len(set.Values)
 		if series > maxCounterSeries {
-			return nil, &ValidationError{Field: counterField(i, ".Attrs"), Message: fmt.Sprintf("must declare at most %d series", maxCounterSeries)}
+			return nil, 0, &ValidationError{Field: counterField(i, ".Attrs"), Message: fmt.Sprintf("must declare at most %d series", maxCounterSeries)}
 		}
 		attrs[set.Key] = values
 	}
-	return attrs, nil
+	return attrs, series, nil
 }
 
 func compileAttrValues(field string, declared []string) (map[string]bool, error) {
@@ -206,6 +231,19 @@ func (c *counterSpec) declares(attrs []attribute.KeyValue) bool {
 	return true
 }
 
+// add records n on the Counter's metric, with its declared attributes plus job.id.
+func (c *counterSpec) add(ctx context.Context, n int64, attrs []attribute.KeyValue) {
+	if c.instrument == nil {
+		return
+	}
+	if len(attrs) == 0 {
+		c.instrument.Add(ctx, n, c.jobOnly)
+		return
+	}
+	// The full slice expression makes append copy, never writing into the caller's array.
+	c.instrument.Add(ctx, n, metric.WithAttributes(append(attrs[:len(attrs):len(attrs)], c.job)...))
+}
+
 // failingKey renders name{k=v,...} with the attributes sorted by key.
 func failingKey(name string, attrs []attribute.KeyValue) string {
 	if len(attrs) == 0 {
@@ -222,6 +260,7 @@ func failingKey(name string, attrs []attribute.KeyValue) string {
 // Recorder tallies one run's Counter outcomes. The scheduler seals it when the run
 // returns or panics; a later call is dropped and counted in recorder.late.
 type Recorder struct {
+	ctx  context.Context // NOSONAR: the run's traced context, held for the run's lifetime so metric exemplars name the job span
 	spec *windowedSpec
 	late *atomic.Int64
 
@@ -232,8 +271,9 @@ type Recorder struct {
 	keys    map[string]bool
 }
 
-func newRecorder(spec *windowedSpec, late *atomic.Int64) *Recorder {
+func newRecorder(ctx context.Context, spec *windowedSpec, late *atomic.Int64) *Recorder {
 	return &Recorder{
+		ctx:     ctx,
 		spec:    spec,
 		late:    late,
 		ok:      make([]int64, len(spec.counters)),
@@ -242,12 +282,13 @@ func newRecorder(spec *windowedSpec, late *atomic.Int64) *Recorder {
 	}
 }
 
-// Count adds n successful outcomes to the named Counter.
+// Count adds n successful outcomes to the named Counter and its metric.
 func (r *Recorder) Count(name string, n int64, attrs ...attribute.KeyValue) {
 	r.record(name, n, attrs, false)
 }
 
-// Fail adds n failing outcomes to the named Counter; n > 0 makes the run failing.
+// Fail adds n failing outcomes to the named Counter and its metric; n > 0 makes the
+// run failing.
 func (r *Recorder) Fail(name string, n int64, attrs ...attribute.KeyValue) {
 	r.record(name, n, attrs, true)
 }
@@ -266,6 +307,7 @@ func (r *Recorder) record(name string, n int64, attrs []attribute.KeyValue, fail
 		r.keys[keyUndeclared] = true
 		return
 	}
+	r.spec.counters[i].add(r.ctx, n, attrs)
 	if !failing {
 		r.ok[i] += n
 		return

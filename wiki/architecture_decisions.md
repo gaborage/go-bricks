@@ -2435,6 +2435,26 @@ reading as tuned.
 
 ---
 
+### [ADR-146: A Windowed Job Writes One Summary Line per Window](adr_146_windowed_job_summary.md)
+
+**Date:** 2026-10-13 | **Status:** Accepted | **Breaking:** none — additive; plain jobs and every other schedule door are unchanged
+
+A `FixedRate` job's per-run action line cannot be sampled: 17,280 lines a day per replica at 5s,
+plus a skip WARN per trigger while a run hangs and an ERROR stack line per panic, none carrying
+domain outcomes. The opt-in `scheduler.Windowed(run, counters...)` door hands the run a typed
+`Recorder` (`Count`/`Fail` against declared Counters), and the scheduler writes one fixed-key
+action line per UTC-aligned `scheduler.summary.window` (default 5m), attributing each run to the
+window it completes in, plus at most two edge lines per window when the failing set turns `new` or
+`grew`. Per-run lines, skips and unedged panic stacks drop to DEBUG; manual triggers keep today's
+line; Shutdown seals windows as partial; each Counter is an exact `Int64Counter`. Counter names
+holding a default log-filter needle are refused; `log.sensitivefields` needles are not checked, a
+recorded residual risk. See [migrations.md](migrations.md) `[C72.28]`.
+
+**Key Benefits:** a high-frequency job's log volume is bounded per window, and a clean-to-failing
+change is still reported at once.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3244,7 +3264,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-145) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-146) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
