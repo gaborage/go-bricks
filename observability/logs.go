@@ -9,11 +9,27 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// maxLogRecordAttributes mirrors logger's record attribute cap; observability
+// does not import logger, so the two constants are pinned equal by a test.
+const maxLogRecordAttributes = 128
+
 // logInitHook allows tests to inject failures after exporter creation but before provider setup.
 var logInitHook func() error
+
+// loggerProviderOptions is the one option list every LoggerProvider this package builds carries.
+// The explicit attribute count limit outranks OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT, so the SDK
+// never truncates below the bridge's own cap.
+func loggerProviderOptions(res *resource.Resource, processor sdklog.Processor) []sdklog.LoggerProviderOption {
+	return []sdklog.LoggerProviderOption{
+		sdklog.WithResource(res),
+		sdklog.WithProcessor(processor),
+		sdklog.WithAttributeCountLimit(maxLogRecordAttributes),
+	}
+}
 
 // initLogProvider initializes the OpenTelemetry logger provider with dual-mode logging.
 func (p *provider) initLogProvider(ctx context.Context) error {
@@ -38,10 +54,7 @@ func (p *provider) initLogProvider(ctx context.Context) error {
 		}
 	}
 
-	p.loggerProvider = sdklog.NewLoggerProvider(
-		sdklog.WithResource(res),
-		sdklog.WithProcessor(processor),
-	)
+	p.loggerProvider = sdklog.NewLoggerProvider(loggerProviderOptions(res, processor)...)
 
 	return nil
 }

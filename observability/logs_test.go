@@ -2,7 +2,9 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -412,10 +414,7 @@ func wireProvider(t *testing.T, build func(p *provider, exp sdklog.Exporter) sdk
 	require.NoError(t, err)
 
 	fake := &fakeLogExporter{}
-	logProvider := sdklog.NewLoggerProvider(
-		sdklog.WithResource(res),
-		sdklog.WithProcessor(build(p, fake)),
-	)
+	logProvider := sdklog.NewLoggerProvider(loggerProviderOptions(res, build(p, fake))...)
 	t.Cleanup(func() {
 		require.NoError(t, logProvider.Shutdown(context.Background()))
 	})
@@ -520,6 +519,76 @@ func TestCreateBatchProcessorEmitsNoIdentityDuplicatesThroughBridge(t *testing.T
 	require.NotNil(t, recordRes)
 	assert.Contains(t, recordRes.Attributes(), serviceNameKey.String("real-svc"),
 		"identity must still reach the backend on the resource block")
+}
+
+// TestLoggerProviderOptionsMatchBridgeAttributeCap writes an oversize line through the bridge
+// into a provider built from the production option list, with the SDK env limit set lower. A
+// SDK limit below the bridge cap would show a drop; a bridge cap below the SDK limit would show
+// fewer attributes. Only equal constants, with the option outranking the env var, pass.
+func TestLoggerProviderOptionsMatchBridgeAttributeCap(t *testing.T) {
+	t.Setenv("OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT", "64")
+	logProvider, fake := wireProvider(t, func(_ *provider, exp sdklog.Exporter) sdklog.Processor {
+		return sdklog.NewSimpleProcessor(exp)
+	})
+	bridge := logger.NewOTelBridge(logProvider)
+	require.NotNil(t, bridge)
+
+	_, err := bridge.Write(bridgeLine(t, 200, nil))
+	require.NoError(t, err)
+
+	require.NotEmpty(t, fake.batches)
+	require.NotEmpty(t, fake.batches[0])
+	rec := fake.batches[0][0]
+	require.Equal(t, log.SeverityInfo, rec.Severity(), "the data record is exported before the truncation WARN")
+	assert.Equal(t, maxLogRecordAttributes, rec.AttributesLen())
+	assert.Zero(t, rec.DroppedAttributes(), "the SDK must never truncate below the bridge's accounting")
+}
+
+// bridgeLine marshals a zerolog-shaped line carrying n caller fields beside extra.
+func bridgeLine(t *testing.T, n int, extra map[string]any) []byte {
+	t.Helper()
+	entry := map[string]any{"level": "info", "message": "m"}
+	for i := 0; i < n; i++ {
+		entry[fmt.Sprintf("field.%03d", i)] = "v"
+	}
+	for k, v := range extra {
+		entry[k] = v
+	}
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	return line
+}
+
+// TestOTelBridgeOversizeActionLineRoutesToActionProcessor writes an INFO action line whose
+// caller fields outnumber the attribute cap. Losing log.type would default it to trace,
+// where the 0.0 sampling rate drops it, so every emit must reach the action exporter.
+func TestOTelBridgeOversizeActionLineRoutesToActionProcessor(t *testing.T) {
+	actionExp, traceExp := &fakeLogExporter{}, &fakeLogExporter{}
+	dual := NewDualModeLogProcessor(sdklog.NewSimpleProcessor(actionExp), sdklog.NewSimpleProcessor(traceExp), 0)
+	logProvider := sdklog.NewLoggerProvider(sdklog.WithProcessor(dual))
+	t.Cleanup(func() {
+		require.NoError(t, logProvider.Shutdown(context.Background()))
+	})
+	bridge := logger.NewOTelBridge(logProvider)
+	require.NotNil(t, bridge)
+
+	const emits = 50
+	line := bridgeLine(t, 200, map[string]any{logTypeKey: logTypeAction})
+	for i := 0; i < emits; i++ {
+		_, err := bridge.Write(line)
+		require.NoError(t, err)
+	}
+
+	for _, batch := range traceExp.batches {
+		for i := range batch {
+			assert.Equal(t, log.SeverityWarn, batch[i].Severity(), "only the bridge's truncation WARN may reach the trace processor")
+		}
+	}
+	require.Len(t, actionExp.batches, emits, "every action emit must reach the action exporter")
+	for _, batch := range actionExp.batches {
+		require.Len(t, batch, 1)
+		assert.Equal(t, attribute.StringValue(logTypeAction), collectAttrs(&batch[0])[logTypeKey])
+	}
 }
 
 func TestInitLogProviderSuccess(t *testing.T) {
