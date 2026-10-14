@@ -283,8 +283,8 @@ Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combin
 
 ## Correlation Fields and Exemplars
 
-A log line from a consumed message or an HTTP request can carry three different
-identifiers, and they hold **different values by design**:
+A log line from a consumed message, an HTTP request or a scheduled job run can carry
+three different identifiers, and they hold **different values by design**:
 
 | field | what it is | when it appears |
 | --- | --- | --- |
@@ -302,8 +302,9 @@ a non-conforming one is discarded and replaced, so a value you sent may not be
 the value you see.
 
 The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
-run's framework id: the one on the run's context when present, else a UUID minted
-once per run and shared by the normal-return and panic-recovery lines. Its
+run's framework id: a UUID minted once per run and shared by the normal-return and
+panic-recovery lines (a framework id already on the run's context wins, though no
+framework path sets one today). Its
 `traceparent` carries the run span's real flags, and is `""` (key kept) when the
 run has no valid span context.
 

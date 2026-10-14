@@ -11954,9 +11954,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   ADR-117 amendment.
 - gist: a scheduler job summary line filled `correlation_id` with the OTel trace id, or `""`
   without a tracer, and hardcoded `-01` into `traceparent`, so an unsampled run claimed sampled and
-  a no-op tracer printed all zeros. `correlation_id` is now the run's framework id, the one on its
-  context or else a UUID minted once per run, and `traceparent` carries the span's real flags, or
-  is `""` with the key kept when the run has no valid span context (C72.26).
+  a no-op tracer printed all zeros. `correlation_id` is now the run's framework id, a UUID minted
+  once per run, and `traceparent` carries the span's real flags, or is `""` with the key kept when
+  the run has no valid span context (C72.26).
 
 ### [C72.1] OpenTelemetry Go moves to v1.47.0: `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read and attribute values nested deeper than 64 export empty · silent-behavior · when: match
 
@@ -12916,12 +12916,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gate: always — every service that registers `scheduler.NewModule()` emits this line for every
   run.
 - before: `correlation_id` held the OTel trace id of the `job.execute` span, all zeros under a
-  no-op tracer and `""` with no tracer. `traceparent` was `00-<trace-id>-<span-id>-01` whenever a
-  tracer was set, so an unsampled run claimed sampled and a no-op tracer printed all zeros, and
-  `""` with no tracer.
-- after: `correlation_id` is the framework id `logger.FieldCorrelationID` defines — the one on the
-  run's context when present, else a UUID minted once per run — always present and never the OTel
-  trace id. `traceparent` is `00-<trace-id>-<span-id>-<flags>` with the span context's flags byte
+  no-op tracer and `""` with no tracer. With a tracer set, `traceparent` was always
+  `00-<trace-id>-<span-id>-01`, so an unsampled run claimed sampled and a no-op tracer printed all
+  zeros; with no tracer it was `""`.
+- after: `correlation_id` is the framework id `logger.FieldCorrelationID` defines — a UUID minted
+  once per run and shared by the normal-return and panic-recovery lines (a framework id already on
+  the run's context wins, though no framework path sets one today) — always present and never the
+  OTel trace id. `traceparent` is `00-<trace-id>-<span-id>-<flags>` with the span context's flags byte
   verbatim (`-00` for an unsampled run), and `""`, key kept, when the run has no valid span
   context (no-op tracer or no tracer).
 - apply: a query that joins job lines to traces through `correlation_id` moves to `trace_id`,
@@ -12930,9 +12931,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `correlation_id` to a 32-hex value, or `traceparent` to all zeros, needs its expectation
   updated.
 - verify: run one job with a tracer whose sampler never samples and one with no tracer. The first
-  summary line's `traceparent` ends in `-00` and its trace segment equals the line's `trace_id`;
-  the second's `traceparent` is `""`; on both, `correlation_id` is a UUID that differs from
-  `trace_id`.
+  summary line's `traceparent` ends in `-00`, its trace segment equals the line's `trace_id`, and
+  its `correlation_id` is a UUID that differs from that `trace_id`; the second line has no
+  `trace_id`, an empty `traceparent` and a UUID `correlation_id`.
 - ref: gaborage/go-bricks#2095 · `scheduler/module.go` (`executeJob`, `logJobResultSummary`,
   `jobTraceparent`) · [observability.md](observability.md#correlation-fields-and-exemplars)
 

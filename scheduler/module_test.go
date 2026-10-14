@@ -270,38 +270,55 @@ func assertMintedCorrelationID(t *testing.T, got any) {
 	assert.NotEqual(t, uuid.Nil, parsed, "correlation_id must not be all zeros")
 }
 
-// TestJobSummaryTraceparentCarriesTheSpanFlags pins traceparent to the run's real
-// span context: an unsampled run must not claim -01, and correlation_id is the
-// framework id, never the OTel trace id.
-func TestJobSummaryTraceparentCarriesTheSpanFlags(t *testing.T) {
+// TestJobSummaryTraceCorrelation pins the summary line to the run's real span
+// context: traceparent carries its flags, or stays on the line as "" without a
+// valid one, and correlation_id is a minted framework id, never the OTel trace id.
+func TestJobSummaryTraceCorrelation(t *testing.T) {
+	neverSample := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
+	alwaysSample := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() {
+		require.NoError(t, neverSample.Shutdown(context.Background()))
+		require.NoError(t, alwaysSample.Shutdown(context.Background()))
+	})
+
 	tests := []struct {
 		name      string
-		sampler   sdktrace.Sampler
-		wantFlags string
+		provider  trace.TracerProvider // nil: no tracer
+		wantFlags string               // "": no valid span context
 	}{
-		{name: "never_sample", sampler: sdktrace.NeverSample(), wantFlags: "00"},
-		{name: "always_sample", sampler: sdktrace.AlwaysSample(), wantFlags: "01"},
+		{name: "never_sample", provider: neverSample, wantFlags: "00"},
+		{name: "always_sample", provider: alwaysSample, wantFlags: "01"},
+		{name: "noop_tracer", provider: noop.NewTracerProvider()},
+		{name: "no_tracer"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(tt.sampler))
-			t.Cleanup(func() { require.NoError(t, tp.Shutdown(context.Background())) })
+			var opts []testSchedulerOption
+			if tt.provider != nil {
+				opts = append(opts, withTracer(tt.provider.Tracer("test-scheduler")))
+			}
 
 			out := captureStdout(t, func() {
-				module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
-				runJobOnce(module, "flags-job", &slowJob{})
+				module, _ := newTestScheduler(t, 5*time.Second, opts...)
+				runJobOnce(module, "summary-job", &slowJob{})
 				require.NoError(t, module.Shutdown())
 			})
 
-			line := jobSummaryFields(t, out, "flags-job")
+			line := jobSummaryFields(t, out, "summary-job")
+			assertMintedCorrelationID(t, line[logger.FieldCorrelationID])
+			require.Contains(t, line, "traceparent")
+			if tt.wantFlags == "" {
+				assert.Empty(t, line["traceparent"])
+				return
+			}
+
 			traceID, _ := line[logger.FieldTraceID].(string)
 			spanID, _ := line[logger.FieldSpanID].(string)
 			require.NotEmpty(t, traceID)
 			require.NotEmpty(t, spanID)
 			assert.Equal(t, "00-"+traceID+"-"+spanID+"-"+tt.wantFlags, line["traceparent"])
 			assert.NotEqual(t, traceID, line[logger.FieldCorrelationID])
-			assertMintedCorrelationID(t, line[logger.FieldCorrelationID])
 		})
 	}
 }
@@ -327,40 +344,17 @@ func TestJobTraceparentRendersFlagsVerbatim(t *testing.T) {
 	}{
 		{name: "nil_span", span: nil, want: ""},
 		{name: "invalid_span_context", span: trace.SpanFromContext(context.Background()), want: ""},
-		{name: "unsampled", span: spanWithFlags(0x00), want: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"},
-		{name: "random_and_sampled", span: spanWithFlags(0x03), want: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-03"},
+		{name: "unsampled", span: spanWithFlags(0), want: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"},
+		{
+			name: "random_and_sampled",
+			span: spanWithFlags(trace.FlagsSampled | trace.FlagsRandom),
+			want: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-03",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, jobTraceparent(tt.span))
-		})
-	}
-}
-
-// TestJobSummaryWithoutAValidSpanContext pins the untraced run: traceparent stays
-// on the line as "", and correlation_id is a minted framework id, never zeros.
-func TestJobSummaryWithoutAValidSpanContext(t *testing.T) {
-	tests := []struct {
-		name string
-		opts []testSchedulerOption
-	}{
-		{name: "noop_tracer", opts: []testSchedulerOption{withTracer(noop.NewTracerProvider().Tracer("test-scheduler"))}},
-		{name: "no_tracer"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			out := captureStdout(t, func() {
-				module, _ := newTestScheduler(t, 5*time.Second, tt.opts...)
-				runJobOnce(module, "untraced-job", &slowJob{})
-				require.NoError(t, module.Shutdown())
-			})
-
-			line := jobSummaryFields(t, out, "untraced-job")
-			require.Contains(t, line, "traceparent")
-			assert.Empty(t, line["traceparent"])
-			assertMintedCorrelationID(t, line[logger.FieldCorrelationID])
 		})
 	}
 }
@@ -372,12 +366,12 @@ func TestJobSummaryCorrelationIDOnBothCallSites(t *testing.T) {
 	const contextID = "job-run-correlation-id"
 
 	tests := []struct {
-		name      string
-		job       Executor
-		contextID string
+		name          string
+		job           Executor
+		withContextID bool
 	}{
-		{name: "normal_return_context_id", job: &slowJob{}, contextID: contextID},
-		{name: "panic_recovery_context_id", job: &panicJob{}, contextID: contextID},
+		{name: "normal_return_context_id", job: &slowJob{}, withContextID: true},
+		{name: "panic_recovery_context_id", job: &panicJob{}, withContextID: true},
 		{name: "panic_recovery_minted", job: &panicJob{}},
 	}
 
@@ -387,8 +381,8 @@ func TestJobSummaryCorrelationIDOnBothCallSites(t *testing.T) {
 				module, _ := newTestScheduler(t, 5*time.Second)
 
 				ctx := context.Background()
-				if tt.contextID != "" {
-					ctx = gobrickstrace.WithTraceID(ctx, tt.contextID)
+				if tt.withContextID {
+					ctx = gobrickstrace.WithTraceID(ctx, contextID)
 				}
 				entry := &jobEntry{
 					job:      tt.job,
@@ -400,8 +394,8 @@ func TestJobSummaryCorrelationIDOnBothCallSites(t *testing.T) {
 			})
 
 			got := jobSummaryFields(t, out, "correlation-job")[logger.FieldCorrelationID]
-			if tt.contextID != "" {
-				assert.Equal(t, tt.contextID, got)
+			if tt.withContextID {
+				assert.Equal(t, contextID, got)
 				return
 			}
 			assertMintedCorrelationID(t, got)
