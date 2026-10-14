@@ -517,11 +517,13 @@ underscores, counters gain `_total`).
 
 | Signal | Window line | Metric |
 | --- | --- | --- |
-| Nobody led | one window's `outbox.relay.led.ok`, summed across replicas, is 0 | `sum(increase(outbox_relay_led_total[w])) == 0` |
-| One tenant's leader is stuck (needs the `tenant` attribute) | — | `sum by (tenant) (increase(outbox_relay_cycles_total{role="leader"}[w])) == 0` |
+| Nobody led | one window's `outbox.relay.led.ok`, summed across replicas, is 0 | `(sum(increase(outbox_relay_led_total[w])) or vector(0)) == 0` |
+| One tenant's leader is stuck (needs the `tenant` attribute) | — | `sum by (tenant) (increase(outbox_relay_cycles_total[w])) unless on (tenant) (sum by (tenant) (increase(outbox_relay_cycles_total{role="leader"}[w])) > 0)` |
 
-Both read 0 only for a series that exists: a counter no replica has added to since it started
-exports none.
+A counter exports no series until its first add, and `outbox.relay.led` adds only on a leader
+cycle, so a relay that has not led since startup has no `led` series at all; `or vector(0)` turns
+that silence into the 0 the check alerts on. The per-tenant check takes its tenants from every
+cycle role, so a tenant whose cycles are all `follower` or `unavailable` still shows up.
 
 ## Outbox Defaults
 
