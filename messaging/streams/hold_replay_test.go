@@ -11,9 +11,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/lanecontract"
 	"github.com/gaborage/go-bricks/multitenant"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 // holdManagerOn builds a manager with a ledger and starts the given declarations
@@ -76,6 +79,54 @@ func TestManagerReplayReturnsTheHandlerErrorUntouched(t *testing.T) {
 	})
 
 	assert.ErrorIs(t, err, wantErr)
+}
+
+// TestManagerReplayConsumeSpanIsARootLinkedToTheCaller pins ADR-068's root rule
+// on the hold replay path: the drain's job span is linked, not adopted as the
+// parent, and the handler's own spans stay inside the replay's trace.
+func TestManagerReplayConsumeSpanIsARootLinkedToTheCaller(t *testing.T) {
+	exporter, _ := lanecontract.SetupTelemetry(t)
+	m := holdManagerOn(t, &fakeHoldLedger{}, holdDeclsWithHandler(
+		func(ctx context.Context, _ *Message) error {
+			_, child := otel.Tracer("test-handler").Start(ctx, "handler.child")
+			child.End()
+			return nil
+		}))
+
+	parentCtx, parent := otel.Tracer("test-drain").Start(context.Background(), "job.execute")
+	err := m.Replay(parentCtx, testConsumerName, &HeldMessage{
+		Consumer: testConsumerName, Stream: testStream, Offset: 4, TenantID: "acme",
+	})
+	parent.End()
+	require.NoError(t, err)
+
+	consume := obtest.NewSpanCollector(t, exporter).WithName(testStream + " receive").AssertCount(1).First()
+	child := obtest.NewSpanCollector(t, exporter).WithName("handler.child").AssertCount(1).First()
+
+	assert.False(t, consume.Parent.IsValid(), "the replay's consume span is a root")
+	require.Len(t, consume.Links, 1, "the replay links the caller's span")
+	assert.True(t, parent.SpanContext().Equal(consume.Links[0].SpanContext), "the link names the caller's span")
+
+	assert.Equal(t, consume.SpanContext.TraceID(), child.SpanContext.TraceID(), "the handler's span is in the replay's trace")
+	assert.Equal(t, consume.SpanContext.SpanID(), child.Parent.SpanID(), "the handler's span nests under the consume span")
+	assert.NotEqual(t, parent.SpanContext().TraceID(), child.SpanContext.TraceID(), "the handler's span left the caller's trace")
+}
+
+// TestManagerReplayWithoutACallerSpanLinksNothing pins the unguarded link: the
+// SDK drops a link to an invalid span context, so a replay with no caller span
+// is a root with zero links.
+func TestManagerReplayWithoutACallerSpanLinksNothing(t *testing.T) {
+	exporter, _ := lanecontract.SetupTelemetry(t)
+	m := holdManagerOn(t, &fakeHoldLedger{}, holdDeclsWithHandler(noopHandler))
+
+	err := m.Replay(context.Background(), testConsumerName, &HeldMessage{
+		Consumer: testConsumerName, Stream: testStream, Offset: 4, TenantID: "acme",
+	})
+	require.NoError(t, err)
+
+	consume := obtest.NewSpanCollector(t, exporter).WithName(testStream + " receive").AssertCount(1).First()
+	assert.False(t, consume.Parent.IsValid(), "the replay's consume span is a root")
+	assert.Empty(t, consume.Links, "an invalid caller span context leaves no link")
 }
 
 // TestManagerReplayRefusesAnUnknownConsumer pins the case where a ledger row
