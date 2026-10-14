@@ -11,7 +11,17 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-const maxFailingKeysListed = 10
+const (
+	maxFailingKeysListed = 10
+	maxEdgesPerWindow    = 2
+
+	edgeNew  = "new"
+	edgeGrew = "grew"
+
+	jobStateClean     = "clean"
+	jobStateFailing   = "failing"
+	jobStateRecovered = "recovered"
+)
 
 // runOutcome is one completed run as its window sees it.
 type runOutcome struct {
@@ -33,6 +43,9 @@ type windowTally struct {
 	failing     []int64
 	keys        map[string]bool
 	last        *runOutcome
+
+	edges           int
+	edgesSuppressed int64
 }
 
 // windowState is one Windowed job's summary window: [k·width, (k+1)·width) on the
@@ -50,6 +63,11 @@ type windowState struct {
 	index    int64
 	inflight bool
 	tally    windowTally
+
+	// failingSet: each scheduled run adds its keys, and a window's close resets
+	// it to its last completed run's keys.
+	failingSet    map[string]bool
+	failingAtOpen bool
 }
 
 // windowSnapshot is a closed window, ready to be written.
@@ -60,10 +78,19 @@ type windowSnapshot struct {
 	inflight bool
 	late     int64
 	tally    windowTally
+	state    string
+}
+
+// edgeEvent is a scheduled run that moved the job's failing set: clean to failing
+// (new), or a key the set did not hold (grew).
+type edgeEvent struct {
+	window *windowState
+	reason string
+	out    *runOutcome
 }
 
 func newWindowState(jobID string, spec *windowedSpec, width time.Duration) *windowState {
-	w := &windowState{jobID: jobID, spec: spec, width: width}
+	w := &windowState{jobID: jobID, spec: spec, width: width, failingSet: make(map[string]bool)}
 	w.reset()
 	return w
 }
@@ -81,17 +108,28 @@ func (w *windowState) roll(now time.Time) *windowSnapshot {
 	}
 	var closed *windowSnapshot
 	if w.open {
-		closed = w.snapshot(false)
+		closed = w.close(false)
 	}
 	w.open, w.index = true, index
+	w.failingAtOpen = len(w.failingSet) > 0
 	w.reset()
 	return closed
 }
 
-// snapshot captures the current window; an empty one writes no line.
-func (w *windowState) snapshot(partial bool) *windowSnapshot {
+// close settles the failing set to the window's last completed run, if any, and
+// captures the window; an empty one writes no line.
+func (w *windowState) close(partial bool) *windowSnapshot {
+	if w.tally.last != nil {
+		w.failingSet = maps.Clone(w.tally.last.keys)
+	}
 	if w.tally.runs == 0 && w.tally.skipped == 0 && !w.inflight {
 		return nil
+	}
+	state := jobStateClean
+	if len(w.failingSet) > 0 {
+		state = jobStateFailing
+	} else if w.failingAtOpen {
+		state = jobStateRecovered
 	}
 	return &windowSnapshot{
 		window:   w,
@@ -100,6 +138,7 @@ func (w *windowState) snapshot(partial bool) *windowSnapshot {
 		inflight: w.inflight,
 		late:     w.late.Swap(0),
 		tally:    w.tally,
+		state:    state,
 	}
 }
 
@@ -119,14 +158,15 @@ func (w *windowState) trigger(now time.Time, tryLock func() bool) (acquired bool
 	return true, closed
 }
 
-// complete counts a scheduled run in the window it completes in. A completion that
-// closes the previous window counts there as in flight. After the seal it reports
-// sealed instead, and the run writes its own action line.
-func (w *windowState) complete(now time.Time, out *runOutcome) (closed *windowSnapshot, sealed bool) {
+// complete counts a scheduled run in the window it completes in, and returns the
+// edge it emits, if any. A completion that closes the previous window counts there
+// as in flight. After the seal it reports sealed instead, and the run writes its
+// own action line.
+func (w *windowState) complete(now time.Time, out *runOutcome) (closed *windowSnapshot, edge *edgeEvent, sealed bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.sealed {
-		return nil, true
+		return nil, nil, true
 	}
 	closed = w.roll(now)
 	w.inflight = false
@@ -146,7 +186,35 @@ func (w *windowState) complete(now time.Time, out *runOutcome) (closed *windowSn
 		t.keys[key] = true
 	}
 	t.last = out
-	return closed, false
+	if reason := w.moveFailingSet(out.keys); reason != "" {
+		if t.edges < maxEdgesPerWindow {
+			t.edges++
+			edge = &edgeEvent{window: w, reason: reason, out: out}
+		} else {
+			t.edgesSuppressed++
+		}
+	}
+	return closed, edge, false
+}
+
+// moveFailingSet adds a run's keys to the failing set, and names the edge they
+// make: new when the set was empty, grew when it held keys but not all of these.
+func (w *windowState) moveFailingSet(keys map[string]bool) string {
+	added := false
+	for key := range keys {
+		if !w.failingSet[key] {
+			added = true
+		}
+	}
+	wasFailing := len(w.failingSet) > 0
+	maps.Copy(w.failingSet, keys)
+	if !added {
+		return ""
+	}
+	if wasFailing {
+		return edgeGrew
+	}
+	return edgeNew
 }
 
 // seal closes the open window as partial and ends window accounting for the job.
@@ -162,7 +230,7 @@ func (w *windowState) seal(now time.Time) []*windowSnapshot {
 	if closed := w.roll(now); closed != nil {
 		out = append(out, closed)
 	}
-	if partial := w.snapshot(true); partial != nil {
+	if partial := w.close(true); partial != nil {
 		out = append(out, partial)
 	}
 	return out
@@ -182,9 +250,7 @@ func (m *Module) logWindow(s *windowSnapshot) {
 	if t.failingRuns > 0 || (t.runs == 0 && t.skipped > 0) {
 		level = logLevelWarn
 	}
-	keys := slices.AppendSeq(make([]string, 0, len(t.keys)), maps.Keys(t.keys))
-	slices.SortFunc(keys, compareFailingKeys)
-	listed := keys[:min(len(keys), maxFailingKeysListed)]
+	listed, more := listFailingKeys(t.keys)
 	inflight := int64(0)
 	if s.inflight {
 		inflight = 1
@@ -200,12 +266,12 @@ func (m *Module) logWindow(s *windowSnapshot) {
 		Int64("runs.slow", t.slowRuns).
 		Int64("runs.skipped", t.skipped).
 		Int64("runs.inflight", inflight).
+		Str("job.state", s.state).
 		Interface("failing.keys", listed).
-		Int("failing.keys.more", len(keys)-len(listed)).
+		Int("failing.keys.more", more).
+		Int64("edges.suppressed", t.edgesSuppressed).
 		Int64("recorder.late", s.late)
-	for i, c := range s.window.spec.counters {
-		event = event.Int64(c.name+".ok", t.ok[i]).Int64(c.name+".failing", t.failing[i])
-	}
+	event = counterFields(event, s.window.spec, t.ok, t.failing)
 	var traceparent, correlationID string
 	if t.last != nil {
 		event = event.Err(t.last.err)
@@ -217,4 +283,46 @@ func (m *Module) logWindow(s *windowSnapshot) {
 		Str("traceparent", traceparent).
 		Str(logger.FieldCorrelationID, correlationID).
 		Msgf("Job '%s' window summary", s.window.jobID)
+}
+
+// logEdge writes an edge line through the module logger, carrying the run's counts
+// and identity: ERROR when the run errored or panicked, otherwise WARN.
+func (m *Module) logEdge(e *edgeEvent) {
+	if e == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	level := logLevelWarn
+	if e.out.keys[keyRunError] || e.out.keys[keyRunPanic] {
+		level = logLevelError
+	}
+	listed, more := listFailingKeys(e.out.keys)
+	event := createJobLogEvent(m.logger, level).
+		Str("log.type", "action").
+		Str(jobIDAttr, e.window.jobID).
+		Str("edge.reason", e.reason).
+		Interface("failing.keys", listed).
+		Int("failing.keys.more", more)
+	counterFields(event, e.window.spec, e.out.ok, e.out.failing).
+		Err(e.out.err).
+		Str("traceparent", e.out.traceparent).
+		Str(logger.FieldCorrelationID, e.out.correlationID).
+		Msgf("Job '%s' failing edge: %s", e.window.jobID, e.reason)
+}
+
+// listFailingKeys orders keys reserved first, and returns at most
+// maxFailingKeysListed of them plus the count of the rest.
+func listFailingKeys(set map[string]bool) (listed []string, more int) {
+	keys := slices.AppendSeq(make([]string, 0, len(set)), maps.Keys(set))
+	slices.SortFunc(keys, compareFailingKeys)
+	listed = keys[:min(len(keys), maxFailingKeysListed)]
+	return listed, len(keys) - len(listed)
+}
+
+// counterFields adds <name>.ok and <name>.failing for every declared Counter.
+func counterFields(event logger.LogEvent, spec *windowedSpec, ok, failing []int64) logger.LogEvent {
+	for i, c := range spec.counters {
+		event = event.Int64(c.name+".ok", ok[i]).Int64(c.name+".failing", failing[i])
+	}
+	return event
 }

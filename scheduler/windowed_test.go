@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 func noopRun(JobContext, *Recorder) error { return nil }
@@ -278,4 +281,45 @@ func TestCleanWindowWritesInfo(t *testing.T) {
 		}
 	}
 	assert.Equal(t, map[any]string{"relay": "warn", "clean": "info"}, levels)
+}
+
+// counterPoints reads a Counter's metric as encoded attribute set -> value.
+func counterPoints(t *testing.T, mp *obtest.TestMeterProvider, name string) map[string]int64 {
+	t.Helper()
+	m := obtest.FindMetric(mp.Collect(t), name)
+	require.NotNil(t, m, "metric %q not recorded", name)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "metric %q is %T, not an Int64Counter sum", name, m.Data)
+	points := make(map[string]int64, len(sum.DataPoints))
+	for _, dp := range sum.DataPoints {
+		points[dp.Attributes.Encoded(attribute.DefaultEncoder())] = dp.Value
+	}
+	return points
+}
+
+func TestWindowedCounterMetricsSumCountAndFail(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	t.Cleanup(func() { require.NoError(t, mp.Shutdown(context.Background())) })
+	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withMeterProvider(mp.MeterProvider))
+	var kept *Recorder
+	job := Windowed(func(_ JobContext, rec *Recorder) error {
+		kept = rec
+		rec.Count("published", 2, laneA, kindX)
+		rec.Fail("published", 3, laneA, kindX)
+		rec.Count("published", 5, attribute.String("lane", "b"), kindX)
+		rec.Count("published", 7, attribute.String("lane", "z"), kindX)
+		rec.Fail("parked", 4)
+		return nil
+	}, Counter{Name: "published", Attrs: []AttrSet{{Key: "lane", Values: []string{"a", "b"}}, {Key: "kind", Values: []string{"x", "y"}}}},
+		Counter{Name: "parked"})
+	require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+
+	module.runJobBody(registeredEntry(t, module, "relay"), triggerScheduled)
+	kept.Count("parked", 9)
+
+	assert.Equal(t, map[string]int64{
+		"job.id=relay,kind=x,lane=a": 5,
+		"job.id=relay,kind=x,lane=b": 5,
+	}, counterPoints(t, mp, "published"), "Count and Fail both add; an undeclared value adds nothing")
+	assert.Equal(t, map[string]int64{"job.id=relay": 4}, counterPoints(t, mp, "parked"), "a late call adds nothing")
 }

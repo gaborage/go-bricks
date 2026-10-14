@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -89,8 +91,9 @@ type windowedExecutor interface {
 }
 
 type counterSpec struct {
-	name  string
-	attrs map[string]map[string]bool
+	name       string
+	attrs      map[string]map[string]bool
+	instrument metric.Int64Counter
 }
 
 // windowedSpec is a validated Windowed job.
@@ -98,6 +101,7 @@ type windowedSpec struct {
 	run      func(JobContext, *Recorder) error
 	counters []counterSpec
 	index    map[string]int
+	jobAttr  attribute.KeyValue
 }
 
 func counterField(i int, rest string) string { return fmt.Sprintf("counters[%d]%s", i, rest) }
@@ -206,6 +210,16 @@ func (c *counterSpec) declares(attrs []attribute.KeyValue) bool {
 	return true
 }
 
+// add records n on the Counter's metric, with its declared attributes plus job.id.
+func (c *counterSpec) add(ctx context.Context, n int64, attrs []attribute.KeyValue, job attribute.KeyValue) {
+	if c.instrument == nil {
+		return
+	}
+	kvs := make([]attribute.KeyValue, 0, len(attrs)+1)
+	kvs = append(append(kvs, attrs...), job)
+	c.instrument.Add(ctx, n, metric.WithAttributes(kvs...))
+}
+
 // failingKey renders name{k=v,...} with the attributes sorted by key.
 func failingKey(name string, attrs []attribute.KeyValue) string {
 	if len(attrs) == 0 {
@@ -222,6 +236,7 @@ func failingKey(name string, attrs []attribute.KeyValue) string {
 // Recorder tallies one run's Counter outcomes. The scheduler seals it when the run
 // returns or panics; a later call is dropped and counted in recorder.late.
 type Recorder struct {
+	ctx  context.Context // NOSONAR: the run's traced context, held for the run's lifetime so metric exemplars name the job span
 	spec *windowedSpec
 	late *atomic.Int64
 
@@ -232,8 +247,9 @@ type Recorder struct {
 	keys    map[string]bool
 }
 
-func newRecorder(spec *windowedSpec, late *atomic.Int64) *Recorder {
+func newRecorder(ctx context.Context, spec *windowedSpec, late *atomic.Int64) *Recorder {
 	return &Recorder{
+		ctx:     ctx,
 		spec:    spec,
 		late:    late,
 		ok:      make([]int64, len(spec.counters)),
@@ -242,12 +258,13 @@ func newRecorder(spec *windowedSpec, late *atomic.Int64) *Recorder {
 	}
 }
 
-// Count adds n successful outcomes to the named Counter.
+// Count adds n successful outcomes to the named Counter and its metric.
 func (r *Recorder) Count(name string, n int64, attrs ...attribute.KeyValue) {
 	r.record(name, n, attrs, false)
 }
 
-// Fail adds n failing outcomes to the named Counter; n > 0 makes the run failing.
+// Fail adds n failing outcomes to the named Counter and its metric; n > 0 makes the
+// run failing.
 func (r *Recorder) Fail(name string, n int64, attrs ...attribute.KeyValue) {
 	r.record(name, n, attrs, true)
 }
@@ -266,6 +283,7 @@ func (r *Recorder) record(name string, n int64, attrs []attribute.KeyValue, fail
 		r.keys[keyUndeclared] = true
 		return
 	}
+	r.spec.counters[i].add(r.ctx, n, attrs, r.spec.jobAttr)
 	if !failing {
 		r.ok[i] += n
 		return

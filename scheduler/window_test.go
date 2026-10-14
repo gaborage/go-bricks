@@ -338,9 +338,10 @@ func TestPanicAfterTheSettleCountsTheRunOnce(t *testing.T) {
 	assert.Empty(t, windows[0].fields["failing.keys"])
 }
 
-func TestPanicPathSurvivesAPanickingWindowLine(t *testing.T) {
+func TestPanicPathSurvivesPanickingSummaryLines(t *testing.T) {
 	clock := newFakeClock(windowTestStart)
-	module := newWindowedTestScheduler(t, clock, withLogger(newLinePanickingLogger("window.start")))
+	log := newLinePanickingLogger("window.start", "edge.reason")
+	module := newWindowedTestScheduler(t, clock, withLogger(log))
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	require.NoError(t, module.FixedRate("relay", gatedJob(started, release, func(*Recorder) error { panic("boom") }), windowTestInterval))
 	entry := registeredEntry(t, module, "relay")
@@ -354,7 +355,10 @@ func TestPanicPathSurvivesAPanickingWindowLine(t *testing.T) {
 	clock.Advance(windowTestWidth)
 	close(release)
 
-	require.Nil(t, <-done, "the window line's panic must not escape the recovery defer")
+	require.Nil(t, <-done, "a summary line's panic must not escape the recovery defer")
+	for key, fired := range log.armed {
+		assert.True(t, fired.Load(), "the %s line was written and panicked", key)
+	}
 	assert.Equal(t, int64(1), entry.metadata.snapshot().FailureCount, "the run is still recorded as failed")
 }
 
@@ -436,7 +440,7 @@ func TestWindowLineKeysStayFixedWhateverTheValues(t *testing.T) {
 		for _, c := range counters {
 			recordEveryCombination(rec, c.Name, values)
 		}
-		return nil
+		return errors.New("relay failed")
 	}, counters...)
 
 	tp := obtest.NewTestTraceProvider()
@@ -454,6 +458,7 @@ func TestWindowLineKeysStayFixedWhateverTheValues(t *testing.T) {
 	windows := log.windowLines()
 	require.Len(t, windows, 1)
 	line := windows[0]
+	assert.Len(t, line.fields, 82, "the brief's budget: 17 fixed keys, log.type and two per Counter")
 	assert.LessOrEqual(t, len(line.fields)+zerologOwnFields, 100)
 	for key := range line.fields {
 		for _, token := range append([]string{"dim_a", "dim_b"}, values...) {
@@ -464,12 +469,12 @@ func TestWindowLineKeysStayFixedWhateverTheValues(t *testing.T) {
 	assert.Equal(t, int64(9), line.fields["c31.failing"])
 	listed, _ := line.fields["failing.keys"].([]string)
 	assert.Equal(t, []string{
+		keyRunError,
 		"c00{dim_a=val_a,dim_b=val_a}", "c00{dim_a=val_a,dim_b=val_b}", "c00{dim_a=val_a,dim_b=val_c}",
 		"c00{dim_a=val_b,dim_b=val_a}", "c00{dim_a=val_b,dim_b=val_b}", "c00{dim_a=val_b,dim_b=val_c}",
 		"c00{dim_a=val_c,dim_b=val_a}", "c00{dim_a=val_c,dim_b=val_b}", "c00{dim_a=val_c,dim_b=val_c}",
-		"c01{dim_a=val_a,dim_b=val_a}",
 	}, listed)
-	assert.Equal(t, maxWindowedCounters*9-maxFailingKeysListed, line.fields["failing.keys.more"])
+	assert.Equal(t, maxWindowedCounters*9+1-maxFailingKeysListed, line.fields["failing.keys.more"])
 
 	span := jobExecuteSpan(t, tp)
 	assert.Equal(t, "00-"+span.SpanContext.TraceID().String()+"-"+span.SpanContext.SpanID().String()+"-01", line.fields["traceparent"])
@@ -578,6 +583,42 @@ func TestReservedFailingKeysListFirst(t *testing.T) {
 	assert.Equal(t, 3, windows[0].fields["failing.keys.more"])
 }
 
+func TestFailingManualRunWritesNoEdgeAndLeavesTheWindow(t *testing.T) {
+	log := newRecordingLogger()
+	mp := obtest.NewTestMeterProvider()
+	t.Cleanup(func() { require.NoError(t, mp.Shutdown(context.Background())) })
+	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log), withMeterProvider(mp.MeterProvider))
+	failNext := false
+	job := Windowed(func(_ JobContext, rec *Recorder) error {
+		if failNext {
+			rec.Fail("published", 4)
+			return errors.New("relay failed")
+		}
+		rec.Count("published", 1)
+		return nil
+	}, Counter{Name: "published"})
+	require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+	entry := registeredEntry(t, module, "relay")
+
+	module.runJobBody(entry, triggerScheduled)
+	failNext = true
+	module.runJobBody(entry, "manual")
+	require.NoError(t, module.Shutdown())
+
+	assert.Empty(t, log.edgeLines(), "a manual run never emits an edge")
+	manual := log.linesWith(func(line recordedLine) bool { return line.fields["job.trigger"] == "manual" })
+	require.Len(t, manual, 1)
+	assert.Equal(t, "error", manual[0].level)
+	assert.Equal(t, "action", manual[0].fields["log.type"])
+	windows := log.windowLines()
+	require.Len(t, windows, 1)
+	assert.Equal(t, int64(1), windows[0].fields["runs"])
+	assert.Equal(t, int64(0), windows[0].fields["published.failing"])
+	assert.Equal(t, "clean", windows[0].fields["job.state"])
+	assert.Equal(t, map[string]int64{"job.id=relay": 5}, counterPoints(t, mp, "published"),
+		"the manual run's Fail still reaches the metric")
+}
+
 func TestRecorderCallAfterTheRunIsCountedLate(t *testing.T) {
 	log := newRecordingLogger()
 	module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
@@ -596,4 +637,172 @@ func TestRecorderCallAfterTheRunIsCountedLate(t *testing.T) {
 	require.Len(t, windows, 1)
 	assert.Equal(t, int64(1), windows[0].fields["recorder.late"])
 	assert.Equal(t, int64(0), windows[0].fields["published.ok"], "a late call is dropped")
+}
+
+// scriptedJob fails one scripted key set per run; an empty set is a clean run.
+func scriptedJob(script [][]string, counters ...Counter) (Executor, *atomic.Int64) {
+	var run atomic.Int64
+	return Windowed(func(_ JobContext, rec *Recorder) error {
+		for _, name := range script[run.Add(1)-1] {
+			rec.Fail(name, 1)
+		}
+		return nil
+	}, counters...), &run
+}
+
+func runWithID(module *Module, entry *jobEntry, id string) {
+	ctx := gobrickstrace.WithTraceID(context.Background(), id)
+	module.executeJob(entry, newJobContext(ctx, entry.metadata.JobID, triggerScheduled, module.logger, nil, nil, module.config))
+}
+
+func TestEdgesFollowTheFailingSetAcrossWindows(t *testing.T) {
+	tp := obtest.NewTestTraceProvider()
+	t.Cleanup(func() { require.NoError(t, tp.Shutdown(context.Background())) })
+	log := newRecordingLogger()
+	clock := newFakeClock(windowTestStart)
+	module := newWindowedTestScheduler(t, clock, withLogger(log), withTracer(tp.Tracer("test-scheduler")))
+	job, _ := scriptedJob([][]string{{"a"}, {"b"}, {"c"}, {}, {}, {"a"}},
+		Counter{Name: "a"}, Counter{Name: "b"}, Counter{Name: "c"})
+	require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+	entry := registeredEntry(t, module, "relay")
+
+	for _, id := range []string{"run-1", "run-2", "run-3"} {
+		runWithID(module, entry, id)
+	}
+	for _, id := range []string{"run-4", "run-5", "run-6"} {
+		clock.Advance(windowTestWidth)
+		runWithID(module, entry, id)
+	}
+	require.NoError(t, module.Shutdown())
+
+	spans := obtest.NewSpanCollector(t, tp.Exporter).WithName("job.execute").AssertCount(6)
+	edges := log.edgeLines()
+	require.Len(t, edges, 3)
+	for i, want := range []struct {
+		reason, correlationID string
+		span                  int
+	}{{"new", "run-1", 0}, {"grew", "run-2", 1}, {"new", "run-6", 5}} {
+		assert.Equal(t, want.reason, edges[i].fields["edge.reason"])
+		assert.Equal(t, "warn", edges[i].level, "a failing run with no error or panic edges at WARN")
+		assert.Equal(t, want.correlationID, edges[i].fields["correlation_id"])
+		sc := spans.Get(want.span).SpanContext
+		assert.Equal(t, "00-"+sc.TraceID().String()+"-"+sc.SpanID().String()+"-01", edges[i].fields["traceparent"])
+	}
+
+	windows := log.windowLines()
+	require.Len(t, windows, 4)
+	states := make([]any, 0, len(windows))
+	for _, line := range windows {
+		states = append(states, line.fields["job.state"])
+	}
+	assert.Equal(t, []any{"failing", "recovered", "clean", "failing"}, states)
+	assert.Equal(t, int64(1), windows[0].fields["edges.suppressed"], "a third edge in one window is only counted")
+	assert.Equal(t, int64(0), windows[3].fields["edges.suppressed"])
+}
+
+func TestEdgeLevelFollowsTheRunKeys(t *testing.T) {
+	tests := []struct {
+		name      string
+		run       func(JobContext, *Recorder) error
+		wantLevel string
+	}{
+		{name: "fail_only_warns", run: func(_ JobContext, rec *Recorder) error {
+			rec.Fail("published", 1)
+			return nil
+		}, wantLevel: "warn"},
+		{name: "error_is_error", run: func(JobContext, *Recorder) error { return errors.New("relay failed") }, wantLevel: "error"},
+		{name: "panic_is_error", run: func(JobContext, *Recorder) error { panic("boom") }, wantLevel: "error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := newRecordingLogger()
+			module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+			require.NoError(t, module.FixedRate("relay", Windowed(tt.run, Counter{Name: "published"}), windowTestInterval))
+
+			module.runJobBody(registeredEntry(t, module, "relay"), triggerScheduled)
+
+			edges := log.edgeLines()
+			require.Len(t, edges, 1)
+			assert.Equal(t, tt.wantLevel, edges[0].level)
+			assert.False(t, edges[0].viaContext, "the edge line goes through the module logger")
+		})
+	}
+}
+
+const panicStackMessage = "Job panicked - recovered and marked as failed"
+
+func TestPanicStackLineIsErrorOnlyOnAnEdge(t *testing.T) {
+	panicking := func(JobContext, *Recorder) error { panic("boom") }
+
+	t.Run("second_panic_in_the_window_drops_to_debug", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+
+		module.runJobBody(entry, triggerScheduled)
+		module.runJobBody(entry, triggerScheduled)
+
+		edges := log.edgeLines()
+		require.Len(t, edges, 1)
+		assert.Equal(t, "new", edges[0].fields["edge.reason"])
+		stacks := log.messageLines(panicStackMessage)
+		require.Len(t, stacks, 2)
+		assert.Equal(t, "error", stacks[0].level, "the run that wrote the edge keeps its stack at ERROR")
+		assert.Equal(t, "debug", stacks[1].level)
+	})
+
+	t.Run("manual_panic_drops_to_debug_and_keeps_its_action_line", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
+
+		module.runJobBody(registeredEntry(t, module, "relay"), "manual")
+
+		requireStackAt(t, log, "debug")
+		requireRunActionLineNamingThePanic(t, log)
+	})
+
+	t.Run("post_seal_panic_drops_to_debug_and_keeps_its_action_line", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+		module.runJobBody(entry, triggerScheduled)
+		require.NoError(t, module.Shutdown())
+		log.reset()
+
+		module.executeJob(entry, newJobContext(context.Background(), "relay", triggerScheduled, module.logger, nil, nil, module.config))
+
+		requireStackAt(t, log, "debug")
+		requireRunActionLineNamingThePanic(t, log)
+	})
+
+	t.Run("plain_job_panic_stays_error", func(t *testing.T) {
+		log := newRecordingLogger()
+		module, _ := newTestScheduler(t, 5*time.Second, withLogger(log))
+
+		runJobOnce(module, "plain-job", &panicJob{})
+
+		requireStackAt(t, log, "error")
+	})
+}
+
+func requireStackAt(t *testing.T, log *recordingLogger, level string) {
+	t.Helper()
+	stacks := log.messageLines(panicStackMessage)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, level, stacks[0].level)
+}
+
+func requireRunActionLineNamingThePanic(t *testing.T, log *recordingLogger) {
+	t.Helper()
+	runs := log.linesWith(func(line recordedLine) bool {
+		return line.fields["log.type"] == "action" && line.fields["job.status"] != nil
+	})
+	require.Len(t, runs, 1)
+	assert.Equal(t, "error", runs[0].level)
+	assert.Equal(t, "panic (type: string)", runs[0].fields["error"])
+	assert.Empty(t, log.edgeLines())
 }

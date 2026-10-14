@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -50,8 +51,9 @@ func (e *jobEntry) windowFor(triggerType string) *windowState {
 }
 
 // newRecorder returns the Recorder a Windowed job's run reports through; nil for a
-// plain job. runWindow is the window the run reports to, nil for a manual run.
-func (e *jobEntry) newRecorder(runWindow *windowState) *Recorder {
+// plain job. runWindow is the window the run reports to, nil for a manual run; ctx
+// is the run's traced context, which its metric points record under.
+func (e *jobEntry) newRecorder(ctx context.Context, runWindow *windowState) *Recorder {
 	if e.window == nil {
 		return nil
 	}
@@ -59,7 +61,7 @@ func (e *jobEntry) newRecorder(runWindow *windowState) *Recorder {
 	if runWindow != nil {
 		late = &runWindow.late
 	}
-	return newRecorder(e.window.spec, late)
+	return newRecorder(ctx, e.window.spec, late)
 }
 
 // execute runs the job: a plain one through Execute, a Windowed one through its

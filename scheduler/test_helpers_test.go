@@ -155,6 +155,12 @@ func (l *recordingLogger) lines() []recordedLine {
 	return append([]recordedLine(nil), l.sink.lines...)
 }
 
+func (l *recordingLogger) reset() {
+	l.sink.mu.Lock()
+	defer l.sink.mu.Unlock()
+	l.sink.lines = nil
+}
+
 func (l *recordingLogger) linesWith(match func(recordedLine) bool) []recordedLine {
 	var out []recordedLine
 	for _, line := range l.lines() {
