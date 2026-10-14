@@ -175,7 +175,7 @@ func (m *Module) startHold(deps *app.ModuleDeps) {
 		cfg:          m.cfg.Hold,
 		owner:        holdOwnerID(),
 		now:          time.Now,
-		window:       deps.Config.Scheduler.Summary.Window,
+		windowWidth:  deps.Config.Scheduler.Summary.Window,
 		warnedWindow: math.MinInt64,
 	}
 

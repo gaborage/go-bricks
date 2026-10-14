@@ -752,7 +752,7 @@ inbox:
     tablename: gobricks_inbox_hold   # tenant table is "<tablename>_tenant"
     draininterval: 5s      # how often the drain looks for due tenants
     maxbackoff: 5m         # cap on the per-tenant retry backoff
-    maxage: 1h             # a tenant held longer than this earns one WARN per summary window
+    maxage: 1h             # held longer: counted; the oldest gets one WARN per summary window
     leaseduration: 60s     # one drainer's hold on a tenant, and the replay's time bound
 ```
 
@@ -877,8 +877,10 @@ recurs. "Hold exceeds max age" is written at most once per window per replica:
 the first pass in a window to find a tenant past `maxage` names the oldest
 (`consumer`, `tenant`, `held_for`, `attempts`) and `over_max_age_tenants`, the
 count in the pass that wrote the WARN, while `over_max_age` counts every
-sighting. "Hold lease spent mid-batch" is DEBUG; the lease-lost and deferral
-WARNs and the release INFO are unchanged.
+sighting. A panic that escapes a consumer's reload or snapshot loses that
+consumer's outcomes and the pass's WARN; the consumers before it keep theirs,
+and the next pass warns again. "Hold lease spent mid-batch" is DEBUG; the
+lease-lost and deferral WARNs and the release INFO are unchanged.
 
 **Operator purge.** A held message is never dropped automatically — there is no
 retention on these tables. To abandon one tenant's backlog, delete its rows

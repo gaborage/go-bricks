@@ -481,11 +481,7 @@ func TestRegisterJobsAddsTheHoldDrain(t *testing.T) {
 // window lines use, with no window claimed before the first WARN.
 func TestInitBuildsTheHoldDrainOnTheSummaryWindow(t *testing.T) {
 	m := NewModule()
-	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) {
-		db := probeReadyDB()
-		db.ExpectQuery(`SELECT tenant_id`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
-		return db, nil
-	}, nil)
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return holdReadyDB(), nil }, nil)
 	deps := testDeps()
 	deps.Config = &config.Config{
 		Scheduler: config.SchedulerConfig{Summary: config.SchedulerSummaryConfig{Window: 10 * time.Minute}},
@@ -496,7 +492,7 @@ func TestInitBuildsTheHoldDrainOnTheSummaryWindow(t *testing.T) {
 	}
 	require.NoError(t, m.Init(deps))
 
-	assert.Equal(t, 10*time.Minute, m.holdDrain.window)
+	assert.Equal(t, 10*time.Minute, m.holdDrain.windowWidth)
 	assert.Equal(t, int64(math.MinInt64), m.holdDrain.warnedWindow)
 }
 
@@ -505,11 +501,7 @@ func TestInitBuildsTheHoldDrainOnTheSummaryWindow(t *testing.T) {
 // refuses fails here, not at a deployment's startup.
 func TestRegisterJobsRegistersTheHoldDrainWithTheScheduler(t *testing.T) {
 	m := NewModule()
-	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) {
-		db := probeReadyDB()
-		db.ExpectQuery(`SELECT tenant_id`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
-		return db, nil
-	}, nil)
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return holdReadyDB(), nil }, nil)
 	deps := testDeps()
 	deps.Config = &config.Config{
 		Inbox: config.InboxConfig{

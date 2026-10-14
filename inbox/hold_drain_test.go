@@ -102,7 +102,7 @@ func newHoldDrain(db dbtypes.Interface, replayer app.HoldReplayer) *HoldDrain {
 		},
 		owner:        "replica-1",
 		now:          time.Now,
-		window:       5 * time.Minute,
+		windowWidth:  5 * time.Minute,
 		warnedWindow: math.MinInt64,
 	}
 }
@@ -634,7 +634,7 @@ func TestDrainRunLogsASpentLeaseAtDebug(t *testing.T) {
 	assert.Equal(t, "debug", line["level"])
 	assert.Equal(t, testHoldConsumer, line["consumer"])
 	assert.Equal(t, testHoldTenant, line["tenant"])
-	assert.Equal(t, float64(0), line["replayed"])
+	assert.EqualValues(t, 0, line["replayed"])
 	assert.NotContains(t, out, "Hold exceeds max age", "a pass with no tenant over age warns about none")
 }
 
@@ -695,8 +695,8 @@ func TestDrainRunWarnsAboutOverAgeTenantsOncePerWindow(t *testing.T) {
 	assert.Equal(t, "warn", line["level"])
 	assert.Equal(t, testHoldConsumer, line["consumer"])
 	assert.Equal(t, testHoldTenant, line["tenant"], "the oldest over-age tenant is named")
-	assert.Equal(t, float64(5), line["attempts"])
-	assert.Equal(t, float64(2), line["over_max_age_tenants"], "the count the warning pass saw")
+	assert.EqualValues(t, 5, line["attempts"])
+	assert.EqualValues(t, 2, line["over_max_age_tenants"], "the count the warning pass saw")
 	assert.Equal(t, map[string]int64{"inbox.hold.drain.over_max_age": 120}, sink.fails,
 		"every sighting is counted, warned or not")
 
@@ -721,7 +721,7 @@ func TestDrainRunWithoutAWindowWarnsEveryOverAgePass(t *testing.T) {
 		HoldStore: mustPostgresHoldStore(), rowsByTenant: map[string][]HoldRow{}, releaseRefused: true,
 	}
 	drain := drainWithStore(db, replayer, store)
-	drain.window = 0
+	drain.windowWidth = 0
 
 	out := captureDrainLogs(t, func() {
 		jobCtx := &fakeHoldJobCtx{Context: context.Background(), log: logger.New("warn", false), db: db}

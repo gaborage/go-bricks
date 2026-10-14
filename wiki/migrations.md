@@ -11989,7 +11989,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   tenant per pass, which a stuck tenant that keeps yielding repeated every pass. It now runs under
   `scheduler.Windowed`: one window line per `scheduler.summary.window` and an edge line when it turns
   failing, Counters for its passes, per-tenant outcomes and over-age sightings, and at most one
-  over-age WARN per window per replica (C72.31). ADR-089 amendment.
+  over-age WARN per window per replica (C72.31, ADR-089 amendment).
 
 ### [C72.1] OpenTelemetry Go moves to v1.47.0: `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read and attribute values nested deeper than 64 export empty · silent-behavior · when: match
 
@@ -13129,7 +13129,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   lease spent mid-batch` at WARN, and `Hold exceeds max age` was one WARN per leased over-age tenant
   per pass, so a stuck tenant that keeps yielding drew one every pass.
 - after: the drain is a `scheduler.Windowed` job (C72.28). Its per-pass action line and skip line
-  are DEBUG, which does not reach OTLP; the scheduler writes one `Job 'inbox-hold-drain' window
+  are DEBUG, which the default `observability.logs.samplingrate` of 0.0 keeps out of OTLP; the scheduler writes one `Job 'inbox-hold-drain' window
   summary` line per `scheduler.summary.window` per replica, and a `failing edge` line when the job
   turns failing (`new` if it was clean, `grew` if it was already failing); the panic stack line
   stays ERROR only on a run that writes an edge. A deferral, a lost lease and an over-age tenant are

@@ -123,9 +123,9 @@ type HoldDrain struct {
 	// uses database time.
 	now func() time.Time
 
-	// window is scheduler.summary.window. The over-age WARN is written at most
-	// once per window, in the scheduler's UTC-aligned windows.
-	window time.Duration
+	// windowWidth is scheduler.summary.window. The over-age WARN is written at
+	// most once per window, in the scheduler's UTC-aligned windows.
+	windowWidth time.Duration
 	// warnedWindow is the index of the window the last over-age WARN was written
 	// in, math.MinInt64 before the first. Runs never overlap — the scheduler skips
 	// a trigger while the job runs — so it needs no lock.
@@ -213,12 +213,11 @@ func (d *HoldDrain) run(jc scheduler.JobContext, sink holdSink) error {
 			if n == 0 {
 				continue
 			}
-			attr := attribute.String(holdOutcomeKey, holdOutcomes[outcome].value)
+			record := sink.Count
 			if holdOutcomes[outcome].fails {
-				sink.Fail(holdDrainTenantsCounter, n, attr)
-			} else {
-				sink.Count(holdDrainTenantsCounter, n, attr)
+				record = sink.Fail
 			}
+			record(holdDrainTenantsCounter, n, attribute.String(holdOutcomeKey, holdOutcomes[outcome].value))
 		}
 		if pass.overAge.count > 0 {
 			sink.Fail(holdDrainOverMaxAgeCounter, pass.overAge.count)
@@ -226,31 +225,38 @@ func (d *HoldDrain) run(jc scheduler.JobContext, sink holdSink) error {
 		overAge.merge(&pass.overAge)
 	}
 
-	if overAge.count > 0 && d.overAgeWarnDue() {
-		log.Warn().
-			Str("consumer", overAge.consumer).
-			Str("tenant", overAge.tenant).
-			Dur("held_for", overAge.heldFor).
-			Int("attempts", overAge.attempts).
-			Int64("over_max_age_tenants", overAge.count).
-			Msg("Hold exceeds max age")
-	}
+	d.warnOverAge(log, &overAge)
 	return errors.Join(errs...)
 }
 
-// overAgeWarnDue reports whether the over-age WARN is due: the first pass in a
-// summary window to find a tenant over age claims the window and writes it. A
-// drain without a window — never registered with the scheduler, which refuses
-// one — writes it on every such pass rather than dividing by zero.
-func (d *HoldDrain) overAgeWarnDue() bool {
-	if d.window <= 0 {
+// warnOverAge writes "Hold exceeds max age" for the pass's oldest over-age
+// tenant, when the pass found one and is the first in its window to.
+func (d *HoldDrain) warnOverAge(log logger.Logger, overAge *overAgeTally) {
+	if overAge.count == 0 || !d.claimOverAgeWindow() {
+		return
+	}
+	log.Warn().
+		Str("consumer", overAge.consumer).
+		Str("tenant", overAge.tenant).
+		Dur("held_for", overAge.heldFor).
+		Int("attempts", overAge.attempts).
+		Int64("over_max_age_tenants", overAge.count).
+		Msg("Hold exceeds max age")
+}
+
+// claimOverAgeWindow claims the current summary window for the over-age WARN,
+// reporting whether it was still unclaimed. A drain without a window — never
+// registered with the scheduler, which refuses one — claims on every call
+// rather than dividing by zero.
+func (d *HoldDrain) claimOverAgeWindow() bool {
+	if d.windowWidth <= 0 {
 		return true
 	}
-	window := d.now().UnixNano() / int64(d.window)
-	if window == d.warnedWindow {
+	index := d.now().UnixNano() / int64(d.windowWidth)
+	if index == d.warnedWindow {
 		return false
 	}
-	d.warnedWindow = window
+	d.warnedWindow = index
 	return true
 }
 

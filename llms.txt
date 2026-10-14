@@ -3487,7 +3487,7 @@ inbox:
     tablename: gobricks_inbox_hold   # tenant table is "<tablename>_tenant"
     draininterval: 5s
     maxbackoff: 5m
-    maxage: 1h             # past this age: counted, and one WARN per summary window
+    maxage: 1h             # past this age: counted, and at most one WARN per summary window
     leaseduration: 60s
 ```
 
