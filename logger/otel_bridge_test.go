@@ -623,6 +623,29 @@ func TestOTelBridgeTruncatesOversizeLineToLexicographicallyFirstCallers(t *testi
 	assert.ElementsMatch(t, wantCallers, keys[5:], "the kept callers are the lexicographically first")
 }
 
+func TestOTelBridgeCallerDroppedCountNeverReplacesStamp(t *testing.T) {
+	bridge, proc := newCaptureBridge(t, sdklog.WithAttributeCountLimit(-1))
+
+	// z.* callers sort after the caller's own log.attributes.dropped, so only
+	// excluding it keeps it from overwriting the bridge's stamp.
+	entry := map[string]any{"level": "info", "message": "m", "log.attributes.dropped": "spoof"}
+	for i := 0; i < 200; i++ {
+		entry[fmt.Sprintf("z.%03d", i)] = "v"
+	}
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	_, err = bridge.Write(line)
+	require.NoError(t, err)
+
+	rec, ok := dataRecord(proc.snapshot())
+	require.True(t, ok, "bridge emitted no data record")
+	assert.Equal(t, 128, rec.AttributesLen())
+	// 201 callers, 126 kept: 128 slots - 1 log.type - 1 stamp.
+	dropped, found := recordAttrValue(&rec, "log.attributes.dropped")
+	require.True(t, found)
+	assert.Equal(t, attribute.Int64Value(75), dropped)
+}
+
 func TestOTelBridgeLeavesLineWithinCapUntouched(t *testing.T) {
 	// wantExtra: the keys expected beside the caller's field.NNN keys.
 	tests := []struct {

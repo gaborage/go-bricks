@@ -12962,8 +12962,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `trace`), then `trace_id`, `span_id` and `trace_flags` when the line carries a valid span
   context. When the caller fields exceed the slots left (127 without a span context, 124 with one),
   the bridge keeps the lexicographically first `slots - 1` by emitted key (after the `app.` remap),
-  stamps `log.attributes.dropped` (Int64) with the exact count dropped, and emits one WARN per
-  bridge, so one per process, carrying `log.type=trace` and the count, never a caller key or value.
+  stamps `log.attributes.dropped` (Int64) with the exact count dropped (a caller field of that
+  name is among them), and emits one WARN per bridge, so one per process, carrying
+  `log.type=trace` and the count, never a caller key or value.
   A line within the cap keeps every field; only the attribute order changes.
 - apply: delete the variable; nothing replaces it, and the cap is not configurable. A limit set
   above 128 now yields 128 attributes, and one set below it no longer shrinks records. To keep

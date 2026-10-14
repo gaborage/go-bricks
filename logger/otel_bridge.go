@@ -282,16 +282,21 @@ func applyAttributes(rec *log.Record, entry map[string]any, emittedTrace bool, b
 
 // capAttributes returns attrs untouched when they fit budget. Otherwise it keeps
 // the lexicographically first budget-1 by key, leaving one slot for the
-// dropped-count stamp, and reports how many it dropped.
+// dropped-count stamp, and reports how many it dropped. A caller field named
+// like the stamp is dropped too: kept, it would overwrite the stamp.
 func capAttributes(attrs []attribute.KeyValue, budget int) (kept []attribute.KeyValue, dropped int) {
 	if len(attrs) <= budget {
 		return attrs, 0
 	}
+	total := len(attrs)
+	attrs = slices.DeleteFunc(attrs, func(kv attribute.KeyValue) bool {
+		return kv.Key == droppedAttrsKey
+	})
 	slices.SortFunc(attrs, func(a, b attribute.KeyValue) int {
 		return strings.Compare(string(a.Key), string(b.Key))
 	})
 	kept = attrs[:budget-1]
-	return kept, len(attrs) - len(kept)
+	return kept, total - len(kept)
 }
 
 func extractSpanContext(entry map[string]any) (trace.SpanContext, bool) {
