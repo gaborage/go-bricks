@@ -233,36 +233,94 @@ func newFakeHoldSink(t *testing.T) *fakeHoldSink {
 
 func (s *fakeHoldSink) Count(name string, n int64, attrs ...attribute.KeyValue) {
 	s.t.Helper()
-	s.counts[s.declaredSeries(name, n, attrs)] += n
+	series, ok := declaredSeries(name, n, attrs)
+	require.True(s.t, ok, "undeclared call Count(%q, %d, %v)", name, n, attrs)
+	s.counts[series] += n
 }
 
 func (s *fakeHoldSink) Fail(name string, n int64, attrs ...attribute.KeyValue) {
 	s.t.Helper()
-	s.fails[s.declaredSeries(name, n, attrs)] += n
+	series, ok := declaredSeries(name, n, attrs)
+	require.True(s.t, ok, "undeclared call Fail(%q, %d, %v)", name, n, attrs)
+	s.fails[series] += n
 }
 
-// declaredSeries names a call name{key=value}, after checking it against the Counters
-// the drain registers: a declared name, a non-negative n, and each declared key
-// once with one of its declared values.
-func (s *fakeHoldSink) declaredSeries(name string, n int64, attrs []attribute.KeyValue) string {
-	s.t.Helper()
+// declaredSeries names a call name{key=value} and reports whether the Counters
+// the drain registers allow it: a declared name, a non-negative n, and each
+// declared key once with one of its declared string values.
+func declaredSeries(name string, n int64, attrs []attribute.KeyValue) (string, bool) {
 	counters := holdDrainCounters()
 	i := slices.IndexFunc(counters, func(c scheduler.Counter) bool { return c.Name == name })
-	require.GreaterOrEqual(s.t, i, 0, "Counter %q is not declared", name)
-	require.GreaterOrEqual(s.t, n, int64(0), "Counter %q takes a non-negative n", name)
+	if i < 0 || n < 0 || len(attrs) != len(counters[i].Attrs) {
+		return "", false
+	}
 
 	declared := counters[i].Attrs
-	require.Len(s.t, attrs, len(declared), "Counter %q takes each declared key once", name)
+	seen := make(map[attribute.Key]bool, len(attrs))
 	var series strings.Builder
 	series.WriteString(name)
 	for _, kv := range attrs {
 		j := slices.IndexFunc(declared, func(a scheduler.AttrSet) bool { return a.Key == string(kv.Key) })
-		require.GreaterOrEqual(s.t, j, 0, "Counter %q does not declare key %q", name, kv.Key)
-		require.Equal(s.t, attribute.STRING, kv.Value.Type(), "Counter %q key %q takes a string", name, kv.Key)
-		require.Contains(s.t, declared[j].Values, kv.Value.AsString(), "Counter %q key %q", name, kv.Key)
+		if j < 0 || seen[kv.Key] || kv.Value.Type() != attribute.STRING ||
+			!slices.Contains(declared[j].Values, kv.Value.AsString()) {
+			return "", false
+		}
+		seen[kv.Key] = true
 		fmt.Fprintf(&series, "{%s=%s}", kv.Key, kv.Value.AsString())
 	}
-	return series.String()
+	return series.String(), true
+}
+
+// TestDeclaredSeriesRejectsUndeclaredCalls pins the fake sink's check, which
+// every outcome test leans on: a check that accepted everything would let a
+// misspelled Counter, key or value pass them all.
+func TestDeclaredSeriesRejectsUndeclaredCalls(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		counter    string
+		n          int64
+		attrs      []attribute.KeyValue
+		wantSeries string
+		wantOK     bool
+	}{
+		{
+			name: "a_declared_call_with_zero_n", counter: "inbox.hold.drain.passes",
+			attrs:      []attribute.KeyValue{attribute.String("role", "active")},
+			wantSeries: "inbox.hold.drain.passes{role=active}", wantOK: true,
+		},
+		{
+			name: "an_undeclared_name", counter: "inbox.hold.drain.pass", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("role", "active")},
+		},
+		{
+			name: "a_negative_n", counter: "inbox.hold.drain.passes", n: -1,
+			attrs: []attribute.KeyValue{attribute.String("role", "active")},
+		},
+		{name: "a_missing_key", counter: "inbox.hold.drain.passes", n: 1},
+		{
+			name: "an_undeclared_key", counter: "inbox.hold.drain.passes", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("mode", "active")},
+		},
+		{
+			name: "a_repeated_key", counter: "inbox.hold.drain.passes", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("role", "active"), attribute.String("role", "standby")},
+		},
+		{
+			name: "a_non_string_value", counter: "inbox.hold.drain.passes", n: 1,
+			attrs: []attribute.KeyValue{attribute.Int("role", 1)},
+		},
+		{
+			name: "an_undeclared_value", counter: "inbox.hold.drain.tenants", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "dead_lettered")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			series, ok := declaredSeries(tc.counter, tc.n, tc.attrs)
+
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantSeries, series)
+		})
+	}
 }
 
 func drainCtx(db dbtypes.Interface) *fakeHoldJobCtx {
