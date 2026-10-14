@@ -174,6 +174,11 @@ func (l *recordingLogger) windowLines() []recordedLine {
 	return l.linesWith(func(line recordedLine) bool { _, ok := line.fields["window.start"]; return ok })
 }
 
+// edgeLines returns the edge lines: the only lines carrying edge.reason.
+func (l *recordingLogger) edgeLines() []recordedLine {
+	return l.linesWith(func(line recordedLine) bool { _, ok := line.fields["edge.reason"]; return ok })
+}
+
 func (l *recordingLogger) messageLines(msg string) []recordedLine {
 	return l.linesWith(func(line recordedLine) bool { return line.msg == msg })
 }

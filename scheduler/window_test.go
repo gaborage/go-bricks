@@ -45,9 +45,13 @@ func TestWindowedJobSummarizesAThousandFailingRunsInOneWarnLine(t *testing.T) {
 	clock.Advance(windowTestWidth)
 	module.runJobBody(entry, triggerScheduled)
 
-	action := log.actionLines()
-	require.Len(t, action, 1, "the window line is the only action line: no per-run action line")
-	line := action[0]
+	edges := log.edgeLines()
+	require.Len(t, edges, 1, "the first failing run is the job's one clean-to-failing edge")
+	assert.Equal(t, "new", edges[0].fields["edge.reason"])
+	windows := log.windowLines()
+	require.Len(t, windows, 1)
+	assert.Len(t, log.actionLines(), 2, "the window and edge lines are the only action lines: no per-run action line")
+	line := windows[0]
 	assert.False(t, line.viaContext, "the window line goes through the module logger, never a run's WithContext")
 	assert.Equal(t, "warn", line.level)
 	assert.Equal(t, "2026-10-14T03:00:00Z", line.fields["window.start"])
