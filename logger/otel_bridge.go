@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,14 +44,24 @@ const (
 	// logTypeAttrKey routes records through dual-mode processing
 	// (observability.DualModeLogProcessor); deliberately caller-settable.
 	logTypeAttrKey = "log.type"
+
+	// maxRecordAttributes caps the attributes on one record. observability sets
+	// the SDK's own limit to the same value (its tests pin the pair), so the
+	// bridge is the only truncation point and picks what survives.
+	maxRecordAttributes = 128
+
+	// droppedAttrsKey carries the number of caller fields the cap dropped, on
+	// the truncated record and on the one-time truncation WARN.
+	droppedAttrsKey = "log.attributes.dropped"
 )
 
 // OTelBridge converts zerolog JSON output to OpenTelemetry log records.
 // It implements io.Writer to intercept zerolog's output stream.
 type OTelBridge struct {
-	loggerProvider *sdklog.LoggerProvider
-	logger         log.Logger
-	remapWarnOnce  sync.Once
+	loggerProvider   *sdklog.LoggerProvider
+	logger           log.Logger
+	remapWarnOnce    sync.Once
+	truncateWarnOnce sync.Once
 }
 
 // NewOTelBridge creates a new bridge that converts zerolog logs to OTel log records.
@@ -81,12 +92,17 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
-	rec, ctx, remapped := buildLogRecord(entry)
+	rec, ctx, changes := buildLogRecord(entry)
 	b.logger.Emit(ctx, rec)
 
-	if len(remapped) > 0 {
+	if len(changes.remapped) > 0 {
 		b.remapWarnOnce.Do(func() {
-			b.emitRemapWarning(ctx, remapped)
+			b.emitRemapWarning(ctx, changes.remapped)
+		})
+	}
+	if changes.dropped > 0 {
+		b.truncateWarnOnce.Do(func() {
+			b.emitTruncationWarning(ctx, changes.dropped)
 		})
 	}
 
@@ -94,11 +110,8 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 }
 
 // emitRemapWarning emits a WARN naming the remapped keys, once per bridge
-// instance (the framework wires a single bridge per process).
-// It builds the record directly and emits via b.logger — never through zerolog
-// (the bridge sits inside zerolog's writer chain; logging through it recurses).
-// Because it bypasses the SensitiveDataFilter it carries key names only, never
-// field values.
+// instance (the framework wires a single bridge per process). It carries key
+// names only, never field values.
 func (b *OTelBridge) emitRemapWarning(ctx context.Context, remapped []string) {
 	sort.Strings(remapped)
 	keys := strings.Join(remapped, ",")
@@ -106,16 +119,32 @@ func (b *OTelBridge) emitRemapWarning(ctx context.Context, remapped []string) {
 	// returns the string unchanged when nothing was cut.
 	keys = strings.ToValidUTF8(keys[:min(len(keys), maxRemapWarnKeysLen)], "")
 
+	b.emitWarning(ctx,
+		"log fields shadow reserved resource attribute namespaces; remapped with \""+callerAttrPrefix+"\" prefix",
+		attribute.String("reserved.keys", keys))
+}
+
+// emitTruncationWarning emits a WARN carrying the number of caller fields the
+// attribute cap dropped, once per bridge instance, on the first truncated
+// record. It carries the count only, never a caller key or value.
+func (b *OTelBridge) emitTruncationWarning(ctx context.Context, dropped int) {
+	b.emitWarning(ctx,
+		"log fields exceed the "+strconv.Itoa(maxRecordAttributes)+"-attribute record cap; the lexicographically last were dropped",
+		attribute.Int(droppedAttrsKey, dropped))
+}
+
+// emitWarning builds a trace-routed WARN record directly and emits it via
+// b.logger — never through zerolog (the bridge sits inside zerolog's writer
+// chain; logging through it recurses). It bypasses the SensitiveDataFilter, so
+// callers must never pass caller field values.
+func (b *OTelBridge) emitWarning(ctx context.Context, body string, attrs ...attribute.KeyValue) {
 	var rec log.Record
 	rec.SetTimestamp(time.Now())
 	rec.SetSeverity(log.SeverityWarn)
 	rec.SetSeverityText(LevelWarn)
-	rec.SetBody(attribute.StringValue(
-		"log fields shadow reserved resource attribute namespaces; remapped with \"" + callerAttrPrefix + "\" prefix"))
-	rec.AddAttributes(
-		attribute.String("reserved.keys", keys),
-		attribute.String(logTypeAttrKey, "trace"),
-	)
+	rec.SetBody(attribute.StringValue(body))
+	rec.AddAttributes(attribute.String(logTypeAttrKey, "trace"))
+	rec.AddAttributes(attrs...)
 	b.logger.Emit(ctx, rec)
 }
 
@@ -128,7 +157,13 @@ func isReservedAttrKey(k string) bool {
 		k == reservedDeploymentEnvKey
 }
 
-func buildLogRecord(entry map[string]any) (rec log.Record, ctx context.Context, remapped []string) {
+// fieldChanges reports how buildLogRecord altered the caller's fields.
+type fieldChanges struct {
+	remapped []string // original names of keys moved under callerAttrPrefix
+	dropped  int      // fields the attribute cap left out
+}
+
+func buildLogRecord(entry map[string]any) (rec log.Record, ctx context.Context, changes fieldChanges) {
 	ctx = context.Background()
 	var traceIDStr, spanIDStr string
 	var traceFlags trace.TraceFlags
@@ -151,26 +186,29 @@ func buildLogRecord(entry map[string]any) (rec log.Record, ctx context.Context, 
 	applyTimestamp(&rec, entry)
 	applySeverity(&rec, entry)
 	applyBody(&rec, entry)
-	remapped = applyAttributes(&rec, entry)
 
-	// Add trace correlation attributes if available
-	// - String format (trace_id, span_id) enables text-based queries
-	// - Int format (trace_flags) enables fallback enrichment of canonical fields
+	// Routing and correlation attributes lead the record, so no caller field
+	// count can truncate them away. Default to trace logs unless the caller
+	// sets log.type; dual-mode routing depends on every record carrying one.
+	if v, ok := entry[logTypeAttrKey]; ok {
+		rec.AddAttributes(attribute.KeyValue{Key: logTypeAttrKey, Value: toLogValue(v)})
+	} else {
+		rec.AddAttributes(attribute.String(logTypeAttrKey, "trace"))
+	}
+
+	// String trace_id/span_id enable text queries; Int trace_flags enables
+	// fallback enrichment of the canonical fields.
 	if hasTraceContext {
 		rec.AddAttributes(
 			attribute.String(FieldTraceID, traceIDStr),
 			attribute.String(FieldSpanID, spanIDStr),
-			attribute.Int64("trace_flags", int64(traceFlags)),
+			attribute.Int64(fieldTraceFlags, int64(traceFlags)),
 		)
 	}
 
-	// Default to trace logs unless caller explicitly sets log.type
-	// This ensures all application logs are categorized for dual-mode routing
-	if _, ok := entry[logTypeAttrKey]; !ok {
-		rec.AddAttributes(attribute.String(logTypeAttrKey, "trace"))
-	}
+	changes = applyAttributes(&rec, entry, hasTraceContext, maxRecordAttributes-rec.AttributesLen())
 
-	return rec, ctx, remapped
+	return rec, ctx, changes
 }
 
 func applyTimestamp(rec *log.Record, entry map[string]any) {
@@ -202,19 +240,25 @@ func applyBody(rec *log.Record, entry map[string]any) {
 	}
 }
 
-// applyAttributes copies entry fields onto the record and returns the original
-// names of any keys remapped out of the reserved resource namespaces (nil in
-// the common no-collision case).
-func applyAttributes(rec *log.Record, entry map[string]any) (remapped []string) {
+// applyAttributes copies entry fields onto the record within budget slots. It
+// reports the original names of any keys remapped out of the reserved resource
+// namespaces (nil in the common no-collision case) and how many fields the
+// budget dropped. With emittedTrace set, the caller's trace keys are skipped:
+// the bridge already wrote them from the span context, and an unparsed caller
+// value would overwrite it (the SDK keeps the last value).
+func applyAttributes(rec *log.Record, entry map[string]any, emittedTrace bool, budget int) (changes fieldChanges) {
 	attrs := make([]attribute.KeyValue, 0, len(entry))
 	for k, v := range entry {
 		// Skip fields handled elsewhere
-		if k == "time" || k == fieldLevel || k == fieldMessage || k == "msg" {
+		if k == "time" || k == fieldLevel || k == fieldMessage || k == "msg" || k == logTypeAttrKey {
+			continue
+		}
+		if emittedTrace && (k == FieldTraceID || k == FieldSpanID || k == fieldTraceFlags) {
 			continue
 		}
 
 		if isReservedAttrKey(k) {
-			remapped = append(remapped, k)
+			changes.remapped = append(changes.remapped, k)
 			k = callerAttrPrefix + k
 		}
 
@@ -223,18 +267,42 @@ func applyAttributes(rec *log.Record, entry map[string]any) (remapped []string) 
 			Value: toLogValue(v),
 		})
 	}
+
+	attrs, changes.dropped = capAttributes(attrs, budget)
+	if changes.dropped > 0 {
+		rec.AddAttributes(attribute.Int(droppedAttrsKey, changes.dropped))
+	}
 	if len(attrs) > 0 {
 		rec.AddAttributes(attrs...)
 	}
-	return remapped
+	return changes
+}
+
+// capAttributes returns attrs untouched when they fit budget. Otherwise it keeps
+// the lexicographically first budget-1 by key, leaving one slot for the
+// dropped-count stamp, and reports how many it dropped. A caller field named
+// like the stamp is dropped too: kept, it would overwrite the stamp.
+func capAttributes(attrs []attribute.KeyValue, budget int) (kept []attribute.KeyValue, dropped int) {
+	if len(attrs) <= budget {
+		return attrs, 0
+	}
+	total := len(attrs)
+	attrs = slices.DeleteFunc(attrs, func(kv attribute.KeyValue) bool {
+		return kv.Key == droppedAttrsKey
+	})
+	slices.SortFunc(attrs, func(a, b attribute.KeyValue) int {
+		return strings.Compare(string(a.Key), string(b.Key))
+	})
+	kept = attrs[:budget-1]
+	return kept, total - len(kept)
 }
 
 func extractSpanContext(entry map[string]any) (trace.SpanContext, bool) {
 	traceID, traceIDOK := parseTraceID(entry)
 	spanID, spanIDOK := parseSpanID(entry)
-	flags, flagsOK := parseTraceFlags(entry["trace_flags"])
+	flags, flagsOK := parseTraceFlags(entry[fieldTraceFlags])
 	if flagsOK {
-		delete(entry, "trace_flags")
+		delete(entry, fieldTraceFlags)
 	}
 
 	if (!traceIDOK || !spanIDOK) && entry != nil {

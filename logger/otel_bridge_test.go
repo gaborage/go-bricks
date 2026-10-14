@@ -44,10 +44,10 @@ func (p *captureProcessor) snapshot() []sdklog.Record {
 	return append([]sdklog.Record(nil), p.records...)
 }
 
-func newCaptureBridge(t *testing.T) (*OTelBridge, *captureProcessor) {
+func newCaptureBridge(t *testing.T, opts ...sdklog.LoggerProviderOption) (*OTelBridge, *captureProcessor) {
 	t.Helper()
 	proc := &captureProcessor{}
-	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(proc))
+	provider := sdklog.NewLoggerProvider(append(opts, sdklog.WithProcessor(proc))...)
 	t.Cleanup(func() {
 		require.NoError(t, provider.Shutdown(context.Background()))
 	})
@@ -519,6 +519,200 @@ func TestOTelBridgeJSONNullArrivesAsEmptyString(t *testing.T) {
 
 	inSlice := writeAndReadAttr(t, `{"level":"info","message":"m","ids":[null]}`, "ids")
 	assert.Equal(t, attribute.SliceValue(attribute.StringValue("")), inSlice)
+}
+
+// callerFieldsLine marshals a zerolog-shaped line carrying n caller fields
+// named field.000 upward, plus extra.
+func callerFieldsLine(t *testing.T, n int, extra map[string]any) []byte {
+	t.Helper()
+	entry := map[string]any{"level": "info", "message": "m"}
+	for i := 0; i < n; i++ {
+		entry[fmt.Sprintf("field.%03d", i)] = fmt.Sprintf("value.%03d", i)
+	}
+	for k, v := range extra {
+		entry[k] = v
+	}
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	return line
+}
+
+func firstAttr(rec *sdklog.Record) attribute.KeyValue {
+	var first attribute.KeyValue
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		first = kv
+		return false
+	})
+	return first
+}
+
+func TestOTelBridgeEmitsDefaultLogTypeFirstOnOversizeLine(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+
+	_, err := bridge.Write(callerFieldsLine(t, 200, nil))
+	require.NoError(t, err)
+
+	rec, ok := dataRecord(proc.snapshot())
+	require.True(t, ok, "bridge emitted no data record")
+	assert.Equal(t, attribute.String(logTypeAttrKey, "trace"), firstAttr(&rec),
+		"log.type must lead the record so no caller field count can truncate it away")
+}
+
+func TestOTelBridgeUnparsedCallerTraceFieldsNeverReplaceSpanContext(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+
+	_, err := bridge.Write([]byte(`{"level":"info","message":"m",` +
+		`"traceparent":"00-0123456789abcdef0123456789abcdef-fedcba9876543210-01",` +
+		`"trace_id":"zz","span_id":"zz","trace_flags":"zz"}`))
+	require.NoError(t, err)
+
+	rec, ok := dataRecord(proc.snapshot())
+	require.True(t, ok, "bridge emitted no data record")
+	want := map[string]attribute.Value{
+		FieldTraceID:  attribute.StringValue("0123456789abcdef0123456789abcdef"),
+		FieldSpanID:   attribute.StringValue("fedcba9876543210"),
+		"trace_flags": attribute.Int64Value(1),
+	}
+	for key, val := range want {
+		got, found := recordAttrValue(&rec, key)
+		require.True(t, found, "%s missing", key)
+		assert.Equal(t, val, got, "%s must carry the span context's value", key)
+	}
+}
+
+var validTraceFields = map[string]any{
+	FieldTraceID:  "0123456789abcdef0123456789abcdef",
+	FieldSpanID:   "fedcba9876543210",
+	"trace_flags": "1",
+}
+
+func attrKeys(rec *sdklog.Record) []string {
+	var keys []string
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		keys = append(keys, string(kv.Key))
+		return true
+	})
+	return keys
+}
+
+func TestOTelBridgeTruncatesOversizeLineToLexicographicallyFirstCallers(t *testing.T) {
+	// Unlimited SDK: any truncation observed here is the bridge's own.
+	bridge, proc := newCaptureBridge(t, sdklog.WithAttributeCountLimit(-1))
+
+	_, err := bridge.Write(callerFieldsLine(t, 200, validTraceFields))
+	require.NoError(t, err)
+
+	rec, ok := dataRecord(proc.snapshot())
+	require.True(t, ok, "bridge emitted no data record")
+	assert.Equal(t, 128, rec.AttributesLen())
+	assert.Zero(t, rec.DroppedAttributes(), "the SDK must not be the one truncating")
+
+	keys := attrKeys(&rec)
+	assert.Equal(t, []string{logTypeAttrKey, FieldTraceID, FieldSpanID, "trace_flags", "log.attributes.dropped"}, keys[:5],
+		"framework attributes, then the dropped-count stamp, lead the record")
+
+	// 128 slots - 4 framework - 1 stamp leaves 123 of the 200 callers.
+	dropped, found := recordAttrValue(&rec, "log.attributes.dropped")
+	require.True(t, found)
+	assert.Equal(t, attribute.Int64Value(77), dropped)
+
+	wantCallers := make([]string, 123)
+	for i := range wantCallers {
+		wantCallers[i] = fmt.Sprintf("field.%03d", i)
+	}
+	assert.ElementsMatch(t, wantCallers, keys[5:], "the kept callers are the lexicographically first")
+}
+
+func TestOTelBridgeCallerDroppedCountNeverReplacesStamp(t *testing.T) {
+	bridge, proc := newCaptureBridge(t, sdklog.WithAttributeCountLimit(-1))
+
+	// z.* callers sort after the caller's own log.attributes.dropped, so only
+	// excluding it keeps it from overwriting the bridge's stamp.
+	entry := map[string]any{"level": "info", "message": "m", "log.attributes.dropped": "spoof"}
+	for i := 0; i < 200; i++ {
+		entry[fmt.Sprintf("z.%03d", i)] = "v"
+	}
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	_, err = bridge.Write(line)
+	require.NoError(t, err)
+
+	rec, ok := dataRecord(proc.snapshot())
+	require.True(t, ok, "bridge emitted no data record")
+	assert.Equal(t, 128, rec.AttributesLen())
+	// 201 callers, 126 kept: 128 slots - 1 log.type - 1 stamp.
+	dropped, found := recordAttrValue(&rec, "log.attributes.dropped")
+	require.True(t, found)
+	assert.Equal(t, attribute.Int64Value(75), dropped)
+}
+
+func TestOTelBridgeLeavesLineWithinCapUntouched(t *testing.T) {
+	// wantExtra: the keys expected beside the caller's field.NNN keys.
+	tests := []struct {
+		name      string
+		callers   int
+		extra     map[string]any
+		wantExtra []string
+	}{
+		{name: "small_line", callers: 3, wantExtra: []string{logTypeAttrKey}},
+		{name: "exactly_128_without_trace", callers: 127, wantExtra: []string{logTypeAttrKey}},
+		{
+			name: "exactly_128_with_trace", callers: 124, extra: validTraceFields,
+			wantExtra: []string{logTypeAttrKey, FieldTraceID, FieldSpanID, "trace_flags"},
+		},
+		{
+			name: "exactly_128_with_caller_log_type", callers: 127, extra: map[string]any{logTypeAttrKey: "action"},
+			wantExtra: []string{logTypeAttrKey},
+		},
+		{
+			name: "unparsed_trace_fields_without_span_context_stay", callers: 3,
+			extra:     map[string]any{FieldTraceID: "zz", FieldSpanID: "zz"},
+			wantExtra: []string{logTypeAttrKey, FieldTraceID, FieldSpanID},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bridge, proc := newCaptureBridge(t, sdklog.WithAttributeCountLimit(-1))
+
+			_, err := bridge.Write(callerFieldsLine(t, tt.callers, tt.extra))
+			require.NoError(t, err)
+
+			rec, ok := dataRecord(proc.snapshot())
+			require.True(t, ok, "bridge emitted no data record")
+			want := append([]string(nil), tt.wantExtra...)
+			for i := 0; i < tt.callers; i++ {
+				want = append(want, fmt.Sprintf("field.%03d", i))
+			}
+			assert.ElementsMatch(t, want, attrKeys(&rec))
+			assert.Empty(t, warnRecords(proc.snapshot()), "a line within the cap must not warn")
+		})
+	}
+}
+
+func TestOTelBridgeWarnsOnceOnTruncation(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+
+	for i := 0; i < 2; i++ {
+		_, err := bridge.Write(callerFieldsLine(t, 200, nil))
+		require.NoError(t, err)
+	}
+
+	records := proc.snapshot()
+	require.Len(t, records, 3, "2 data records + exactly 1 WARN")
+	warns := warnRecords(records)
+	require.Len(t, warns, 1, "truncation WARN must fire exactly once per bridge instance")
+
+	warn := warns[0]
+	// 128 slots - 1 log.type - 1 stamp leaves 126 of the 200 callers.
+	assert.Equal(t, []string{logTypeAttrKey, "log.attributes.dropped"}, attrKeys(&warn),
+		"the WARN bypasses SensitiveDataFilter, so it carries no caller key")
+	dropped, _ := recordAttrValue(&warn, "log.attributes.dropped")
+	assert.Equal(t, attribute.Int64Value(74), dropped)
+	logType, _ := recordAttrValue(&warn, logTypeAttrKey)
+	assert.Equal(t, attribute.StringValue("trace"), logType)
+	assert.NotContains(t, warn.Body().AsString(), "field.")
+	assert.NotContains(t, warn.Body().AsString(), "value.")
 }
 
 // benchNoopProcessor discards every record; keeps BenchmarkOTelBridgeWrite's
