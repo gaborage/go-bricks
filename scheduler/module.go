@@ -368,11 +368,13 @@ func (m *Module) newJobWindow(jobID string, job *windowedJob) (*windowState, err
 	spec.jobAttr = attribute.String(jobIDAttr, jobID)
 	if m.meterProvider != nil {
 		meter := m.meterProvider.Meter("scheduler")
+		jobOnly := metric.WithAttributeSet(attribute.NewSet(spec.jobAttr))
 		for i := range spec.counters {
 			spec.counters[i].instrument, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
 				spec.counters[i].name,
 				metric.WithDescription("Outcomes a Windowed job reported, Count and Fail alike"),
 			)
+			spec.counters[i].jobOnly = jobOnly
 		}
 	}
 	return newWindowState(jobID, spec, width), nil
@@ -786,36 +788,21 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			panicType := fmt.Sprintf("%T", r)
 			panicErr := fmt.Errorf("panic (type: %s)", panicType)
 
-			var edge *edgeEvent
+			var edged bool
 			if !settled {
-				var closed *windowSnapshot
-				line, closed, edge = m.settleRun(window, rec, &finishedRun{
+				line, edged = m.settleRun(window, rec, &finishedRun{
 					end: end, duration: duration, err: panicErr, panicked: true,
 					traceparent: jobTraceparent(span), correlationID: correlationID,
 				})
-				m.logWindow(closed)
-				m.logEdge(edge)
 			}
 
 			// A Windowed job's edge line carries the failure signal, so its stack
 			// line is ERROR only on the run that wrote one.
 			stackLevel := logLevelError
-			if rec != nil && edge == nil {
+			if rec != nil && !edged {
 				stackLevel = logLevelDebug
 			}
-
-			// The logger is consumer-supplied and its write can panic; `%T` cannot.
-			// This defer has already spent its recover(), so guard the log call
-			// alone — otherwise that panic escapes and skips the accounting below,
-			// leaving the job counted as neither success nor failure.
-			func() {
-				defer func() { _ = recover() }()
-				createJobLogEvent(m.logger.WithContext(ctx), stackLevel).
-					Str("jobID", entry.metadata.JobID).
-					Str("panic_type", panicType).
-					Str("stackTrace", string(debug.Stack())).
-					Msg("Job panicked - recovered and marked as failed")
-			}()
+			m.logPanicStack(ctx, entry.metadata.JobID, panicType, stackLevel)
 
 			// Record panic in span (if span exists)
 			if span != nil {
@@ -846,13 +833,11 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	end := m.now()
 	duration := end.Sub(start)
 
-	line, closed, edge := m.settleRun(window, rec, &finishedRun{
+	line, _ = m.settleRun(window, rec, &finishedRun{
 		end: end, duration: duration, err: err,
 		traceparent: jobTraceparent(span), correlationID: correlationID,
 	})
 	settled = true
-	m.logWindow(closed)
-	m.logEdge(edge)
 
 	// Emit structured action log with operational counters and correlation
 	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, err, span, line)
@@ -885,6 +870,24 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	}
 }
 
+// logPanicStack writes a recovered panic's stack line. The logger is
+// consumer-supplied and its write can panic; `%T` cannot. The caller's defer has
+// already spent its recover(), so the write is guarded here — otherwise that panic
+// escapes and skips the accounting after it, leaving the job counted as neither
+// success nor failure. The stack is captured only when the level is enabled.
+func (m *Module) logPanicStack(ctx JobContext, jobID, panicType, level string) {
+	defer func() { _ = recover() }()
+	event := createJobLogEvent(m.logger.WithContext(ctx), level)
+	if !event.Enabled() {
+		return
+	}
+	event.
+		Str("jobID", jobID).
+		Str("panic_type", panicType).
+		Str("stackTrace", string(debug.Stack())).
+		Msg("Job panicked - recovered and marked as failed")
+}
+
 // finishedRun is how a run ended, as its summary window counts it.
 type finishedRun struct {
 	end           time.Time
@@ -904,13 +907,13 @@ type summaryLine struct {
 	correlationID string
 }
 
-// settleRun counts a finished scheduled run in its summary window, and returns how
-// the run's own summary line is written, the window its completion closed and the
-// edge it emitted, if any.
-func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun) (summaryLine, *windowSnapshot, *edgeEvent) {
-	line := summaryLine{correlationID: run.correlationID}
+// settleRun counts a finished scheduled run in its summary window, writes the
+// window its completion closed and the edge it emitted, if any, and returns how
+// the run's own summary line is written and whether it wrote an edge.
+func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun) (line summaryLine, edged bool) {
+	line = summaryLine{correlationID: run.correlationID}
 	if window == nil {
-		return line, nil, nil
+		return line, false
 	}
 	out := rec.outcome()
 	if run.panicked {
@@ -923,12 +926,14 @@ func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun)
 	}
 	out.err, out.traceparent, out.correlationID = run.err, run.traceparent, run.correlationID
 	closed, edge, sealed := window.complete(run.end, out)
+	m.logWindow(closed)
 	if sealed {
 		line.failing = len(out.keys) > 0
-		return line, closed, nil
+		return line, false
 	}
+	m.logEdge(edge)
 	line.debug = true
-	return line, closed, edge
+	return line, edge != nil
 }
 
 // sealWindows closes every open summary window as partial. A run that completes

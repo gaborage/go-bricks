@@ -200,14 +200,14 @@ func (w *windowState) complete(now time.Time, out *runOutcome) (closed *windowSn
 // moveFailingSet adds a run's keys to the failing set, and names the edge they
 // make: new when the set was empty, grew when it held keys but not all of these.
 func (w *windowState) moveFailingSet(keys map[string]bool) string {
+	wasFailing := len(w.failingSet) > 0
 	added := false
 	for key := range keys {
 		if !w.failingSet[key] {
+			w.failingSet[key] = true
 			added = true
 		}
 	}
-	wasFailing := len(w.failingSet) > 0
-	maps.Copy(w.failingSet, keys)
 	if !added {
 		return ""
 	}

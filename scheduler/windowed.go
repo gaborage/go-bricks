@@ -94,6 +94,7 @@ type counterSpec struct {
 	name       string
 	attrs      map[string]map[string]bool
 	instrument metric.Int64Counter
+	jobOnly    metric.AddOption // the job.id set an attribute-less Counter records under
 }
 
 // windowedSpec is a validated Windowed job.
@@ -213,6 +214,10 @@ func (c *counterSpec) declares(attrs []attribute.KeyValue) bool {
 // add records n on the Counter's metric, with its declared attributes plus job.id.
 func (c *counterSpec) add(ctx context.Context, n int64, attrs []attribute.KeyValue, job attribute.KeyValue) {
 	if c.instrument == nil {
+		return
+	}
+	if len(attrs) == 0 {
+		c.instrument.Add(ctx, n, c.jobOnly)
 		return
 	}
 	kvs := make([]attribute.KeyValue, 0, len(attrs)+1)
