@@ -3,7 +3,6 @@ package outbox
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1201,8 +1200,7 @@ func TestRelayRunReportsALeaderCycleOnTheSink(t *testing.T) {
 	}, sink.calls)
 }
 
-// TestRelayLogsItsCycleSummaryAtDebug pins the cycle line's level: the window line and the
-// outbox.relay.* metrics carry the counts at INFO.
+// TestRelayLogsItsCycleSummaryAtDebug pins the cycle line's level and its field set.
 func TestRelayLogsItsCycleSummaryAtDebug(t *testing.T) {
 	r, _, _ := newRelayWithLanes(&fakeStore{FetchPendingResult: []Record{{ID: "A1", Exchange: "ex", RoutingKey: "a"}}})
 	log := newRecordingLogger()
@@ -1212,7 +1210,7 @@ func TestRelayLogsItsCycleSummaryAtDebug(t *testing.T) {
 	require.NoError(t, runRelay(t, r, ctx))
 
 	assert.Equal(t, []string{"DEBUG Outbox relay cycle completed"}, log.leveled())
-	assert.Equal(t, int64(1), log.numbers()["published_amqp"], "the line keeps its field set")
+	assert.Equal(t, int64(1), log.numbers()["published_amqp"])
 }
 
 // TestRelayRunReportsEachRolePathOnTheSink pins the role every relayTenant return takes,
@@ -1422,13 +1420,6 @@ func TestRelayRunReportsUnrecordedDeliveries(t *testing.T) {
 // TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan pins the declaration at its
 // edges, each registered with a real scheduler.
 func TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan(t *testing.T) {
-	tenantsNamed := func(n int) []string {
-		ids := make([]string, n)
-		for i := range ids {
-			ids[i] = fmt.Sprintf("t%04d", i)
-		}
-		return ids
-	}
 	tests := []struct {
 		name       string
 		tenants    []string
@@ -1440,8 +1431,8 @@ func TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan(t *testing.T) {
 		{name: "key_at_64_bytes", tenants: []string{strings.Repeat("k", 64)}, tenantAttr: true},
 		{name: "key_at_65_bytes", tenants: []string{strings.Repeat("k", 65)}, reason: "does not match ^[a-z0-9_-]{1,64}$"},
 		{name: "key_outside_the_value_charset", tenants: []string{"t1", "Acme.EU"}, reason: `tenant "Acme.EU" does not match`},
-		{name: "666_tenants", tenants: tenantsNamed(666), tenantAttr: true},
-		{name: "667_tenants", tenants: tenantsNamed(667), reason: "667 tenants make 2001 role and tenant series, over the 1999"},
+		{name: "666_tenants", tenants: tenantIDs(666), tenantAttr: true},
+		{name: "667_tenants", tenants: tenantIDs(667), reason: "667 tenants make 2001 role and tenant series, over the 1999"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

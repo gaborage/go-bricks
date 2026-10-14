@@ -550,6 +550,15 @@ var (
 	_ relaySink = (*recordingSink)(nil)
 )
 
+// tenantIDs returns n distinct static tenant ids, each a valid metric attribute value.
+func tenantIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("t%04d", i)
+	}
+	return ids
+}
+
 // runRelay runs one relay pass on a sink that checks every Counter call.
 func runRelay(t *testing.T, r *Relay, jobCtx scheduler.JobContext) error {
 	t.Helper()

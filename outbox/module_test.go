@@ -3,7 +3,6 @@ package outbox
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1370,11 +1369,11 @@ func TestRegisterJobsRegistersTheRelayAsAWindowedJob(t *testing.T) {
 	require.Len(t, reg.FixedRateCalls, 1)
 	job := reg.FixedRateCalls[0].Job
 	_, isRelay := job.(*Relay)
-	assert.False(t, isRelay, "the registrar must receive the Windowed wrapper, not the relay")
+	assert.False(t, isRelay)
 	executor, ok := job.(scheduler.Executor)
 	require.True(t, ok)
 	require.ErrorContains(t, executor.Execute(newFakeJobCtx(nil)), "runs only when registered with FixedRate")
-	assert.Zero(t, resolves, "a direct Execute must not reach the database, so no store call")
+	assert.Zero(t, resolves, "no database resolve, so no store call")
 }
 
 // TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan registers through a real
@@ -1387,10 +1386,6 @@ func TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan(t *testing.T)
 			tenants[id] = config.TenantEntry{}
 		}
 		return config.MultitenantConfig{Enabled: true, Tenants: tenants}
-	}
-	numbered := make([]string, 667)
-	for i := range numbered {
-		numbered[i] = fmt.Sprintf("t%04d", i)
 	}
 	tests := []struct {
 		name        string
@@ -1409,7 +1404,7 @@ func TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan(t *testing.T)
 			reason: "does not match", cycle: "count outbox.relay.cycles{role=leader}",
 		},
 		{
-			name: "667_tenants", multitenant: static(numbered...),
+			name: "667_tenants", multitenant: static(tenantIDs(667)...),
 			reason: "667 tenants make 2001", cycle: "count outbox.relay.cycles{role=leader}",
 		},
 	}
