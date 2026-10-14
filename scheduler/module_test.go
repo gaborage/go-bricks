@@ -306,6 +306,38 @@ func TestJobSummaryTraceparentCarriesTheSpanFlags(t *testing.T) {
 	}
 }
 
+// TestJobTraceparentRendersFlagsVerbatim pins the flags byte as the span context
+// holds it, the W3C random bit included; no SDK sampler sets that bit, so only
+// a constructed span context reaches it.
+func TestJobTraceparentRendersFlagsVerbatim(t *testing.T) {
+	traceID, err := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex("00f067aa0ba902b7")
+	require.NoError(t, err)
+
+	spanWithFlags := func(flags trace.TraceFlags) trace.Span {
+		sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: flags})
+		return trace.SpanFromContext(trace.ContextWithSpanContext(context.Background(), sc))
+	}
+
+	tests := []struct {
+		name string
+		span trace.Span
+		want string
+	}{
+		{name: "nil_span", span: nil, want: ""},
+		{name: "invalid_span_context", span: trace.SpanFromContext(context.Background()), want: ""},
+		{name: "unsampled", span: spanWithFlags(0x00), want: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"},
+		{name: "random_and_sampled", span: spanWithFlags(0x03), want: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-03"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, jobTraceparent(tt.span))
+		})
+	}
+}
+
 // TestJobSummaryWithoutAValidSpanContext pins the untraced run: traceparent stays
 // on the line as "", and correlation_id is a minted framework id, never zeros.
 func TestJobSummaryWithoutAValidSpanContext(t *testing.T) {
@@ -327,7 +359,7 @@ func TestJobSummaryWithoutAValidSpanContext(t *testing.T) {
 
 			line := jobSummaryFields(t, out, "untraced-job")
 			require.Contains(t, line, "traceparent")
-			assert.Equal(t, "", line["traceparent"])
+			assert.Empty(t, line["traceparent"])
 			assertMintedCorrelationID(t, line[logger.FieldCorrelationID])
 		})
 	}

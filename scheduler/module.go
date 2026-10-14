@@ -23,6 +23,7 @@ import (
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/observability"
 	"github.com/gaborage/go-bricks/server"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // OpenTelemetry attribute names for job scheduler observability.
@@ -673,6 +674,10 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 		ctx = ctx.withContext(tracedCtx)
 	}
 
+	// The run's framework correlation id, minted before the recovery defer so
+	// both summary calls report the same value.
+	correlationID := gobrickstrace.EnsureTraceID(ctx)
+
 	start := time.Now()
 	var executionStatus string
 
@@ -728,7 +733,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			// Emit the structured action log so the panic path also gets the
 			// advertised 100% job-execution sampling (the normal-return call
 			// below never runs when Execute panics).
-			m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, ctx.TriggerType(), duration, panicErr, span)
+			m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, panicErr, span, correlationID)
 		}
 	}()
 
@@ -738,7 +743,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	duration := time.Since(start)
 
 	// Emit structured action log with operational counters and correlation
-	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, ctx.TriggerType(), duration, err, span)
+	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, err, span, correlationID)
 
 	// Update metadata and record observability based on result
 	if err != nil {
@@ -816,10 +821,11 @@ func (m *Module) recordMetrics(ctx context.Context, jobID, status, scheduleType 
 // Similar to HTTP request logging, this provides 100% sampling of job executions with operational counters.
 func (m *Module) logJobResultSummary(
 	ctx JobContext,
-	jobID, scheduleType, trigger string,
+	jobID, scheduleType string,
 	duration time.Duration,
 	err error,
 	span trace.Span,
+	correlationID string,
 ) {
 	contextLog := m.logger.WithContext(ctx)
 
@@ -841,32 +847,35 @@ func (m *Module) logJobResultSummary(
 	amqpCount := logger.GetAMQPCounter(ctx)
 	amqpElapsed := logger.GetAMQPElapsed(ctx)
 
-	// Trace correlation
-	traceID := ""
-	traceparent := ""
-	if span != nil {
-		traceID = span.SpanContext().TraceID().String()
-		traceparent = fmt.Sprintf("00-%s-%s-01",
-			span.SpanContext().TraceID().String(),
-			span.SpanContext().SpanID().String())
-	}
-
 	// Emit structured action log
 	event.
 		Str("log.type", "action").
 		Str("job.id", jobID).
 		Str("job.schedule_type", scheduleType).
-		Str("job.trigger", trigger).
+		Str("job.trigger", ctx.TriggerType()).
 		Int64("job.execution.duration", duration.Nanoseconds()).
 		Str("job.status", jobStatusFromError(err)).
 		Str("result_code", resultCode).
-		Str(logger.FieldCorrelationID, traceID).
-		Str("traceparent", traceparent).
+		Str(logger.FieldCorrelationID, correlationID).
+		Str("traceparent", jobTraceparent(span)).
 		Int64("db_queries", dbCount).
 		Int64("db_elapsed", dbElapsed).
 		Int64("amqp_published", amqpCount).
 		Int64("amqp_elapsed", amqpElapsed).
 		Msg(createJobMessage(jobID, duration, err))
+}
+
+// jobTraceparent renders span's W3C traceparent with its real flags, or "" when
+// there is no valid span context.
+func jobTraceparent(span trace.Span) string {
+	if span == nil {
+		return ""
+	}
+	sc := span.SpanContext()
+	if !sc.IsValid() {
+		return ""
+	}
+	return fmt.Sprintf("00-%s-%s-%s", sc.TraceID(), sc.SpanID(), sc.TraceFlags())
 }
 
 // determineJobSeverity calculates log severity and result_code based on execution result and duration.
