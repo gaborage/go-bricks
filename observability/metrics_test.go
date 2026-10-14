@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	goruntime "runtime"
 	"sync"
 	"testing"
 	"time"
@@ -656,13 +657,28 @@ func swapRuntimeReadFloorOption(t *testing.T, build func(time.Duration) runtime.
 	t.Cleanup(func() { newRuntimeReadFloorOption = prev })
 }
 
+// spawnBlockedGoroutines parks n goroutines until the test ends. Its cleanup waits until they
+// have exited, so none survives into the next test's go.goroutine.count read.
 func spawnBlockedGoroutines(t *testing.T, n int) {
 	t.Helper()
+	baseline := goruntime.NumGoroutine()
 	release := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(n)
 	for range n {
-		go func() { <-release }()
+		go func() {
+			defer wg.Done()
+			<-release
+		}()
 	}
-	t.Cleanup(func() { close(release) })
+	t.Cleanup(func() {
+		close(release)
+		wg.Wait()
+		// wg.Done runs before a goroutine has exited. Eventually runs the condition on a
+		// goroutine of its own, hence baseline+1.
+		require.Eventually(t, func() bool { return goruntime.NumGoroutine() <= baseline+1 },
+			time.Second, time.Millisecond, "spawned goroutines outlived the test")
+	})
 }
 
 // runtimeSampleExporter reads each export at Export time: the periodic reader reuses its
