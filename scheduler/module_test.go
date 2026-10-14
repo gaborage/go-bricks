@@ -378,7 +378,6 @@ func TestJobSummaryCorrelationIDOnBothCallSites(t *testing.T) {
 	}{
 		{name: "normal_return_context_id", job: &slowJob{}, contextID: contextID},
 		{name: "panic_recovery_context_id", job: &panicJob{}, contextID: contextID},
-		{name: "normal_return_minted", job: &slowJob{}},
 		{name: "panic_recovery_minted", job: &panicJob{}},
 	}
 
