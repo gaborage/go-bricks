@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -227,11 +228,7 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 
 	spanOpts := consumerSpanOpts
 	if req.NewRoot {
-		spanOpts = []trace.SpanStartOption{
-			trace.WithSpanKind(trace.SpanKindConsumer),
-			trace.WithNewRoot(),
-			trace.WithLinks(trace.LinkFromContext(ctx)),
-		}
+		spanOpts = append(slices.Clip(consumerSpanOpts), trace.WithNewRoot(), trace.WithLinks(trace.LinkFromContext(ctx)))
 	}
 	msgCtx, span := tracer().Start(msgCtx, req.Destination+" "+spanOperationReceive, spanOpts...)
 	span.SetAttributes(spanAttributes(req)...)

@@ -169,9 +169,7 @@ func reportBrokenTelemetry() {
 	// DEFECT 15: a link, which only the hold replay's consume span may carry.
 	_, span := tracer.Start(parented, brokenSpanName,
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
-		oteltrace.WithLinks(oteltrace.Link{SpanContext: oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
-			TraceID: brokenOtherTraceID, SpanID: brokenSpanID, TraceFlags: oteltrace.FlagsSampled, Remote: true,
-		})}))
+		oteltrace.WithLinks(oteltrace.LinkFromContext(parented)))
 	span.SetAttributes(
 		attribute.String("messaging.system", "not-rabbitmq"),
 		attribute.String("undeclared.attribute", "x"),
