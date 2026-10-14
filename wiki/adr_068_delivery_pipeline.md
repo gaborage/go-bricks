@@ -25,7 +25,7 @@
 > The "two deliberate `correlation_id` stamps" the Decision names below are therefore
 > one stamp under each of two names. The text below is the record as decided.
 >
-> **Amended (2026-10-14, [migrations.md](migrations.md) `[C72.29]`):** the hold replay path
+> **Amended (2026-10-13, [migrations.md](migrations.md) `[C72.29]`):** the hold replay path
 > now honors the root rule. A replay runs under the drain job's context, so its consume
 > span was a child of the job's span; `delivery.Request.NewRoot`, set only by the
 > streams replay, starts it as a new root linked to the caller's span instead.

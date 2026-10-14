@@ -11966,7 +11966,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   in `log.attributes.dropped`, and draws one WARN per process; the SDK limit is set explicitly, so
   `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT` is no longer read (C72.27).
 - gist: a hold replay runs under the drain job's context, so its consume span opened as a child of
-  the `job.execute` span, the one path breaking ADR-068's "consume spans are roots". It now starts
+  the `job.execute` span, the one path breaking ADR-068's rule that a consume span is a root. It now starts
   its own root trace, linked to the drain run's span; the handler's spans nest under it, and normal
   delivery on both lanes is unchanged (C72.29, ADR-068 amendment).
 
@@ -12999,8 +12999,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   and shared its sampling decision.
 - after: the consume span is a root carrying one link to the drain's `job.execute` span (none when
   the drain had no valid span context); the handler's spans nest under it. The `trace_id`/`span_id`
-  stamped on the handler's lines and on `Hold replay failed`, and the consume exemplars, name the
-  replay's own trace. Below an `observability.trace.sample.rate` of 1.0 each replay is sampled on
+  stamped on the handler's lines and on the streams lane's `Hold replay failed` line, and the consume
+  exemplars, name the replay's own trace; the drain's own `Hold replay failed; tenant deferred` line
+  stays in the drain run's trace. Below an `observability.trace.sample.rate` of 1.0 each replay is sampled on
   its own rather than with the drain run.
 - apply: a trace query or dashboard that found replays under the drain run must follow the span
   link from the replay to the run, or filter consume spans on `messaging.hold.replay=true`.

@@ -3229,6 +3229,9 @@ only after success" do not move.
 recorded at completion with `error.type` instead of at receive without it. OTel span parenting is
 deliberately unchanged: a consume span is still a root span. See [migrations.md](migrations.md)
 `[C60.6]`.
+Amended 2026-10-13 (#2097): a hold replay, which runs under the drain job's context, starts its
+consume span as a new root linked to the drain run's span (`delivery.Request.NewRoot`, set only by the
+streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ---
 
