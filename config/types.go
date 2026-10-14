@@ -1038,6 +1038,7 @@ type InboxHoldConfig struct {
 type SchedulerConfig struct {
 	Security SchedulerSecurityConfig `koanf:"security" json:"security" yaml:"security" toml:"security" mapstructure:"security"`
 	Timeout  SchedulerTimeoutConfig  `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
+	Summary  SchedulerSummaryConfig  `koanf:"summary" json:"summary" yaml:"summary" toml:"summary" mapstructure:"summary"`
 
 	// Timezone is the IANA timezone name the scheduler uses to interpret
 	// wall-clock schedules (DailyAt/WeeklyAt/MonthlyAt/HourlyAt). Validated via
@@ -1071,6 +1072,13 @@ type SchedulerTimeoutConfig struct {
 	// Jobs exceeding this duration are logged with result_code="WARN" even if successful.
 	// Zero applies the default; negative is rejected. Default: 25s.
 	SlowJob time.Duration `koanf:"slowjob" json:"slowjob" yaml:"slowjob" toml:"slowjob" mapstructure:"slowjob"`
+}
+
+// SchedulerSummaryConfig holds the summary settings of scheduler.Windowed jobs.
+type SchedulerSummaryConfig struct {
+	// Window is the width of the UTC-aligned window one summary line covers.
+	// Zero applies the default; it must be at least 1m and divide 24h. Default: 5m.
+	Window time.Duration `koanf:"window" json:"window" yaml:"window" toml:"window" mapstructure:"window"`
 }
 
 // KeyStoreConfig holds named key material configuration.

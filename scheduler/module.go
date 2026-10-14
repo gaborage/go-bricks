@@ -71,6 +71,9 @@ type Module struct {
 	jobs      map[string]*jobEntry
 	mu        sync.RWMutex // Protects scheduler and jobs map
 
+	// now is the clock behind run durations and summary windows; tests replace it.
+	now func() time.Time
+
 	// Shutdown coordination
 	shutdownCtx    context.Context // NOSONAR: Lifecycle context for graceful shutdown coordination - NOT request context (standard Go service pattern)
 	shutdownCancel context.CancelFunc
@@ -84,6 +87,7 @@ func NewModule() *Module {
 
 	return &Module{
 		jobs:           make(map[string]*jobEntry),
+		now:            time.Now,
 		shutdownCtx:    shutdownCtx,
 		shutdownCancel: shutdownCancel,
 	}
@@ -678,12 +682,12 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	// both summary calls report the same value.
 	correlationID := gobrickstrace.EnsureTraceID(ctx)
 
-	start := time.Now()
+	start := m.now()
 	var executionStatus string
 
 	// Panic recovery per FR-021
 	defer func() {
-		duration := time.Since(start)
+		duration := m.now().Sub(start)
 
 		if r := recover(); r != nil {
 			executionStatus = "panic"
@@ -740,7 +744,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	// Execute the job with the original JobContext (span is already linked via context)
 	err := entry.job.Execute(ctx)
 
-	duration := time.Since(start)
+	duration := m.now().Sub(start)
 
 	// Emit structured action log with operational counters and correlation
 	m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, duration, err, span, correlationID)
