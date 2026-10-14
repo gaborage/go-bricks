@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -164,7 +165,6 @@ func (r *recordingHoldStore) NextRows(ctx context.Context, db dbtypes.Interface,
 		return nil, r.nextRowsErr
 	}
 	if r.rowsByTenant == nil {
-
 		return r.HoldStore.NextRows(ctx, db, consumer, tenant, limit)
 	}
 	return r.rowsByTenant[tenant], nil
@@ -253,15 +253,16 @@ func (s *fakeHoldSink) series(name string, n int64, attrs []attribute.KeyValue) 
 
 	declared := counters[i].Attrs
 	require.Len(s.t, attrs, len(declared), "Counter %q takes each declared key once", name)
-	series := name
+	var series strings.Builder
+	series.WriteString(name)
 	for _, kv := range attrs {
 		j := slices.IndexFunc(declared, func(a scheduler.AttrSet) bool { return a.Key == string(kv.Key) })
 		require.GreaterOrEqual(s.t, j, 0, "Counter %q does not declare key %q", name, kv.Key)
 		require.Equal(s.t, attribute.STRING, kv.Value.Type(), "Counter %q key %q takes a string", name, kv.Key)
 		require.Contains(s.t, declared[j].Values, kv.Value.AsString(), "Counter %q key %q", name, kv.Key)
-		series += "{" + string(kv.Key) + "=" + kv.Value.AsString() + "}"
+		fmt.Fprintf(&series, "{%s=%s}", kv.Key, kv.Value.AsString())
 	}
-	return series
+	return series.String()
 }
 
 func drainCtx(db dbtypes.Interface) *fakeHoldJobCtx {
