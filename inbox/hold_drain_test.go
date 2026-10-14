@@ -233,18 +233,18 @@ func newFakeHoldSink(t *testing.T) *fakeHoldSink {
 
 func (s *fakeHoldSink) Count(name string, n int64, attrs ...attribute.KeyValue) {
 	s.t.Helper()
-	s.counts[s.series(name, n, attrs)] += n
+	s.counts[s.declaredSeries(name, n, attrs)] += n
 }
 
 func (s *fakeHoldSink) Fail(name string, n int64, attrs ...attribute.KeyValue) {
 	s.t.Helper()
-	s.fails[s.series(name, n, attrs)] += n
+	s.fails[s.declaredSeries(name, n, attrs)] += n
 }
 
-// series names a call name{key=value}, after checking it against the Counters
+// declaredSeries names a call name{key=value}, after checking it against the Counters
 // the drain registers: a declared name, a non-negative n, and each declared key
 // once with one of its declared values.
-func (s *fakeHoldSink) series(name string, n int64, attrs []attribute.KeyValue) string {
+func (s *fakeHoldSink) declaredSeries(name string, n int64, attrs []attribute.KeyValue) string {
 	s.t.Helper()
 	counters := holdDrainCounters()
 	i := slices.IndexFunc(counters, func(c scheduler.Counter) bool { return c.Name == name })
@@ -571,6 +571,7 @@ func TestDrainRunKeepsAConsumersOutcomesWhenALaterOnePanics(t *testing.T) {
 		"inbox.hold.drain.passes{role=active}":       1,
 		"inbox.hold.drain.tenants{outcome=released}": 1,
 	}, sink.counts, "the first consumer's release survives the second consumer's panic")
+	assert.Empty(t, sink.fails)
 }
 
 // TestHoldDrainCountersRegisterWithTheScheduler pins the drain's Counter

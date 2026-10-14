@@ -58,9 +58,8 @@ const (
 	holdOutcomeLeaseLost
 )
 
-// holdOutcomes names each outcome on the tenants Counter and says whether it
-// fails the run: a deferral and a lost lease do; a release, a yield and a tenant
-// another replica holds are the drain working.
+// holdOutcomes names each outcome on the tenants Counter and whether it fails
+// the run.
 var holdOutcomes = [...]struct {
 	value string
 	fails bool
