@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -175,18 +174,22 @@ func (m *Module) logWindow(s *windowSnapshot) {
 	if s == nil {
 		return
 	}
+	// The logger is consumer-supplied: a panic here would unwind through window
+	// accounting the caller has not finished (the run lock, the run's own settle).
+	defer func() { _ = recover() }()
 	t := s.tally
-	event := m.logger.Info()
+	level := logLevelInfo
 	if t.failingRuns > 0 || (t.runs == 0 && t.skipped > 0) {
-		event = m.logger.Warn()
+		level = logLevelWarn
 	}
-	keys := slices.Sorted(maps.Keys(t.keys))
-	listed := append([]string{}, keys[:min(len(keys), maxFailingKeysListed)]...)
+	keys := slices.AppendSeq(make([]string, 0, len(t.keys)), maps.Keys(t.keys))
+	slices.Sort(keys)
+	listed := keys[:min(len(keys), maxFailingKeysListed)]
 	inflight := int64(0)
 	if s.inflight {
 		inflight = 1
 	}
-	event = event.
+	event := createJobLogEvent(m.logger, level).
 		Str("log.type", "action").
 		Str(jobIDAttr, s.window.jobID).
 		Str("window.start", s.start.Format(time.RFC3339)).
@@ -213,5 +216,5 @@ func (m *Module) logWindow(s *windowSnapshot) {
 	event.
 		Str("traceparent", traceparent).
 		Str(logger.FieldCorrelationID, correlationID).
-		Msg(fmt.Sprintf("Job '%s' window summary", s.window.jobID))
+		Msgf("Job '%s' window summary", s.window.jobID)
 }

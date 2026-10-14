@@ -41,6 +41,8 @@ const (
 
 	triggerScheduled = "scheduled"
 	logLevelWarn     = "warn"
+	logLevelDebug    = "debug"
+	logLevelInfo     = "info"
 
 	// Error message for job type validation
 	errJobInterfaceMsg = "must implement scheduler.Executor interface, got %T"
@@ -343,27 +345,10 @@ func (m *Module) FixedRate(jobID string, job any, interval time.Duration) error 
 		}
 	}
 
-	var window *windowState
-	if wj, ok := schedulerJob.(windowedExecutor); ok {
-		if window, err = m.newJobWindow(jobID, wj.windowed()); err != nil {
-			return err
-		}
-	}
-
-	if err := m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
+	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:     ScheduleTypeFixedRate,
 		Interval: interval,
-	}, window); err != nil {
-		return err
-	}
-	if window != nil && interval >= window.width {
-		m.logger.Warn().
-			Str("jobID", jobID).
-			Dur("interval", interval).
-			Dur("window", window.width).
-			Msg("Windowed job interval is not shorter than scheduler.summary.window")
-	}
-	return nil
+	})
 }
 
 // newJobWindow validates a Windowed job and builds its summary window.
@@ -396,7 +381,7 @@ func (m *Module) DailyAt(jobID string, job any, localTime time.Time) error {
 		Type:   ScheduleTypeDaily,
 		Hour:   hour,
 		Minute: minute,
-	}, nil)
+	})
 }
 
 // WeeklyAt implements JobRegistrar per FR-005. localTime is interpreted in the
@@ -414,7 +399,7 @@ func (m *Module) WeeklyAt(jobID string, job any, dayOfWeek time.Weekday, localTi
 		Hour:      hour,
 		Minute:    minute,
 		DayOfWeek: dayOfWeek,
-	}, nil)
+	})
 }
 
 // HourlyAt implements JobRegistrar per FR-006. The minute is taken within the
@@ -436,7 +421,7 @@ func (m *Module) HourlyAt(jobID string, job any, minute int) error {
 	return m.registerJob(jobID, schedulerJob, ScheduleConfiguration{
 		Type:   ScheduleTypeHourly,
 		Minute: minute,
-	}, nil)
+	})
 }
 
 // MonthlyAt implements JobRegistrar per FR-007. localTime is interpreted in the
@@ -462,17 +447,24 @@ func (m *Module) MonthlyAt(jobID string, job any, dayOfMonth int, localTime time
 		Hour:       hour,
 		Minute:     minute,
 		DayOfMonth: dayOfMonth,
-	}, nil)
+	})
 }
 
 // registerJob is the internal method that handles job registration and scheduler setup.
 // Per FR-022: Validates unique job IDs.
 // Per FR-016: Lazy-initializes scheduler on first job registration.
-func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfiguration, window *windowState) error {
-	if _, ok := job.(windowedExecutor); ok && schedule.Type != ScheduleTypeFixedRate {
-		return &ValidationError{
-			Field:   "job",
-			Message: "is Windowed. Register it with FixedRate.",
+func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfiguration) error {
+	var window *windowState
+	if wj, ok := job.(windowedExecutor); ok {
+		if schedule.Type != ScheduleTypeFixedRate {
+			return &ValidationError{
+				Field:   "job",
+				Message: "is Windowed. Register it with FixedRate.",
+			}
+		}
+		var err error
+		if window, err = m.newJobWindow(jobID, wj.windowed()); err != nil {
+			return err
 		}
 	}
 
@@ -532,6 +524,14 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 		Str("jobID", jobID).
 		Str("scheduleType", string(schedule.Type)).
 		Msg("Job registered successfully")
+
+	if window != nil && schedule.Interval >= window.width {
+		m.logger.Warn().
+			Str("jobID", jobID).
+			Dur("interval", schedule.Interval).
+			Dur("window", window.width).
+			Msg("Windowed job interval is not shorter than scheduler.summary.window")
+	}
 
 	return nil
 }
@@ -650,11 +650,11 @@ func (m *Module) runJobBody(entry *jobEntry, triggerType string) {
 	// counts its scheduled skips, so the per-trigger line drops to DEBUG.
 	window := entry.windowFor(triggerType)
 	if !m.acquire(entry, window) {
-		skipped := m.logger.Warn()
+		level := logLevelWarn
 		if window != nil {
-			skipped = m.logger.Debug()
+			level = logLevelDebug
 		}
-		skipped.
+		createJobLogEvent(m.logger, level).
 			Str("jobID", entry.metadata.JobID).
 			Str("triggerType", triggerType).
 			Msg("Job trigger skipped - job is already running")
@@ -775,10 +775,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 				end: end, duration: duration, err: panicErr, panicked: true,
 				traceparent: jobTraceparent(span), correlationID: correlationID,
 			})
-			func() {
-				defer func() { _ = recover() }()
-				m.logWindow(closed)
-			}()
+			m.logWindow(closed)
 
 			// The logger is consumer-supplied and its write can panic; `%T` cannot.
 			// This defer has already spent its recover(), so guard the log call
@@ -891,7 +888,7 @@ func (m *Module) settleRun(window *windowState, rec *Recorder, run *finishedRun)
 	} else if run.err != nil {
 		out.keys[keyRunError] = true
 	}
-	if run.duration > m.config.Scheduler.Timeout.SlowJob {
+	if m.isSlow(run.duration) {
 		out.keys[keyRunSlow] = true
 	}
 	out.err, out.traceparent, out.correlationID = run.err, run.traceparent, run.correlationID
@@ -982,8 +979,8 @@ func (m *Module) logJobResultSummary(
 
 	logLevel, resultCode := m.determineJobSeverity(duration, err)
 	if line.debug {
-		logLevel = "debug"
-	} else if line.failing && logLevel == "info" {
+		logLevel = logLevelDebug
+	} else if line.failing && logLevel == logLevelInfo {
 		logLevel, resultCode = logLevelWarn, "WARN"
 	}
 
@@ -1044,12 +1041,17 @@ func (m *Module) determineJobSeverity(duration time.Duration, err error) (logLev
 	}
 
 	// WARN: Slow job (succeeded but exceeded scheduler.timeout.slowjob)
-	if duration > m.config.Scheduler.Timeout.SlowJob {
+	if m.isSlow(duration) {
 		return logLevelWarn, "WARN"
 	}
 
 	// INFO: Normal successful job
-	return "info", "INFO"
+	return logLevelInfo, "INFO"
+}
+
+// isSlow reports whether a run exceeded scheduler.timeout.slowjob.
+func (m *Module) isSlow(duration time.Duration) bool {
+	return duration > m.config.Scheduler.Timeout.SlowJob
 }
 
 // createJobLogEvent creates a log event with the specified severity.
@@ -1059,7 +1061,7 @@ func createJobLogEvent(log logger.Logger, level string) logger.LogEvent {
 		return log.Error()
 	case logLevelWarn:
 		return log.Warn()
-	case "debug":
+	case logLevelDebug:
 		return log.Debug()
 	default:
 		return log.Info()

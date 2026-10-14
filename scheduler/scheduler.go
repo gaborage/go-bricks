@@ -61,12 +61,14 @@ func (e *jobEntry) newRecorder(window *windowState) *Recorder {
 	return newRecorder(e.window.spec, late)
 }
 
-// execute runs the job: a Windowed job through its Recorder, a plain one through Execute.
+// execute runs the job: a plain one through Execute, a Windowed one through its
+// Recorder, which is sealed however run ends.
 func (e *jobEntry) execute(ctx JobContext, rec *Recorder) error {
 	if rec == nil {
 		return e.job.Execute(ctx)
 	}
-	return e.window.spec.execute(ctx, rec)
+	defer rec.seal()
+	return e.window.spec.run(ctx, rec)
 }
 
 // tryLock attempts to acquire the execution lock for this job.

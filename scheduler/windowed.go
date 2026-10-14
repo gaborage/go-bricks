@@ -3,7 +3,6 @@ package scheduler
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -93,8 +92,9 @@ func compileWindowed(j *windowedJob) (*windowedSpec, error) {
 		return nil, &ValidationError{Field: "counters", Message: fmt.Sprintf("must hold at most %d Counters (got %d)", maxWindowedCounters, len(j.counters))}
 	}
 	spec := &windowedSpec{run: j.run, index: make(map[string]int, len(j.counters))}
+	needles := logger.DefaultFilterConfig().SensitiveFields
 	for i, c := range j.counters {
-		if err := validateCounterName(i, c.Name); err != nil {
+		if err := validateCounterName(i, c.Name, needles); err != nil {
 			return nil, err
 		}
 		if _, dup := spec.index[c.Name]; dup {
@@ -110,7 +110,7 @@ func compileWindowed(j *windowedJob) (*windowedSpec, error) {
 	return spec, nil
 }
 
-func validateCounterName(i int, name string) error {
+func validateCounterName(i int, name string, needles []string) error {
 	field := counterField(i, ".Name")
 	if !counterNamePattern.MatchString(name) {
 		return &ValidationError{Field: field, Message: fmt.Sprintf("%q must match %s", name, counterNamePattern)}
@@ -122,7 +122,7 @@ func validateCounterName(i int, name string) error {
 	}
 	// The log filter masks a field whose name holds a needle, so such a Counter would
 	// silently mask its own .ok and .failing fields.
-	for _, needle := range logger.DefaultFilterConfig().SensitiveFields {
+	for _, needle := range needles {
 		if strings.Contains(name, strings.ToLower(needle)) {
 			return &ValidationError{Field: field, Message: fmt.Sprintf("%q holds the log filter needle %q", name, needle)}
 		}
@@ -258,21 +258,15 @@ func (r *Recorder) record(name string, n int64, attrs []attribute.KeyValue, fail
 	}
 }
 
-// execute runs the job and seals the Recorder however run ends.
-func (s *windowedSpec) execute(ctx JobContext, rec *Recorder) error {
-	defer rec.seal()
-	return s.run(ctx, rec)
-}
-
 func (r *Recorder) seal() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sealed = true
 }
 
-// outcome returns the sealed run's tally.
+// outcome returns the sealed run's tally; a sealed Recorder never writes it again.
 func (r *Recorder) outcome() *runOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return &runOutcome{ok: slices.Clone(r.ok), failing: slices.Clone(r.failing), keys: maps.Clone(r.keys)}
+	return &runOutcome{ok: r.ok, failing: r.failing, keys: r.keys}
 }
