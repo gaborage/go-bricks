@@ -357,10 +357,14 @@ type recordingLogger struct {
 	lines  *[]string
 	levels *[]string
 	fields *map[string]int64
+	texts  *map[string]string
 }
 
 func newRecordingLogger() *recordingLogger {
-	return &recordingLogger{mu: &sync.Mutex{}, lines: &[]string{}, levels: &[]string{}, fields: &map[string]int64{}}
+	return &recordingLogger{
+		mu: &sync.Mutex{}, lines: &[]string{}, levels: &[]string{},
+		fields: &map[string]int64{}, texts: &map[string]string{},
+	}
 }
 
 // leveled returns each recorded line as "<level> <message>".
@@ -392,6 +396,17 @@ func (l *recordingLogger) numbers() map[string]int64 {
 	return out
 }
 
+// stringFields returns the string fields the recorded lines carried, the last value per key.
+func (l *recordingLogger) stringFields() map[string]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[string]string, len(*l.texts))
+	for k, v := range *l.texts {
+		out[k] = v
+	}
+	return out
+}
+
 func (l *recordingLogger) event(level string) logger.LogEvent {
 	return &recordingEvent{owner: l, level: level}
 }
@@ -417,7 +432,12 @@ func (e *recordingEvent) Msg(msg string) {
 
 func (e *recordingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
 func (e *recordingEvent) Err(error) logger.LogEvent       { return e }
-func (e *recordingEvent) Str(_, _ string) logger.LogEvent { return e }
+func (e *recordingEvent) Str(key, value string) logger.LogEvent {
+	e.owner.mu.Lock()
+	defer e.owner.mu.Unlock()
+	(*e.owner.texts)[key] = value
+	return e
+}
 func (e *recordingEvent) Int(key string, value int) logger.LogEvent {
 	return e.Int64(key, int64(value))
 }

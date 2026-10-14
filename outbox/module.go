@@ -60,6 +60,8 @@ type Module struct {
 	streamPublishers map[string]streamPublisher
 
 	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
+
+	relay *Relay
 }
 
 // NewModule creates a new Module instance.

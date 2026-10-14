@@ -3,6 +3,8 @@ package outbox
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // fakeRegistrar captures FixedRate / DailyAt registrations and returns
@@ -1349,4 +1352,104 @@ func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
 	assert.NotContains(t, err.Error(), "outbox.autocreatetable")
 	assert.NotContains(t, err.Error(), "is not usable")
 	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
+}
+
+// TestRegisterJobsRegistersTheRelayAsAWindowedJob pins that the relay reaches the scheduler
+// only as a Windowed job: the registered job is not the relay, and calling its Execute
+// directly runs no cycle.
+func TestRegisterJobsRegistersTheRelayAsAWindowedJob(t *testing.T) {
+	m, _ := initEnabledModule(t, "postgresql", 24*time.Hour)
+	resolves := 0
+	m.getDB = func(context.Context) (dbtypes.Interface, error) {
+		resolves++
+		return nil, errors.New("no database in this test")
+	}
+
+	reg := &fakeRegistrar{}
+	require.NoError(t, m.RegisterJobs(reg))
+
+	require.Len(t, reg.FixedRateCalls, 1)
+	job := reg.FixedRateCalls[0].Job
+	_, isRelay := job.(*Relay)
+	assert.False(t, isRelay, "the registrar must receive the Windowed wrapper, not the relay")
+	executor, ok := job.(scheduler.Executor)
+	require.True(t, ok)
+	require.ErrorContains(t, executor.Execute(newFakeJobCtx(nil)), "runs only when registered with FixedRate")
+	assert.Zero(t, resolves, "a direct Execute must not reach the database, so no store call")
+}
+
+// TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan registers through a real
+// scheduler, which refuses a declaration it cannot carry, and projects one cycle against
+// the declaration RegisterJobs made.
+func TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan(t *testing.T) {
+	static := func(ids ...string) config.MultitenantConfig {
+		tenants := make(map[string]config.TenantEntry, len(ids))
+		for _, id := range ids {
+			tenants[id] = config.TenantEntry{}
+		}
+		return config.MultitenantConfig{Enabled: true, Tenants: tenants}
+	}
+	numbered := make([]string, 667)
+	for i := range numbered {
+		numbered[i] = fmt.Sprintf("t%04d", i)
+	}
+	tests := []struct {
+		name        string
+		multitenant config.MultitenantConfig
+		tenantAttr  bool
+		reason      string
+		cycle       string
+	}{
+		{name: "control_plane_key", cycle: "count outbox.relay.cycles{role=leader}"},
+		{
+			name: "static_tenants", multitenant: static("t1", "t2"), tenantAttr: true,
+			cycle: "count outbox.relay.cycles{role=leader,tenant=t1}",
+		},
+		{
+			name: "key_at_65_bytes", multitenant: static(strings.Repeat("k", 65)),
+			reason: "does not match", cycle: "count outbox.relay.cycles{role=leader}",
+		},
+		{
+			name: "667_tenants", multitenant: static(numbered...),
+			reason: "667 tenants make 2001", cycle: "count outbox.relay.cycles{role=leader}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := newRecordingLogger()
+			m := NewModule()
+			require.NoError(t, m.Init(&app.ModuleDeps{
+				MessagingConfigured: true,
+				Logger:              log,
+				Config: &config.Config{
+					Outbox:      config.OutboxConfig{Enabled: true},
+					Multitenant: tt.multitenant,
+					Messaging:   config.MessagingConfig{Broker: config.BrokerConfig{URL: "amqp://localhost"}},
+				},
+				DB:        func(context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },
+				Messaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
+			}))
+
+			require.NoError(t, m.RegisterJobs(newWindowScheduler(t)))
+
+			require.NotNil(t, m.relay)
+			assert.Equal(t, tt.tenantAttr, m.relay.tenantAttr)
+			warns := 0
+			for _, line := range log.leveled() {
+				if line == "WARN Outbox relay counts outbox.relay.cycles without a tenant attribute" {
+					warns++
+				}
+			}
+			if tt.reason == "" {
+				assert.Zero(t, warns)
+			} else {
+				assert.Equal(t, 1, warns)
+				assert.Contains(t, log.stringFields()["reason"], tt.reason)
+			}
+			counters, _, _ := relayCounters(m.relay.tenants, m.relay.laneOrder)
+			sink := &recordingSink{t: t, counters: counters, calls: map[string]int64{}}
+			m.relay.project(sink, m.relay.tenants[0], &tenantCycle{role: roleLeader})
+			assert.Contains(t, sink.calls, tt.cycle)
+		})
+	}
 }
