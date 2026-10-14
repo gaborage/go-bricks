@@ -13,6 +13,14 @@
   [ADR-083](adr_083_span_sinks_record_errors_by_type.md) (type-only rendering of
   the errors the ledger persists)
 
+> **Amended (2026-10-14, #2100):** the drain is a `scheduler.Windowed` job
+> ([ADR-146](adr_146_windowed_job_summary.md)). Decision 2's item 5 (Visibility),
+> "one WARN per drain pass", now reads: at most one "Hold exceeds max age" WARN per summary window per
+> replica, naming the oldest over-age tenant and the count in the pass that wrote
+> it, while the Counter `inbox.hold.drain.over_max_age` counts every sighting. Each
+> pass and each due tenant's outcome are the Counters `inbox.hold.drain.passes` and
+> `inbox.hold.drain.tenants` ([outbox.md](outbox.md#hold-ledger)).
+
 ## Context
 
 A RabbitMQ stream is an ordered lane, and the events on it are frequently

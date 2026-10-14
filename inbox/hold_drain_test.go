@@ -3,9 +3,11 @@ package inbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -98,8 +100,10 @@ func newHoldDrain(db dbtypes.Interface, replayer app.HoldReplayer) *HoldDrain {
 			Enabled: true, TableName: DefaultHoldTableName, DrainInterval: 5 * time.Second,
 			MaxBackoff: 5 * time.Minute, MaxAge: time.Hour, LeaseDuration: time.Minute,
 		},
-		owner: "replica-1",
-		now:   time.Now,
+		owner:        "replica-1",
+		now:          time.Now,
+		window:       5 * time.Minute,
+		warnedWindow: math.MinInt64,
 	}
 }
 
@@ -367,7 +371,7 @@ func TestDrainReplaysInOrderAndReleases(t *testing.T) {
 	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
 	drain := newHoldDrain(db, replayer)
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 
 	assert.Equal(t, []int64{3, 4, 5}, replayer.replayed, "oldest offset first")
 	assert.Equal(t, []string{testHoldConsumer}, replayer.reloaded,
@@ -612,6 +616,122 @@ func TestDrainRunOnStandbyReportsOnlyTheStandbyPass(t *testing.T) {
 	assert.Empty(t, sink.fails)
 }
 
+// TestDrainRunLogsASpentLeaseAtDebug pins the yield on a spent lease as routine:
+// the tenant keeps its place, the tenants Counter records the yield, and the
+// line describing it is DEBUG with its fields unchanged.
+func TestDrainRunLogsASpentLeaseAtDebug(t *testing.T) {
+	db := dueTenantDB(t)
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+	drain := newHoldDrain(db, replayer)
+	leaseSpentAtOnce(drain)
+
+	out := captureDrainLogs(t, func() {
+		jobCtx := &fakeHoldJobCtx{Context: context.Background(), log: logger.New("debug", false), db: db}
+		require.NoError(t, drain.run(jobCtx, newFakeHoldSink(t)))
+	})
+
+	line := logLineWithMessage(t, out, "Hold lease spent mid-batch; the rest stays for the next pass")
+	assert.Equal(t, "debug", line["level"])
+	assert.Equal(t, testHoldConsumer, line["consumer"])
+	assert.Equal(t, testHoldTenant, line["tenant"])
+	assert.Equal(t, float64(0), line["replayed"])
+	assert.NotContains(t, out, "Hold exceeds max age", "a pass with no tenant over age warns about none")
+}
+
+// logLineWithMessage returns the one JSON log line carrying msg, decoded.
+func logLineWithMessage(t *testing.T, out, msg string) map[string]any {
+	t.Helper()
+	var found []map[string]any
+	for raw := range strings.Lines(out) {
+		var line map[string]any
+		if json.Unmarshal([]byte(raw), &line) == nil && line["message"] == msg {
+			found = append(found, line)
+		}
+	}
+	require.Len(t, found, 1, "exactly one %q line in:\n%s", msg, out)
+	return found[0]
+}
+
+// TestDrainRunWarnsAboutOverAgeTenantsOncePerWindow pins the over-age WARN's
+// bound: every sighting is counted, but a window of passes that keep finding the
+// same stuck tenants writes one WARN, naming the oldest and the count its pass
+// saw — and the next window writes one again.
+func TestDrainRunWarnsAboutOverAgeTenantsOncePerWindow(t *testing.T) {
+	// Aligned on a window boundary, so 60 passes 5s apart stay in one 5m window.
+	start := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	// The older tenant is due second, so the WARN cannot just name the first.
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(
+		dbtesting.NewRowSet("consumer", "tenant_id", "held_since", "attempts", "next_attempt_at", "last_error").
+			AddRow(testHoldConsumer, otherHoldTenant, start.Add(-2*time.Hour), 2, start, "").
+			AddRow(testHoldConsumer, testHoldTenant, start.Add(-3*time.Hour), 5, start, ""))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
+		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant).AddRow(otherHoldTenant))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(2), int64(2), start))
+
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+	// Both stay held: their reads come back empty and the release is refused, as
+	// for rows a concurrent park keeps adding.
+	store := &recordingHoldStore{
+		HoldStore: mustPostgresHoldStore(), rowsByTenant: map[string][]HoldRow{}, releaseRefused: true,
+	}
+	drain := drainWithStore(db, replayer, store)
+	sink := newFakeHoldSink(t)
+	passAt := func(log logger.Logger, at time.Time) {
+		drain.now = func() time.Time { return at }
+		require.NoError(t, drain.run(&fakeHoldJobCtx{Context: context.Background(), log: log, db: db}, sink))
+	}
+
+	firstWindow := captureDrainLogs(t, func() {
+		log := logger.New("warn", false)
+		for i := range 60 {
+			passAt(log, start.Add(time.Duration(i)*5*time.Second))
+		}
+	})
+
+	line := logLineWithMessage(t, firstWindow, "Hold exceeds max age")
+	assert.Equal(t, "warn", line["level"])
+	assert.Equal(t, testHoldConsumer, line["consumer"])
+	assert.Equal(t, testHoldTenant, line["tenant"], "the oldest over-age tenant is named")
+	assert.Equal(t, float64(5), line["attempts"])
+	assert.Equal(t, float64(2), line["over_max_age_tenants"], "the count the warning pass saw")
+	assert.Equal(t, map[string]int64{"inbox.hold.drain.over_max_age": 120}, sink.fails,
+		"every sighting is counted, warned or not")
+
+	nextWindow := captureDrainLogs(t, func() { passAt(logger.New("warn", false), start.Add(5*time.Minute)) })
+
+	logLineWithMessage(t, nextWindow, "Hold exceeds max age")
+}
+
+// TestDrainRunWithoutAWindowWarnsEveryOverAgePass pins the drain no scheduler
+// registered: it has no summary window to count in, so every pass that finds a
+// tenant over age warns rather than dividing by a zero width.
+func TestDrainRunWithoutAWindowWarnsEveryOverAgePass(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now().Add(-2*time.Hour), testHoldTenant))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(1), int64(1), time.Now()))
+
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+	store := &recordingHoldStore{
+		HoldStore: mustPostgresHoldStore(), rowsByTenant: map[string][]HoldRow{}, releaseRefused: true,
+	}
+	drain := drainWithStore(db, replayer, store)
+	drain.window = 0
+
+	out := captureDrainLogs(t, func() {
+		jobCtx := &fakeHoldJobCtx{Context: context.Background(), log: logger.New("warn", false), db: db}
+		require.NoError(t, drain.run(jobCtx, newFakeHoldSink(t)))
+		require.NoError(t, drain.run(jobCtx, newFakeHoldSink(t)))
+	})
+
+	assert.Equal(t, 2, strings.Count(out, "Hold exceeds max age"))
+}
+
 // TestDrainRunKeepsAConsumersOutcomesWhenALaterOnePanics pins when outcomes are
 // reported: as each consumer's pass returns, so a panic in a later consumer —
 // one the drain does not recover, past its tenants — cannot take the earlier
@@ -630,30 +750,6 @@ func TestDrainRunKeepsAConsumersOutcomesWhenALaterOnePanics(t *testing.T) {
 		"inbox.hold.drain.tenants{outcome=released}": 1,
 	}, sink.counts, "the first consumer's release survives the second consumer's panic")
 	assert.Empty(t, sink.fails)
-}
-
-// TestHoldDrainCountersRegisterWithTheScheduler pins the drain's Counter
-// declarations against the scheduler that enforces them: a name or value it
-// refuses fails here, not at a deployment's startup.
-func TestHoldDrainCountersRegisterWithTheScheduler(t *testing.T) {
-	sched := scheduler.NewModule()
-	require.NoError(t, sched.Init(&app.ModuleDeps{
-		Logger: logger.New("error", false),
-		Config: &config.Config{Scheduler: config.SchedulerConfig{
-			Timezone: "UTC",
-			Timeout:  config.SchedulerTimeoutConfig{Shutdown: time.Second, SlowJob: time.Second},
-			Summary:  config.SchedulerSummaryConfig{Window: 5 * time.Minute},
-		}},
-	}))
-	t.Cleanup(func() { assert.NoError(t, sched.Shutdown()) })
-
-	drain := newHoldDrain(nil, nil)
-	job := scheduler.Windowed(func(jc scheduler.JobContext, rec *scheduler.Recorder) error {
-		return drain.run(jc, rec)
-	}, holdDrainCounters()...)
-
-	// Never due inside the test, so the job only registers.
-	require.NoError(t, sched.FixedRate(holdDrainJobID, job, time.Hour))
 }
 
 // TestDrainStopsTheTenantAtTheFirstFailure pins the ordering guarantee: a replay
@@ -678,7 +774,7 @@ func TestDrainStopsTheTenantAtTheFirstFailure(t *testing.T) {
 	drain := newHoldDrain(db, replayer)
 	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
 
-	require.NoError(t, drain.Execute(drainCtx(db)), "a deferred tenant is not a failed pass")
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)), "a deferred tenant is not a failed pass")
 
 	assert.Equal(t, []int64{3, 4}, replayer.replayed, "offset 5 stays parked behind offset 4")
 	assert.Zero(t, store.released, "and the tenant is not released with rows still behind the failure")
@@ -698,7 +794,7 @@ func TestDrainSkipsATenantAnotherReplicaHolds(t *testing.T) {
 	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
 	drain := newHoldDrain(db, replayer)
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 	assert.Empty(t, replayer.replayed, "another replica owns this tenant's replay")
 }
 
@@ -709,7 +805,7 @@ func TestDrainWithoutStreamsDoesNothing(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	drain := newHoldDrain(db, nil)
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 	assert.Empty(t, db.QueryLog(), "no replayer, no pass")
 	assert.Empty(t, db.ExecLog())
 }
@@ -729,7 +825,7 @@ func TestDrainSurvivesAPanicInOneTenant(t *testing.T) {
 	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}, panicAt: 3}
 	drain := newHoldDrain(db, replayer)
 
-	err := drain.Execute(drainCtx(db))
+	err := drain.run(drainCtx(db), newFakeHoldSink(t))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), testHoldTenant)
@@ -763,7 +859,7 @@ func TestDrainContinuesAfterATenantPanics(t *testing.T) {
 	drain := newHoldDrain(db, replayer)
 	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
 
-	err := drain.Execute(drainCtx(db))
+	err := drain.run(drainCtx(db), newFakeHoldSink(t))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), testHoldTenant, "the panicking tenant is named")
@@ -799,7 +895,7 @@ func TestDrainReplaysTheParkedProperties(t *testing.T) {
 	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
 	drain := newHoldDrain(db, replayer)
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 
 	require.Len(t, replayer.properties, 1)
 	assert.Equal(t, map[string]any{"traceparent": "00-abc-def-01"}, replayer.properties[0],
@@ -823,7 +919,7 @@ func TestDrainDefersAnUndecodableRow(t *testing.T) {
 	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
 	drain := newHoldDrain(db, replayer)
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 
 	assert.Empty(t, replayer.replayed, "an undecodable row is never handed to the handler")
 }
@@ -855,7 +951,7 @@ func TestDrainYieldsTheLeaseAfterAFullBatch(t *testing.T) {
 	drain := newHoldDrain(db, replayer)
 	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 
 	assert.Len(t, replayer.replayed, holdDrainRowsPerRead, "the whole batch replayed")
 	assert.Equal(t, 1, store.leasesYielded, "the lease goes back while rows remain")
@@ -892,7 +988,7 @@ func TestDrainStopsWhenTheLeaseRunsOut(t *testing.T) {
 		return start.Add(2 * drain.cfg.LeaseDuration)
 	}
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 
 	assert.Equal(t, []int64{3}, replayer.replayed,
 		"the pass stops at the deadline instead of draining the batch")
@@ -993,34 +1089,39 @@ func TestDrainDefersOnTheNextAttemptNumber(t *testing.T) {
 	drain := newHoldDrain(db, replayer)
 	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
 
-	require.NoError(t, drain.Execute(drainCtx(db)))
+	require.NoError(t, drain.run(drainCtx(db), newFakeHoldSink(t)))
 
 	// Two attempts behind it, so the third: 5s doubled twice.
 	assert.Equal(t, 20*time.Second, store.deferredBackoff,
 		"the backoff is the NEXT attempt's, not the last one's")
 }
 
-// TestWarnIfTooOldFiresOnlyPastTheThreshold pins both sides of the max-age
+// TestTallyIfTooOldCountsOnlyPastTheThreshold pins both sides of the max-age
 // boundary: a tenant held exactly the configured age is not yet stuck, and one
-// held longer earns the line an operator watches for.
-func TestWarnIfTooOldFiresOnlyPastTheThreshold(t *testing.T) {
+// held a second longer is a sighting, kept as the pass's oldest.
+func TestTallyIfTooOldCountsOnlyPastTheThreshold(t *testing.T) {
 	now := time.Now()
 	drain := &HoldDrain{cfg: config.InboxHoldConfig{MaxAge: time.Hour}, now: func() time.Time { return now }}
+	pass := &holdPass{consumer: testHoldConsumer}
 
-	atThreshold := captureDrainLogs(t, func() {
-		drain.warnIfTooOld(logger.New("warn", false), &holdPass{consumer: testHoldConsumer}, &HoldTenant{
-			TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour),
-		})
-	})
-	assert.NotContains(t, atThreshold, "Hold exceeds max age", "held exactly the max age is not past it")
+	drain.tallyIfTooOld(pass, &HoldTenant{TenantID: otherHoldTenant, HeldSince: now.Add(-time.Hour)})
+	assert.Zero(t, pass.overAge, "held exactly the max age is not past it")
 
-	pastThreshold := captureDrainLogs(t, func() {
-		drain.warnIfTooOld(logger.New("warn", false), &holdPass{consumer: testHoldConsumer}, &HoldTenant{
-			TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour - time.Second),
-		})
-	})
-	assert.Contains(t, pastThreshold, "Hold exceeds max age", "a second past it warns")
-	assert.Contains(t, pastThreshold, testHoldTenant, "and names the tenant")
+	drain.tallyIfTooOld(pass, &HoldTenant{TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour - time.Second), Attempts: 4})
+	assert.Equal(t, overAgeTally{
+		count: 1, consumer: testHoldConsumer, tenant: testHoldTenant, heldFor: time.Hour + time.Second, attempts: 4,
+	}, pass.overAge, "a second past it is one sighting")
+}
+
+// TestOverAgeTallyKeepsTheFirstOfTwoEquallyOldTenants pins the tie: the WARN names
+// one tenant, and which one must not depend on more than the order they were seen.
+func TestOverAgeTallyKeepsTheFirstOfTwoEquallyOldTenants(t *testing.T) {
+	var tally overAgeTally
+	tally.merge(&overAgeTally{count: 1, consumer: testHoldConsumer, tenant: testHoldTenant, heldFor: time.Hour})
+	tally.merge(&overAgeTally{count: 1, consumer: testHoldConsumer, tenant: otherHoldTenant, heldFor: time.Hour})
+
+	assert.Equal(t, testHoldTenant, tally.tenant)
+	assert.Equal(t, int64(2), tally.count)
 }
 
 // TestOwnerIDFallsBackWhenItsSourcesFail pins the two fallbacks in the lease
@@ -1113,7 +1214,7 @@ func TestDrainReportsEveryLedgerFailure(t *testing.T) {
 			store := &recordingHoldStore{HoldStore: mustPostgresHoldStore()}
 			tc.breaks(store, replayer)
 
-			err := drainWithStore(db, replayer, store).Execute(drainCtx(db))
+			err := drainWithStore(db, replayer, store).run(drainCtx(db), newFakeHoldSink(t))
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
@@ -1169,7 +1270,7 @@ func TestDrainDoesNotReportABackoffItNeverWrote(t *testing.T) {
 		// Built inside the capture and at WARN: zerolog binds its writer when the
 		// logger is made, and drainCtx's own logger is quieter than this line.
 		jobCtx := &fakeHoldJobCtx{Context: context.Background(), log: logger.New("warn", false), db: db}
-		require.NoError(t, drainWithStore(db, replayer, store).Execute(jobCtx))
+		require.NoError(t, drainWithStore(db, replayer, store).run(jobCtx, newFakeHoldSink(t)))
 	})
 
 	assert.Contains(t, out, "Hold lease lost before the tenant could be deferred")

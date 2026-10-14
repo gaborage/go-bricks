@@ -1025,8 +1025,9 @@ type InboxHoldConfig struct {
 	// MaxBackoff caps the drain's per-tenant retry backoff. Default: 5m.
 	MaxBackoff time.Duration `koanf:"maxbackoff" json:"maxbackoff" yaml:"maxbackoff" toml:"maxbackoff" mapstructure:"maxbackoff"`
 
-	// MaxAge is how long a tenant may stay held before each drain pass logs one
-	// WARN naming it. Default: 1h.
+	// MaxAge is how long a tenant may stay held before the drain counts it in
+	// inbox.hold.drain.over_max_age and, at most once per summary window, logs a
+	// WARN naming the oldest such tenant. Default: 1h.
 	MaxAge time.Duration `koanf:"maxage" json:"maxage" yaml:"maxage" toml:"maxage" mapstructure:"maxage"`
 
 	// LeaseDuration is how long one drainer holds a tenant, and therefore the
