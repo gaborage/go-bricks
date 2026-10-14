@@ -283,12 +283,12 @@ Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combin
 
 ## Correlation Fields and Exemplars
 
-A log line from a consumed message or an HTTP request can carry three different
-identifiers, and they hold **different values by design**:
+A log line from a consumed message, an HTTP request or a scheduled job run can carry
+three different identifiers, and they hold **different values by design**:
 
 | field | what it is | when it appears |
 | --- | --- | --- |
-| `correlation_id` | the framework's cross-service id — what travels as `X-Request-ID`, and what both messaging lanes stamp on every outcome line | always |
+| `correlation_id` | the framework's cross-service id — what travels as `X-Request-ID`, what both messaging lanes stamp on every outcome line, and what the scheduler stamps on every job summary line | always |
 | `trace_id` | the OpenTelemetry trace id of the span the line was written under | only when a tracer provider is registered |
 | `span_id` | the OpenTelemetry span id | only when a tracer provider is registered |
 
@@ -300,6 +300,13 @@ the OTel ids exist only while a provider is registered. Inbound identifiers are
 validated before either is used ([ADR-070](adr_070_inbound_trace_identifier_validation.md)):
 a non-conforming one is discarded and replaced, so a value you sent may not be
 the value you see.
+
+The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
+run's framework id: a UUID minted once per run and shared by the normal-return and
+panic-recovery lines (a framework id already on the run's context wins, though no
+framework path sets one today). Its
+`traceparent` carries the run span's real flags, and is `""` (key kept) when the
+run has no valid span context.
 
 **Metric exemplars** link a metric data point back to a trace. The messaging
 consume metrics record inside the delivery span, so their data points carry an
