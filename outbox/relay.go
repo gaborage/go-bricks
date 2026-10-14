@@ -188,9 +188,9 @@ func declarableTenants(tenants []string) (ok bool, reason string) {
 	if len(tenants) == 1 && tenants[0] == "" {
 		return false, ""
 	}
-	if series := len(cycleRoles) * len(tenants); series > maxCounterSeries {
+	if len(tenants) > maxCounterSeries/len(cycleRoles) {
 		return false, fmt.Sprintf("%d tenants make %d role and tenant series, over the %d a Counter may declare",
-			len(tenants), series, maxCounterSeries)
+			len(tenants), len(cycleRoles)*len(tenants), maxCounterSeries)
 	}
 	for _, tenantID := range tenants {
 		if !attrValuePattern.MatchString(tenantID) {
