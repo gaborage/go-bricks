@@ -336,6 +336,7 @@ func TestPanicAfterTheSettleCountsTheRunOnce(t *testing.T) {
 	require.Len(t, windows, 1)
 	assert.Equal(t, int64(1), windows[0].fields["runs"], "the recovery defer must not settle a settled run again")
 	assert.Empty(t, windows[0].fields["failing.keys"])
+	assert.Empty(t, log.edgeLines(), "a clean run settled once writes no phantom run.panic edge")
 }
 
 func TestPanicPathSurvivesPanickingSummaryLines(t *testing.T) {
@@ -458,7 +459,7 @@ func TestWindowLineKeysStayFixedWhateverTheValues(t *testing.T) {
 	windows := log.windowLines()
 	require.Len(t, windows, 1)
 	line := windows[0]
-	assert.Len(t, line.fields, 82, "the brief's budget: 17 fixed keys, log.type and two per Counter")
+	assert.Len(t, line.fields, 82, "ADR-146's budget: 17 fixed keys, log.type and two per Counter")
 	assert.LessOrEqual(t, len(line.fields)+zerologOwnFields, 100)
 	for key := range line.fields {
 		for _, token := range append([]string{"dim_a", "dim_b"}, values...) {
@@ -640,14 +641,14 @@ func TestRecorderCallAfterTheRunIsCountedLate(t *testing.T) {
 }
 
 // scriptedJob fails one scripted key set per run; an empty set is a clean run.
-func scriptedJob(script [][]string, counters ...Counter) (Executor, *atomic.Int64) {
+func scriptedJob(script [][]string, counters ...Counter) Executor {
 	var run atomic.Int64
 	return Windowed(func(_ JobContext, rec *Recorder) error {
 		for _, name := range script[run.Add(1)-1] {
 			rec.Fail(name, 1)
 		}
 		return nil
-	}, counters...), &run
+	}, counters...)
 }
 
 func runWithID(module *Module, entry *jobEntry, id string) {
@@ -661,7 +662,7 @@ func TestEdgesFollowTheFailingSetAcrossWindows(t *testing.T) {
 	log := newRecordingLogger()
 	clock := newFakeClock(windowTestStart)
 	module := newWindowedTestScheduler(t, clock, withLogger(log), withTracer(tp.Tracer("test-scheduler")))
-	job, _ := scriptedJob([][]string{{"a"}, {"b"}, {"c"}, {}, {}, {"a"}},
+	job := scriptedJob([][]string{{"a"}, {"b"}, {"c"}, {}, {}, {"a"}},
 		Counter{Name: "a"}, Counter{Name: "b"}, Counter{Name: "c"})
 	require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
 	entry := registeredEntry(t, module, "relay")
@@ -728,81 +729,4 @@ func TestEdgeLevelFollowsTheRunKeys(t *testing.T) {
 			assert.False(t, edges[0].viaContext, "the edge line goes through the module logger")
 		})
 	}
-}
-
-const panicStackMessage = "Job panicked - recovered and marked as failed"
-
-func TestPanicStackLineIsErrorOnlyOnAnEdge(t *testing.T) {
-	panicking := func(JobContext, *Recorder) error { panic("boom") }
-
-	t.Run("second_panic_in_the_window_drops_to_debug", func(t *testing.T) {
-		log := newRecordingLogger()
-		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
-		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
-		entry := registeredEntry(t, module, "relay")
-
-		module.runJobBody(entry, triggerScheduled)
-		module.runJobBody(entry, triggerScheduled)
-
-		edges := log.edgeLines()
-		require.Len(t, edges, 1)
-		assert.Equal(t, "new", edges[0].fields["edge.reason"])
-		stacks := log.messageLines(panicStackMessage)
-		require.Len(t, stacks, 2)
-		assert.Equal(t, "error", stacks[0].level, "the run that wrote the edge keeps its stack at ERROR")
-		assert.Equal(t, "debug", stacks[1].level)
-	})
-
-	t.Run("manual_panic_drops_to_debug_and_keeps_its_action_line", func(t *testing.T) {
-		log := newRecordingLogger()
-		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
-		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
-
-		module.runJobBody(registeredEntry(t, module, "relay"), "manual")
-
-		requireStackAt(t, log, "debug")
-		requireRunActionLineNamingThePanic(t, log)
-	})
-
-	t.Run("post_seal_panic_drops_to_debug_and_keeps_its_action_line", func(t *testing.T) {
-		log := newRecordingLogger()
-		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
-		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
-		entry := registeredEntry(t, module, "relay")
-		module.runJobBody(entry, triggerScheduled)
-		require.NoError(t, module.Shutdown())
-		log.reset()
-
-		module.executeJob(entry, newJobContext(context.Background(), "relay", triggerScheduled, module.logger, nil, nil, module.config))
-
-		requireStackAt(t, log, "debug")
-		requireRunActionLineNamingThePanic(t, log)
-	})
-
-	t.Run("plain_job_panic_stays_error", func(t *testing.T) {
-		log := newRecordingLogger()
-		module, _ := newTestScheduler(t, 5*time.Second, withLogger(log))
-
-		runJobOnce(module, "plain-job", &panicJob{})
-
-		requireStackAt(t, log, "error")
-	})
-}
-
-func requireStackAt(t *testing.T, log *recordingLogger, level string) {
-	t.Helper()
-	stacks := log.messageLines(panicStackMessage)
-	require.Len(t, stacks, 1)
-	assert.Equal(t, level, stacks[0].level)
-}
-
-func requireRunActionLineNamingThePanic(t *testing.T, log *recordingLogger) {
-	t.Helper()
-	runs := log.linesWith(func(line recordedLine) bool {
-		return line.fields["log.type"] == "action" && line.fields["job.status"] != nil
-	})
-	require.Len(t, runs, 1)
-	assert.Equal(t, "error", runs[0].level)
-	assert.Equal(t, "panic (type: string)", runs[0].fields["error"])
-	assert.Empty(t, log.edgeLines())
 }

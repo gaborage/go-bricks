@@ -1,7 +1,7 @@
 # ADR-146: A Windowed Job Writes One Summary Line per Window
 
 **Status:** Accepted
-**Date:** 2026-10-14
+**Date:** 2026-10-13
 
 ## Context
 

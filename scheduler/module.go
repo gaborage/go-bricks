@@ -365,17 +365,8 @@ func (m *Module) newJobWindow(jobID string, job *windowedJob) (*windowState, err
 	if err != nil {
 		return nil, err
 	}
-	spec.jobAttr = attribute.String(jobIDAttr, jobID)
 	if m.meterProvider != nil {
-		meter := m.meterProvider.Meter("scheduler")
-		jobOnly := metric.WithAttributeSet(attribute.NewSet(spec.jobAttr))
-		for i := range spec.counters {
-			spec.counters[i].instrument, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
-				spec.counters[i].name,
-				metric.WithDescription("Outcomes a Windowed job reported, Count and Fail alike"),
-			)
-			spec.counters[i].jobOnly = jobOnly
-		}
+		spec.instrument(m.meterProvider.Meter("scheduler"), jobID)
 	}
 	return newWindowState(jobID, spec, width), nil
 }
@@ -762,6 +753,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	// settled stops the recovery defer from counting a run twice when a panic
 	// follows the normal path's settle (a logger, metrics or span call).
 	var line summaryLine
+	var edged bool
 	settled := false
 
 	start := m.now()
@@ -788,7 +780,6 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			panicType := fmt.Sprintf("%T", r)
 			panicErr := fmt.Errorf("panic (type: %s)", panicType)
 
-			var edged bool
 			if !settled {
 				line, edged = m.settleRun(window, rec, &finishedRun{
 					end: end, duration: duration, err: panicErr, panicked: true,
@@ -796,13 +787,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 				})
 			}
 
-			// A Windowed job's edge line carries the failure signal, so its stack
-			// line is ERROR only on the run that wrote one.
-			stackLevel := logLevelError
-			if rec != nil && !edged {
-				stackLevel = logLevelDebug
-			}
-			m.logPanicStack(ctx, entry.metadata.JobID, panicType, stackLevel)
+			m.logPanicStack(ctx, entry.metadata.JobID, panicType, panicStackLevel(rec != nil, edged))
 
 			// Record panic in span (if span exists)
 			if span != nil {
@@ -833,7 +818,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	end := m.now()
 	duration := end.Sub(start)
 
-	line, _ = m.settleRun(window, rec, &finishedRun{
+	line, edged = m.settleRun(window, rec, &finishedRun{
 		end: end, duration: duration, err: err,
 		traceparent: jobTraceparent(span), correlationID: correlationID,
 	})
@@ -868,6 +853,15 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 		entry.metadata.incrementSuccess()
 		m.recordMetrics(ctx, entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 	}
+}
+
+// panicStackLevel is ERROR, except for a Windowed run that wrote no edge: the edge
+// line carries the failure signal, so that run's stack drops to DEBUG.
+func panicStackLevel(windowed, edged bool) string {
+	if windowed && !edged {
+		return logLevelDebug
+	}
+	return logLevelError
 }
 
 // logPanicStack writes a recovered panic's stack line. The logger is

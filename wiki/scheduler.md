@@ -104,7 +104,7 @@ not shorter than the window logs one startup WARN and registers.
 | `edges.suppressed` | Edges past the two a window writes |
 | `recorder.late` | `Count`/`Fail` calls made after their run returned, dropped |
 | `<name>.ok`, `<name>.failing` | Per Counter: the sum of `Count` and of `Fail` |
-| `error`, `traceparent`, `correlation_id` | The last completed run's; with none, no `error`, `traceparent` `""` and a fresh `correlation_id` |
+| `error`, `traceparent`, `correlation_id` | The last completed run's (`error` only when that run failed); with none, no `error`, `traceparent` `""` and a fresh `correlation_id` |
 
 The line is WARN when `runs.failing > 0` or the window only skipped (`runs == 0`,
 `runs.skipped > 0`), otherwise INFO. Its keys are fixed by the declaration: at most 82 fields at

@@ -2437,7 +2437,7 @@ reading as tuned.
 
 ### [ADR-146: A Windowed Job Writes One Summary Line per Window](adr_146_windowed_job_summary.md)
 
-**Date:** 2026-10-14 | **Status:** Accepted | **Breaking:** none — additive; plain jobs and every other schedule door are unchanged
+**Date:** 2026-10-13 | **Status:** Accepted | **Breaking:** none — additive; plain jobs and every other schedule door are unchanged
 
 A `FixedRate` job's per-run action line cannot be sampled: 17,280 lines a day per replica at 5s,
 plus a skip WARN per trigger while a run hangs and an ERROR stack line per panic, none carrying

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/app"
@@ -286,4 +288,18 @@ func newTestScheduler(t *testing.T, shutdownTimeout time.Duration, opts ...testS
 	})
 
 	return module, module
+}
+
+// counterPoints reads a Counter's metric as encoded attribute set -> value.
+func counterPoints(t *testing.T, mp *obtest.TestMeterProvider, name string) map[string]int64 {
+	t.Helper()
+	m := obtest.FindMetric(mp.Collect(t), name)
+	require.NotNil(t, m, "metric %q not recorded", name)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "metric %q is %T, not an Int64Counter sum", name, m.Data)
+	points := make(map[string]int64, len(sum.DataPoints))
+	for _, dp := range sum.DataPoints {
+		points[dp.Attributes.Encoded(attribute.DefaultEncoder())] = dp.Value
+	}
+	return points
 }

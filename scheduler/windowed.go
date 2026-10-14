@@ -91,9 +91,12 @@ type windowedExecutor interface {
 }
 
 type counterSpec struct {
-	name       string
-	attrs      map[string]map[string]bool
+	name  string
+	attrs map[string]map[string]bool
+
+	// Set by instrument; a nil instrument records nothing.
 	instrument metric.Int64Counter
+	job        attribute.KeyValue
 	jobOnly    metric.AddOption // the job.id set an attribute-less Counter records under
 }
 
@@ -102,7 +105,21 @@ type windowedSpec struct {
 	run      func(JobContext, *Recorder) error
 	counters []counterSpec
 	index    map[string]int
-	jobAttr  attribute.KeyValue
+}
+
+// instrument creates one Int64Counter per declared Counter, named after it on the
+// scheduler's meter and recorded with its declared attributes plus job.id.
+func (s *windowedSpec) instrument(meter metric.Meter, jobID string) {
+	job := attribute.String(jobIDAttr, jobID)
+	jobOnly := metric.WithAttributeSet(attribute.NewSet(job))
+	for i := range s.counters {
+		c := &s.counters[i]
+		c.instrument, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
+			c.name,
+			metric.WithDescription("Outcomes a Windowed job reported, Count and Fail alike"),
+		)
+		c.job, c.jobOnly = job, jobOnly
+	}
 }
 
 func counterField(i int, rest string) string { return fmt.Sprintf("counters[%d]%s", i, rest) }
@@ -212,7 +229,7 @@ func (c *counterSpec) declares(attrs []attribute.KeyValue) bool {
 }
 
 // add records n on the Counter's metric, with its declared attributes plus job.id.
-func (c *counterSpec) add(ctx context.Context, n int64, attrs []attribute.KeyValue, job attribute.KeyValue) {
+func (c *counterSpec) add(ctx context.Context, n int64, attrs []attribute.KeyValue) {
 	if c.instrument == nil {
 		return
 	}
@@ -221,7 +238,7 @@ func (c *counterSpec) add(ctx context.Context, n int64, attrs []attribute.KeyVal
 		return
 	}
 	kvs := make([]attribute.KeyValue, 0, len(attrs)+1)
-	kvs = append(append(kvs, attrs...), job)
+	kvs = append(append(kvs, attrs...), c.job)
 	c.instrument.Add(ctx, n, metric.WithAttributes(kvs...))
 }
 
@@ -288,7 +305,7 @@ func (r *Recorder) record(name string, n int64, attrs []attribute.KeyValue, fail
 		r.keys[keyUndeclared] = true
 		return
 	}
-	r.spec.counters[i].add(r.ctx, n, attrs, r.spec.jobAttr)
+	r.spec.counters[i].add(r.ctx, n, attrs)
 	if !failing {
 		r.ok[i] += n
 		return

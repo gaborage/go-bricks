@@ -44,7 +44,7 @@ type windowTally struct {
 	keys        map[string]bool
 	last        *runOutcome
 
-	edges           int
+	edges           int64
 	edgesSuppressed int64
 }
 

@@ -1122,3 +1122,123 @@ func TestPlainJobTriggerSkipStillWarns(t *testing.T) {
 	require.Len(t, skips, 1)
 	assert.Equal(t, "warn", skips[0].level)
 }
+
+const panicStackMessage = "Job panicked - recovered and marked as failed"
+
+func TestPanicStackLineIsErrorOnlyOnAnEdge(t *testing.T) {
+	panicking := func(JobContext, *Recorder) error { panic("boom") }
+
+	t.Run("second_panic_in_the_window_drops_to_debug", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+
+		module.runJobBody(entry, triggerScheduled)
+		module.runJobBody(entry, triggerScheduled)
+
+		edges := log.edgeLines()
+		require.Len(t, edges, 1)
+		assert.Equal(t, "new", edges[0].fields["edge.reason"])
+		stacks := log.messageLines(panicStackMessage)
+		require.Len(t, stacks, 2)
+		assert.Equal(t, "error", stacks[0].level, "the run that wrote the edge keeps its stack at ERROR")
+		assert.Equal(t, "debug", stacks[1].level)
+	})
+
+	t.Run("suppressed_edge_panic_drops_to_debug", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		var run atomic.Int64
+		job := Windowed(func(_ JobContext, rec *Recorder) error {
+			n := run.Add(1)
+			if n == 3 {
+				panic("boom")
+			}
+			rec.Fail([]string{"a", "b"}[n-1], 1)
+			return nil
+		}, Counter{Name: "a"}, Counter{Name: "b"})
+		require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+
+		for range 3 {
+			module.runJobBody(entry, triggerScheduled)
+		}
+		require.NoError(t, module.Shutdown())
+
+		require.Len(t, log.edgeLines(), 2, "the panic's run.panic edge is the window's third, so it is only counted")
+		requireStackAt(t, log, "debug")
+		windows := log.windowLines()
+		require.Len(t, windows, 1)
+		assert.Equal(t, int64(1), windows[0].fields["edges.suppressed"])
+	})
+
+	t.Run("logger_panic_after_an_edge_keeps_the_stack_at_error", func(t *testing.T) {
+		// job.schedule_type is on the run's own summary line, written after its edge.
+		log := newLinePanickingLogger("job.schedule_type")
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		job := Windowed(func(_ JobContext, rec *Recorder) error {
+			rec.Fail("published", 1)
+			return nil
+		}, Counter{Name: "published"})
+		require.NoError(t, module.FixedRate("relay", job, windowTestInterval))
+
+		require.NotPanics(t, func() { module.runJobBody(registeredEntry(t, module, "relay"), triggerScheduled) })
+
+		require.Len(t, log.edgeLines(), 1)
+		requireStackAt(t, log.recordingLogger, "error")
+	})
+
+	t.Run("manual_panic_drops_to_debug_and_keeps_its_action_line", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
+
+		module.runJobBody(registeredEntry(t, module, "relay"), "manual")
+
+		requireStackAt(t, log, "debug")
+		requireRunActionLineNamingThePanic(t, log)
+	})
+
+	t.Run("post_seal_panic_drops_to_debug_and_keeps_its_action_line", func(t *testing.T) {
+		log := newRecordingLogger()
+		module := newWindowedTestScheduler(t, newFakeClock(windowTestStart), withLogger(log))
+		require.NoError(t, module.FixedRate("relay", Windowed(panicking), windowTestInterval))
+		entry := registeredEntry(t, module, "relay")
+		module.runJobBody(entry, triggerScheduled)
+		require.NoError(t, module.Shutdown())
+		log.reset()
+
+		module.executeJob(entry, newJobContext(context.Background(), "relay", triggerScheduled, module.logger, nil, nil, module.config))
+
+		requireStackAt(t, log, "debug")
+		requireRunActionLineNamingThePanic(t, log)
+	})
+
+	t.Run("plain_job_panic_stays_error", func(t *testing.T) {
+		log := newRecordingLogger()
+		module, _ := newTestScheduler(t, 5*time.Second, withLogger(log))
+
+		runJobOnce(module, "plain-job", &panicJob{})
+
+		requireStackAt(t, log, "error")
+	})
+}
+
+func requireStackAt(t *testing.T, log *recordingLogger, level string) {
+	t.Helper()
+	stacks := log.messageLines(panicStackMessage)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, level, stacks[0].level)
+}
+
+func requireRunActionLineNamingThePanic(t *testing.T, log *recordingLogger) {
+	t.Helper()
+	runs := log.linesWith(func(line recordedLine) bool {
+		return line.fields["log.type"] == "action" && line.fields["job.status"] != nil
+	})
+	require.Len(t, runs, 1)
+	assert.Equal(t, "error", runs[0].level)
+	assert.Equal(t, "panic (type: string)", runs[0].fields["error"])
+	assert.Empty(t, log.edgeLines())
+}
