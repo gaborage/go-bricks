@@ -570,6 +570,7 @@ func TestOTelBridgeOversizeActionLineRoutesToActionProcessor(t *testing.T) {
 	bridge := logger.NewOTelBridge(logProvider)
 	require.NotNil(t, bridge)
 
+	// Before the fix a caller's log.type survived about 64% of emits, so 50 makes a false pass negligible.
 	const emits = 50
 	line := bridgeLine(t, 200, map[string]any{logTypeKey: logTypeAction})
 	for i := 0; i < emits; i++ {

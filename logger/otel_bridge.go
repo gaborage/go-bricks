@@ -45,8 +45,6 @@ const (
 	// (observability.DualModeLogProcessor); deliberately caller-settable.
 	logTypeAttrKey = "log.type"
 
-	fieldTraceFlags = "trace_flags"
-
 	// maxRecordAttributes caps the attributes on one record. observability sets
 	// the SDK's own limit to the same value (its tests pin the pair), so the
 	// bridge is the only truncation point and picks what survives.

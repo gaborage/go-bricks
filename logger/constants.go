@@ -40,6 +40,7 @@ const (
 
 // Log entry field key constants.
 const (
-	fieldMessage = "message"
-	fieldLevel   = "level"
+	fieldMessage    = "message"
+	fieldLevel      = "level"
+	fieldTraceFlags = "trace_flags"
 )
