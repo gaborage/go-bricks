@@ -11,6 +11,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
@@ -619,11 +620,12 @@ func (s *recordingSink) declares(name string, n int64, attrs []attribute.KeyValu
 
 // newWindowScheduler is a real scheduler Module: registering a Windowed job with it
 // proves the scheduler accepts the declaration, which a fake registrar never checks.
-func newWindowScheduler(t *testing.T) *scheduler.Module {
+func newWindowScheduler(t *testing.T, meterProvider metric.MeterProvider) *scheduler.Module {
 	t.Helper()
 	sched := scheduler.NewModule()
 	if err := sched.Init(&app.ModuleDeps{
-		Logger: logger.New("disabled", true),
+		Logger:        logger.New("disabled", true),
+		MeterProvider: meterProvider,
 		Config: &config.Config{Scheduler: config.SchedulerConfig{
 			Timezone: config.DefaultTimezone,
 			Timeout:  config.SchedulerTimeoutConfig{Shutdown: time.Second, SlowJob: time.Minute},

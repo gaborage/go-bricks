@@ -1457,7 +1457,7 @@ func TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan(t *testing.T) {
 				}},
 				{Name: "outbox.relay.unrecorded"},
 			}, counters)
-			require.NoError(t, newWindowScheduler(t).FixedRate("outbox-relay",
+			require.NoError(t, newWindowScheduler(t, nil).FixedRate("outbox-relay",
 				scheduler.Windowed(func(scheduler.JobContext, *scheduler.Recorder) error { return nil }, counters...), time.Hour))
 		})
 	}

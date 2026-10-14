@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
@@ -19,6 +20,7 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 	"github.com/gaborage/go-bricks/scheduler"
 )
 
@@ -1418,7 +1420,7 @@ func TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan(t *testing.T)
 			m := NewModule()
 			require.NoError(t, m.Init(deps))
 
-			require.NoError(t, m.RegisterJobs(newWindowScheduler(t)))
+			require.NoError(t, m.RegisterJobs(newWindowScheduler(t, nil)))
 
 			require.NotNil(t, m.relay)
 			assert.Equal(t, tt.tenantAttr, m.relay.tenantAttr)
@@ -1440,4 +1442,40 @@ func TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan(t *testing.T)
 			assert.Contains(t, sink.calls, tt.cycle)
 		})
 	}
+}
+
+// TestRegisterJobsReportsTheRelayCyclesAsMetrics runs the registered relay on a real
+// scheduler tick: a cycle reaches outbox.relay.cycles only if RegisterJobs handed Windowed
+// both the relay's run and its Counters.
+func TestRegisterJobsReportsTheRelayCyclesAsMetrics(t *testing.T) {
+	m, _ := initEnabledModule(t, "postgresql", 24*time.Hour)
+	m.cfg.PollInterval = 10 * time.Millisecond
+	m.getDB = func(context.Context) (dbtypes.Interface, error) { return nil, errors.New("no database in this test") }
+	mp := obtest.NewTestMeterProvider()
+	t.Cleanup(func() { require.NoError(t, mp.Shutdown(context.Background())) })
+
+	require.NoError(t, m.RegisterJobs(newWindowScheduler(t, mp.MeterProvider)))
+
+	assert.Eventually(t, func() bool {
+		var rm metricdata.ResourceMetrics
+		if err := mp.Reader.Collect(context.Background(), &rm); err != nil {
+			return false
+		}
+		cycles := obtest.FindMetric(rm, "outbox.relay.cycles")
+		if cycles == nil {
+			return false
+		}
+		sum, ok := cycles.Data.(metricdata.Sum[int64])
+		if !ok {
+			return false
+		}
+		for _, point := range sum.DataPoints {
+			role, _ := point.Attributes.Value("role")
+			job, _ := point.Attributes.Value("job.id")
+			if role.AsString() == "unavailable" && job.AsString() == "outbox-relay" && point.Value > 0 {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "an unavailable relay cycle must reach outbox.relay.cycles")
 }
