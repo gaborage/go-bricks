@@ -6,12 +6,14 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
@@ -19,6 +21,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // fakeHoldJobCtx is the scheduler.JobContext the drain runs under. The embedded
@@ -48,6 +51,9 @@ type fakeHoldReplayer struct {
 	failAt     map[int64]error
 	panicAt    int64
 	panicked   bool
+	// reloadPanicFor names a consumer whose reload panics: a panic past the
+	// drain's per-tenant recover, which only the scheduler catches.
+	reloadPanicFor string
 }
 
 func (f *fakeHoldReplayer) HoldConsumers() []string { return f.consumers }
@@ -67,6 +73,9 @@ func (f *fakeHoldReplayer) Replay(_ context.Context, _ string, msg *app.HeldMess
 // longer the drain's to pass: the generation guarding the held set has to be read
 // before the ledger is, so the manager owns that read.
 func (f *fakeHoldReplayer) ReloadHeld(_ context.Context, consumer string) error {
+	if consumer == f.reloadPanicFor {
+		panic("reload exploded")
+	}
 	f.reloaded = append(f.reloaded, consumer)
 	return f.reloadErr
 }
@@ -111,12 +120,51 @@ type recordingHoldStore struct {
 	// substring, so every tenant's read matches the same registration and cannot
 	// carry a tenant's own rows; this can.
 	rowsByTenant map[string][]HoldRow
+	// contended names the tenants another replica holds the lease on, for the same
+	// reason: one TestDB answer cannot lease one tenant and refuse the next.
+	contended map[string]bool
+	// The remaining knobs fail or fence one store call. A TestDB answer cannot:
+	// DeleteRow's and Release's statements both match "DELETE FROM <hold table>".
+	acquireErr      error
+	nextRowsErr     error
+	deleteErr       error
+	deleteRefused   bool
+	releaseRefused  bool
+	releaseLeaseErr error
+}
+
+func (r *recordingHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface,
+	consumer, tenant, owner string, lease time.Duration,
+) (bool, error) {
+	if r.acquireErr != nil {
+		return false, r.acquireErr
+	}
+	if r.contended[tenant] {
+		return false, nil
+	}
+	return r.HoldStore.AcquireLease(ctx, db, consumer, tenant, owner, lease)
+}
+
+func (r *recordingHoldStore) DeleteRow(ctx context.Context, db dbtypes.Interface,
+	consumer, stream string, offset int64, tenant, owner string,
+) (bool, error) {
+	if r.deleteErr != nil {
+		return false, r.deleteErr
+	}
+	if r.deleteRefused {
+		return false, nil
+	}
+	return r.HoldStore.DeleteRow(ctx, db, consumer, stream, offset, tenant, owner)
 }
 
 func (r *recordingHoldStore) NextRows(ctx context.Context, db dbtypes.Interface,
 	consumer, tenant string, limit int,
 ) ([]HoldRow, error) {
+	if r.nextRowsErr != nil {
+		return nil, r.nextRowsErr
+	}
 	if r.rowsByTenant == nil {
+
 		return r.HoldStore.NextRows(ctx, db, consumer, tenant, limit)
 	}
 	return r.rowsByTenant[tenant], nil
@@ -126,6 +174,9 @@ func (r *recordingHoldStore) Release(ctx context.Context, db dbtypes.Interface, 
 	r.released++
 	if r.releaseErr != nil {
 		return false, r.releaseErr
+	}
+	if r.releaseRefused {
+		return false, nil
 	}
 	return r.HoldStore.Release(ctx, db, consumer, tenant, owner)
 }
@@ -152,6 +203,9 @@ func (r *recordingHoldStore) Stats(ctx context.Context, db dbtypes.Interface, co
 
 func (r *recordingHoldStore) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
 	r.leasesYielded++
+	if r.releaseLeaseErr != nil {
+		return r.releaseLeaseErr
+	}
 	return r.HoldStore.ReleaseLease(ctx, db, consumer, tenant, owner)
 }
 
@@ -161,6 +215,53 @@ func mustPostgresHoldStore() HoldStore {
 		panic(err)
 	}
 	return store
+}
+
+// fakeHoldSink stands in for the scheduler's Recorder. It fails the test on a
+// call the drain's declarations do not allow — the Recorder would only mark the
+// run failing as "undeclared", which no unit test sees — and tallies the rest per
+// series, Count and Fail apart.
+type fakeHoldSink struct {
+	t      *testing.T
+	counts map[string]int64
+	fails  map[string]int64
+}
+
+func newFakeHoldSink(t *testing.T) *fakeHoldSink {
+	return &fakeHoldSink{t: t, counts: map[string]int64{}, fails: map[string]int64{}}
+}
+
+func (s *fakeHoldSink) Count(name string, n int64, attrs ...attribute.KeyValue) {
+	s.t.Helper()
+	s.counts[s.series(name, n, attrs)] += n
+}
+
+func (s *fakeHoldSink) Fail(name string, n int64, attrs ...attribute.KeyValue) {
+	s.t.Helper()
+	s.fails[s.series(name, n, attrs)] += n
+}
+
+// series names a call name{key=value}, after checking it against the Counters
+// the drain registers: a declared name, a non-negative n, and each declared key
+// once with one of its declared values.
+func (s *fakeHoldSink) series(name string, n int64, attrs []attribute.KeyValue) string {
+	s.t.Helper()
+	counters := holdDrainCounters()
+	i := slices.IndexFunc(counters, func(c scheduler.Counter) bool { return c.Name == name })
+	require.GreaterOrEqual(s.t, i, 0, "Counter %q is not declared", name)
+	require.GreaterOrEqual(s.t, n, int64(0), "Counter %q takes a non-negative n", name)
+
+	declared := counters[i].Attrs
+	require.Len(s.t, attrs, len(declared), "Counter %q takes each declared key once", name)
+	series := name
+	for _, kv := range attrs {
+		j := slices.IndexFunc(declared, func(a scheduler.AttrSet) bool { return a.Key == string(kv.Key) })
+		require.GreaterOrEqual(s.t, j, 0, "Counter %q does not declare key %q", name, kv.Key)
+		require.Equal(s.t, attribute.STRING, kv.Value.Type(), "Counter %q key %q takes a string", name, kv.Key)
+		require.Contains(s.t, declared[j].Values, kv.Value.AsString(), "Counter %q key %q", name, kv.Key)
+		series += "{" + string(kv.Key) + "=" + kv.Value.AsString() + "}"
+	}
+	return series
 }
 
 func drainCtx(db dbtypes.Interface) *fakeHoldJobCtx {
@@ -212,6 +313,287 @@ func TestDrainReplaysInOrderAndReleases(t *testing.T) {
 	assert.Equal(t, []int64{3, 4, 5}, replayer.replayed, "oldest offset first")
 	assert.Equal(t, []string{testHoldConsumer}, replayer.reloaded,
 		"the runners are asked to refresh what the ledger still holds")
+}
+
+// TestDrainRunReportsEachTenantOutcome pins what a pass reports: the pass itself
+// as active, and each due tenant once, by how its turn ended — a deferral as a
+// Fail, a release and a tenant another replica holds as successes.
+func TestDrainRunReportsEachTenantOutcome(t *testing.T) {
+	const deferredTenant, contendedTenant = otherHoldTenant, "tenant-c"
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(
+		dueTenantRows(time.Now(), testHoldTenant, deferredTenant, contendedTenant))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1) // AcquireLease, Defer
+	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
+	db.ExpectExec(`DELETE FROM ` + holdTenantTable).WillReturnRowsAffected(1) // Release
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
+		dbtesting.NewRowSet("tenant_id").AddRow(deferredTenant))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(1), int64(1), time.Now()))
+
+	replayer := &fakeHoldReplayer{
+		consumers: []string{testHoldConsumer},
+		failAt:    map[int64]error{7: errors.New("handler said no")},
+	}
+	store := &recordingHoldStore{
+		HoldStore: mustPostgresHoldStore(),
+		rowsByTenant: map[string][]HoldRow{
+			testHoldTenant: {{Consumer: testHoldConsumer, Stream: testHoldStream, Offset: 3, TenantID: testHoldTenant}},
+			deferredTenant: {{Consumer: testHoldConsumer, Stream: testHoldStream, Offset: 7, TenantID: deferredTenant}},
+		},
+		contended: map[string]bool{contendedTenant: true},
+	}
+	sink := newFakeHoldSink(t)
+
+	require.NoError(t, drainWithStore(db, replayer, store).run(drainCtx(db), sink))
+
+	assert.Equal(t, map[string]int64{
+		"inbox.hold.drain.passes{role=active}":        1,
+		"inbox.hold.drain.tenants{outcome=released}":  1,
+		"inbox.hold.drain.tenants{outcome=contended}": 1,
+	}, sink.counts)
+	assert.Equal(t, map[string]int64{"inbox.hold.drain.tenants{outcome=deferred}": 1}, sink.fails,
+		"the deferral is the pass's only failing outcome")
+}
+
+// leaseSpentAtOnce makes the pass's lease run out before the first row: a lease
+// no longer than the deadline's one-second margin leaves no time to replay in.
+func leaseSpentAtOnce(d *HoldDrain) {
+	now := time.Now()
+	d.now = func() time.Time { return now }
+	d.cfg.LeaseDuration = time.Second
+}
+
+// fullBatch is one batch of held rows for testHoldTenant, the most one read returns.
+func fullBatch() []HoldRow {
+	rows := make([]HoldRow, holdDrainRowsPerRead)
+	for i := range rows {
+		rows[i] = HoldRow{Consumer: testHoldConsumer, Stream: testHoldStream, Offset: int64(i + 1), TenantID: testHoldTenant}
+	}
+	return rows
+}
+
+// TestDrainRunReportsOneOutcomePerTerminalBranch pins the outcome of every way a
+// tenant's turn can end, one tenant per case: exactly one outcome, Count or Fail
+// as its kind says, and none at all when the turn ends in an error the run
+// returns instead.
+func TestDrainRunReportsOneOutcomePerTerminalBranch(t *testing.T) {
+	const activePass = "inbox.hold.drain.passes{role=active}"
+	for _, tc := range []struct {
+		name  string
+		setup func(*recordingHoldStore, *fakeHoldReplayer, *HoldDrain)
+		// count and fail name the outcome the tenant must record; wantErr the error
+		// a turn that records none returns.
+		count, fail string
+		wantErr     string
+	}{
+		{name: "released", setup: func(*recordingHoldStore, *fakeHoldReplayer, *HoldDrain) {}, count: "released"},
+		{
+			name:  "yielded_when_the_lease_is_spent",
+			setup: func(_ *recordingHoldStore, _ *fakeHoldReplayer, d *HoldDrain) { leaseSpentAtOnce(d) },
+			count: "yielded",
+		},
+		{
+			name: "yielded_after_a_full_batch",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.rowsByTenant = map[string][]HoldRow{testHoldTenant: fullBatch()}
+			},
+			count: "yielded",
+		},
+		{
+			// A lost lease and a row a concurrent park added both refuse the release,
+			// and the drain cannot tell them apart: normal traffic, not a failing run.
+			name:  "yielded_when_the_release_is_refused",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) { s.releaseRefused = true },
+			count: "yielded",
+		},
+		{
+			name: "contended",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.contended = map[string]bool{testHoldTenant: true}
+			},
+			count: "contended",
+		},
+		{
+			name: "deferred_after_a_replay_error",
+			setup: func(_ *recordingHoldStore, r *fakeHoldReplayer, _ *HoldDrain) {
+				r.failAt = map[int64]error{3: errors.New("handler said no")}
+			},
+			fail: "deferred",
+		},
+		{
+			name: "deferred_on_an_undecodable_row",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.rowsByTenant = map[string][]HoldRow{testHoldTenant: {{
+					Consumer: testHoldConsumer, Stream: testHoldStream, Offset: 3, TenantID: testHoldTenant,
+					Properties: []byte(`{"broken`),
+				}}}
+			},
+			fail: "deferred",
+		},
+		{
+			name:  "lease_lost_when_the_delete_is_fenced",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) { s.deleteRefused = true },
+			fail:  "lease_lost",
+		},
+		{
+			name: "lease_lost_when_the_defer_is_fenced",
+			setup: func(s *recordingHoldStore, r *fakeHoldReplayer, _ *HoldDrain) {
+				s.deferRefused = true
+				r.failAt = map[int64]error{3: errors.New("handler said no")}
+			},
+			fail: "lease_lost",
+		},
+		{
+			name: "no_outcome_when_the_resolve_fails",
+			setup: func(_ *recordingHoldStore, _ *fakeHoldReplayer, d *HoldDrain) {
+				d.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) {
+					return nil, nil, errors.New("resolve exploded")
+				}
+			},
+			wantErr: "resolve exploded",
+		},
+		{
+			name: "no_outcome_when_the_lease_cannot_be_taken",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.acquireErr = errors.New("acquire exploded")
+			},
+			wantErr: "acquire exploded",
+		},
+		{
+			name: "no_outcome_when_the_rows_cannot_be_read",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.nextRowsErr = errors.New("rows exploded")
+			},
+			wantErr: "rows exploded",
+		},
+		{
+			name: "no_outcome_when_the_delete_fails",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.deleteErr = errors.New("delete exploded")
+			},
+			wantErr: "delete exploded",
+		},
+		{
+			name: "no_outcome_when_the_defer_fails",
+			setup: func(s *recordingHoldStore, r *fakeHoldReplayer, _ *HoldDrain) {
+				s.deferErr = errors.New("defer exploded")
+				r.failAt = map[int64]error{3: errors.New("handler said no")}
+			},
+			wantErr: "defer exploded",
+		},
+		{
+			name: "no_outcome_when_the_release_fails",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.releaseErr = errors.New("release exploded")
+			},
+			wantErr: "release exploded",
+		},
+		{
+			name: "no_outcome_when_a_spent_lease_cannot_be_handed_back",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, d *HoldDrain) {
+				leaseSpentAtOnce(d)
+				s.releaseLeaseErr = errors.New("handback exploded")
+			},
+			wantErr: "handback exploded",
+		},
+		{
+			name: "no_outcome_when_a_full_batch_cannot_hand_the_lease_back",
+			setup: func(s *recordingHoldStore, _ *fakeHoldReplayer, _ *HoldDrain) {
+				s.rowsByTenant = map[string][]HoldRow{testHoldTenant: fullBatch()}
+				s.releaseLeaseErr = errors.New("handback exploded")
+			},
+			wantErr: "handback exploded",
+		},
+		{
+			name:    "no_outcome_when_the_replay_panics",
+			setup:   func(_ *recordingHoldStore, r *fakeHoldReplayer, _ *HoldDrain) { r.panicAt = 3 },
+			wantErr: "panic (type: string)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := dueTenantDB(t)
+			replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+			store := &recordingHoldStore{HoldStore: mustPostgresHoldStore()}
+			drain := drainWithStore(db, replayer, store)
+			tc.setup(store, replayer, drain)
+			sink := newFakeHoldSink(t)
+
+			err := drain.run(drainCtx(db), sink)
+
+			wantCounts := map[string]int64{activePass: 1}
+			wantFails := map[string]int64{}
+			if tc.count != "" {
+				wantCounts["inbox.hold.drain.tenants{outcome="+tc.count+"}"] = 1
+			}
+			if tc.fail != "" {
+				wantFails["inbox.hold.drain.tenants{outcome="+tc.fail+"}"] = 1
+			}
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err, "an outcome, failing or not, is not a run error")
+			}
+			assert.Equal(t, wantCounts, sink.counts)
+			assert.Equal(t, wantFails, sink.fails)
+		})
+	}
+}
+
+// TestDrainRunOnStandbyReportsOnlyTheStandbyPass pins the replica with no stream
+// consumers: its pass is counted as standby, and it reports nothing else.
+func TestDrainRunOnStandbyReportsOnlyTheStandbyPass(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	sink := newFakeHoldSink(t)
+
+	require.NoError(t, newHoldDrain(db, nil).run(drainCtx(db), sink))
+
+	assert.Equal(t, map[string]int64{"inbox.hold.drain.passes{role=standby}": 1}, sink.counts)
+	assert.Empty(t, sink.fails)
+}
+
+// TestDrainRunKeepsAConsumersOutcomesWhenALaterOnePanics pins when outcomes are
+// reported: as each consumer's pass returns, so a panic in a later consumer —
+// one the drain does not recover, past its tenants — cannot take the earlier
+// consumer's with it.
+func TestDrainRunKeepsAConsumersOutcomesWhenALaterOnePanics(t *testing.T) {
+	db := dueTenantDB(t)
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer, "audit-processor"}, reloadPanicFor: "audit-processor"}
+	sink := newFakeHoldSink(t)
+
+	assert.PanicsWithValue(t, "reload exploded", func() {
+		_ = newHoldDrain(db, replayer).run(drainCtx(db), sink)
+	})
+
+	assert.Equal(t, map[string]int64{
+		"inbox.hold.drain.passes{role=active}":       1,
+		"inbox.hold.drain.tenants{outcome=released}": 1,
+	}, sink.counts, "the first consumer's release survives the second consumer's panic")
+}
+
+// TestHoldDrainCountersRegisterWithTheScheduler pins the drain's Counter
+// declarations against the scheduler that enforces them: a name or value it
+// refuses fails here, not at a deployment's startup.
+func TestHoldDrainCountersRegisterWithTheScheduler(t *testing.T) {
+	sched := scheduler.NewModule()
+	require.NoError(t, sched.Init(&app.ModuleDeps{
+		Logger: logger.New("error", false),
+		Config: &config.Config{Scheduler: config.SchedulerConfig{
+			Timezone: "UTC",
+			Timeout:  config.SchedulerTimeoutConfig{Shutdown: time.Second, SlowJob: time.Second},
+			Summary:  config.SchedulerSummaryConfig{Window: 5 * time.Minute},
+		}},
+	}))
+	t.Cleanup(func() { assert.NoError(t, sched.Shutdown()) })
+
+	drain := newHoldDrain(nil, nil)
+	job := scheduler.Windowed(func(jc scheduler.JobContext, rec *scheduler.Recorder) error {
+		return drain.run(jc, rec)
+	}, holdDrainCounters()...)
+
+	// Never due inside the test, so the job only registers.
+	require.NoError(t, sched.FixedRate(holdDrainJobID, job, time.Hour))
 }
 
 // TestDrainStopsTheTenantAtTheFirstFailure pins the ordering guarantee: a replay
