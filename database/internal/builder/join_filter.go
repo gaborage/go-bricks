@@ -338,13 +338,13 @@ type betweenBound struct {
 	value   any
 }
 
-// resolveBetweenBound resolves a bound through orderingOperand, which splices an
-// expression — or a pointer to one — for this family. A value bound is an
-// ordering operand wherever it ends up rendered — squirrel.Expr, the construct
-// a mixed pair uses, resolves nothing at build time, so a bound spliced into it
-// unresolved reached the driver as written: a nil rendered `col <= ?` bound to
-// NULL, matching nothing, and a nil pointer to a Valuer was dereferenced at
-// EXEC.
+// resolveBetweenBound resolves a bound through orderingOperand, which returns
+// the SQL of an expression — or a pointer to one — for this family to splice. A
+// value bound is an ordering operand wherever it ends up rendered —
+// squirrel.Expr, the construct a mixed pair uses, resolves nothing at build
+// time, so a bound spliced into it unresolved reached the driver as written: a
+// nil rendered `col <= ?` bound to NULL, matching nothing, and a nil pointer to
+// a Valuer was dereferenced at EXEC.
 func resolveBetweenBound(op string, bound any) (resolved betweenBound, err error) {
 	value, exprSQL, operandErr := orderingOperand(op, bound, joinFilterFamily)
 	if operandErr != nil {

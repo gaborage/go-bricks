@@ -1031,8 +1031,8 @@ func TestStructDoorsRefuseDbTagOnUnknownVendor(t *testing.T) {
 }
 
 // TestBuildUpsertOracleSplicesARawExpression pins #2120: an expression in
-// either map is spliced into the MERGE through valueCell, and only the bound
-// values number placeholders, contiguously across USING and UPDATE SET.
+// either map is spliced into the MERGE, and only the bound values number
+// placeholders, contiguously across USING and UPDATE SET.
 func TestBuildUpsertOracleSplicesARawExpression(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword, no user input
