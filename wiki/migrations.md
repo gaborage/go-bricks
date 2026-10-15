@@ -11984,9 +11984,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   key, and four `outbox.relay.*` metrics (cycles by role and, where declarable, tenant; leader
   cycles; records by outcome and lane; unrecorded deliveries), while the per-run, skip and cycle
   lines drop to DEBUG (C72.30).
-- gist: the inbox hold drain wrote an action line per pass (every 5s by default), a WARN per trigger
-  a hung pass skipped, a WARN per spent lease, and one "Hold exceeds max age" WARN per over-age
-  tenant per pass, which a stuck tenant that keeps yielding repeated every pass. It now runs under
+- gist: the inbox hold drain wrote an action line per pass (every 5s by default), a WARN each time
+  the scheduler skipped a trigger because the previous pass was still running, a WARN per spent
+  lease, and one "Hold exceeds max age" WARN per over-age tenant per pass, which a stuck tenant
+  that keeps yielding repeated every pass. It now runs under
   `scheduler.Windowed`: one window line per `scheduler.summary.window` and an edge line when it turns
   failing, Counters for its passes, per-tenant outcomes and over-age sightings, and at most one
   over-age WARN per window per replica (C72.31, ADR-089 amendment).
@@ -13125,9 +13126,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gate: match = a detect hit in a deployment that consumes a stream with `Hold: true`. no-match =
   no hit; with the hold off the drain is not registered.
 - before: every pass wrote an action line (INFO, or WARN/ERROR when it failed, plus an ERROR stack
-  line on every panic), every trigger a hung pass skipped wrote a WARN, a spent lease wrote `Hold
-  lease spent mid-batch` at WARN, and `Hold exceeds max age` was one WARN per leased over-age tenant
-  per pass, so a stuck tenant that keeps yielding drew one every pass.
+  line on every panic), the scheduler wrote a WARN each time it skipped a trigger because the
+  previous pass was still running, a spent lease wrote `Hold lease spent mid-batch` at WARN, and
+  `Hold exceeds max age` was one WARN per leased over-age tenant per pass, so a stuck tenant that
+  keeps yielding drew one every pass.
 - after: the drain is a `scheduler.Windowed` job (C72.28). Its per-pass action line and skip line
   are DEBUG, which the default `observability.logs.samplingrate` of 0.0 keeps out of OTLP; the
   scheduler writes one `Job 'inbox-hold-drain' window summary` line per `scheduler.summary.window`
@@ -13143,7 +13145,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - apply: move each alert or query on a line that left onto its replacement: a pass's success or
   failure onto the window line or `inbox.hold.drain.tenants{outcome}`; a stuck tenant onto
   `inbox.hold.drain.over_max_age` or the window line, since `Hold exceeds max age` no longer recurs
-  every pass; a hung pass onto the window line's `runs.skipped`.
+  every pass; a skipped trigger (the previous pass still running) onto the window line's
+  `runs.skipped`.
 - verify: hold a tenant past `inbox.hold.maxage` and let the drain run through two summary windows:
   each window has one `Job 'inbox-hold-drain' window summary` line, at WARN, and one `Hold exceeds
   max age` WARN, while `inbox.hold.drain.over_max_age` grows on every pass.
