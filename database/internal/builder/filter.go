@@ -147,9 +147,9 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 }
 
 // In creates an IN filter (column IN (values...)).
-// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression, or a pointer to one, is refused with
-// dbtypes.ErrExpressionInFilter at ToSQL(); use JoinFilterFactory.In or f.Raw.
+// Accepts both slices and scalar values. A scalar other than a map or chan is resolved
+// and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
+// refused with dbtypes.ErrExpressionInFilter at ToSQL(); use JoinFilterFactory.In or f.Raw.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -162,9 +162,9 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
-// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression, or a pointer to one, is refused with
-// dbtypes.ErrExpressionInFilter at ToSQL().
+// Accepts both slices and scalar values. A scalar other than a map or chan is resolved
+// and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
+// refused with dbtypes.ErrExpressionInFilter at ToSQL().
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:

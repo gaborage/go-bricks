@@ -2220,6 +2220,7 @@ func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 		{name: "pointer_to_byte_slice", value: &raw, width: 1, wantArgs: []any{raw}},
 		{name: "untyped_nil", value: nil, width: 0, wantArgs: nil},
 		{name: "typed_nil_pointer", value: (*int)(nil), width: 1, wantArgs: []any{nil}},
+		{name: "nil_expression_pointer", value: (*dbtypes.RawExpression)(nil), width: 1, wantArgs: []any{nil}},
 		{name: "slice", value: ids, width: 2, wantArgs: []any{1, 2}},
 		{name: "pointer_to_slice", value: &ids, width: 2, wantArgs: []any{1, 2}},
 		{name: "empty_slice", value: []int{}, width: 0, wantArgs: nil},
@@ -2288,15 +2289,17 @@ func TestInDoorsKeepTheWholeOperandRendering(t *testing.T) {
 	}
 }
 
-// TestInDoorsRenderAnInterfaceOrPointerValuedMapLikeAConcreteOne pins #2119: a
-// map or chan whose values could need resolution panicked walking its elements.
-func TestInDoorsRenderAnInterfaceOrPointerValuedMapLikeAConcreteOne(t *testing.T) {
+// TestInDoorsBindAMapOrChanWithResolvableValuesWhole pins #2119: a non-empty map
+// or chan whose value type is an interface, a pointer or a driver.Valuer
+// panicked walking its elements; it binds whole, like a concrete-valued one.
+func TestInDoorsBindAMapOrChanWithResolvableValuesWhole(t *testing.T) {
 	five := 5
 	ch := make(chan any, 1)
 	ch <- 1
 	operands := map[string]any{
 		"interface_valued_map":  map[string]any{"a": 1},
 		"pointer_valued_map":    map[string]*int{"a": &five},
+		"valuer_valued_map":     map[string]dbsql.NullString{"a": {String: "x", Valid: true}},
 		"interface_valued_chan": ch,
 	}
 

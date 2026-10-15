@@ -237,9 +237,9 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 }
 
 // In creates an IN condition (column IN (values...)).
-// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression, or a pointer to one, is spliced as
-// `column IN (<sql>)`, with no placeholder and no argument.
+// Accepts both slices and scalar values. A scalar other than a map or chan is resolved
+// and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
+// spliced as `column IN (<sql>)`, with no placeholder and no argument.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -253,9 +253,9 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 }
 
 // NotIn creates a NOT IN condition (column NOT IN (values...)).
-// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression, or a pointer to one, is spliced as
-// `column NOT IN (<sql>)`.
+// Accepts both slices and scalar values. A scalar other than a map or chan is resolved
+// and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
+// spliced as `column NOT IN (<sql>)`.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
