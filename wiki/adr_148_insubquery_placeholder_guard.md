@@ -52,9 +52,10 @@ embedded SQL, for all four doors.
   `f.InSubquery` whose `ToSQL()` returns `$N` or `:N` now fails `ToSQL()` with
   `subquery must render question-mark placeholders, not $N or :N`. On the same
   vendor with no other parameter, that statement built and ran before.
-- The check is textual, so a `$N` or `:N` inside a string literal or comment of
-  a foreign subquery (`'10:30'`) is refused too. That limitation already held at
-  the other three doors and is not addressed here.
+- The check is textual, so any foreign subquery SQL matching `[$:]\d+` is
+  refused, not only a placeholder: a string literal or comment (`'10:30'`), or
+  SQL such as a PostgreSQL array slice `arr[1:3]`. That limitation already held
+  at the other three doors and is not addressed here.
 - `errSubqueryPlaceholderFormat` stays unexported; a consumer matches the text.
 
 ## References

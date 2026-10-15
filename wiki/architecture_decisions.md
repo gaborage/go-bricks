@@ -2469,7 +2469,7 @@ numbered by the outer statement, and this package's subqueries render as before.
 [migrations.md](migrations.md) `[C72.35]`.
 
 **Key Benefits:** all four subquery doors share one rendering rule, so a placeholder collision
-fails at `ToSQL()` instead of at the database.
+fails at `ToSQL()` instead of reaching the database.
 
 ---
 

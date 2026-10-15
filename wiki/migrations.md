@@ -11991,6 +11991,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `scheduler.Windowed`: one window line per `scheduler.summary.window` and an edge line when it turns
   failing, Counters for its passes, per-tenant outcomes and over-age sightings, and at most one
   over-age WARN per window per replica (C72.31, ADR-089 amendment).
+- gist: `f.InSubquery` embedded a subquery from another `SelectQueryBuilder` implementation
+  verbatim, so a `$N` or `:N` it had rendered skipped the guard `f.Exists`, `f.NotExists` and
+  `SubqueryColumn` apply and collided with the outer statement's numbering. It now renders
+  through that guard: such a subquery fails `ToSQL()` on either vendor, a foreign `?` subquery is
+  numbered by the outer statement, and package-built subqueries render unchanged (C72.35). ADR-148.
 
 ### [C72.1] OpenTelemetry Go moves to v1.47.0: `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read and attribute values nested deeper than 64 export empty · silent-behavior · when: match
 
@@ -13165,7 +13170,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   built by go-bricks' own builder renders exactly as before; a foreign subquery that renders `?`
   builds, numbered by the outer statement; `f.Exists`, `f.NotExists` and `SubqueryColumn`
   already refused this input.
-- gate: match = a detect hit. no-match = no hit, or every foreign subquery renders `?`.
+- gate: match = a detect hit. no-match = otherwise.
 - before: the foreign SQL was embedded verbatim. On its own vendor with no other parameter the
   statement built and ran; beside another parameter its `$1`/`:1` collided with the outer
   statement's numbering, which PostgreSQL rejects at the database; on the other vendor it was
