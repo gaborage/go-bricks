@@ -3,18 +3,23 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // oversizedShortStr is one byte past what an AMQP shortstr can carry, and
@@ -506,4 +511,91 @@ func streamShipperWith(pub streamPublisher) *streamShipper {
 		}
 		return nil, false
 	})
+}
+
+// recordingSink is the relaySink a test hands run. It checks every call against the
+// Counters relayCounters declares, the way the scheduler's Recorder does, so a call
+// production would count as undeclared fails the test instead of passing silently.
+type recordingSink struct {
+	t        *testing.T
+	counters []scheduler.Counter
+	// calls sums n per "<count|fail> <name>{k=v,...}". A call with n == 0 still adds
+	// its key, so a projection that skips nothing shows up in an exact comparison.
+	calls map[string]int64
+}
+
+var (
+	_ relaySink = (*scheduler.Recorder)(nil)
+	_ relaySink = (*recordingSink)(nil)
+)
+
+// newRecordingSink declares r's Counters and sets r.tenantAttr from that declaration.
+func newRecordingSink(t *testing.T, r *Relay) *recordingSink {
+	t.Helper()
+	counters, tenantAttr, _ := relayCounters(r.tenants, r.laneOrder)
+	r.tenantAttr = tenantAttr
+	return &recordingSink{t: t, counters: counters, calls: map[string]int64{}}
+}
+
+func (s *recordingSink) Count(name string, n int64, attrs ...attribute.KeyValue) {
+	s.record("count", name, n, attrs)
+}
+
+func (s *recordingSink) Fail(name string, n int64, attrs ...attribute.KeyValue) {
+	s.record("fail", name, n, attrs)
+}
+
+func (s *recordingSink) record(kind, name string, n int64, attrs []attribute.KeyValue) {
+	s.t.Helper()
+	pairs := make([]string, 0, len(attrs))
+	for _, kv := range attrs {
+		pairs = append(pairs, string(kv.Key)+"="+kv.Value.AsString())
+	}
+	slices.Sort(pairs)
+	key := kind + " " + name
+	if len(pairs) > 0 {
+		key += "{" + strings.Join(pairs, ",") + "}"
+	}
+	if !s.declares(name, n, attrs) {
+		s.t.Errorf("%s %d names no declared Counter series", key, n)
+	}
+	s.calls[key] += n
+}
+
+// declares mirrors the Recorder's check: a declared name, n >= 0, and every declared key
+// exactly once with one of its declared values.
+func (s *recordingSink) declares(name string, n int64, attrs []attribute.KeyValue) bool {
+	i := slices.IndexFunc(s.counters, func(c scheduler.Counter) bool { return c.Name == name })
+	if i < 0 || n < 0 || len(attrs) != len(s.counters[i].Attrs) {
+		return false
+	}
+	seen := make(map[attribute.Key]bool, len(attrs))
+	for _, kv := range attrs {
+		sets := s.counters[i].Attrs
+		j := slices.IndexFunc(sets, func(set scheduler.AttrSet) bool { return set.Key == string(kv.Key) })
+		if j < 0 || seen[kv.Key] || !slices.Contains(sets[j].Values, kv.Value.AsString()) {
+			return false
+		}
+		seen[kv.Key] = true
+	}
+	return true
+}
+
+// newWindowScheduler is a real scheduler Module: registering a Windowed job with it
+// proves the scheduler accepts the declaration, which a fake registrar never checks.
+func newWindowScheduler(t *testing.T) *scheduler.Module {
+	t.Helper()
+	sched := scheduler.NewModule()
+	if err := sched.Init(&app.ModuleDeps{
+		Logger: logger.New("disabled", true),
+		Config: &config.Config{Scheduler: config.SchedulerConfig{
+			Timezone: config.DefaultTimezone,
+			Timeout:  config.SchedulerTimeoutConfig{Shutdown: time.Second, SlowJob: time.Minute},
+			Summary:  config.SchedulerSummaryConfig{Window: time.Hour},
+		}},
+	}); err != nil {
+		t.Fatalf("scheduler Init: %v", err)
+	}
+	t.Cleanup(func() { _ = sched.Shutdown() })
+	return sched
 }

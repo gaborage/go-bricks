@@ -3,18 +3,21 @@ package outbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/ledgererr"
 	"github.com/gaborage/go-bricks/multitenant"
+	"github.com/gaborage/go-bricks/scheduler"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -1168,4 +1171,330 @@ func TestRelayAllOutageCycleStillLogsItsCounts(t *testing.T) {
 	numbers := log.numbers()
 	assert.Equal(t, int64(2), numbers["failed_amqp"], "both outaged rows are charged to the AMQP lane")
 	assert.Equal(t, int64(2), numbers["total"], "the cycle summary still reports every fetched row")
+}
+
+// --- the window counters ------------------------------------------------------
+
+// TestRelayRunReportsALeaderCycleOnTheSink pins one tenant's cycle as the Counter calls it
+// projects: each record outcome under its lane, the cycle under its role and tenant, and
+// the lead.
+func TestRelayRunReportsALeaderCycleOnTheSink(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+		{ID: "A2", Exchange: "ex", RoutingKey: "b"},
+		{ID: "A3", Exchange: "ex", RoutingKey: "b"}, // parks behind A2
+		{ID: "A4", Exchange: "ex", RoutingKey: "b"}, // also parks behind A2
+	}}
+	r, amqpLane, _ := newRelayWithLanes(store)
+	r.tenants = []string{"t1"}
+	amqpLane.Verdicts = []verdict{{Kind: shipDelivered}, {Kind: shipRetry, Err: errors.New("broker rejected")}}
+	sink := newRecordingSink(t, r)
+
+	require.NoError(t, r.run(newFakeJobCtx(dbtesting.NewTestDB("postgresql")), sink))
+
+	assert.Equal(t, map[string]int64{
+		"count outbox.relay.records{lane=amqp,outcome=published}": 1,
+		"fail outbox.relay.records{lane=amqp,outcome=failed}":     1,
+		"fail outbox.relay.records{lane=amqp,outcome=parked}":     2,
+		"count outbox.relay.cycles{role=leader,tenant=t1}":        1,
+		"count outbox.relay.led":                                  1,
+	}, sink.calls)
+}
+
+// TestRelayRunReportsEachRolePathOnTheSink pins the role every relayTenant return takes,
+// whether the cycle counts as a success or a failure, and that run's error is unchanged.
+func TestRelayRunReportsEachRolePathOnTheSink(t *testing.T) {
+	tests := []struct {
+		name    string
+		arrange func(r *Relay, store *fakeStore, amqpLane *fakeShipper)
+		calls   map[string]int64
+		check   func(t *testing.T, err error)
+	}{
+		{
+			name: "database_error",
+			arrange: func(r *Relay, _ *fakeStore, _ *fakeShipper) {
+				r.getDB = func(context.Context) (dbtypes.Interface, error) { return nil, errors.New("pool exhausted") }
+			},
+			calls: map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": database not available: pool exhausted`)
+			},
+		},
+		{
+			name: "nil_database",
+			arrange: func(r *Relay, _ *fakeStore, _ *fakeShipper) {
+				r.getDB = func(context.Context) (dbtypes.Interface, error) { return nil, nil }
+			},
+			calls: map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": database not available`)
+			},
+		},
+		{
+			name:    "another_instance_leads",
+			arrange: func(_ *Relay, store *fakeStore, _ *fakeShipper) { store.LeadErr = ErrNotLeader },
+			calls:   map[string]int64{"count outbox.relay.cycles{role=follower}": 1},
+			check:   func(t *testing.T, err error) { assert.NoError(t, err) },
+		},
+		{
+			name:    "lead_error",
+			arrange: func(_ *Relay, store *fakeStore, _ *fakeShipper) { store.LeadErr = errors.New("lock timeout") },
+			calls:   map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": leader: lock timeout`)
+			},
+		},
+		{
+			name: "fetch_error",
+			arrange: func(_ *Relay, store *fakeStore, _ *fakeShipper) {
+				store.FetchPendingErr = errors.New("relation missing")
+			},
+			calls: map[string]int64{"fail outbox.relay.cycles{role=unavailable}": 1},
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": fetch failed: relation missing`)
+			},
+		},
+		{
+			name:    "empty_batch",
+			arrange: func(*Relay, *fakeStore, *fakeShipper) {},
+			calls: map[string]int64{
+				"count outbox.relay.cycles{role=leader}": 1,
+				"count outbox.relay.led":                 1,
+			},
+			check: func(t *testing.T, err error) { assert.NoError(t, err) },
+		},
+		{
+			name: "every_row_on_a_down_lane",
+			arrange: func(_ *Relay, store *fakeStore, amqpLane *fakeShipper) {
+				store.FetchPendingResult = []Record{{ID: "A1", Exchange: "ex", RoutingKey: "a"}}
+				amqpLane.ReadyErr = errors.New("broker unreachable")
+			},
+			calls: map[string]int64{
+				"count outbox.relay.cycles{role=leader}":              1,
+				"count outbox.relay.led":                              1,
+				"fail outbox.relay.records{lane=amqp,outcome=failed}": 1,
+			},
+			check: func(t *testing.T, err error) {
+				assert.EqualError(t, err, `outbox relay: tenant "": broker unreachable`)
+			},
+		},
+		{
+			name: "lead_lost_mid_cycle",
+			arrange: func(_ *Relay, store *fakeStore, _ *fakeShipper) {
+				store.FetchPendingResult = []Record{
+					{ID: "A1", Exchange: "ex", RoutingKey: "a"},
+					{ID: "A2", Exchange: "ex", RoutingKey: "b"},
+				}
+				store.ProbeErr, store.ProbeErrAfter = errors.New("connection reset"), 2
+			},
+			calls: map[string]int64{
+				"count outbox.relay.cycles{role=leader}":                  1,
+				"count outbox.relay.led":                                  1,
+				"count outbox.relay.records{lane=amqp,outcome=published}": 1,
+			},
+			check: func(t *testing.T, err error) {
+				require.ErrorIs(t, err, ErrNotLeader)
+				assert.EqualError(t, err, `outbox relay: tenant "": outbox: another relay instance leads this ledger: `+
+					`lost the leader row mid-cycle, database unreachable or the transaction was ended: connection reset`)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{}
+			r, amqpLane, _ := newRelayWithLanes(store)
+			tt.arrange(r, store, amqpLane)
+			sink := newRecordingSink(t, r)
+
+			err := r.run(newFakeJobCtx(dbtesting.NewTestDB("postgresql")), sink)
+
+			tt.check(t, err)
+			assert.Equal(t, tt.calls, sink.calls)
+		})
+	}
+}
+
+// leadsExcept is a store that leads as its fakeStore does, except for one tenant, which
+// another instance leads.
+type leadsExcept struct {
+	*fakeStore
+	follower string
+}
+
+func (s leadsExcept) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, error) {
+	if tenantID, _ := multitenant.GetTenant(ctx); tenantID == s.follower {
+		return nil, ErrNotLeader
+	}
+	return s.fakeStore.Lead(ctx, db)
+}
+
+func TestRelayRunReportsEachTenantUnderItsOwnRole(t *testing.T) {
+	r := newRelayWithShippers(leadsExcept{fakeStore: &fakeStore{}, follower: "t2"},
+		map[string]shipper{LaneAMQP: &fakeShipper{}, LaneStream: &fakeShipper{}})
+	r.tenants = []string{"t1", "t2"}
+	sink := newRecordingSink(t, r)
+
+	require.NoError(t, r.run(newFakeJobCtx(dbtesting.NewTestDB("postgresql")), sink))
+
+	assert.Equal(t, map[string]int64{
+		"count outbox.relay.cycles{role=leader,tenant=t1}":   1,
+		"count outbox.relay.cycles{role=follower,tenant=t2}": 1,
+		"count outbox.relay.led":                             1,
+	}, sink.calls)
+}
+
+// TestRelayRunReportsEarlierTenantsBeforeALaterOnePanics pins that each tenant's counts
+// reach the sink before the next tenant runs.
+func TestRelayRunReportsEarlierTenantsBeforeALaterOnePanics(t *testing.T) {
+	r, _, _ := newRelayWithLanes(&fakeStore{})
+	r.tenants = []string{"t1", "t2"}
+	r.getDB = func(ctx context.Context) (dbtypes.Interface, error) {
+		if tenantID, _ := multitenant.GetTenant(ctx); tenantID == "t2" {
+			panic("t2 resolver")
+		}
+		return dbFromCtx(ctx), nil
+	}
+	sink := newRecordingSink(t, r)
+
+	assert.PanicsWithValue(t, "t2 resolver", func() {
+		_ = r.run(newFakeJobCtx(dbtesting.NewTestDB("postgresql")), sink)
+	})
+
+	assert.Equal(t, map[string]int64{
+		"count outbox.relay.cycles{role=leader,tenant=t1}": 1,
+		"count outbox.relay.led":                           1,
+	}, sink.calls)
+}
+
+// TestRelayRunReportsALaneThisBuildLacksAsUnknown pins that a poison row naming a lane
+// this build lacks reports under lane=unknown, the one lane value declared for it.
+func TestRelayRunReportsALaneThisBuildLacksAsUnknown(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "X1", Lane: "carrier-pigeon", RetryCount: 99},
+		{ID: "X2", Lane: "owl"},
+	}}
+	r, _, _ := newRelayWithLanes(store)
+	sink := newRecordingSink(t, r)
+
+	require.NoError(t, r.run(newFakeJobCtx(dbtesting.NewTestDB("postgresql")), sink))
+
+	assert.Equal(t, map[string]int64{
+		"count outbox.relay.cycles{role=leader}":                       1,
+		"count outbox.relay.led":                                       1,
+		"fail outbox.relay.records{lane=unknown,outcome=deadlettered}": 1,
+		"fail outbox.relay.records{lane=unknown,outcome=failed}":       1,
+	}, sink.calls)
+}
+
+// TestRelayRunReportsUnrecordedDeliveries pins a delivery whose MarkPublished failed: no
+// lane's share, only outbox.relay.unrecorded.
+func TestRelayRunReportsUnrecordedDeliveries(t *testing.T) {
+	store := &fakeStore{
+		FetchPendingResult: []Record{{ID: "S1", Lane: LaneStream, Stream: "customers", PartitionKey: "acme"}},
+		MarkPublishedErr:   errors.New("ledger write failed"),
+	}
+	r, _, _ := newRelayWithLanes(store)
+	sink := newRecordingSink(t, r)
+
+	require.NoError(t, r.run(newFakeJobCtx(dbtesting.NewTestDB("postgresql")), sink))
+
+	assert.Equal(t, map[string]int64{
+		"count outbox.relay.cycles{role=leader}": 1,
+		"count outbox.relay.led":                 1,
+		"fail outbox.relay.unrecorded":           1,
+	}, sink.calls)
+}
+
+// TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan pins the declaration at its
+// edges, each registered with a real scheduler.
+func TestRelayCountersDeclareTheTenantOnlyWhenTheSchedulerCan(t *testing.T) {
+	tenantsNamed := func(n int) []string {
+		ids := make([]string, n)
+		for i := range ids {
+			ids[i] = fmt.Sprintf("t%04d", i)
+		}
+		return ids
+	}
+	tests := []struct {
+		name       string
+		tenants    []string
+		tenantAttr bool
+		reason     string
+	}{
+		{name: "control_plane_key", tenants: []string{""}},
+		{name: "static_tenants", tenants: []string{"t1", "t2"}, tenantAttr: true},
+		{name: "key_at_64_bytes", tenants: []string{strings.Repeat("k", 64)}, tenantAttr: true},
+		{name: "key_at_65_bytes", tenants: []string{strings.Repeat("k", 65)}, reason: "does not match ^[a-z0-9_-]{1,64}$"},
+		{name: "key_outside_the_value_charset", tenants: []string{"t1", "Acme.EU"}, reason: `tenant "Acme.EU" does not match`},
+		{name: "666_tenants", tenants: tenantsNamed(666), tenantAttr: true},
+		{name: "667_tenants", tenants: tenantsNamed(667), reason: "667 tenants make 2001 role and tenant series, over the 1999"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			counters, tenantAttr, reason := relayCounters(tt.tenants, []string{LaneAMQP, LaneStream})
+
+			assert.Equal(t, tt.tenantAttr, tenantAttr)
+			if tt.reason == "" {
+				assert.Empty(t, reason)
+			} else {
+				assert.Contains(t, reason, tt.reason)
+			}
+			cycles := []scheduler.AttrSet{{Key: "role", Values: []string{"leader", "follower", "unavailable"}}}
+			if tt.tenantAttr {
+				cycles = append(cycles, scheduler.AttrSet{Key: "tenant", Values: tt.tenants})
+			}
+			assert.Equal(t, []scheduler.Counter{
+				{Name: "outbox.relay.cycles", Attrs: cycles},
+				{Name: "outbox.relay.led"},
+				{Name: "outbox.relay.records", Attrs: []scheduler.AttrSet{
+					{Key: "outcome", Values: []string{"published", "failed", "parked", "deadlettered"}},
+					{Key: "lane", Values: []string{"amqp", "stream", "unknown"}},
+				}},
+				{Name: "outbox.relay.unrecorded"},
+			}, counters)
+			require.NoError(t, newWindowScheduler(t).FixedRate("outbox-relay",
+				scheduler.Windowed(func(scheduler.JobContext, *scheduler.Recorder) error { return nil }, counters...), time.Hour))
+		})
+	}
+}
+
+// TestRecordingSinkRejectsUndeclaredCalls is the fake sink's negative control: a check that
+// accepted every call would let every projection test above pass vacuously.
+func TestRecordingSinkRejectsUndeclaredCalls(t *testing.T) {
+	r, _, _ := newRelayWithLanes(&fakeStore{})
+	sink := newRecordingSink(t, r)
+	tests := []struct {
+		name  string
+		named string
+		n     int64
+		attrs []attribute.KeyValue
+	}{
+		{name: "undeclared_counter", named: "outbox.relay.cycle", n: 1, attrs: []attribute.KeyValue{attribute.String("role", "leader")}},
+		{name: "negative_count", named: "outbox.relay.led", n: -1},
+		{
+			name: "tenant_under_the_control_plane_key", named: "outbox.relay.cycles", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("role", "leader"), attribute.String("tenant", "t1")},
+		},
+		{name: "missing_key", named: "outbox.relay.records", n: 1, attrs: []attribute.KeyValue{attribute.String("outcome", "published")}},
+		{
+			name: "undeclared_key", named: "outbox.relay.records", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "published"), attribute.String("role", "leader")},
+		},
+		{
+			name: "repeated_key", named: "outbox.relay.records", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "published"), attribute.String("outcome", "failed")},
+		},
+		{
+			name: "undeclared_value", named: "outbox.relay.records", n: 1,
+			attrs: []attribute.KeyValue{attribute.String("outcome", "dead_lettered"), attribute.String("lane", "amqp")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, sink.declares(tt.named, tt.n, tt.attrs))
+		})
+	}
+	assert.True(t, sink.declares("outbox.relay.records", 0,
+		[]attribute.KeyValue{attribute.String("lane", "amqp"), attribute.String("outcome", "published")}),
+		"a declared call in any key order, with n == 0, passes")
 }
