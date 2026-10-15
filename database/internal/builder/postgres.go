@@ -100,6 +100,9 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 		return "", nil, fmt.Errorf("BuildUpsert: %w", err)
 	}
 	cols := qb.escapeIdentifiers(orderedCols)
+	for i, col := range cols {
+		cols[i] = escapeQuestionMarks(col)
+	}
 
 	insertBuilder := qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
 		Columns(cols...).
@@ -113,7 +116,7 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	escapedCC := qb.escapeIdentifiers(cc)
 	updateCols := sortedKeys(updateKeys)
 
-	onConflict := "ON CONFLICT (" + suffixIdentifier(strings.Join(escapedCC, ", ")) + ")"
+	onConflict := "ON CONFLICT (" + escapeQuestionMarks(strings.Join(escapedCC, ", ")) + ")"
 	if len(updateCols) == 0 {
 		return insertBuilder.Suffix(onConflict + " DO NOTHING").ToSql()
 	}
@@ -125,14 +128,14 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	// them and broke update columns absent from the insert (EXCLUDED.<not-inserted>).
 	setParts := make([]string, len(updateCols))
 	for i, col := range updateCols {
-		setParts[i] = suffixIdentifier(qb.EscapeIdentifier(col)) + " = ?"
+		setParts[i] = escapeQuestionMarks(qb.EscapeIdentifier(col)) + " = ?"
 	}
 	return insertBuilder.Suffix(onConflict+" DO UPDATE SET "+strings.Join(setParts, ", "), updateVals...).ToSql()
 }
 
-// suffixIdentifier prepares a rendered identifier for the ON CONFLICT suffix,
-// which goes through squirrel's placeholder pass: the pass does not know
-// quotes, so each `?` is escaped as `??` to come out as written.
-func suffixIdentifier(identifier string) string {
+// escapeQuestionMarks prepares a rendered identifier for squirrel's placeholder
+// pass, which walks the INSERT column list and the ON CONFLICT suffix alike: the
+// pass does not know quotes, so each `?` is escaped as `??` to come out as written.
+func escapeQuestionMarks(identifier string) string {
 	return strings.ReplaceAll(identifier, "?", "??")
 }

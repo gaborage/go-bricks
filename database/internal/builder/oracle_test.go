@@ -1108,6 +1108,46 @@ func TestBuildUpsertOracleKeepsAQuestionMarkInAnUpdateOnlyQuotedKey(t *testing.T
 	}
 }
 
+// TestBuildUpsertOracleKeepsAQuestionMarkInAQuotedInsertKey pins that the
+// hand-built MERGE renders a `?` inside a quoted insert or conflict key as
+// written: it never runs a placeholder pass, so nothing is escaped.
+func TestBuildUpsertOracleKeepsAQuestionMarkInAQuotedInsertKey(t *testing.T) {
+	cases := map[string]struct {
+		conflict []string
+		insert   map[string]any
+		wantSQL  string
+	}{
+		"single_question_mark": {
+			conflict: []string{"id"},
+			insert:   map[string]any{`"a?b"`: 1, "id": 2},
+			wantSQL: `MERGE INTO t target USING (SELECT :1 AS "a?b", :2 AS id FROM dual) source ON (target.id = source.id)` +
+				` WHEN MATCHED THEN UPDATE SET name = :3 WHEN NOT MATCHED THEN INSERT ("a?b", id) VALUES (source."a?b", source.id)`,
+		},
+		"doubled_question_mark": {
+			conflict: []string{"id"},
+			insert:   map[string]any{`"a??b"`: 1, "id": 2},
+			wantSQL: `MERGE INTO t target USING (SELECT :1 AS "a??b", :2 AS id FROM dual) source ON (target.id = source.id)` +
+				` WHEN MATCHED THEN UPDATE SET name = :3 WHEN NOT MATCHED THEN INSERT ("a??b", id) VALUES (source."a??b", source.id)`,
+		},
+		"question_mark_in_the_conflict_key": {
+			conflict: []string{`"a?b"`},
+			insert:   map[string]any{`"a?b"`: 1, "name": 2},
+			wantSQL: `MERGE INTO t target USING (SELECT :1 AS "a?b", :2 AS name FROM dual) source ON (target."a?b" = source."a?b")` +
+				` WHEN MATCHED THEN UPDATE SET name = :3 WHEN NOT MATCHED THEN INSERT ("a?b", name) VALUES (source."a?b", source.name)`,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			sql, args, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", tc.conflict, tc.insert, map[string]any{"name": 3})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSQL, sql)
+			assert.Equal(t, []any{1, 2, 3}, args)
+		})
+	}
+}
+
 // TestBuildUpsertOracleBindsAPointerToARawExpression pins that a pointer to an
 // expression stays a bound value in either map, as Set and Values bind one.
 func TestBuildUpsertOracleBindsAPointerToARawExpression(t *testing.T) {

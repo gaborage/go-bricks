@@ -257,15 +257,13 @@ func TestBuildPostgreSQLUpsertRefusesABlankRawExpression(t *testing.T) {
 
 // TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedConflictKey pins that the
 // ON CONFLICT target keeps a `?` in a quoted key as written, and that the SET
-// placeholder continues the statement's own numbering after it. The INSERT
-// column list is not pinned: squirrel's pass rewrites a `?` there, as it did
-// before #2120.
+// placeholder continues the statement's own numbering after it.
 func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedConflictKey(t *testing.T) {
 	cases := map[string]struct {
 		update     map[string]any
 		wantSuffix string
 	}{
-		"do_update":  {update: map[string]any{"n": "y"}, wantSuffix: ` ON CONFLICT ("a?b") DO UPDATE SET "n" = $4`},
+		"do_update":  {update: map[string]any{"n": "y"}, wantSuffix: ` ON CONFLICT ("a?b") DO UPDATE SET "n" = $3`},
 		"do_nothing": {update: nil, wantSuffix: ` ON CONFLICT ("a?b") DO NOTHING`},
 	}
 
@@ -276,6 +274,43 @@ func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedConflictKey(t *testing.
 
 			require.NoError(t, err)
 			assert.True(t, strings.HasSuffix(sql, tc.wantSuffix), "got %s", sql)
+		})
+	}
+}
+
+// TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedInsertKey pins that the
+// INSERT column list keeps a `?` in a quoted key as written, so the statement's
+// placeholders number its values alone.
+func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedInsertKey(t *testing.T) {
+	cases := map[string]struct {
+		conflict []string
+		insert   map[string]any
+		wantSQL  string
+	}{
+		"single_question_mark": {
+			conflict: []string{"id"},
+			insert:   map[string]any{`"a?b"`: 1, "id": 2},
+			wantSQL:  `INSERT INTO t ("a?b","id") VALUES ($1,$2) ON CONFLICT ("id") DO UPDATE SET "name" = $3`,
+		},
+		"doubled_question_mark": {
+			conflict: []string{"id"},
+			insert:   map[string]any{`"a??b"`: 1, "id": 2},
+			wantSQL:  `INSERT INTO t ("a??b","id") VALUES ($1,$2) ON CONFLICT ("id") DO UPDATE SET "name" = $3`,
+		},
+		"question_mark_in_the_conflict_key": {
+			conflict: []string{`"a?b"`},
+			insert:   map[string]any{`"a?b"`: 1, "name": 2},
+			wantSQL:  `INSERT INTO t ("a?b","name") VALUES ($1,$2) ON CONFLICT ("a?b") DO UPDATE SET "name" = $3`,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", tc.conflict, tc.insert, map[string]any{"name": 3})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSQL, sql)
+			assert.Equal(t, []any{1, 2, 3}, args)
 		})
 	}
 }
