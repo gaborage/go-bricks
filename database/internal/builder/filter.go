@@ -147,20 +147,24 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 }
 
 // In creates an IN filter (column IN (values...)).
-// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
+// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
+// in a one-element list. A RawExpression is spliced as `column IN (<sql>)`, with no
+// placeholder and no argument.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
 //
 //	f.In("status", []string{"active", "pending"})  // IN with multiple values
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
+//	f.In("day", qb.MustExpr("CURRENT_DATE"))       // day IN (CURRENT_DATE)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	// Empty slice special case: generate "1=0" to ensure no matches
 	return inListPredicate(ff.qb, column, values, false, wrapFilter)
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
-// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
+// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
+// in a one-element list. A RawExpression is spliced as `column NOT IN (<sql>)`.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:

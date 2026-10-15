@@ -454,6 +454,23 @@ func (w *operandWalk) askValuer(value *any) (asked bool, err error) {
 	return true, nil
 }
 
+// expressionOperand recognizes the one predicate operand that is spliced rather
+// than resolved and bound: a dbtypes.RawExpression, whose SQL goes into the
+// predicate verbatim with no placeholder and no argument. It is validated HERE,
+// at consumption, because RawExpression is a plain struct a caller can build
+// without Expr() (#1153). Any other operand reports isExpr false and goes on to
+// resolveOperand.
+func expressionOperand(value any) (sql string, isExpr bool, err error) {
+	expr, isExpr := value.(dbtypes.RawExpression)
+	if !isExpr {
+		return "", false, nil
+	}
+	if validateErr := expr.Validate(); validateErr != nil {
+		return "", true, validateErr
+	}
+	return expr.SQL, true, nil
+}
+
 // resolveOperand mirrors the prologue of squirrel's Eq.toSQL — resolve a
 // driver.Valuer, then dereference a pointer (a nil one becoming an untyped nil)
 // — and classifies the RESULT the way squirrel's own isListType does.
@@ -612,7 +629,7 @@ func resolveListOperands(op string, values any) (normalized any, empty bool, err
 
 	v := reflect.ValueOf(values)
 	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
-		element, _, resolveErr := resolveOperand(values)
+		element, nullOrList, resolveErr := resolveOperand(values)
 		if resolveErr != nil {
 			return nil, false, wrapOperandErr(op, resolveErr)
 		}
@@ -620,10 +637,15 @@ func resolveListOperands(op string, values any) (normalized any, empty bool, err
 		// POINTER to a slice resolves to the slice, and wrapping that as a
 		// single element left squirrel expanding only the outer list — `IN (?)`
 		// bound to a whole []int, which the driver rejects. A resolved nil stays
-		// one NULL element, and a []byte stays one operand, both handled by the
-		// list path below.
+		// one NULL element. Anything else is a scalar of whatever type — an
+		// `int`, a `*int` resolved to its element, a struct — and is wrapped
+		// here; handing it to the list path asked a non-list for its element
+		// type and panicked (#2119).
 		if element == nil {
 			return []any{nil}, false, nil
+		}
+		if !nullOrList {
+			return []any{element}, false, nil
 		}
 		return resolveList(op, reflect.ValueOf(element), element)
 	}

@@ -2037,3 +2037,213 @@ func TestInExpandsAPointerToASlice(t *testing.T) {
 		assert.Equal(t, "(1=0)", gotSQL)
 	})
 }
+
+// TestInWrapsAResolvedScalarInAOneElementList pins the IN door's scalar
+// contract for an operand that is not a driver.Value: `int` reached the list
+// path unwrapped and panicked on the element type of a non-list (#2119).
+func TestInWrapsAResolvedScalarInAOneElementList(t *testing.T) {
+	vendors := []struct {
+		vendor  string
+		wantSQL string
+	}{
+		{vendor: dbtypes.PostgreSQL, wantSQL: "SELECT * FROM t WHERE c IN ($1)"},
+		{vendor: dbtypes.Oracle, wantSQL: "SELECT * FROM t WHERE c IN (:1)"},
+	}
+
+	for _, v := range vendors {
+		t.Run(v.vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(v.vendor)
+			var (
+				sql  string
+				args []any
+				err  error
+			)
+			require.NotPanics(t, func() {
+				sql, args, err = qb.Select("*").From("t").Where(qb.Filter().In("c", 5)).ToSQL()
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, v.wantSQL, sql)
+			assert.Equal(t, []any{5}, args)
+		})
+	}
+}
+
+// inListDoor renders one of the four IN doors inside a full SELECT, so the
+// vendor's own placeholder ($1 / :1) is what gets asserted.
+type inListDoor struct {
+	name      string
+	clause    string
+	predicate string
+	emptySet  string
+	build     func(qb *QueryBuilder, values any) (string, []any, error)
+}
+
+// render spells the full statement around one rendered predicate.
+func (d inListDoor) render(predicate string) string {
+	return d.clause + " " + predicate
+}
+
+func inListDoors() []inListDoor {
+	return []inListDoor{
+		{
+			name: "filter_in", clause: "SELECT * FROM t WHERE", predicate: "c IN", emptySet: "(1=0)",
+			build: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Select("*").From("t").Where(qb.Filter().In("c", values)).ToSQL()
+			},
+		},
+		{
+			name: "filter_not_in", clause: "SELECT * FROM t WHERE", predicate: "c NOT IN", emptySet: "(1=1)",
+			build: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Select("*").From("t").Where(qb.Filter().NotIn("c", values)).ToSQL()
+			},
+		},
+		{
+			name: "join_filter_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c IN", emptySet: "(1=0)",
+			build: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().In("c", values)).ToSQL()
+			},
+		},
+		{
+			name: "join_filter_not_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c NOT IN", emptySet: "(1=1)",
+			build: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().NotIn("c", values)).ToSQL()
+			},
+		},
+	}
+}
+
+var inListVendors = []struct {
+	vendor      string
+	placeholder string
+}{
+	{vendor: dbtypes.PostgreSQL, placeholder: "$1"},
+	{vendor: dbtypes.Oracle, placeholder: ":1"},
+}
+
+type inScalarStatus string
+
+type inScalarPoint struct{ X int }
+
+func TestInDoorsWrapEveryResolvedScalarType(t *testing.T) {
+	five := 5
+	scalars := []struct {
+		name  string
+		value any
+		want  any
+	}{
+		{name: "int", value: 5, want: 5},
+		{name: "int32", value: int32(5), want: int32(5)},
+		{name: "uint", value: uint(5), want: uint(5)},
+		{name: "float32", value: float32(1.5), want: float32(1.5)},
+		{name: "pointer_to_int", value: &five, want: 5},
+		{name: "defined_string_type", value: inScalarStatus("active"), want: inScalarStatus("active")},
+		{name: "non_valuer_struct", value: inScalarPoint{X: 1}, want: inScalarPoint{X: 1}},
+	}
+
+	for _, v := range inListVendors {
+		for _, door := range inListDoors() {
+			for _, sc := range scalars {
+				t.Run(v.vendor+"_"+door.name+"_"+sc.name, func(t *testing.T) {
+					var (
+						sql  string
+						args []any
+						err  error
+					)
+					require.NotPanics(t, func() {
+						sql, args, err = door.build(NewQueryBuilder(v.vendor), sc.value)
+					})
+
+					require.NoError(t, err)
+					assert.Equal(t, door.render(door.predicate+" ("+v.placeholder+")"), sql)
+					assert.Equal(t, []any{sc.want}, args)
+				})
+			}
+		}
+	}
+}
+
+func TestInDoorsSpliceARawExpression(t *testing.T) {
+	for _, v := range inListVendors {
+		for _, door := range inListDoors() {
+			t.Run(v.vendor+"_"+door.name, func(t *testing.T) {
+				qb := NewQueryBuilder(v.vendor)
+				var (
+					sql  string
+					args []any
+					err  error
+				)
+				require.NotPanics(t, func() {
+					// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword, no user input
+					sql, args, err = door.build(qb, qb.MustExpr("CURRENT_DATE"))
+				})
+
+				require.NoError(t, err)
+				assert.Equal(t, door.render(door.predicate+" (CURRENT_DATE)"), sql)
+				assert.Empty(t, args)
+			})
+		}
+	}
+}
+
+func TestInDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
+	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
+	blank := dbtypes.RawExpression{SQL: "  "}
+
+	for _, v := range inListVendors {
+		for _, door := range inListDoors() {
+			t.Run(v.vendor+"_"+door.name, func(t *testing.T) {
+				var err error
+				require.NotPanics(t, func() {
+					_, _, err = door.build(NewQueryBuilder(v.vendor), blank)
+				})
+
+				require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+			})
+		}
+	}
+}
+
+// TestInDoorsKeepTheirOutputForOperandsThatAlreadyRendered pins the shapes the
+// scalar wrap and the expression splice must not move.
+func TestInDoorsKeepTheirOutputForOperandsThatAlreadyRendered(t *testing.T) {
+	raw := []byte("raw")
+	ids := []int{1, 2}
+
+	for _, v := range inListVendors {
+		second := "$2"
+		if v.vendor == dbtypes.Oracle {
+			second = ":2"
+		}
+		one := "(" + v.placeholder + ")"
+		two := "(" + v.placeholder + "," + second + ")"
+
+		for _, door := range inListDoors() {
+			operands := []struct {
+				name     string
+				value    any
+				wantPred string
+				wantArgs []any
+			}{
+				{name: "int64", value: int64(5), wantPred: door.predicate + " " + one, wantArgs: []any{int64(5)}},
+				{name: "string", value: "a", wantPred: door.predicate + " " + one, wantArgs: []any{"a"}},
+				{name: "byte_slice", value: raw, wantPred: door.predicate + " " + one, wantArgs: []any{raw}},
+				{name: "untyped_nil", value: nil, wantPred: door.emptySet, wantArgs: nil},
+				{name: "typed_nil_pointer", value: (*int)(nil), wantPred: door.predicate + " " + one, wantArgs: []any{nil}},
+				{name: "slice", value: ids, wantPred: door.predicate + " " + two, wantArgs: []any{1, 2}},
+				{name: "pointer_to_slice", value: &ids, wantPred: door.predicate + " " + two, wantArgs: []any{1, 2}},
+				{name: "empty_slice", value: []int{}, wantPred: door.emptySet, wantArgs: nil},
+			}
+
+			for _, op := range operands {
+				t.Run(v.vendor+"_"+door.name+"_"+op.name, func(t *testing.T) {
+					sql, args, err := door.build(NewQueryBuilder(v.vendor), op.value)
+
+					require.NoError(t, err)
+					assert.Equal(t, door.render(op.wantPred), sql)
+					assert.Equal(t, op.wantArgs, args)
+				})
+			}
+		}
+	}
+}

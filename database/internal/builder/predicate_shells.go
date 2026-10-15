@@ -45,8 +45,9 @@ func combineLogical[T squirrel.Sqlizer, C logicalContainer](
 }
 
 // inListPredicate is the shared body of Filter.In/NotIn and
-// JoinFilter.In/NotIn: quote the column, resolve the list operand through the
-// same normalization the compare doors use (nil/pointer/Valuer elements,
+// JoinFilter.In/NotIn: quote the column, splice a RawExpression operand as
+// `col IN (<sql>)`, otherwise resolve the list operand through the same
+// normalization the compare doors use (nil/pointer/Valuer elements,
 // scalar-to-one-element wrapping), and render either squirrel's own
 // empty-list constant or the column-to-list comparison.
 //
@@ -75,6 +76,13 @@ func inListPredicate[T squirrel.Sqlizer](
 	op, emptySQL := "IN", "(1=0)"
 	if negate {
 		op, emptySQL = "NOT IN", "(1=1)"
+	}
+	exprSQL, isExpr, err := expressionOperand(values)
+	if err != nil {
+		return wrap(errorSqlizer{err: err})
+	}
+	if isExpr {
+		return wrap(squirrel.Expr(quotedColumn + " " + op + " (" + exprSQL + ")"))
 	}
 	normalized, empty, err := resolveListOperands(op, values)
 	if err != nil {

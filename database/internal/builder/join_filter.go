@@ -237,20 +237,24 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 }
 
 // In creates an IN condition (column IN (values...)).
-// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
+// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
+// in a one-element list. A RawExpression is spliced as `column IN (<sql>)`, with no
+// placeholder and no argument.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
 //
 //	jf.In("status", []string{"active", "pending"})  // IN with multiple values
 //	jf.In("status", "active")                       // IN with single value (wrapped automatically)
+//	jf.In("day", qb.MustExpr("CURRENT_DATE"))       // day IN (CURRENT_DATE)
 func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 	// Empty IN list - always false
 	return inListPredicate(jff.qb, column, values, false, wrapJoinFilter)
 }
 
 // NotIn creates a NOT IN condition (column NOT IN (values...)).
-// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
+// Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
+// in a one-element list. A RawExpression is spliced as `column NOT IN (<sql>)`.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
