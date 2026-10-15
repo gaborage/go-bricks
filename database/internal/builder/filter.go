@@ -81,6 +81,9 @@ func (ff *FilterFactory) equality(column, op string, value any) dbtypes.Filter {
 	if err != nil {
 		return filterOf(nil, wrapOperandErr(op, err))
 	}
+	if _, isExpr, exprErr := expressionOperand(op, resolved, filterFamily); isExpr {
+		return filterOf(nil, exprErr)
+	}
 	if op == opEqual {
 		return filterOf(ff.qb.Eq(column, resolved))
 	}
@@ -91,6 +94,8 @@ func (ff *FilterFactory) equality(column, op string, value any) dbtypes.Filter {
 // Column names are automatically quoted according to database vendor rules.
 // A nil operand — untyped, a typed nil pointer, or a Valuer reporting NULL —
 // renders IS NULL.
+// A RawExpression, or a non-nil pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
 	return ff.equality(column, opEqual, value)
 }
@@ -98,6 +103,8 @@ func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
 // NotEq creates a not-equal filter (column <> value).
 // Column names are automatically quoted according to database vendor rules.
 // A nil operand renders IS NOT NULL.
+// A RawExpression, or a non-nil pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
 	return ff.equality(column, opNotEqual, value)
 }
@@ -105,8 +112,10 @@ func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
 // Lt creates a less-than filter (column < value).
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
+// A RawExpression, or a non-nil pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand("<", value)
+	resolved, _, err := orderingOperand("<", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -116,8 +125,10 @@ func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
 // Lte creates a less-than-or-equal filter (column <= value).
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
+// A RawExpression, or a non-nil pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand("<=", value)
+	resolved, _, err := orderingOperand("<=", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -127,8 +138,10 @@ func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
 // Gt creates a greater-than filter (column > value).
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
+// A RawExpression, or a non-nil pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand(">", value)
+	resolved, _, err := orderingOperand(">", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -138,8 +151,10 @@ func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
 // Gte creates a greater-than-or-equal filter (column >= value).
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
+// A RawExpression, or a non-nil pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand(">=", value)
+	resolved, _, err := orderingOperand(">=", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -243,6 +258,8 @@ func (ff *FilterFactory) NotNull(column string) dbtypes.Filter {
 
 // Between creates a BETWEEN filter (column BETWEEN lowerBound AND upperBound).
 // Column names are automatically quoted according to database vendor rules.
+// A RawExpression bound, or a non-nil pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbtypes.Filter {
 	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
 	if err != nil {
@@ -251,11 +268,11 @@ func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbty
 	// A BETWEEN bound is an ordering operand, so it takes the ordering contract:
 	// there is no rendering of `col >= NULL`, and a nil pointer to a Valuer would
 	// otherwise reach squirrel's GtOrEq prologue and panic (#1209).
-	lower, err := orderingOperand(">=", lowerBound)
+	lower, _, err := orderingOperand(">=", lowerBound, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
-	upper, err := orderingOperand("<=", upperBound)
+	upper, _, err := orderingOperand("<=", upperBound, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}

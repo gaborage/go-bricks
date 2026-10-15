@@ -137,28 +137,26 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 	return JoinFilter{sqlizer: columnComparison{left, ">=", right}}
 }
 
-// compare renders `<column> <op> <value>`: a RawExpression is interpolated
-// verbatim with no placeholder, any other operand is resolved ONCE by
-// resolveOperand and it is the RESOLVED value that is classified, rendered and
-// bound. The expression is validated HERE, not only in Expr() — RawExpression
-// is a plain struct, so a caller can hand this door a literal that never passed
-// through the constructor (#1153).
+// compare renders `<column> <op> <value>`: the operand is resolved ONCE by
+// resolveOperand and it is the RESOLVED value that is judged, classified,
+// rendered and bound — a RawExpression, or a pointer to one, is validated and
+// interpolated verbatim with no placeholder by expressionOperand.
 func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.JoinFilter {
 	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
 	if err != nil {
 		return joinFilterErr(err)
 	}
 
-	if expr, ok := value.(dbtypes.RawExpression); ok {
-		if err := expr.Validate(); err != nil {
-			return joinFilterErr(err)
-		}
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " " + op + " " + expr.SQL)}
-	}
-
 	resolved, nullOrList, resolveErr := resolveOperand(value)
 	if resolveErr != nil {
 		return joinFilterErr(wrapOperandErr(op, resolveErr))
+	}
+	exprSQL, isExpr, exprErr := expressionOperand(op, resolved, joinFilterFamily)
+	if exprErr != nil {
+		return joinFilterErr(exprErr)
+	}
+	if isExpr {
+		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " " + op + " " + exprSQL)}
 	}
 
 	// A nil or slice operand delegates to the SAME construct f.Eq/f.NotEq use, so
@@ -332,45 +330,34 @@ func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any)
 	}}
 }
 
-// betweenBound is one resolved BETWEEN bound: either a RawExpression to splice
-// verbatim, or an ordering operand already resolved to the value that will be
-// bound.
+// betweenBound is one resolved BETWEEN bound: either the SQL of a RawExpression
+// to splice verbatim, or an ordering operand already resolved to the value that
+// will be bound.
 type betweenBound struct {
 	exprSQL string
 	value   any
-	isExpr  bool
 }
 
-// resolveBetweenBound validates an expression bound or resolves a value one.
-//
-// An expression is interpolated verbatim, so it is validated at this door for
-// the same reason compare() validates its value: RawExpression is a plain
-// struct and a caller can hand one over that never passed through Expr()
-// (#1153). A value bound is an ordering operand wherever it ends up rendered —
+// resolveBetweenBound resolves a bound through orderingOperand, which returns
+// the SQL of an expression — or a pointer to one — for this family to splice. A
+// value bound is an ordering operand wherever it ends up rendered —
 // squirrel.Expr, the construct a mixed pair uses, resolves nothing at build
 // time, so a bound spliced into it unresolved reached the driver as written: a
 // nil rendered `col <= ?` bound to NULL, matching nothing, and a nil pointer to
 // a Valuer was dereferenced at EXEC.
 func resolveBetweenBound(op string, bound any) (resolved betweenBound, err error) {
-	if expr, isExpr := bound.(dbtypes.RawExpression); isExpr {
-		if validateErr := expr.Validate(); validateErr != nil {
-			return betweenBound{}, validateErr
-		}
-		return betweenBound{exprSQL: expr.SQL, isExpr: true}, nil
-	}
-
-	value, operandErr := orderingOperand(op, bound)
+	value, exprSQL, operandErr := orderingOperand(op, bound, joinFilterFamily)
 	if operandErr != nil {
 		return betweenBound{}, operandErr
 	}
-	return betweenBound{value: value}, nil
+	return betweenBound{exprSQL: exprSQL, value: value}, nil
 }
 
 // sqlizer renders this bound as `<column> <op> …`: an expression inline with no
 // placeholder and no argument, a value as a placeholder bound to the value the
 // door already resolved.
 func (b betweenBound) sqlizer(quotedColumn, op string) squirrel.Sqlizer {
-	if b.isExpr {
+	if b.exprSQL != "" {
 		return squirrel.Expr(quotedColumn + " " + op + " " + b.exprSQL)
 	}
 	return squirrel.Expr(quotedColumn+" "+op+" ?", b.value)

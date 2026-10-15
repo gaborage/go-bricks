@@ -95,7 +95,10 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	// builder's own output by the rule meant for a caller's input, and would
 	// validate the table a second time.
 	orderedCols := sortedKeys(insertColumns)
-	vals := valuesByKeyOrder(insertColumns, orderedCols)
+	vals, err := valueCells(valuesByKeyOrder(insertColumns, orderedCols), keyLabel(orderedCols))
+	if err != nil {
+		return "", nil, fmt.Errorf("BuildUpsert: %w", err)
+	}
 	cols := qb.escapeIdentifiers(orderedCols)
 
 	insertBuilder := qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
@@ -110,35 +113,26 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	escapedCC := qb.escapeIdentifiers(cc)
 	updateCols := sortedKeys(updateKeys)
 
-	var conflictClause string
-	var updateVals []any
+	onConflict := "ON CONFLICT (" + suffixIdentifier(strings.Join(escapedCC, ", ")) + ")"
 	if len(updateCols) == 0 {
-		// If no update columns are provided, do nothing on conflict
-		conflictClause = "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO NOTHING"
-	} else {
-		// Bind the caller's update values as parameters rather than reusing EXCLUDED (the
-		// proposed-insert values). EXCLUDED silently ignored the updateColumns values —
-		// diverging from Oracle's MERGE — and broke update columns absent from the insert
-		// set (EXCLUDED.<not-inserted> references a non-existent column). The update
-		// placeholders continue numbering after the insert placeholders ($len(vals)+i).
-		updateVals = valuesByKeyOrder(updateKeys, updateCols)
-		setParts := make([]string, 0, len(updateCols))
-		for i, col := range updateCols {
-			escapedCol := qb.EscapeIdentifier(col)
-			setParts = append(setParts, fmt.Sprintf("%s = $%d", escapedCol, len(vals)+1+i))
-		}
-		conflictClause = "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO UPDATE SET " + strings.Join(setParts, ", ")
+		return insertBuilder.Suffix(onConflict + " DO NOTHING").ToSql()
 	}
-
-	// Generate the final SQL with conflict resolution
-	sql, args, err := insertBuilder.ToSql()
+	updateVals, err := valueCells(valuesByKeyOrder(updateKeys, updateCols), keyLabel(updateCols))
 	if err != nil {
-		return "", nil, err
+		return "", nil, fmt.Errorf("BuildUpsert: %w", err)
 	}
+	// Bind the caller's update values rather than reusing EXCLUDED, which ignored
+	// them and broke update columns absent from the insert (EXCLUDED.<not-inserted>).
+	setParts := make([]string, len(updateCols))
+	for i, col := range updateCols {
+		setParts[i] = suffixIdentifier(qb.EscapeIdentifier(col)) + " = ?"
+	}
+	return insertBuilder.Suffix(onConflict+" DO UPDATE SET "+strings.Join(setParts, ", "), updateVals...).ToSql()
+}
 
-	// Append the update values (bound by the placeholders above) after the insert args.
-	args = append(args, updateVals...)
-
-	query = sql + " " + conflictClause
-	return query, args, nil
+// suffixIdentifier prepares a rendered identifier for the ON CONFLICT suffix,
+// which goes through squirrel's placeholder pass: the pass does not know
+// quotes, so each `?` is escaped as `??` to come out as written.
+func suffixIdentifier(identifier string) string {
+	return strings.ReplaceAll(identifier, "?", "??")
 }

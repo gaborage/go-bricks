@@ -1029,3 +1029,113 @@ func TestStructDoorsRefuseDbTagOnUnknownVendor(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildUpsertOracleSplicesARawExpression pins #2120: an expression in
+// either map is spliced into the MERGE, and only the bound values number
+// placeholders, contiguously across USING and UPDATE SET.
+func TestBuildUpsertOracleSplicesARawExpression(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword, no user input
+	now := dbtypes.MustExpr("CURRENT_TIMESTAMP")
+
+	sql, args, err := qb.BuildUpsert("t", []string{"id"},
+		map[string]any{"id": 1, "created": now, "name": "a"},
+		map[string]any{"name": "b", "updated": now})
+
+	require.NoError(t, err)
+	assert.Equal(t, "MERGE INTO t target USING (SELECT CURRENT_TIMESTAMP AS created, :1 AS id, :2 AS name FROM dual) source"+
+		" ON (target.id = source.id) WHEN MATCHED THEN UPDATE SET name = :3, updated = CURRENT_TIMESTAMP"+
+		" WHEN NOT MATCHED THEN INSERT (created, id, name) VALUES (source.created, source.id, source.name)", sql)
+	assert.Equal(t, []any{1, "a", "b"}, args)
+}
+
+func TestBuildUpsertOracleRefusesAnAliasedRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword with an alias, never rendered
+	aliased := dbtypes.MustExpr("CURRENT_TIMESTAMP", "ts")
+	cases := map[string]struct{ insert, update map[string]any }{
+		"in_insert_columns": {insert: map[string]any{"id": 1, "created": aliased}, update: map[string]any{"name": "b"}},
+		"in_update_columns": {insert: map[string]any{"id": 1}, update: map[string]any{"updated": aliased}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"}, tc.insert, tc.update)
+
+			require.ErrorIs(t, err, dbtypes.ErrAliasInValue)
+		})
+	}
+}
+
+// TestBuildUpsertOracleResolvesTheEscapedPlaceholderLikeSet pins that a MERGE
+// cell renders an expression's `??` escape the way Oracle's Set does.
+func TestBuildUpsertOracleResolvesTheEscapedPlaceholderLikeSet(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	// SECURITY: Manual SQL review completed - literal expression with an escaped question mark, no user input
+	escaped := dbtypes.RawExpression{SQL: "NVL(x, '??')"}
+
+	setSQL, _, err := qb.Update("t").Set("b", escaped).Where(qb.Filter().Eq("id", 1)).ToSQL()
+	require.NoError(t, err)
+	require.Equal(t, "UPDATE t SET b = NVL(x, '?') WHERE id = :1", setSQL)
+
+	sql, args, err := qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1, "a": escaped}, map[string]any{"b": escaped})
+
+	require.NoError(t, err)
+	assert.Equal(t, "MERGE INTO t target USING (SELECT NVL(x, '?') AS a, :1 AS id FROM dual) source"+
+		" ON (target.id = source.id) WHEN MATCHED THEN UPDATE SET b = NVL(x, '?')"+
+		" WHEN NOT MATCHED THEN INSERT (a, id) VALUES (source.a, source.id)", sql)
+	assert.Equal(t, []any{1}, args)
+}
+
+// TestBuildUpsertOracleKeepsAQuestionMarkInAnUpdateOnlyQuotedKey pins that the
+// hand-built MERGE renders a `?` inside a quoted update-column identifier as
+// written.
+func TestBuildUpsertOracleKeepsAQuestionMarkInAnUpdateOnlyQuotedKey(t *testing.T) {
+	cases := map[string]string{
+		"single_question_mark":  `"a?b"`,
+		"doubled_question_mark": `"a??b"`,
+	}
+
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
+			sql, args, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"},
+				map[string]any{"id": 1}, map[string]any{key: 2})
+
+			require.NoError(t, err)
+			assert.Equal(t, "MERGE INTO t target USING (SELECT :1 AS id FROM dual) source ON (target.id = source.id)"+
+				" WHEN MATCHED THEN UPDATE SET "+key+" = :2 WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)", sql)
+			assert.Equal(t, []any{1, 2}, args)
+		})
+	}
+}
+
+// TestBuildUpsertOracleBindsAPointerToARawExpression pins that a pointer to an
+// expression stays a bound value in either map, as Set and Values bind one.
+func TestBuildUpsertOracleBindsAPointerToARawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword, bound not rendered
+	now := dbtypes.MustExpr("CURRENT_TIMESTAMP")
+
+	sql, args, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"},
+		map[string]any{"id": 1, "created": &now}, map[string]any{"updated": &now})
+
+	require.NoError(t, err)
+	assert.Equal(t, "MERGE INTO t target USING (SELECT :1 AS created, :2 AS id FROM dual) source ON (target.id = source.id)"+
+		" WHEN MATCHED THEN UPDATE SET updated = :3 WHEN NOT MATCHED THEN INSERT (created, id) VALUES (source.created, source.id)", sql)
+	assert.Equal(t, []any{&now, 1, &now}, args)
+}
+
+func TestBuildUpsertOracleRefusesABlankRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
+	blank := dbtypes.RawExpression{SQL: "  "}
+	cases := map[string]struct{ insert, update map[string]any }{
+		"in_insert_columns": {insert: map[string]any{"id": 1, "created": blank}, update: map[string]any{"name": "b"}},
+		"in_update_columns": {insert: map[string]any{"id": 1}, update: map[string]any{"updated": blank}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"}, tc.insert, tc.update)
+
+			require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+		})
+	}
+}

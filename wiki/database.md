@@ -143,7 +143,7 @@ func NewProductService(db database.Interface) *ProductService {
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`.
 
-**Operand contract (both families, nine value doors — `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `Between`, `In`, `NotIn`):** `f` and `jf` resolve an operand the same way before doing anything with it — a NIL pointer is nil before it is asked for anything, then a `driver.Valuer` becomes its `Value()`, then a pointer becomes its element — and classify the RESULT as NIL (`nil`, a typed nil pointer, a Valuer reporting NULL), a LIST (a slice or an array), or a SCALAR (anything else, `[]byte` and a Valuer holding a value included). A `dbtypes.RawExpression` operand (`qb.Expr(…)`) is spliced before all of this — its SQL goes into the predicate verbatim, with no placeholder and no argument — so it is neither resolved nor classified, except at `In`/`NotIn`, which judge it after resolution, so a non-nil pointer to one counts too: `jf.In`/`jf.NotIn` run `Validate()` and splice it, and `f.In`/`f.NotIn` refuse it with `dbtypes.ErrExpressionInFilter`.
+**Operand contract (both families, nine value doors — `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `Between`, `In`, `NotIn`):** `f` and `jf` resolve an operand the same way before doing anything with it — a NIL pointer is nil before it is asked for anything, then a `driver.Valuer` becomes its `Value()`, then a pointer becomes its element — and classify the RESULT as NIL (`nil`, a typed nil pointer, a Valuer reporting NULL), a LIST (a slice or an array), or a SCALAR (anything else, `[]byte` and a Valuer holding a value included). A `dbtypes.RawExpression` operand (`qb.Expr(…)`) is judged right after resolution, before classification, so a non-nil pointer to one counts too: the `jf` doors run `Validate()` and splice its SQL into the predicate verbatim, with no placeholder and no argument, and the `f` doors refuse it with `dbtypes.ErrExpressionInFilter` — a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
 
 - **Equality** (`Eq`, `NotEq`): NIL renders `IS NULL` / `IS NOT NULL`; a LIST expands to `IN (…)` / `NOT IN (…)`, an empty one to the constant `(1=0)` / `(1=1)`; a SCALAR is bound to `col op ?` whatever its Go type — a struct no driver accepts is passed through, not diagnosed.
 - **Ordering** (`Lt`, `Lte`, `Gt`, `Gte`) and both bounds of `Between`: a NIL or LIST operand is refused with `dbtypes.ErrOrderingOperandNotComparable` (exported from `database/types`, so `errors.Is` works from your own code), surfaced at `ToSQL()`. There is no rendering for `col < NULL` or for an ordering against a set, so the door fails closed rather than emitting SQL that silently matches nothing.
@@ -210,7 +210,7 @@ query := qb.Select("*").
 
 **Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Nine of them follow the *Operand contract* above — the six compare doors, `In`, `NotIn` and `Between`, whose two bounds are each resolved as an ordering operand. `Like` does NOT: it takes a string pattern, so there is no operand to resolve.
 
-**Expression Support:** All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders.
+**Expression Support:** Every `jf` value door — the six compare doors, both `Between` bounds, `In` and `NotIn` — splices a `qb.Expr()` expression, or a non-nil pointer to one, without placeholders. The `f` value doors refuse one with `dbtypes.ErrExpressionInFilter`; a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
 
 **Raw() Escape Hatch:** Use `jf.Raw()` only for conditions type-safe methods cannot express (e.g., spatial functions, exotic operators).
 
@@ -230,8 +230,8 @@ p := productCols.As("p")
 // SECURITY: Manual SQL review completed - constant literal, no user input
 subquery := qb.Select(qb.MustExpr("1")).From("reviews").
     Where(f.And(
-        // SECURITY: Manual SQL review completed - correlated column identifier from struct tags, no user input
-        f.Eq("reviews."+reviewCols.Col("ProductID"), qb.MustExpr(p.Col("ID"))),
+        // SECURITY: Manual SQL review completed - correlated column identifiers from struct tags, no user input
+        f.Raw("reviews."+reviewCols.Col("ProductID")+" = "+p.Col("ID")),
         f.Eq(reviewCols.Col("Rating"), 5),
     ))
 
@@ -405,17 +405,18 @@ the builder. The grammar will not accept a computed one.
   whitespace-only body — and the rest of a `RawExpression` is validated too: a
   struct literal built without the constructor is checked where it is consumed,
   so an empty SQL body, or an alias that is not an unquoted identifier, fails from
-  `ToSQL()` (ADR-082 2026-08-24 addendum). The alias was a six-substring denylist
-  until `[C61.9]` replaced it with the grammar. The doors that consume one are
-  the clause doors `Select`, `GroupBy`, `OrderBy` and `Having`, the nine `f`/`jf`
-  operand doors, and the value doors `Set`, `SetMap` (update and insert) and
-  `Values`: `qb.Update("t").Set("updated_at", qb.MustExpr("now()"))` renders
+  `ToSQL()`, or from `BuildUpsert`'s own returned error (ADR-082 2026-08-23 and
+  2026-08-24 addenda). The alias was a six-substring denylist until `[C61.9]`
+  replaced it with the grammar. The doors that consume one are
+  the clause doors `Select`, `GroupBy`, `OrderBy` and `Having`, the nine `jf`
+  operand doors, and the value doors `Set`, `SetMap` (update and insert),
+  `Values` and both `BuildUpsert` column maps:
+  `qb.Update("t").Set("updated_at", qb.MustExpr("now()"))` renders
   `SET updated_at = now()` with no placeholder and no argument, every other value
-  staying parameterized. An alias in a value position is a `ToSQL()` error
+  staying parameterized. An alias in a value position is an error
   (`ErrAliasInValue`) naming the column or one-based position — a `SET` or
-  `VALUES` cell projects nothing, so it could only be dropped silently.
-  `BuildUpsert`'s column maps are NOT value doors: a `RawExpression` there is
-  bound as a parameter and fails at the driver.
+  `VALUES` cell projects nothing, so it could only be dropped silently. The nine
+  `f` operand doors refuse an expression with `ErrExpressionInFilter`.
 - **`f.Raw()`, `jf.Raw()`, `database.Raw()`, an UPDATE `SetExpr()`, a STRING
   predicate passed to `Having()`, and every `RawExpression` SQL body** do. Each
   admits arbitrary SQL — the first two a WHERE/JOIN fragment, `database.Raw` the

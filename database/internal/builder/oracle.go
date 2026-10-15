@@ -232,13 +232,18 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	// Build the USING clause with values. Use reserved-word-only quoting (the same
 	// quoting the DML paths use) so non-reserved identifiers stay unquoted and Oracle
 	// folds them to the uppercase form created by standard DDL.
+	// Only a bound value numbers a placeholder, contiguously across USING and
+	// UPDATE SET; an expression is spliced in its place.
 	insertKeys := sortedKeys(insertColumns)
 	quotedInsertCols := qb.quoteColumnsForDML(insertKeys...)
 	usingValues := make([]string, len(insertKeys))
 	for i, col := range quotedInsertCols {
-		usingValues[i] = fmt.Sprintf(":%d AS %s", i+1, col)
+		cell, cellErr := mergeCell(insertKeys[i], insertColumns[insertKeys[i]], &args)
+		if cellErr != nil {
+			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
+		}
+		usingValues[i] = cell + " AS " + col
 	}
-	usingArgs := valuesByKeyOrder(insertColumns, insertKeys)
 
 	// Build ON clause for conflict detection
 	orderedConflicts := append([]string(nil), conflictColumns...)
@@ -253,11 +258,13 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	updateKeys := sortedKeys(updateColumns)
 	quotedUpdateCols := qb.quoteColumnsForDML(updateKeys...)
 	updateSets := make([]string, len(updateKeys))
-	baseIndex := len(insertKeys) + 1
 	for i, col := range quotedUpdateCols {
-		updateSets[i] = fmt.Sprintf("%s = :%d", col, baseIndex+i)
+		cell, cellErr := mergeCell(updateKeys[i], updateColumns[updateKeys[i]], &args)
+		if cellErr != nil {
+			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
+		}
+		updateSets[i] = col + " = " + cell
 	}
-	updateArgs := valuesByKeyOrder(updateColumns, updateKeys)
 
 	// Build INSERT clause
 	insertCols := make([]string, len(quotedInsertCols))
@@ -280,10 +287,20 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 		strings.Join(insertCols, ", "),
 		strings.Join(insertVals, ", "))
 
-	// Combine arguments: using args first, then update args
-	args = make([]any, 0, len(usingArgs)+len(updateArgs))
-	args = append(args, usingArgs...)
-	args = append(args, updateArgs...)
-
 	return query, args, nil
+}
+
+// mergeCell renders one MERGE value: an expression judged by valueExpression is
+// spliced with squirrel's `??` escape resolved, as Set renders it, and any other
+// value is appended to args and rendered as the next `:N`.
+func mergeCell(column string, value any, args *[]any) (string, error) {
+	exprSQL, isExpr, err := valueExpression(column, value)
+	if err != nil {
+		return "", err
+	}
+	if isExpr {
+		return strings.ReplaceAll(exprSQL, "??", "?"), nil
+	}
+	*args = append(*args, value)
+	return fmt.Sprintf(":%d", len(*args)), nil
 }

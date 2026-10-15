@@ -4,9 +4,11 @@ import "github.com/Masterminds/squirrel"
 
 // This file holds the generic bodies for the six method pairs that were
 // structural copies between Filter and JoinFilter — And/Or, In, NotIn,
-// Null/NotNull (#1259). In/NotIn carry JoinFilter's RawExpression acceptance,
-// a real interface difference, as a doorFamily argument; Eq/NotEq/Between/
-// compare and the subquery doors stay family-owned.
+// Null/NotNull (#1259). The one real interface difference between the
+// families — a jf value door splices a RawExpression, an f value door refuses
+// it with ErrExpressionInFilter (a WHERE-side expression takes an annotated
+// f.Raw) — is a doorFamily argument to the shared expressionOperand: In/NotIn
+// pass it here, and the family-owned compare and Between bodies pass their own.
 
 // logicalContainer is the squirrel wrapper And/Or fold into. squirrel.And and
 // squirrel.Or are both named []squirrel.Sqlizer types that also render
