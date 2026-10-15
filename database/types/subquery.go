@@ -13,6 +13,9 @@ type subqueryValidator interface {
 //
 // Subquery support is implemented by reusing SelectQueryBuilder.
 // Any SelectQueryBuilder instance can be used as a subquery in filter expressions.
+// One from another implementation (a mock, a decorator) must render `?`
+// placeholders, which the outer statement numbers; one that renders $N or :N
+// fails the outer ToSQL() (ADR-148).
 //
 // Example usage:
 //

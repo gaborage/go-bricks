@@ -476,7 +476,8 @@ func (ff *FilterFactory) buildExistsFilter(subquery dbtypes.SelectQueryBuilder, 
 //	subquery := qb.Select("max_price").From("price_history").Where(jf.EqColumn("price_history.product_id", "p.id"))
 //	query := qb.Select("*").From(Table("products").As("p")).Where(f.InSubquery("p.current_price", subquery))
 func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {
-	if err := dbtypes.ValidateSubquery(subquery); err != nil {
+	sql, args, err := renderSubquery(subquery)
+	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
 
@@ -486,25 +487,6 @@ func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryB
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
 
-	// Render the subquery with question-mark placeholders and embed the raw SQL so the
-	// outer query's single final placeholder pass numbers everything consistently (see
-	// buildExistsFilter for the rationale — passing the SelectBuilder directly causes
-	// duplicate placeholder numbers when combined with other parameterized filters).
-	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
-		subSQL, subArgs, renderErr := sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
-		if renderErr != nil {
-			return Filter{sqlizer: errorSqlizer{err: renderErr}}
-		}
-		return Filter{sqlizer: &inSubqueryFilter{
-			sqlizer: squirrel.Expr(quotedColumn+" IN ("+subSQL+")", subArgs...),
-		}}
-	}
-
-	// Fallback for other implementations
-	sql, args, err := subquery.ToSQL()
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
 	return Filter{sqlizer: &inSubqueryFilter{
 		sqlizer: squirrel.Expr(quotedColumn+" IN ("+sql+")", args...),
 	}}

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
@@ -958,6 +959,107 @@ func TestFilterSubqueryErrorCases(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, dbtypes.ErrNilSubquery)
 	})
+}
+
+// TestFilterInSubqueryRefusesAForeignVendorPlaceholder pins #2122: the outer
+// statement numbers only `?`, so a foreign subquery that already rendered $N or
+// :N is refused on either vendor, as the EXISTS and SubqueryColumn doors do.
+func TestFilterInSubqueryRefusesAForeignVendorPlaceholder(t *testing.T) {
+	tests := []struct {
+		name        string
+		vendor      string
+		placeholder string
+	}{
+		{name: "postgresql_dollar", vendor: dbtypes.PostgreSQL, placeholder: "$1"},
+		{name: "postgresql_colon", vendor: dbtypes.PostgreSQL, placeholder: ":1"},
+		{name: "oracle_dollar", vendor: dbtypes.Oracle, placeholder: "$1"},
+		{name: "oracle_colon", vendor: dbtypes.Oracle, placeholder: ":1"},
+	}
+	statements := []struct {
+		name  string
+		build func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error)
+	}{
+		{name: "select_beside_another_parameter", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			f := qb.Filter()
+			return qb.Select(colID).From(tableUsers).Where(f.And(f.Eq("x", 1), in)).ToSQL()
+		}},
+		{name: "select_alone", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			return qb.Select(colID).From(tableUsers).Where(in).ToSQL()
+		}},
+		{name: "update", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			return qb.Update(tableUsers).Set("x", 1).Where(in).ToSQL()
+		}},
+		{name: "delete", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			return qb.Delete(tableUsers).Where(in).ToSQL()
+		}},
+	}
+	for _, tt := range tests {
+		for _, stmt := range statements {
+			t.Run(tt.name+"_"+stmt.name, func(t *testing.T) {
+				qb := NewQueryBuilder(tt.vendor)
+				sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = " + tt.placeholder, args: []any{7}}
+
+				_, _, err := stmt.build(qb, qb.Filter().InSubquery(colID, sub))
+				require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
+			})
+		}
+	}
+}
+
+// TestFilterInSubqueryNumbersAQuestionMarkSubquery pins the accepted side of
+// #2122: a foreign subquery that renders `?`, like one this package built, is
+// numbered by the outer statement, after the parameter that precedes it.
+func TestFilterInSubqueryNumbersAQuestionMarkSubquery(t *testing.T) {
+	tests := []struct {
+		name        string
+		vendor      string
+		expectedSQL string
+	}{
+		{
+			name:        "postgresql",
+			vendor:      dbtypes.PostgreSQL,
+			expectedSQL: "SELECT id FROM users WHERE (x = $1 AND id IN (SELECT id FROM held WHERE consumer = $2))",
+		},
+		{
+			name:        "oracle",
+			vendor:      dbtypes.Oracle,
+			expectedSQL: "SELECT id FROM users WHERE (x = :1 AND id IN (SELECT id FROM held WHERE consumer = :2))",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"_foreign", func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
+			sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = ?", args: []any{7}}
+
+			sql, args, err := qb.Select(colID).From(tableUsers).Where(f.And(f.Eq("x", 1), f.InSubquery(colID, sub))).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql)
+			assert.Equal(t, []any{1, 7}, args)
+		})
+		// A subquery this package built renders to the same statement (#2122 AC4).
+		t.Run(tt.name+"_package", func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
+			sub := qb.Select(colID).From("held").Where(f.Eq("consumer", 7))
+
+			sql, args, err := qb.Select(colID).From(tableUsers).Where(f.And(f.Eq("x", 1), f.InSubquery(colID, sub))).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql)
+			assert.Equal(t, []any{1, 7}, args)
+		})
+	}
+}
+
+// TestFilterInSubqueryRefusesAMockQueryBuilderVendorPlaceholder covers the
+// shipped double: testing/mocks.MockQueryBuilder is a foreign implementation too.
+func TestFilterInSubqueryRefusesAMockQueryBuilderVendorPlaceholder(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	sub := &mocks.MockQueryBuilder{}
+	sub.On("ToSQL").Return("SELECT id FROM held WHERE consumer = $1", nil, nil)
+
+	_, _, err := qb.Select(colID).From(tableUsers).Where(qb.Filter().InSubquery(colID, sub)).ToSQL()
+	require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
 }
 
 func TestFilterSubqueryCombinedWithOtherFilters(t *testing.T) {

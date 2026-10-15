@@ -2455,6 +2455,24 @@ change is still reported at once.
 
 ---
 
+### [ADR-148: Every Subquery Door Refuses a Vendor-Rendered Placeholder](adr_148_insubquery_placeholder_guard.md)
+
+**Date:** 2026-10-15 | **Status:** Accepted | **Breaking:** `f.InSubquery` refuses a subquery from another `SelectQueryBuilder` implementation whose SQL carries `$N` or `:N`, where it embedded it verbatim
+
+The outer statement numbers only `?`, so a `$1` or `:1` a foreign subquery already rendered
+collides with its numbering or is invalid on the other vendor. `f.Exists`, `f.NotExists` and
+`SubqueryColumn` refused it through `renderSubquery`; `f.InSubquery` kept its own copy of the
+concrete branch and embedded a foreign `ToSQL()` unchecked. It now renders only through
+`renderSubquery`, the one place a subquery becomes embedded SQL: a foreign `$N`/`:N` subquery
+fails `ToSQL()` on either vendor under SELECT, UPDATE and DELETE, a foreign `?` subquery is
+numbered by the outer statement, and this package's subqueries render as before. See
+[migrations.md](migrations.md) `[C72.35]`.
+
+**Key Benefits:** all four subquery doors share one rendering rule, so a placeholder collision
+fails at `ToSQL()` instead of reaching the database.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3264,7 +3282,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-146) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-148) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

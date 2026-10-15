@@ -240,7 +240,7 @@ query := qb.Select(p.Col("Name")).
     Where(f.Exists(subquery))
 ```
 
-**Methods:** `f.Exists(subquery)`, `f.NotExists(subquery)`, `f.InSubquery(column, subquery)`. Supports correlated and nested subqueries.
+**Methods:** `f.Exists(subquery)`, `f.NotExists(subquery)`, `f.InSubquery(column, subquery)`. Supports correlated and nested subqueries. A subquery from another `SelectQueryBuilder` implementation (a mock, a decorator) must render `?` placeholders, which the outer statement numbers; one that renders `$N` or `:N` fails `ToSQL()` at every subquery door ([ADR-148](adr_148_insubquery_placeholder_guard.md)).
 
 ## SELECT Expressions (v2.1+)
 
