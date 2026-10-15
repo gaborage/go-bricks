@@ -2042,12 +2042,12 @@ func TestInExpandsAPointerToASlice(t *testing.T) {
 // inListDoor renders one of the four IN doors inside a full SELECT, so the
 // vendor's own placeholder ($1 / :1) is what gets asserted.
 type inListDoor struct {
-	name      string
-	clause    string
-	predicate string
-	emptySet  string
-	boundOne  string
-	call      func(qb *QueryBuilder, values any) (string, []any, error)
+	name       string
+	clause     string
+	predicate  string
+	emptySet   string
+	boundWhole string
+	call       func(qb *QueryBuilder, values any) (string, []any, error)
 }
 
 func (d *inListDoor) render(predicate string) string {
@@ -2065,13 +2065,13 @@ func (d *inListDoor) build(t *testing.T, vendor string, values any) (sql string,
 
 var inFilterDoors = []inListDoor{
 	{
-		name: "filter_in", clause: "SELECT * FROM t WHERE", predicate: "c IN", emptySet: "(1=0)", boundOne: "c =",
+		name: "filter_in", clause: "SELECT * FROM t WHERE", predicate: "c IN", emptySet: "(1=0)", boundWhole: "c =",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
 			return qb.Select("*").From("t").Where(qb.Filter().In("c", values)).ToSQL()
 		},
 	},
 	{
-		name: "filter_not_in", clause: "SELECT * FROM t WHERE", predicate: "c NOT IN", emptySet: "(1=1)", boundOne: "c <>",
+		name: "filter_not_in", clause: "SELECT * FROM t WHERE", predicate: "c NOT IN", emptySet: "(1=1)", boundWhole: "c <>",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
 			return qb.Select("*").From("t").Where(qb.Filter().NotIn("c", values)).ToSQL()
 		},
@@ -2080,13 +2080,13 @@ var inFilterDoors = []inListDoor{
 
 var inJoinFilterDoors = []inListDoor{
 	{
-		name: "join_filter_in", clause: "SELECT * FROM t JOIN u ON", predicate: "u.c IN", emptySet: "(1=0)", boundOne: "u.c =",
+		name: "join_filter_in", clause: "SELECT * FROM t JOIN u ON", predicate: "u.c IN", emptySet: "(1=0)", boundWhole: "u.c =",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
 			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().In("u.c", values)).ToSQL()
 		},
 	},
 	{
-		name: "join_filter_not_in", clause: "SELECT * FROM t JOIN u ON", predicate: "u.c NOT IN", emptySet: "(1=1)", boundOne: "u.c <>",
+		name: "join_filter_not_in", clause: "SELECT * FROM t JOIN u ON", predicate: "u.c NOT IN", emptySet: "(1=1)", boundWhole: "u.c <>",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
 			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().NotIn("u.c", values)).ToSQL()
 		},
@@ -2096,12 +2096,12 @@ var inJoinFilterDoors = []inListDoor{
 var inListDoors = slices.Concat(inFilterDoors, inJoinFilterDoors)
 
 var inListVendors = []struct {
-	vendor      string
-	placeholder string
-	second      string
+	vendor            string
+	placeholder       string
+	secondPlaceholder string
 }{
-	{vendor: dbtypes.PostgreSQL, placeholder: "$1", second: "$2"},
-	{vendor: dbtypes.Oracle, placeholder: ":1", second: ":2"},
+	{vendor: dbtypes.PostgreSQL, placeholder: "$1", secondPlaceholder: "$2"},
+	{vendor: dbtypes.Oracle, placeholder: ":1", secondPlaceholder: ":2"},
 }
 
 type inScalarStatus string
@@ -2221,7 +2221,7 @@ func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 	for _, v := range inListVendors {
 		placeholders := map[int]string{
 			1: "(" + v.placeholder + ")",
-			2: "(" + v.placeholder + "," + v.second + ")",
+			2: "(" + v.placeholder + "," + v.secondPlaceholder + ")",
 		}
 		for _, door := range inListDoors {
 			for _, op := range operands {
@@ -2242,7 +2242,7 @@ func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 	}
 }
 
-// TestInDoorsKeepTheMapAndChanRendering pins the 50820b01 rendering of a map or
+// TestInDoorsKeepTheMapAndChanRendering pins the pre-#2119 rendering of a map or
 // chan operand: bound as one `=` / `<>` argument, or the empty-set constant when
 // it holds nothing.
 func TestInDoorsKeepTheMapAndChanRendering(t *testing.T) {
@@ -2266,7 +2266,7 @@ func TestInDoorsKeepTheMapAndChanRendering(t *testing.T) {
 				t.Run(v.vendor+"_"+door.name+"_"+op.name, func(t *testing.T) {
 					wantPred := door.emptySet
 					if op.bound {
-						wantPred = door.boundOne + " " + v.placeholder
+						wantPred = door.boundWhole + " " + v.placeholder
 					}
 
 					sql, args, err := door.build(t, v.vendor, op.value)
@@ -2281,12 +2281,15 @@ func TestInDoorsKeepTheMapAndChanRendering(t *testing.T) {
 }
 
 // TestInDoorsRenderAnInterfaceOrPointerValuedMapLikeAConcreteOne pins #2119: a
-// map whose values could need resolution panicked walking its elements.
+// map or chan whose values could need resolution panicked walking its elements.
 func TestInDoorsRenderAnInterfaceOrPointerValuedMapLikeAConcreteOne(t *testing.T) {
 	five := 5
+	ch := make(chan any, 1)
+	ch <- 1
 	operands := map[string]any{
-		"interface_valued_map": map[string]any{"a": 1},
-		"pointer_valued_map":   map[string]*int{"a": &five},
+		"interface_valued_map":  map[string]any{"a": 1},
+		"pointer_valued_map":    map[string]*int{"a": &five},
+		"interface_valued_chan": ch,
 	}
 
 	for _, v := range inListVendors {
@@ -2296,7 +2299,7 @@ func TestInDoorsRenderAnInterfaceOrPointerValuedMapLikeAConcreteOne(t *testing.T
 					sql, args, err := door.build(t, v.vendor, operand)
 
 					require.NoError(t, err)
-					assert.Equal(t, door.render(door.boundOne+" "+v.placeholder), sql)
+					assert.Equal(t, door.render(door.boundWhole+" "+v.placeholder), sql)
 					assert.Equal(t, []any{operand}, args)
 				})
 			}

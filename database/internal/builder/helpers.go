@@ -578,7 +578,12 @@ func classifyOperand(value any, r reflect.Value) (resolved any, nullOrList bool)
 	if driver.IsValue(value) {
 		return value, false
 	}
-	return value, r.Kind() == reflect.Slice || r.Kind() == reflect.Array
+	return value, isListKind(r.Kind())
+}
+
+// isListKind reports the two kinds squirrel expands into a list.
+func isListKind(kind reflect.Kind) bool {
+	return kind == reflect.Slice || kind == reflect.Array
 }
 
 // orderingOperand resolves an ordering operand and fails closed on the shapes an
@@ -642,7 +647,7 @@ func resolveListOperands(op string, values any, family doorFamily) (normalized a
 	}
 
 	v := reflect.ValueOf(values)
-	if v.Kind() == reflect.Slice || v.Kind() == reflect.Array {
+	if isListKind(v.Kind()) {
 		normalized, empty, err = resolveList(op, v, values)
 		return normalized, "", empty, err
 	}
@@ -662,7 +667,7 @@ func resolveListOperands(op string, values any, family doorFamily) (normalized a
 	// other scalar is one element.
 	resolved := reflect.ValueOf(element)
 	kind := resolved.Kind()
-	if kind == reflect.Slice || kind == reflect.Array {
+	if isListKind(kind) {
 		normalized, empty, err = resolveList(op, resolved, element)
 		return normalized, "", empty, err
 	}
