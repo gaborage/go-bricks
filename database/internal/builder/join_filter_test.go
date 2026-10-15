@@ -1222,7 +1222,8 @@ func TestJoinFilterValueDoorsSpliceAResolvedRawExpression(t *testing.T) {
 	}
 }
 
-// jfValueDoors are the ten JoinFilterFactory value doors, each on column "u.c".
+// jfValueDoors are the ten JoinFilterFactory value-door positions (Between's
+// two bounds counted apart), each on column "u.c".
 var jfValueDoors = map[string]func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter{
 	"eq":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) },
 	"not_eq":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("u.c", v) },

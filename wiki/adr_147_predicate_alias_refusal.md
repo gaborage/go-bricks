@@ -6,10 +6,11 @@
 ## Context
 
 A `RawExpression` carries an optional alias, and an alias renders only where a
-column is projected: `Select` writes `<sql> AS <alias>`. Two value positions
-already refuse one because a cell projects nothing and the alias would be
-dropped without a word: `Having` (`ErrAliasInHaving`) and `Set`/`SetMap`/`Values`
-(`ErrAliasInValue`, judged in `valueExpression` since #2120).
+column is projected: `Select` writes `<sql> AS <alias>`. Two doors already
+refuse one because nothing there projects and the alias would be dropped
+without a word: the `Having` predicate (`ErrAliasInHaving`) and the
+`Set`/`SetMap`/`Values` cells (`ErrAliasInValue`, judged in `valueExpression`
+since #2120).
 
 The predicate operand doors did not. Since #2119 and #2120 a `JoinFilterFactory`
 value door (the six compare doors, both `Between` bounds, `In` and `NotIn`)
@@ -43,7 +44,7 @@ non-nil pointer to an aliased expression is refused the same way.
 - **Render the alias in the predicate.** Rejected: SQL has no alias syntax for
   an operand.
 - **Drop the alias silently, as before.** Rejected: an alias the caller wrote is
-  intent, and the value positions already refuse that silence.
+  intent, and `Having` and the value cells already refuse that silence.
 - **Refuse the alias at `GroupBy`/`OrderBy` too.** Rejected: it would break the
   shared-expression idiom for no safety gain, since nothing is dropped there that
   `Select` does not render.

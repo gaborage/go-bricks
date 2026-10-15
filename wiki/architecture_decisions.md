@@ -2468,8 +2468,8 @@ before `Validate()` (an alias outside the grammar reports the same sentinel). `G
 `OrderBy` keep rendering the body without the alias by design, so one aliased expression serves
 `Select`, `GroupBy` and `OrderBy`. See [migrations.md](migrations.md) `[C72.34]`.
 
-**Key Benefits:** no predicate drops an alias the caller wrote, and every alias refusal names the
-position it was refused at.
+**Key Benefits:** no predicate drops an alias the caller wrote, and the refusal names the operator
+it was judged for.
 
 ---
 

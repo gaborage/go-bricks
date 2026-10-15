@@ -2318,7 +2318,8 @@ func TestInDoorsBindAMapOrChanWithResolvableValuesWhole(t *testing.T) {
 	}
 }
 
-// fValueDoors are the ten FilterFactory value doors, each on column "c".
+// fValueDoors are the ten FilterFactory value-door positions (Between's two
+// bounds counted apart), each on column "c".
 var fValueDoors = map[string]func(f dbtypes.FilterFactory, v any) dbtypes.Filter{
 	"eq":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Eq("c", v) },
 	"not_eq":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotEq("c", v) },
@@ -2332,7 +2333,7 @@ var fValueDoors = map[string]func(f dbtypes.FilterFactory, v any) dbtypes.Filter
 	"not_in":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotIn("c", v) },
 }
 
-// TestFilterValueDoorsRefuseARawExpressionAtToSQL pins #2120: a FilterFactory
+// TestFilterValueDoorsRefuseARawExpressionAtToSQL pins #2119 and #2120: a FilterFactory
 // value door takes values, so an expression — or a non-nil pointer to one,
 // blank or not — fails the statement instead of binding a struct the driver
 // cannot encode.
