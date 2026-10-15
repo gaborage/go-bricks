@@ -158,8 +158,8 @@ type relaySink interface {
 // discardSink drops every call, for a run outside a window.
 type discardSink struct{}
 
-func (discardSink) Count(string, int64, ...attribute.KeyValue) {}
-func (discardSink) Fail(string, int64, ...attribute.KeyValue)  {}
+func (discardSink) Count(string, int64, ...attribute.KeyValue) { /* dropped: no Recorder */ }
+func (discardSink) Fail(string, int64, ...attribute.KeyValue)  { /* dropped: no Recorder */ }
 
 // relayCounters declares the relay's window Counters over its tenants and lanes.
 // outbox.relay.cycles carries the tenant attribute only when the scheduler can declare
