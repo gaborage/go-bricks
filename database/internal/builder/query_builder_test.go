@@ -3751,8 +3751,9 @@ func TestOracleTableLessSelectRendersFromDual(t *testing.T) {
 	assert.NotContains(t, sql, "dual")
 }
 
-// vendorRenderedSubquery is an external SelectQueryBuilder that already applied
-// a vendor placeholder format — what the shared renderSubquery must refuse.
+// vendorRenderedSubquery is an external SelectQueryBuilder returning fixed SQL:
+// with $N or :N, what the shared renderSubquery must refuse; with `?`, what the
+// outer statement numbers.
 type vendorRenderedSubquery struct {
 	dbtypes.SelectQueryBuilder
 	sql  string

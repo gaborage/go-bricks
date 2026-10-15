@@ -16,13 +16,13 @@ this package's `SelectQueryBuilder` with `?` placeholders, and for any other
 implementation (a mock, a decorator) it calls `ToSQL()` and refuses output that
 matches `[$:]\d+` with `errSubqueryPlaceholderFormat`. `f.Exists`, `f.NotExists`
 and `SubqueryColumn` have rendered through it since #1391. ADR-098 records only
-the rendering half of that rule, for `SubqueryColumn`, not the refusal, so this
-decision gets its own record rather than an ADR-098 amendment.
+the rendering half of that rule, for `SubqueryColumn`, not the refusal.
 
 `f.InSubquery` did not use it. It carried its own copy of the concrete branch
 and a fallback that embedded a foreign `ToSQL()` verbatim. A foreign subquery
 rendering `$1` therefore built on the same vendor with no other parameter, and
-broke at the database beside another parameter. Fixes #2122.
+beside another parameter collided with the outer numbering, which PostgreSQL
+rejects at the database. Fixes #2122.
 
 ## Decision
 
@@ -36,9 +36,15 @@ embedded SQL, for all four doors.
 - A foreign subquery that renders `?` builds, numbered by the outer statement.
 - A subquery built by this package renders exactly as before.
 
-**Refuse, do not renumber.** Rewriting a foreign `$N` would mean parsing
-another implementation's SQL to tell a placeholder from a literal; the outer
-pass already numbers `?`, so `?` is the contract.
+## Alternatives considered
+
+- **Renumber a foreign `$N`/`:N`.** Rejected: telling a placeholder from a
+  literal means parsing another implementation's SQL, and the outer pass
+  already numbers `?`, so `?` is the contract.
+- **Add the check to `InSubquery`'s own fallback.** Rejected: two copies of
+  one rule are how this door drifted from the other three.
+- **Amend ADR-098.** Rejected: it records how `SubqueryColumn` renders, not
+  the refusal, and the refusal now binds four doors.
 
 ## Consequences
 
@@ -59,7 +65,7 @@ pass already numbers `?`, so `?` is the contract.
 - `database/internal/builder/query_builder.go` — `SubqueryColumn`
 - `database/internal/builder/filter_test.go` —
   `TestFilterInSubqueryRefusesAForeignVendorPlaceholder`,
-  `TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery`,
+  `TestFilterInSubqueryNumbersAQuestionMarkSubquery`,
   `TestFilterInSubqueryRefusesAMockQueryBuilderVendorPlaceholder`
 - [ADR-098](adr_098_builder_clauses_for_ledger_stores.md) — `SubqueryColumn`
   and the question-mark rendering rule

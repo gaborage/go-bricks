@@ -997,7 +997,7 @@ func TestFilterInSubqueryRefusesAForeignVendorPlaceholder(t *testing.T) {
 		for _, stmt := range statements {
 			t.Run(tt.name+"_"+stmt.name, func(t *testing.T) {
 				qb := NewQueryBuilder(tt.vendor)
-				sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = " + tt.placeholder}
+				sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = " + tt.placeholder, args: []any{7}}
 
 				_, _, err := stmt.build(qb, qb.Filter().InSubquery(colID, sub))
 				require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
@@ -1006,10 +1006,10 @@ func TestFilterInSubqueryRefusesAForeignVendorPlaceholder(t *testing.T) {
 	}
 }
 
-// TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery pins the accepted
-// side of #2122: a foreign subquery that renders `?` is numbered by the outer
-// statement, after the parameter that precedes it.
-func TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery(t *testing.T) {
+// TestFilterInSubqueryNumbersAQuestionMarkSubquery pins the accepted side of
+// #2122: a foreign subquery that renders `?`, like one this package built, is
+// numbered by the outer statement, after the parameter that precedes it.
+func TestFilterInSubqueryNumbersAQuestionMarkSubquery(t *testing.T) {
 	tests := []struct {
 		name        string
 		vendor      string
@@ -1027,10 +1027,21 @@ func TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name+"_foreign", func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
 			f := qb.Filter()
 			sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = ?", args: []any{7}}
+
+			sql, args, err := qb.Select(colID).From(tableUsers).Where(f.And(f.Eq("x", 1), f.InSubquery(colID, sub))).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql)
+			assert.Equal(t, []any{1, 7}, args)
+		})
+		// A subquery this package built renders to the same statement (#2122 AC4).
+		t.Run(tt.name+"_package", func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
+			sub := qb.Select(colID).From("held").Where(f.Eq("consumer", 7))
 
 			sql, args, err := qb.Select(colID).From(tableUsers).Where(f.And(f.Eq("x", 1), f.InSubquery(colID, sub))).ToSQL()
 			require.NoError(t, err)

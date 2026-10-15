@@ -13168,7 +13168,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gate: match = a detect hit. no-match = no hit, or every foreign subquery renders `?`.
 - before: the foreign SQL was embedded verbatim. On its own vendor with no other parameter the
   statement built and ran; beside another parameter its `$1`/`:1` collided with the outer
-  statement's numbering and failed at the database; on the other vendor it was invalid SQL.
+  statement's numbering, which PostgreSQL rejects at the database; on the other vendor it was
+  invalid SQL.
 - after: `ToSQL()` returns an error reading
   `subquery must render question-mark placeholders, not $N or :N`. The sentinel is unexported;
   match the text.
