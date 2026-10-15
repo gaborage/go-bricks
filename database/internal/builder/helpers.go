@@ -666,9 +666,10 @@ func resolveList(op string, v reflect.Value, values any) (normalized any, empty 
 	return resolved, len(resolved) == 0, nil
 }
 
-// renderSubquery validates sub and renders it with question-mark placeholders,
-// so the OUTER statement's single final placeholder pass numbers the subquery's
-// and its own parameters consistently. Passing the SelectBuilder through
+// renderSubquery is the one place a subquery becomes embedded SQL, for every
+// door (EXISTS, NOT EXISTS, IN, SubqueryColumn). It validates sub and renders
+// it with question-mark placeholders, so the OUTER statement's single final
+// placeholder pass numbers the subquery's and its own parameters consistently. Passing the SelectBuilder through
 // directly would let squirrel apply the vendor format ($1/:1) early and collide
 // with the outer renumbering (duplicate $1 on PostgreSQL, duplicate :1 on
 // Oracle). Another implementation (a mock) falls back to its own ToSQL, and

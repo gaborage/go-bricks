@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
@@ -958,6 +959,98 @@ func TestFilterSubqueryErrorCases(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, dbtypes.ErrNilSubquery)
 	})
+}
+
+// TestFilterInSubqueryRefusesAForeignVendorPlaceholder pins #2122: the outer
+// statement numbers only `?`, so a foreign subquery that already rendered $N or
+// :N is refused on either vendor, as the EXISTS and SubqueryColumn doors do.
+func TestFilterInSubqueryRefusesAForeignVendorPlaceholder(t *testing.T) {
+	tests := []struct {
+		name        string
+		vendor      string
+		placeholder string
+	}{
+		{name: "postgresql_dollar", vendor: dbtypes.PostgreSQL, placeholder: "$1"},
+		{name: "postgresql_colon", vendor: dbtypes.PostgreSQL, placeholder: ":1"},
+		{name: "oracle_dollar", vendor: dbtypes.Oracle, placeholder: "$1"},
+		{name: "oracle_colon", vendor: dbtypes.Oracle, placeholder: ":1"},
+	}
+	for _, tt := range tests {
+		for _, stmt := range inSubqueryStatements {
+			t.Run(tt.name+"_"+stmt.name, func(t *testing.T) {
+				qb := NewQueryBuilder(tt.vendor)
+				sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = " + tt.placeholder, args: []any{7}}
+
+				_, _, err := stmt.build(qb, qb.Filter().InSubquery("id", sub))
+				require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
+			})
+		}
+	}
+}
+
+// inSubqueryStatements carries one InSubquery filter in every statement whose
+// WHERE clause accepts it, beside another parameter and as the only one.
+var inSubqueryStatements = []struct {
+	name  string
+	build func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error)
+}{
+	{name: "select_beside_another_parameter", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+		f := qb.Filter()
+		return qb.Select("id").From(tableUsers).Where(f.And(f.Eq("x", 1), in)).ToSQL()
+	}},
+	{name: "select_alone", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+		return qb.Select("id").From(tableUsers).Where(in).ToSQL()
+	}},
+	{name: "update", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+		return qb.Update(tableUsers).Set("x", 1).Where(in).ToSQL()
+	}},
+	{name: "delete", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+		return qb.Delete(tableUsers).Where(in).ToSQL()
+	}},
+}
+
+// TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery pins the accepted
+// side of #2122: a foreign subquery that renders `?` is numbered by the outer
+// statement, after the parameter that precedes it.
+func TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery(t *testing.T) {
+	tests := []struct {
+		name        string
+		vendor      string
+		expectedSQL string
+	}{
+		{
+			name:        "postgresql",
+			vendor:      dbtypes.PostgreSQL,
+			expectedSQL: "SELECT id FROM users WHERE (x = $1 AND id IN (SELECT id FROM held WHERE consumer = $2))",
+		},
+		{
+			name:        "oracle",
+			vendor:      dbtypes.Oracle,
+			expectedSQL: "SELECT id FROM users WHERE (x = :1 AND id IN (SELECT id FROM held WHERE consumer = :2))",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = ?", args: []any{7}}
+
+			sql, args, err := inSubqueryStatements[0].build(qb, qb.Filter().InSubquery("id", sub))
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedSQL, sql)
+			assert.Equal(t, []any{1, 7}, args)
+		})
+	}
+}
+
+// TestFilterInSubqueryRefusesAMockQueryBuilderVendorPlaceholder covers the
+// shipped double: testing/mocks.MockQueryBuilder is a foreign implementation too.
+func TestFilterInSubqueryRefusesAMockQueryBuilderVendorPlaceholder(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	sub := &mocks.MockQueryBuilder{}
+	sub.On("ToSQL").Return("SELECT id FROM held WHERE consumer = $1", []any{7}, nil)
+
+	_, _, err := qb.Select("id").From(tableUsers).Where(qb.Filter().InSubquery("id", sub)).ToSQL()
+	require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
 }
 
 func TestFilterSubqueryCombinedWithOtherFilters(t *testing.T) {

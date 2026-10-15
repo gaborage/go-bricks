@@ -3755,11 +3755,12 @@ func TestOracleTableLessSelectRendersFromDual(t *testing.T) {
 // a vendor placeholder format — what the shared renderSubquery must refuse.
 type vendorRenderedSubquery struct {
 	dbtypes.SelectQueryBuilder
-	sql string
+	sql  string
+	args []any
 }
 
 func (v vendorRenderedSubquery) ToSQL() (sql string, args []any, err error) {
-	return v.sql, []any{1}, nil
+	return v.sql, v.args, nil
 }
 
 // TestSubqueryColumnRefusesAnExternalVendorPlaceholder pins the outer pass's
@@ -3786,7 +3787,7 @@ func TestSubqueryColumnRefusesAnExternalVendorPlaceholder(t *testing.T) {
 	// A question-mark external subquery is accepted and renumbered.
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	f := qb.Filter()
-	sub := vendorRenderedSubquery{sql: "SELECT COUNT(*) FROM held WHERE consumer = ?"}
+	sub := vendorRenderedSubquery{sql: "SELECT COUNT(*) FROM held WHERE consumer = ?", args: []any{1}}
 	sql, args, err := qb.Select("id").SubqueryColumn(sub, "n").From(tableUsers).Where(f.Eq("id", 2)).ToSQL()
 	require.NoError(t, err)
 	assert.Equal(t, `SELECT id, (SELECT COUNT(*) FROM held WHERE consumer = $1) AS n FROM users WHERE id = $2`, sql)
