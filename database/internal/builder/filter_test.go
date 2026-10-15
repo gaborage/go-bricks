@@ -2038,37 +2038,6 @@ func TestInExpandsAPointerToASlice(t *testing.T) {
 	})
 }
 
-// TestInWrapsAResolvedScalarInAOneElementList pins the IN door's scalar
-// contract for an operand that is not a driver.Value: `int` reached the list
-// path unwrapped and panicked on the element type of a non-list (#2119).
-func TestInWrapsAResolvedScalarInAOneElementList(t *testing.T) {
-	vendors := []struct {
-		vendor  string
-		wantSQL string
-	}{
-		{vendor: dbtypes.PostgreSQL, wantSQL: "SELECT * FROM t WHERE c IN ($1)"},
-		{vendor: dbtypes.Oracle, wantSQL: "SELECT * FROM t WHERE c IN (:1)"},
-	}
-
-	for _, v := range vendors {
-		t.Run(v.vendor, func(t *testing.T) {
-			qb := NewQueryBuilder(v.vendor)
-			var (
-				sql  string
-				args []any
-				err  error
-			)
-			require.NotPanics(t, func() {
-				sql, args, err = qb.Select("*").From("t").Where(qb.Filter().In("c", 5)).ToSQL()
-			})
-
-			require.NoError(t, err)
-			assert.Equal(t, v.wantSQL, sql)
-			assert.Equal(t, []any{5}, args)
-		})
-	}
-}
-
 // inListDoor renders one of the four IN doors inside a full SELECT, so the
 // vendor's own placeholder ($1 / :1) is what gets asserted.
 type inListDoor struct {
@@ -2076,7 +2045,7 @@ type inListDoor struct {
 	clause    string
 	predicate string
 	emptySet  string
-	build     func(qb *QueryBuilder, values any) (string, []any, error)
+	call      func(qb *QueryBuilder, values any) (string, []any, error)
 }
 
 // render spells the full statement around one rendered predicate.
@@ -2084,33 +2053,40 @@ func (d inListDoor) render(predicate string) string {
 	return d.clause + " " + predicate
 }
 
-func inListDoors() []inListDoor {
-	return []inListDoor{
-		{
-			name: "filter_in", clause: "SELECT * FROM t WHERE", predicate: "c IN", emptySet: "(1=0)",
-			build: func(qb *QueryBuilder, values any) (string, []any, error) {
-				return qb.Select("*").From("t").Where(qb.Filter().In("c", values)).ToSQL()
-			},
+// build renders the door's statement and fails the test on a panic.
+func (d inListDoor) build(t *testing.T, vendor string, values any) (sql string, args []any, err error) {
+	t.Helper()
+	require.NotPanics(t, func() {
+		sql, args, err = d.call(NewQueryBuilder(vendor), values)
+	})
+	return sql, args, err
+}
+
+var inListDoors = []inListDoor{
+	{
+		name: "filter_in", clause: "SELECT * FROM t WHERE", predicate: "c IN", emptySet: "(1=0)",
+		call: func(qb *QueryBuilder, values any) (string, []any, error) {
+			return qb.Select("*").From("t").Where(qb.Filter().In("c", values)).ToSQL()
 		},
-		{
-			name: "filter_not_in", clause: "SELECT * FROM t WHERE", predicate: "c NOT IN", emptySet: "(1=1)",
-			build: func(qb *QueryBuilder, values any) (string, []any, error) {
-				return qb.Select("*").From("t").Where(qb.Filter().NotIn("c", values)).ToSQL()
-			},
+	},
+	{
+		name: "filter_not_in", clause: "SELECT * FROM t WHERE", predicate: "c NOT IN", emptySet: "(1=1)",
+		call: func(qb *QueryBuilder, values any) (string, []any, error) {
+			return qb.Select("*").From("t").Where(qb.Filter().NotIn("c", values)).ToSQL()
 		},
-		{
-			name: "join_filter_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c IN", emptySet: "(1=0)",
-			build: func(qb *QueryBuilder, values any) (string, []any, error) {
-				return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().In("c", values)).ToSQL()
-			},
+	},
+	{
+		name: "join_filter_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c IN", emptySet: "(1=0)",
+		call: func(qb *QueryBuilder, values any) (string, []any, error) {
+			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().In("c", values)).ToSQL()
 		},
-		{
-			name: "join_filter_not_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c NOT IN", emptySet: "(1=1)",
-			build: func(qb *QueryBuilder, values any) (string, []any, error) {
-				return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().NotIn("c", values)).ToSQL()
-			},
+	},
+	{
+		name: "join_filter_not_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c NOT IN", emptySet: "(1=1)",
+		call: func(qb *QueryBuilder, values any) (string, []any, error) {
+			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().NotIn("c", values)).ToSQL()
 		},
-	}
+	},
 }
 
 var inListVendors = []struct {
@@ -2125,6 +2101,9 @@ type inScalarStatus string
 
 type inScalarPoint struct{ X int }
 
+// TestInDoorsWrapEveryResolvedScalarType pins the IN doors' scalar contract for
+// an operand that is not a driver.Value: such a scalar reached the list path
+// unwrapped and panicked on the element type of a non-list (#2119).
 func TestInDoorsWrapEveryResolvedScalarType(t *testing.T) {
 	five := 5
 	scalars := []struct {
@@ -2142,17 +2121,10 @@ func TestInDoorsWrapEveryResolvedScalarType(t *testing.T) {
 	}
 
 	for _, v := range inListVendors {
-		for _, door := range inListDoors() {
+		for _, door := range inListDoors {
 			for _, sc := range scalars {
 				t.Run(v.vendor+"_"+door.name+"_"+sc.name, func(t *testing.T) {
-					var (
-						sql  string
-						args []any
-						err  error
-					)
-					require.NotPanics(t, func() {
-						sql, args, err = door.build(NewQueryBuilder(v.vendor), sc.value)
-					})
+					sql, args, err := door.build(t, v.vendor, sc.value)
 
 					require.NoError(t, err)
 					assert.Equal(t, door.render(door.predicate+" ("+v.placeholder+")"), sql)
@@ -2164,19 +2136,13 @@ func TestInDoorsWrapEveryResolvedScalarType(t *testing.T) {
 }
 
 func TestInDoorsSpliceARawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword, no user input
+	expr := dbtypes.MustExpr("CURRENT_DATE")
+
 	for _, v := range inListVendors {
-		for _, door := range inListDoors() {
+		for _, door := range inListDoors {
 			t.Run(v.vendor+"_"+door.name, func(t *testing.T) {
-				qb := NewQueryBuilder(v.vendor)
-				var (
-					sql  string
-					args []any
-					err  error
-				)
-				require.NotPanics(t, func() {
-					// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword, no user input
-					sql, args, err = door.build(qb, qb.MustExpr("CURRENT_DATE"))
-				})
+				sql, args, err := door.build(t, v.vendor, expr)
 
 				require.NoError(t, err)
 				assert.Equal(t, door.render(door.predicate+" (CURRENT_DATE)"), sql)
@@ -2191,12 +2157,9 @@ func TestInDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
 	blank := dbtypes.RawExpression{SQL: "  "}
 
 	for _, v := range inListVendors {
-		for _, door := range inListDoors() {
+		for _, door := range inListDoors {
 			t.Run(v.vendor+"_"+door.name, func(t *testing.T) {
-				var err error
-				require.NotPanics(t, func() {
-					_, _, err = door.build(NewQueryBuilder(v.vendor), blank)
-				})
+				_, _, err := door.build(t, v.vendor, blank)
 
 				require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 			})
@@ -2218,7 +2181,7 @@ func TestInDoorsKeepTheirOutputForOperandsThatAlreadyRendered(t *testing.T) {
 		one := "(" + v.placeholder + ")"
 		two := "(" + v.placeholder + "," + second + ")"
 
-		for _, door := range inListDoors() {
+		for _, door := range inListDoors {
 			operands := []struct {
 				name     string
 				value    any
@@ -2228,6 +2191,7 @@ func TestInDoorsKeepTheirOutputForOperandsThatAlreadyRendered(t *testing.T) {
 				{name: "int64", value: int64(5), wantPred: door.predicate + " " + one, wantArgs: []any{int64(5)}},
 				{name: "string", value: "a", wantPred: door.predicate + " " + one, wantArgs: []any{"a"}},
 				{name: "byte_slice", value: raw, wantPred: door.predicate + " " + one, wantArgs: []any{raw}},
+				{name: "pointer_to_byte_slice", value: &raw, wantPred: door.predicate + " " + one, wantArgs: []any{raw}},
 				{name: "untyped_nil", value: nil, wantPred: door.emptySet, wantArgs: nil},
 				{name: "typed_nil_pointer", value: (*int)(nil), wantPred: door.predicate + " " + one, wantArgs: []any{nil}},
 				{name: "slice", value: ids, wantPred: door.predicate + " " + two, wantArgs: []any{1, 2}},
@@ -2237,7 +2201,7 @@ func TestInDoorsKeepTheirOutputForOperandsThatAlreadyRendered(t *testing.T) {
 
 			for _, op := range operands {
 				t.Run(v.vendor+"_"+door.name+"_"+op.name, func(t *testing.T) {
-					sql, args, err := door.build(NewQueryBuilder(v.vendor), op.value)
+					sql, args, err := door.build(t, v.vendor, op.value)
 
 					require.NoError(t, err)
 					assert.Equal(t, door.render(op.wantPred), sql)

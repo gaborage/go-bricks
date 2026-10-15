@@ -458,8 +458,7 @@ func (w *operandWalk) askValuer(value *any) (asked bool, err error) {
 // than resolved and bound: a dbtypes.RawExpression, whose SQL goes into the
 // predicate verbatim with no placeholder and no argument. It is validated HERE,
 // at consumption, because RawExpression is a plain struct a caller can build
-// without Expr() (#1153). Any other operand reports isExpr false and goes on to
-// resolveOperand.
+// without Expr() (#1153).
 func expressionOperand(value any) (sql string, isExpr bool, err error) {
 	expr, isExpr := value.(dbtypes.RawExpression)
 	if !isExpr {
@@ -633,18 +632,10 @@ func resolveListOperands(op string, values any) (normalized any, empty bool, err
 		if resolveErr != nil {
 			return nil, false, wrapOperandErr(op, resolveErr)
 		}
-		// Classify what resolution PRODUCED, not the operand's surface form. A
-		// POINTER to a slice resolves to the slice, and wrapping that as a
-		// single element left squirrel expanding only the outer list — `IN (?)`
-		// bound to a whole []int, which the driver rejects. A resolved nil stays
-		// one NULL element. Anything else is a scalar of whatever type — an
-		// `int`, a `*int` resolved to its element, a struct — and is wrapped
-		// here; handing it to the list path asked a non-list for its element
-		// type and panicked (#2119).
-		if element == nil {
-			return []any{nil}, false, nil
-		}
-		if !nullOrList {
+		// Route on what resolution PRODUCED, not the operand's surface form: a
+		// nil or a scalar of any type is one element, and a list — a pointer to
+		// a slice resolves to one — is expanded.
+		if element == nil || !nullOrList {
 			return []any{element}, false, nil
 		}
 		return resolveList(op, reflect.ValueOf(element), element)
