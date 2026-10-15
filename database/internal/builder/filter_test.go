@@ -2,6 +2,7 @@ package builder
 
 import (
 	dbsql "database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -2108,6 +2109,12 @@ type inScalarStatus string
 
 type inScalarPoint struct{ X int }
 
+// inValuerList is a slice that is also a driver.Valuer: squirrel asks it for
+// its value and binds the answer as one operand.
+type inValuerList []int
+
+func (inValuerList) Value() (driver.Value, error) { return "asked", nil }
+
 // TestInDoorsWrapEveryResolvedScalarType pins #2119: a scalar that is not a
 // driver.Value is one bound element.
 func TestInDoorsWrapEveryResolvedScalarType(t *testing.T) {
@@ -2242,10 +2249,10 @@ func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 	}
 }
 
-// TestInDoorsKeepTheMapAndChanRendering pins the pre-#2119 rendering of a map or
-// chan operand: bound as one `=` / `<>` argument, or the empty-set constant when
-// it holds nothing.
-func TestInDoorsKeepTheMapAndChanRendering(t *testing.T) {
+// TestInDoorsKeepTheWholeOperandRendering pins the pre-#2119 rendering of a map,
+// a chan, or a slice that is a driver.Valuer: bound as one `=` / `<>` argument,
+// or the empty-set constant when it holds nothing.
+func TestInDoorsKeepTheWholeOperandRendering(t *testing.T) {
 	var nilMap map[string]int
 	values := map[string]int{"a": 1}
 	operands := []struct {
@@ -2258,6 +2265,7 @@ func TestInDoorsKeepTheMapAndChanRendering(t *testing.T) {
 		{name: "empty_map", value: map[string]int{}, bound: false, wantArgs: nil},
 		{name: "nil_map", value: nilMap, bound: false, wantArgs: nil},
 		{name: "empty_chan", value: make(chan int), bound: false, wantArgs: nil},
+		{name: "valuer_slice", value: inValuerList{1, 2}, bound: true, wantArgs: []any{"asked"}},
 	}
 
 	for _, v := range inListVendors {
