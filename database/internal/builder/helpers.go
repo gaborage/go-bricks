@@ -454,6 +454,36 @@ func (w *operandWalk) askValuer(value *any) (asked bool, err error) {
 	return true, nil
 }
 
+// doorFamily names the predicate family judging an operand: a FilterFactory
+// door takes values only, a JoinFilterFactory door also splices a
+// RawExpression (#1259).
+type doorFamily uint8
+
+const (
+	filterFamily doorFamily = iota
+	joinFilterFamily
+)
+
+// expressionOperand judges a RESOLVED operand that is a dbtypes.RawExpression —
+// so a pointer to one is judged the same — by the door's family: a filterFamily
+// door refuses it, a joinFilterFamily door splices its SQL verbatim, with no
+// placeholder and no argument. A spliced expression is validated HERE, at
+// consumption, because RawExpression is a plain struct a caller can build
+// without Expr() (#1153).
+func expressionOperand(op string, resolved any, family doorFamily) (sql string, isExpr bool, err error) {
+	expr, isExpr := resolved.(dbtypes.RawExpression)
+	if !isExpr {
+		return "", false, nil
+	}
+	if family != joinFilterFamily {
+		return "", true, fmt.Errorf("%w: %s", dbtypes.ErrExpressionInFilter, op)
+	}
+	if validateErr := expr.Validate(); validateErr != nil {
+		return "", true, validateErr
+	}
+	return expr.SQL, true, nil
+}
+
 // resolveOperand mirrors the prologue of squirrel's Eq.toSQL — resolve a
 // driver.Valuer, then dereference a pointer (a nil one becoming an untyped nil)
 // — and classifies the RESULT the way squirrel's own isListType does.
@@ -548,7 +578,12 @@ func classifyOperand(value any, r reflect.Value) (resolved any, nullOrList bool)
 	if driver.IsValue(value) {
 		return value, false
 	}
-	return value, r.Kind() == reflect.Slice || r.Kind() == reflect.Array
+	return value, isListKind(r.Kind())
+}
+
+// isListKind reports the two kinds squirrel expands into a list.
+func isListKind(kind reflect.Kind) bool {
+	return kind == reflect.Slice || kind == reflect.Array
 }
 
 // orderingOperand resolves an ordering operand and fails closed on the shapes an
@@ -604,31 +639,42 @@ var valuerType = reflect.TypeOf((*driver.Valuer)(nil)).Elem()
 // []byte, which is a driver.Value and therefore ONE operand, not N.
 //
 // The returned `empty` reports the empty-set case for the caller's constant,
-// which the pass-through path could not answer from a []any length.
-func resolveListOperands(op string, values any) (normalized any, empty bool, err error) {
+// which the pass-through path could not answer from a []any length. A non-empty
+// `exprSQL` is a RawExpression the family splices in place of a list.
+func resolveListOperands(op string, values any, family doorFamily) (normalized any, exprSQL string, empty bool, err error) {
 	if values == nil {
-		return []any{}, true, nil
+		return []any{}, "", true, nil
 	}
 
 	v := reflect.ValueOf(values)
-	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
-		element, _, resolveErr := resolveOperand(values)
-		if resolveErr != nil {
-			return nil, false, wrapOperandErr(op, resolveErr)
-		}
-		// Classify what resolution PRODUCED, not the operand's surface form. A
-		// POINTER to a slice resolves to the slice, and wrapping that as a
-		// single element left squirrel expanding only the outer list — `IN (?)`
-		// bound to a whole []int, which the driver rejects. A resolved nil stays
-		// one NULL element, and a []byte stays one operand, both handled by the
-		// list path below.
-		if element == nil {
-			return []any{nil}, false, nil
-		}
-		return resolveList(op, reflect.ValueOf(element), element)
+	if isListKind(v.Kind()) {
+		normalized, empty, err = resolveList(op, v, values)
+		return normalized, "", empty, err
 	}
 
-	return resolveList(op, v, values)
+	element, _, resolveErr := resolveOperand(values)
+	if resolveErr != nil {
+		return nil, "", false, wrapOperandErr(op, resolveErr)
+	}
+	exprSQL, isExpr, exprErr := expressionOperand(op, element, family)
+	if isExpr {
+		return nil, exprSQL, false, exprErr
+	}
+	// Route on what resolution PRODUCED, not the operand's surface form: a list —
+	// a pointer to a slice resolves to one — is expanded; a map or chan passes
+	// through whole, squirrel binding it as one `= ?` operand, or the empty set
+	// when it holds nothing, and its elements are never walked; a nil or any
+	// other scalar is one element.
+	resolved := reflect.ValueOf(element)
+	kind := resolved.Kind()
+	if isListKind(kind) {
+		normalized, empty, err = resolveList(op, resolved, element)
+		return normalized, "", empty, err
+	}
+	if kind == reflect.Map || kind == reflect.Chan {
+		return element, "", resolved.Len() == 0, nil
+	}
+	return []any{element}, "", false, nil
 }
 
 // resolveList resolves an already-classified list operand. It takes both the

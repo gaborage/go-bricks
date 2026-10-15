@@ -58,6 +58,12 @@ var (
 	// has nowhere to render; accepting one silently would drop it.
 	ErrAliasInValue = errors.New("alias is not allowed in a SET or VALUES value")
 
+	// ErrExpressionInFilter is returned when a RawExpression, or a non-nil
+	// pointer to one, reaches FilterFactory.In or NotIn. A FilterFactory door
+	// takes values: an expression belongs to a JoinFilterFactory door, a SET or
+	// VALUES value, or an annotated f.Raw.
+	ErrExpressionInFilter = errors.New("a RawExpression is not allowed as a Filter operand")
+
 	// ErrRowLockWithPagination is returned by ToSQL on Oracle when a SELECT
 	// carries both a row lock (ForUpdate/ForUpdateNoWait) and a Limit/Offset:
 	// the Oracle SQL Language Reference, "Restrictions on the row_limiting_clause",

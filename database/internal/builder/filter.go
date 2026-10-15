@@ -147,7 +147,9 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 }
 
 // In creates an IN filter (column IN (values...)).
-// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
+// Accepts both slices and scalar values. A scalar other than a map or chan is resolved
+// and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
+// refused with dbtypes.ErrExpressionInFilter at ToSQL(); use JoinFilterFactory.In or f.Raw.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -156,11 +158,13 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	// Empty slice special case: generate "1=0" to ensure no matches
-	return inListPredicate(ff.qb, column, values, false, wrapFilter)
+	return inListPredicate(ff.qb, column, values, false, filterFamily, wrapFilter)
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
-// Accepts both slices and scalar values. Scalars are automatically wrapped in a slice.
+// Accepts both slices and scalar values. A scalar other than a map or chan is resolved
+// and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
+// refused with dbtypes.ErrExpressionInFilter at ToSQL().
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -169,7 +173,7 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 //	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	// Empty NOT IN list - always true
-	return inListPredicate(ff.qb, column, values, true, wrapFilter)
+	return inListPredicate(ff.qb, column, values, true, filterFamily, wrapFilter)
 }
 
 // Like creates a case-insensitive LIKE filter.
