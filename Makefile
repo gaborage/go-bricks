@@ -23,7 +23,7 @@ GOSEC_BIN := $(GOSEC_DIR)/gosec
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.14.0
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
-GREMLINS_VERSION := v0.5.1
+GREMLINS_VERSION := v0.6.0
 # renovate: datasource=npm depName=markdownlint-cli2
 MARKDOWNLINT_VERSION := 0.23.3
 GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
