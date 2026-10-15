@@ -13290,9 +13290,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: `git grep -nE 'BuildUpsert\(' -- '*.go'`, keeping calls on PostgreSQL whose insert map
   holds a quoted key with a `?` in it (`"a?b"`, `"a??b"`).
-- scope: the INSERT column list of `BuildUpsert` on PostgreSQL. **Unchanged**: Oracle's MERGE,
-  which never runs a placeholder pass; the ON CONFLICT target and the SET columns, which already
-  kept a `?` as written; every key without a `?`, byte for byte.
+- scope: the INSERT column list of `BuildUpsert` on PostgreSQL, and the numbering of every
+  placeholder after it. **Unchanged**: Oracle's MERGE, which never runs a placeholder pass; the
+  ON CONFLICT target and SET column names, which already kept a `?` as written; every statement
+  whose insert keys hold no `?`, byte for byte.
 - gate: match = a detect hit. no-match = no hit. A `"a?b"` key built a malformed statement; a
   `"a??b"` key wrote column `a?b`, not the one it named.
 - before: squirrel's placeholder pass rewrote each `?` in the INSERT column list: `"a?b"` rendered

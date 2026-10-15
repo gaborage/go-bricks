@@ -99,9 +99,9 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	if err != nil {
 		return "", nil, fmt.Errorf("BuildUpsert: %w", err)
 	}
-	cols := qb.escapeIdentifiers(orderedCols)
-	for i, col := range cols {
-		cols[i] = escapeQuestionMarks(col)
+	cols := make([]string, len(orderedCols))
+	for i, col := range orderedCols {
+		cols[i] = escapeQuestionMarks(qb.EscapeIdentifier(col))
 	}
 
 	insertBuilder := qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
@@ -133,9 +133,10 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	return insertBuilder.Suffix(onConflict+" DO UPDATE SET "+strings.Join(setParts, ", "), updateVals...).ToSql()
 }
 
-// escapeQuestionMarks prepares a rendered identifier for squirrel's placeholder
-// pass, which walks the INSERT column list and the ON CONFLICT suffix alike: the
-// pass does not know quotes, so each `?` is escaped as `??` to come out as written.
-func escapeQuestionMarks(identifier string) string {
-	return strings.ReplaceAll(identifier, "?", "??")
+// escapeQuestionMarks prepares rendered identifiers, one or a joined list, for
+// squirrel's placeholder pass, which walks the INSERT column list and the ON
+// CONFLICT suffix alike: the pass does not know quotes, so each `?` is escaped
+// as `??` to come out as written.
+func escapeQuestionMarks(identifiers string) string {
+	return strings.ReplaceAll(identifiers, "?", "??")
 }
