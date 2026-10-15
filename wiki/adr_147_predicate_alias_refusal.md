@@ -29,9 +29,11 @@ place a predicate operand is judged, applied to the RESOLVED operand, so a
 non-nil pointer to an aliased expression is refused the same way.
 
 - **Order:** the family refusal first, so an aliased expression at an `f` door
-  reports `ErrExpressionInFilter`; then the alias, BEFORE `Validate()`, the order
-  `Having` and `valueExpression` use, so an alias that also fails the grammar
-  still reports `ErrAliasInPredicate`.
+  reports `ErrExpressionInFilter`. An `f` door takes values only (#1259), so the
+  expression itself is the fault there, and removing the alias would still leave
+  a refused operand. Then the alias, BEFORE `Validate()`, the order `Having` and
+  `valueExpression` use, so an alias that also fails the grammar still reports
+  `ErrAliasInPredicate`.
 - **Surface:** the refusal surfaces at `ToSQL()`, with the operator in the
   message: `<op>: alias is not allowed in a predicate operand: <alias>`.
 - **`GroupBy` and `OrderBy` keep rendering the body without its alias, by
@@ -45,9 +47,13 @@ non-nil pointer to an aliased expression is refused the same way.
   an operand.
 - **Drop the alias silently, as before.** Rejected: an alias the caller wrote is
   intent, and `Having` and the value cells already refuse that silence.
-- **Refuse the alias at `GroupBy`/`OrderBy` too.** Rejected: it would break the
-  shared-expression idiom for no safety gain, since nothing is dropped there that
-  `Select` does not render.
+- **Judge the alias at the `f` doors too (`ErrAliasInPredicate` everywhere).**
+  Rejected: #1259 keeps `FilterFactory` value-only, so at an `f` door the
+  expression itself is the fault, and dropping the alias would still fail.
+  Reporting the alias first would point the caller at the wrong fix.
+- **Refuse the alias at `GroupBy`/`OrderBy` too.** Rejected: GROUP BY and ORDER BY
+  reference the expression, not its projection name, so refusing the alias would
+  force two copies of one expression.
 - **Reuse `ErrAliasInValue`.** Rejected: its text names SET and VALUES, and a
   matcher keyed on it would start firing for predicates.
 
@@ -77,5 +83,9 @@ non-nil pointer to an aliased expression is refused the same way.
   `TestAnAliasedExpressionServesSelectGroupByAndOrderBy`
 - [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) — the
   `Validate()` funnel and its consumption sites
+- [ADR-100](adr_100_vendor_identifier_grammar_behind_renderer.md) — `Select`'s
+  vendor alias check
+- gaborage/go-bricks#1259 — `FilterFactory` takes values; accepting a
+  `RawExpression` is a `JoinFilterFactory` difference
 - gaborage/go-bricks#2121
 - See [migrations.md](migrations.md) `[C72.34]`.

@@ -743,6 +743,7 @@ func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
 			require.ErrorIs(t, err, dbtypes.ErrAliasInPredicate)
+			assert.NotErrorIs(t, err, dbtypes.ErrInvalidAlias)
 		})
 	}
 }
@@ -1318,4 +1319,12 @@ func TestPredicatePositionsRefuseAnAliasedRawExpression(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("message_names_the_operator_and_the_alias", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		_, _, err := qb.Select("t.id").From("t").JoinOn("u", qb.JoinFilter().In("u.c", aliased)).ToSQL()
+
+		require.ErrorContains(t, err, "IN: alias is not allowed in a predicate operand: d")
+	})
 }
