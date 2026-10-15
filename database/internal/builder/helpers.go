@@ -480,10 +480,10 @@ const (
 // expressionOperand judges a RESOLVED operand that is a dbtypes.RawExpression —
 // so a pointer to one is judged the same — by the door's family: a filterFamily
 // door refuses it, a joinFilterFamily door splices its SQL verbatim, with no
-// placeholder and no argument. A spliced expression's alias is refused first —
-// a predicate operand projects nothing, the order Having and valueExpression
-// use — and the rest is validated HERE, at consumption, because RawExpression
-// is a plain struct a caller can build without Expr() (#1153).
+// placeholder and no argument. Its alias is refused before Validate() — a
+// predicate operand projects nothing — and the rest is validated HERE, at
+// consumption, because RawExpression is a plain struct a caller can build
+// without Expr() (#1153).
 func expressionOperand(op string, resolved any, family doorFamily) (sql string, isExpr bool, err error) {
 	expr, isExpr := resolved.(dbtypes.RawExpression)
 	if !isExpr {

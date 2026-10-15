@@ -62,9 +62,8 @@ var (
 	// a non-nil pointer to one, reaches a JoinFilterFactory value door: Eq,
 	// NotEq, Lt, Lte, Gt, Gte, either Between bound, In or NotIn. A predicate
 	// operand projects nothing, so an alias has nowhere to render; at a value or
-	// predicate position, accepting one silently would drop it. GroupBy and
-	// OrderBy render the expression's body without its alias by design, so one
-	// aliased expression can serve Select, GroupBy and OrderBy.
+	// predicate position accepting one silently would drop it (GroupBy and
+	// OrderBy render the body by design).
 	ErrAliasInPredicate = errors.New("alias is not allowed in a predicate operand")
 
 	// ErrExpressionInFilter is returned when a RawExpression, or a non-nil

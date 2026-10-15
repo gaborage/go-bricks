@@ -1222,24 +1222,28 @@ func TestJoinFilterValueDoorsSpliceAResolvedRawExpression(t *testing.T) {
 	}
 }
 
+// jfValueDoors are the ten JoinFilterFactory value doors, each on column "u.c".
+var jfValueDoors = map[string]func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter{
+	"eq":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) },
+	"not_eq":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("u.c", v) },
+	"lt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("u.c", v) },
+	"lte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lte("u.c", v) },
+	"gt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gt("u.c", v) },
+	"gte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gte("u.c", v) },
+	"between_lower": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", v, 5) },
+	"between_upper": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", 5, v) },
+	"in":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.In("u.c", v) },
+	"not_in":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotIn("u.c", v) },
+}
+
 func TestJoinFilterValueDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
 	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
 	blank := dbtypes.RawExpression{SQL: "  "}
 	operands := map[string]any{"blank_expression": blank, "pointer_to_blank_expression": &blank}
-	doors := map[string]func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter{
-		"eq":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) },
-		"not_eq":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("u.c", v) },
-		"lt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("u.c", v) },
-		"lte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lte("u.c", v) },
-		"gt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gt("u.c", v) },
-		"gte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gte("u.c", v) },
-		"between_lower": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", v, 5) },
-		"between_upper": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", 5, v) },
-	}
 
 	for _, v := range inListVendors {
 		vendor := v.vendor
-		for doorName, door := range doors {
+		for doorName, door := range jfValueDoors {
 			for name, operand := range operands {
 				t.Run(vendor+"_"+doorName+"_"+name, func(t *testing.T) {
 					qb := NewQueryBuilder(vendor)
@@ -1291,34 +1295,9 @@ func TestPredicatePositionsRefuseAnAliasedRawExpression(t *testing.T) {
 	badAlias := dbtypes.RawExpression{SQL: "CURRENT_DATE", Alias: "x FROM users"}
 	operands := map[string]any{"aliased": aliased, "pointer_to_aliased": &aliased, "alias_outside_the_grammar": badAlias}
 
-	jfDoors := map[string]func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter{
-		"eq":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) },
-		"not_eq":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("u.c", v) },
-		"lt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("u.c", v) },
-		"lte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lte("u.c", v) },
-		"gt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gt("u.c", v) },
-		"gte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gte("u.c", v) },
-		"between_lower": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", v, 5) },
-		"between_upper": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", 5, v) },
-		"in":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.In("u.c", v) },
-		"not_in":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotIn("u.c", v) },
-	}
-	fDoors := map[string]func(f dbtypes.FilterFactory, v any) dbtypes.Filter{
-		"eq":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Eq("c", v) },
-		"not_eq":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotEq("c", v) },
-		"lt":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lt("c", v) },
-		"lte":           func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lte("c", v) },
-		"gt":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gt("c", v) },
-		"gte":           func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gte("c", v) },
-		"between_lower": func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Between("c", v, 5) },
-		"between_upper": func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Between("c", 5, v) },
-		"in":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.In("c", v) },
-		"not_in":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotIn("c", v) },
-	}
-
 	for _, v := range inListVendors {
 		for name, operand := range operands {
-			for doorName, door := range jfDoors {
+			for doorName, door := range jfValueDoors {
 				t.Run(v.vendor+"_jf_"+doorName+"_"+name, func(t *testing.T) {
 					qb := NewQueryBuilder(v.vendor)
 
@@ -1327,7 +1306,7 @@ func TestPredicatePositionsRefuseAnAliasedRawExpression(t *testing.T) {
 					require.ErrorIs(t, err, dbtypes.ErrAliasInPredicate)
 				})
 			}
-			for doorName, door := range fDoors {
+			for doorName, door := range fValueDoors {
 				t.Run(v.vendor+"_f_"+doorName+"_"+name, func(t *testing.T) {
 					qb := NewQueryBuilder(v.vendor)
 

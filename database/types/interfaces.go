@@ -104,11 +104,12 @@ type JoinFilter interface {
 // enabling mixed JOIN conditions without requiring Raw() for common cases.
 //
 // Column-to-value methods splice a RawExpression, or a non-nil pointer to one, for
-// complex SQL expressions; one carrying an alias is refused with
-// ErrAliasInPredicate, since a predicate operand projects nothing:
+// complex SQL expressions:
 //
 //	jf.Eq("amount", qb.MustExpr("TO_NUMBER('100')"))  // Expression support (no placeholders inside expressions)
 //	jf.Eq("status", "active")                         // Simple value with placeholder
+//
+// An expression carrying an alias is refused with ErrAliasInPredicate.
 type JoinFilterFactory interface {
 	// Column-to-column comparison operators
 	EqColumn(leftColumn, rightColumn string) JoinFilter

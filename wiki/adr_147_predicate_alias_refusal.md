@@ -59,8 +59,9 @@ non-nil pointer to an aliased expression is refused the same way.
 - `f` doors are unchanged: they refuse the expression itself first.
 - `Select`, `GroupBy`, `OrderBy`, `Having`, `Set`, `SetMap`, `Values` and
   `BuildUpsert` are unchanged.
-- On PostgreSQL, `GroupBy`, `OrderBy` and `jf.Eq` still accept an alias such as
-  `a#b` that `Select`'s vendor alias check refuses. That is out of scope here.
+- On PostgreSQL, `GroupBy` and `OrderBy` still accept an alias such as `a#b` that
+  `Select`'s vendor alias check refuses, since they never render it. That is out
+  of scope here.
 
 ## References
 
