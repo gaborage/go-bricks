@@ -301,8 +301,9 @@ idempotent on `(consumer, stream, offset)`. It is **never auto-dropped** — the
 is no retention on the hold ledger; rows leave through a successful replay or an
 operator's `DELETE`. The backlog is visible as the gauges
 `inbox.hold.tenants`, `inbox.hold.rows` and `inbox.hold.oldest_age` (keyed by
-`messaging.consumer.name`), plus one WARN per drain pass naming any tenant held
-longer than `inbox.hold.maxage`.
+`messaging.consumer.name`), plus the drain's Counters, and at most one WARN per
+summary window naming the oldest tenant held longer than `inbox.hold.maxage`
+([outbox.md](outbox.md#hold-ledger)).
 
 A holding consumer that declares no `Retry` gets `streams.DefaultHoldRetry` (3
 attempts, 200ms initial, 2s cap). The single-attempt default is therefore a

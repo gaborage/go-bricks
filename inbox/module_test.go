@@ -3,6 +3,7 @@ package inbox
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -15,21 +16,27 @@ import (
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // fakeRegistrar captures DailyAt registrations. Implements app.JobRegistrar.
 type fakeRegistrar struct {
 	dailyJobs map[string]any
-	// fixedRateJobs records the interval each fixed-rate job asked for, which is
-	// what the hold drain's registration is about.
-	fixedRateJobs map[string]time.Duration
+	// fixedRateJobs records each fixed-rate job and the interval it asked for,
+	// which is what the hold drain's registration is about.
+	fixedRateJobs map[string]fixedRateJob
 }
 
-func (r *fakeRegistrar) FixedRate(jobID string, _ any, interval time.Duration) error {
+type fixedRateJob struct {
+	job      any
+	interval time.Duration
+}
+
+func (r *fakeRegistrar) FixedRate(jobID string, job any, interval time.Duration) error {
 	if r.fixedRateJobs == nil {
-		r.fixedRateJobs = map[string]time.Duration{}
+		r.fixedRateJobs = map[string]fixedRateJob{}
 	}
-	r.fixedRateJobs[jobID] = interval
+	r.fixedRateJobs[jobID] = fixedRateJob{job: job, interval: interval}
 	return nil
 }
 
@@ -459,8 +466,64 @@ func TestRegisterJobsAddsTheHoldDrain(t *testing.T) {
 	reg := &fakeRegistrar{}
 	require.NoError(t, m.RegisterJobs(reg))
 
-	assert.Equal(t, DefaultHoldDrainInterval, reg.fixedRateJobs[holdDrainJobID],
-		"the drain runs at the configured interval")
+	registered := reg.fixedRateJobs[holdDrainJobID]
+	assert.Equal(t, DefaultHoldDrainInterval, registered.interval, "the drain runs at the configured interval")
+	assert.IsNotType(t, &HoldDrain{}, registered.job, "the drain registers wrapped by scheduler.Windowed")
+	executor, ok := registered.job.(scheduler.Executor)
+	require.True(t, ok)
+	// The module has no replayer source here, so a pass would panic on its first
+	// line: an error back means Execute refused without running the drain.
+	assert.Error(t, executor.Execute(drainCtx(nil)), "a Windowed job runs only under the scheduler")
+}
+
+// TestInitBuildsTheHoldDrainOnTheSummaryWindow pins where the over-age WARN's
+// window comes from: scheduler.summary.window, the width the scheduler's own
+// window lines use, with no window claimed before the first WARN.
+func TestInitBuildsTheHoldDrainOnTheSummaryWindow(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return holdReadyDB(), nil }, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Scheduler: config.SchedulerConfig{Summary: config.SchedulerSummaryConfig{Window: 10 * time.Minute}},
+		Inbox: config.InboxConfig{
+			Enabled: true, Tenancy: config.TenancyShared,
+			Hold: config.InboxHoldConfig{Enabled: true},
+		},
+	}
+	require.NoError(t, m.Init(deps))
+
+	assert.Equal(t, 10*time.Minute, m.holdDrain.windowWidth)
+	assert.Equal(t, int64(math.MinInt64), m.holdDrain.warnedWindow)
+}
+
+// TestRegisterJobsRegistersTheHoldDrainWithTheScheduler pins the drain's Counter
+// declarations against the scheduler that enforces them: a name or value it
+// refuses fails here, not at a deployment's startup.
+func TestRegisterJobsRegistersTheHoldDrainWithTheScheduler(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return holdReadyDB(), nil }, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{
+			Enabled: true, Tenancy: config.TenancyShared,
+			// Never due inside the test, so no pass runs against the fixture.
+			Hold: config.InboxHoldConfig{Enabled: true, DrainInterval: time.Hour},
+		},
+	}
+	require.NoError(t, m.Init(deps))
+
+	sched := scheduler.NewModule()
+	require.NoError(t, sched.Init(&app.ModuleDeps{
+		Logger: logger.New("error", false),
+		Config: &config.Config{Scheduler: config.SchedulerConfig{
+			Timezone: "UTC",
+			Timeout:  config.SchedulerTimeoutConfig{Shutdown: time.Second, SlowJob: time.Second},
+			Summary:  config.SchedulerSummaryConfig{Window: 5 * time.Minute},
+		}},
+	}))
+	t.Cleanup(func() { assert.NoError(t, sched.Shutdown()) })
+
+	require.NoError(t, m.RegisterJobs(sched))
 }
 
 // TestRegisterJobsWithoutAHoldAddsNoDrain is the other half: an inbox with no

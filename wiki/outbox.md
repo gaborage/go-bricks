@@ -752,7 +752,7 @@ inbox:
     tablename: gobricks_inbox_hold   # tenant table is "<tablename>_tenant"
     draininterval: 5s      # how often the drain looks for due tenants
     maxbackoff: 5m         # cap on the per-tenant retry backoff
-    maxage: 1h             # a tenant held longer than this earns one WARN per pass
+    maxage: 1h             # held longer: counted; the oldest gets at most one WARN per summary window
     leaseduration: 60s     # one drainer's hold on a tenant, and the replay's time bound
 ```
 
@@ -845,6 +845,42 @@ the lease's end, and stops the batch there with the remaining rows still held. A
 pass that stops with work left — because the batch was full or the lease ran out
 — hands the lease back rather than idling on it, so the next pass can start at
 once on any replica.
+
+**Drain reporting.** The drain is a [Windowed job](scheduler.md#windowed-jobs)
+([ADR-146](adr_146_windowed_job_summary.md)): instead of a line per pass, the
+scheduler writes one window line per `scheduler.summary.window` per replica, and
+an edge line when the job turns failing. Three Counters feed that line and are
+also metrics on the scheduler's meter (scope `scheduler`, with
+`job.id=inbox-hold-drain`). None carries a tenant or consumer attribute; both stay
+values on the event lines.
+
+| Counter | Attribute | Recorded |
+| --- | --- | --- |
+| `inbox.hold.drain.passes` | `role`: `active`, `standby` | Count, once per pass; `standby` when no stream consumer runs on the replica |
+| `inbox.hold.drain.tenants` | `outcome` (below) | once per due tenant, after its last store write succeeded |
+| `inbox.hold.drain.over_max_age` | none | Fail, once per leased tenant found held past `maxage` |
+
+| `outcome` | Kind | The tenant's turn ended because |
+| --- | --- | --- |
+| `released` | Count | its last row replayed and its marker was released |
+| `yielded` | Count | the lease went back with the tenant still held: a full batch, a spent lease, or a release refused for a lost lease or a row a concurrent park added |
+| `contended` | Count | another replica holds its lease |
+| `deferred` | Fail | a replay failed, or a row could not be decoded |
+| `lease_lost` | Fail | the fence refused the row delete or the deferral |
+
+A turn that ends in an error — a store error, a failed lease handback, a
+recovered panic — records no outcome; the error reaches the window line's
+`run.error`. A Fail marks the run failing: a run that fails on a series the job
+was not already failing on writes an edge line (`new` if the job was clean,
+`grew` if it was already failing on others), and the window line is WARN every
+window while any Fail recurs. "Hold exceeds max age" is written at most once per window per replica:
+the first pass in a window to find a tenant past `maxage` names the oldest
+(`consumer`, `tenant`, `held_for`, `attempts`) and `over_max_age_tenants`, the
+count in the pass that wrote the WARN, while `over_max_age` counts every
+sighting. A panic that escapes a consumer's reload or snapshot loses that
+consumer's outcomes and the pass's WARN; the consumers before it keep theirs,
+and the next pass warns again. "Hold lease spent mid-batch" is DEBUG; the
+lease-lost and deferral WARNs and the release INFO are unchanged.
 
 **Operator purge.** A held message is never dropped automatically — there is no
 retention on these tables. To abandon one tenant's backlog, delete its rows

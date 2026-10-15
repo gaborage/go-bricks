@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -14,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // Module implements the GoBricks Module interface for the consumer-side inbox.
@@ -168,11 +170,13 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // one per caller.
 func (m *Module) startHold(deps *app.ModuleDeps) {
 	m.holdDrain = &HoldDrain{
-		resolve:  m.holdStoreFor,
-		replayer: m.holdReplayer,
-		cfg:      m.cfg.Hold,
-		owner:    holdOwnerID(),
-		now:      time.Now,
+		resolve:      m.holdStoreFor,
+		replayer:     m.holdReplayer,
+		cfg:          m.cfg.Hold,
+		owner:        holdOwnerID(),
+		now:          time.Now,
+		windowWidth:  deps.Config.Scheduler.Summary.Window,
+		warnedWindow: math.MinInt64,
 	}
 
 	if deps.MeterProvider == nil {
@@ -257,7 +261,8 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 	// The drain registers independently of retention: a hold that is never drained
 	// parks messages forever, and that must not hinge on the cleanup job's config.
 	if m.holdDrain != nil {
-		if err := registrar.FixedRate(holdDrainJobID, m.holdDrain, m.cfg.Hold.DrainInterval); err != nil {
+		drain := scheduler.Windowed(m.holdDrain.Run, holdDrainCounters()...)
+		if err := registrar.FixedRate(holdDrainJobID, drain, m.cfg.Hold.DrainInterval); err != nil {
 			return fmt.Errorf("inbox: failed to register hold drain job: %w", err)
 		}
 		m.logger.Info().

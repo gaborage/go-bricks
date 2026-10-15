@@ -36,8 +36,9 @@ const (
 // metrics. None carries a tenant or consumer attribute — both are unbounded sets
 // at runtime, so they stay values on the event lines.
 const (
-	holdDrainPassesCounter  = "inbox.hold.drain.passes"
-	holdDrainTenantsCounter = "inbox.hold.drain.tenants"
+	holdDrainPassesCounter     = "inbox.hold.drain.passes"
+	holdDrainTenantsCounter    = "inbox.hold.drain.tenants"
+	holdDrainOverMaxAgeCounter = "inbox.hold.drain.over_max_age"
 
 	holdRoleKey     = "role"
 	holdRoleActive  = "active"
@@ -81,6 +82,7 @@ func holdDrainCounters() []scheduler.Counter {
 	return []scheduler.Counter{
 		{Name: holdDrainPassesCounter, Attrs: []scheduler.AttrSet{{Key: holdRoleKey, Values: []string{holdRoleActive, holdRoleStandby}}}},
 		{Name: holdDrainTenantsCounter, Attrs: []scheduler.AttrSet{{Key: holdOutcomeKey, Values: outcomes}}},
+		{Name: holdDrainOverMaxAgeCounter},
 	}
 }
 
@@ -116,9 +118,18 @@ type HoldDrain struct {
 	statsMu sync.Mutex
 	stats   map[string]*HoldStats
 
-	// now is the Go clock, used only for the age a WARN reports. Every decision
-	// the ledger makes uses database time.
+	// now is the Go clock: the ages the drain reports, the deadline it replays
+	// under, and the summary window it is in. Every decision the ledger makes
+	// uses database time.
 	now func() time.Time
+
+	// windowWidth is scheduler.summary.window. The over-age WARN is written at
+	// most once per window, in the scheduler's UTC-aligned windows.
+	windowWidth time.Duration
+	// warnedWindow is the index of the window the last over-age WARN was written
+	// in, math.MinInt64 before the first. Runs never overlap — the scheduler skips
+	// a trigger while the job runs — so it needs no lock.
+	warnedWindow int64
 }
 
 // holdPass is one consumer's pass: the control-plane database, the store that
@@ -130,8 +141,35 @@ type holdPass struct {
 	replayer app.HoldReplayer
 	consumer string
 
-	// outcomes counts the pass's tenants by how their turn ended; run reports it.
+	// outcomes counts the pass's tenants by how their turn ended, and overAge the
+	// leased tenants it found held past maxage; run reports both.
 	outcomes [len(holdOutcomes)]int64
+	overAge  overAgeTally
+}
+
+// overAgeTally counts the leased tenants found held past maxage, and keeps the
+// oldest of them for the WARN.
+type overAgeTally struct {
+	count     int64
+	consumer  string
+	tenant    string
+	heldSince time.Time
+	heldFor   time.Duration
+	attempts  int
+}
+
+// merge adds other's sightings, keeping whichever oldest tenant was held first.
+// HeldSince decides, not heldFor: a tenant sighted later in a pass reads a later
+// clock, so its age can exceed an older tenant's.
+func (t *overAgeTally) merge(other *overAgeTally) {
+	if other.count == 0 {
+		return
+	}
+	if t.count == 0 || other.heldSince.Before(t.heldSince) {
+		t.consumer, t.tenant, t.heldSince, t.heldFor, t.attempts =
+			other.consumer, other.tenant, other.heldSince, other.heldFor, other.attempts
+	}
+	t.count += other.count
 }
 
 // heldTenant is one tenant's turn under a lease: the ledger's row for it, and the
@@ -142,17 +180,11 @@ type heldTenant struct {
 	deadline time.Time
 }
 
-// Execute runs one drain pass over every holding consumer.
-func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
-	return d.run(jobCtx, noopHoldSink{})
+// Run is the drain's scheduled job: one pass over every holding consumer, its
+// outcomes reported to the scheduler's Recorder.
+func (d *HoldDrain) Run(jc scheduler.JobContext, rec *scheduler.Recorder) error {
+	return d.run(jc, rec)
 }
-
-// noopHoldSink discards a pass's outcomes: the drain has no Recorder to report
-// them to until it registers as a Windowed job.
-type noopHoldSink struct{}
-
-func (noopHoldSink) Count(string, int64, ...attribute.KeyValue) { /* dropped: no Recorder yet */ }
-func (noopHoldSink) Fail(string, int64, ...attribute.KeyValue)  { /* dropped: no Recorder yet */ }
 
 // run is one pass. Each consumer's outcomes reach sink as soon as its pass
 // returns, so a later consumer's panic keeps them; a panic in a consumer's own
@@ -176,6 +208,7 @@ func (d *HoldDrain) run(jc scheduler.JobContext, sink holdSink) error {
 	}
 
 	var errs []error
+	var overAge overAgeTally
 	for _, consumer := range replayer.HoldConsumers() {
 		pass := &holdPass{db: db, store: store, replayer: replayer, consumer: consumer}
 		if err := d.drainConsumer(jc, log, pass); err != nil {
@@ -187,15 +220,51 @@ func (d *HoldDrain) run(jc scheduler.JobContext, sink holdSink) error {
 			if n == 0 {
 				continue
 			}
-			attr := attribute.String(holdOutcomeKey, holdOutcomes[outcome].value)
+			record := sink.Count
 			if holdOutcomes[outcome].fails {
-				sink.Fail(holdDrainTenantsCounter, n, attr)
-			} else {
-				sink.Count(holdDrainTenantsCounter, n, attr)
+				record = sink.Fail
 			}
+			record(holdDrainTenantsCounter, n, attribute.String(holdOutcomeKey, holdOutcomes[outcome].value))
 		}
+		if pass.overAge.count > 0 {
+			sink.Fail(holdDrainOverMaxAgeCounter, pass.overAge.count)
+		}
+		overAge.merge(&pass.overAge)
 	}
+
+	d.warnOverAge(log, &overAge)
 	return errors.Join(errs...)
+}
+
+// warnOverAge writes "Hold exceeds max age" for the pass's oldest over-age
+// tenant, when the pass found one and is the first in its window to.
+func (d *HoldDrain) warnOverAge(log logger.Logger, overAge *overAgeTally) {
+	if overAge.count == 0 || !d.claimOverAgeWindow() {
+		return
+	}
+	log.Warn().
+		Str("consumer", overAge.consumer).
+		Str("tenant", overAge.tenant).
+		Dur("held_for", overAge.heldFor).
+		Int("attempts", overAge.attempts).
+		Int64("over_max_age_tenants", overAge.count).
+		Msg("Hold exceeds max age")
+}
+
+// claimOverAgeWindow claims the current summary window for the over-age WARN,
+// reporting whether it was still unclaimed. A drain without a window — never
+// registered with the scheduler, which refuses one — claims on every call
+// rather than dividing by zero.
+func (d *HoldDrain) claimOverAgeWindow() bool {
+	if d.windowWidth <= 0 {
+		return true
+	}
+	index := d.now().UnixNano() / int64(d.windowWidth)
+	if index == d.warnedWindow {
+		return false
+	}
+	d.warnedWindow = index
+	return true
 }
 
 // drainConsumer runs one consumer's pass and then tells its runners what the
@@ -246,7 +315,7 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *ho
 		return holdOutcomeContended, nil
 	}
 
-	d.warnIfTooOld(log, pass, tenant)
+	d.tallyIfTooOld(pass, tenant)
 	return d.replayTenantRows(ctx, log, pass, &heldTenant{tenant: tenant, deadline: d.leaseDeadline()})
 }
 
@@ -288,7 +357,7 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pas
 			// The lease ran out with rows still held. Stopping is not a failure — the
 			// tenant keeps its place and its backoff — so hand the lease back rather
 			// than making every other replica wait for it to expire.
-			log.Warn().
+			log.Debug().
 				Str("consumer", pass.consumer).
 				Str("tenant", tenant.TenantID).
 				Int("replayed", i).
@@ -418,20 +487,18 @@ func (d *HoldDrain) releaseTenant(ctx context.Context, log logger.Logger, pass *
 	return holdOutcomeReleased, nil
 }
 
-// warnIfTooOld reports a tenant held longer than the configured age. One line per
-// pass per tenant: an operator watching a stuck tenant needs to see it recur.
-func (d *HoldDrain) warnIfTooOld(log logger.Logger, pass *holdPass, tenant *HoldTenant) {
+// tallyIfTooOld counts a leased tenant held longer than the configured age on
+// the pass's tally, which run turns into a Counter and at most one WARN per
+// window: a tenant that yields stays due, and is seen again, every pass.
+func (d *HoldDrain) tallyIfTooOld(pass *holdPass, tenant *HoldTenant) {
 	held := d.now().Sub(tenant.HeldSince)
 	if held <= d.cfg.MaxAge {
 		return
 	}
-
-	log.Warn().
-		Str("consumer", pass.consumer).
-		Str("tenant", tenant.TenantID).
-		Dur("held_for", held).
-		Int("attempts", tenant.Attempts).
-		Msg("Hold exceeds max age")
+	pass.overAge.merge(&overAgeTally{
+		count: 1, consumer: pass.consumer, tenant: tenant.TenantID,
+		heldSince: tenant.HeldSince, heldFor: held, attempts: tenant.Attempts,
+	})
 }
 
 // reloadAndSnapshot tells the runners what the ledger holds and refreshes what
