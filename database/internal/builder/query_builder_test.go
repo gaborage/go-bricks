@@ -4067,3 +4067,35 @@ func TestEscapeIdentifierTrimsBareNames(t *testing.T) {
 		})
 	}
 }
+
+// TestAnAliasedExpressionServesSelectGroupByAndOrderBy pins #2121's other half:
+// GroupBy and OrderBy render an expression's body without its alias, by
+// design, so one aliased expression serves all three clauses; Having and Set
+// keep refusing the alias with their own sentinels.
+func TestAnAliasedExpressionServesSelectGroupByAndOrderBy(t *testing.T) {
+	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+			// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword with an alias, no user input
+			e := qb.MustExpr("CURRENT_DATE", "d")
+
+			groupSQL, _, err := qb.Select("id").From("t").GroupBy(e).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, "SELECT id FROM t GROUP BY CURRENT_DATE", groupSQL)
+
+			orderSQL, _, err := qb.Select("id").From("t").OrderBy(e).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, "SELECT id FROM t ORDER BY CURRENT_DATE", orderSQL)
+
+			allSQL, _, err := qb.Select(e).From("t").GroupBy(e).OrderBy(e).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, "SELECT CURRENT_DATE AS d FROM t GROUP BY CURRENT_DATE ORDER BY CURRENT_DATE", allSQL)
+
+			_, _, err = qb.Select("id").From("t").GroupBy("id").Having(e).ToSQL()
+			require.ErrorIs(t, err, dbtypes.ErrAliasInHaving)
+
+			_, _, err = qb.Update("t").Set("c", e).Where(qb.Filter().Eq("id", 1)).ToSQL()
+			require.ErrorIs(t, err, dbtypes.ErrAliasInValue)
+		})
+	}
+}

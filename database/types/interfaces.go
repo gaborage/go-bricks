@@ -108,6 +108,8 @@ type JoinFilter interface {
 //
 //	jf.Eq("amount", qb.MustExpr("TO_NUMBER('100')"))  // Expression support (no placeholders inside expressions)
 //	jf.Eq("status", "active")                         // Simple value with placeholder
+//
+// An expression carrying an alias is refused with ErrAliasInPredicate.
 type JoinFilterFactory interface {
 	// Column-to-column comparison operators
 	EqColumn(leftColumn, rightColumn string) JoinFilter
@@ -179,6 +181,9 @@ type SelectQueryBuilder interface {
 	InnerJoinOn(table any, filter JoinFilter) SelectQueryBuilder
 	CrossJoinOn(table any) SelectQueryBuilder
 
+	// GroupBy groups by columns or RawExpressions. An expression renders its body
+	// without its alias, by design: one aliased expression can serve Select,
+	// GroupBy and OrderBy.
 	GroupBy(groupBys ...any) SelectQueryBuilder
 
 	// Having adds a HAVING predicate. Prefer a RawExpression from qb.Expr() —
@@ -188,6 +193,8 @@ type SelectQueryBuilder interface {
 	// an error (ErrAliasInHaving), since a predicate projects nothing. Both forms are
 	// raw SQL needing the SECURITY annotation at every call site; see dbtypes.RawExpression.
 	Having(pred any, rest ...any) SelectQueryBuilder
+	// OrderBy orders by columns or RawExpressions. An expression renders its body
+	// without its alias, by design, as at GroupBy.
 	OrderBy(orderBys ...any) SelectQueryBuilder
 	Limit(limit uint64) SelectQueryBuilder
 	Offset(offset uint64) SelectQueryBuilder
