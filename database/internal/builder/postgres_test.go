@@ -279,3 +279,30 @@ func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedConflictKey(t *testing.
 		})
 	}
 }
+
+// TestBuildPostgreSQLUpsertResolvesTheEscapedPlaceholderLikeSet pins that an
+// update expression renders squirrel's `??` escape the way Set does, beside an
+// ordinary key and beside a quoted key that holds a `?` itself.
+func TestBuildPostgreSQLUpsertResolvesTheEscapedPlaceholderLikeSet(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	// SECURITY: Manual SQL review completed - literal expression with an escaped question mark, no user input
+	escaped := dbtypes.RawExpression{SQL: "NVL(x,'??')"}
+
+	setSQL, _, err := qb.Update("t").Set("b", escaped).Where(qb.Filter().Eq("id", 1)).ToSQL()
+	require.NoError(t, err)
+	require.Equal(t, "UPDATE t SET b = NVL(x,'?') WHERE id = $1", setSQL)
+
+	cases := map[string]string{
+		"ordinary_key":           `"b"`,
+		"question_mark_in_a_key": `"a?b"`,
+	}
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
+			sql, args, err := qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1}, map[string]any{key: escaped})
+
+			require.NoError(t, err)
+			assert.Equal(t, `INSERT INTO t ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET `+key+` = NVL(x,'?')`, sql)
+			assert.Equal(t, []any{1}, args)
+		})
+	}
+}
