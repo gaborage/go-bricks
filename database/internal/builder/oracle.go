@@ -240,7 +240,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	for i, col := range quotedInsertCols {
 		cell, cellErr := mergeCell(insertKeys[i], insertColumns[insertKeys[i]], &args)
 		if cellErr != nil {
-			return "", nil, cellErr
+			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
 		}
 		usingValues[i] = cell + " AS " + col
 	}
@@ -261,7 +261,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	for i, col := range quotedUpdateCols {
 		cell, cellErr := mergeCell(updateKeys[i], updateColumns[updateKeys[i]], &args)
 		if cellErr != nil {
-			return "", nil, cellErr
+			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
 		}
 		updateSets[i] = col + " = " + cell
 	}
@@ -291,15 +291,15 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 }
 
 // mergeCell renders one MERGE value: an expression judged by valueExpression is
-// spliced, and any other value is appended to args and rendered as the next
-// `:N`.
+// spliced with squirrel's `??` escape resolved, as Set renders it, and any other
+// value is appended to args and rendered as the next `:N`.
 func mergeCell(column string, value any, args *[]any) (string, error) {
 	exprSQL, isExpr, err := valueExpression(column, value)
 	if err != nil {
-		return "", fmt.Errorf("BuildUpsert: %w", err)
+		return "", err
 	}
 	if isExpr {
-		return exprSQL, nil
+		return strings.ReplaceAll(exprSQL, "??", "?"), nil
 	}
 	*args = append(*args, value)
 	return fmt.Sprintf(":%d", len(*args)), nil

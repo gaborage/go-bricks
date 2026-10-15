@@ -113,8 +113,9 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	escapedCC := qb.escapeIdentifiers(cc)
 	updateCols := sortedKeys(updateKeys)
 
+	onConflict := "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ")"
 	if len(updateCols) == 0 {
-		return insertBuilder.Suffix("ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO NOTHING").ToSql()
+		return insertBuilder.Suffix(onConflict + " DO NOTHING").ToSql()
 	}
 	updateVals, err := valueCells(valuesByKeyOrder(updateKeys, updateCols), keyLabel(updateCols))
 	if err != nil {
@@ -126,5 +127,5 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	for i, col := range updateCols {
 		setParts[i] = qb.EscapeIdentifier(col) + " = ?"
 	}
-	return insertBuilder.Suffix("ON CONFLICT ("+strings.Join(escapedCC, ", ")+") DO UPDATE SET "+strings.Join(setParts, ", "), updateVals...).ToSql()
+	return insertBuilder.Suffix(onConflict+" DO UPDATE SET "+strings.Join(setParts, ", "), updateVals...).ToSql()
 }

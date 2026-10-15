@@ -1202,7 +1202,7 @@ func TestJoinFilterValueDoorsSpliceAResolvedRawExpression(t *testing.T) {
 	}
 	operands := map[string]any{"expression": expr, "pointer_to_expression": &expr}
 
-	for _, v := range []struct{ vendor, placeholder string }{{dbtypes.PostgreSQL, "$1"}, {dbtypes.Oracle, ":1"}} {
+	for _, v := range inListVendors {
 		for _, door := range doors {
 			for name, operand := range operands {
 				t.Run(v.vendor+"_"+door.name+"_"+name, func(t *testing.T) {
@@ -1229,12 +1229,17 @@ func TestJoinFilterValueDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
 	operands := map[string]any{"blank_expression": blank, "pointer_to_blank_expression": &blank}
 	doors := map[string]func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter{
 		"eq":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) },
+		"not_eq":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("u.c", v) },
 		"lt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("u.c", v) },
+		"lte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lte("u.c", v) },
+		"gt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gt("u.c", v) },
+		"gte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gte("u.c", v) },
 		"between_lower": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", v, 5) },
 		"between_upper": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", 5, v) },
 	}
 
-	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+	for _, v := range inListVendors {
+		vendor := v.vendor
 		for doorName, door := range doors {
 			for name, operand := range operands {
 				t.Run(vendor+"_"+doorName+"_"+name, func(t *testing.T) {
@@ -1255,7 +1260,8 @@ func TestJoinFilterValueDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
 func TestJoinFilterValueDoorsTreatANilExpressionPointerAsNil(t *testing.T) {
 	var nilExpr *dbtypes.RawExpression
 
-	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+	for _, v := range inListVendors {
+		vendor := v.vendor
 		t.Run(vendor+"_eq_renders_is_null", func(t *testing.T) {
 			qb := NewQueryBuilder(vendor)
 

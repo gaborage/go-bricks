@@ -34,8 +34,9 @@ type Filter interface {
 //
 // The value doors — Eq, NotEq, Lt, Lte, Gt, Gte, both Between bounds, In and NotIn —
 // take values: a RawExpression, or a non-nil pointer to one, fails ToSQL() with
-// ErrExpressionInFilter. A WHERE-side expression uses Raw with its SECURITY
-// annotation, or a JoinFilterFactory door.
+// ErrExpressionInFilter. A JoinFilterFactory door and the value positions (Set,
+// SetMap, SetExpr, Values, BuildUpsert) splice one; a WHERE-side expression uses
+// Raw with its SECURITY annotation.
 type FilterFactory interface {
 	// Comparison operators
 	Eq(column string, value any) Filter

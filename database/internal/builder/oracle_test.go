@@ -1065,3 +1065,23 @@ func TestBuildUpsertOracleRefusesAnAliasedRawExpression(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildUpsertOracleResolvesTheEscapedPlaceholderLikeSet pins that a MERGE
+// cell renders an expression's `??` escape the way Oracle's Set does.
+func TestBuildUpsertOracleResolvesTheEscapedPlaceholderLikeSet(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	// SECURITY: Manual SQL review completed - literal expression with an escaped question mark, no user input
+	escaped := dbtypes.RawExpression{SQL: "NVL(x, '??')"}
+
+	setSQL, _, err := qb.Update("t").Set("b", escaped).Where(qb.Filter().Eq("id", 1)).ToSQL()
+	require.NoError(t, err)
+	require.Equal(t, "UPDATE t SET b = NVL(x, '?') WHERE id = :1", setSQL)
+
+	sql, args, err := qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1, "a": escaped}, map[string]any{"b": escaped})
+
+	require.NoError(t, err)
+	assert.Equal(t, "MERGE INTO t target USING (SELECT NVL(x, '?') AS a, :1 AS id FROM dual) source"+
+		" ON (target.id = source.id) WHEN MATCHED THEN UPDATE SET b = NVL(x, '?')"+
+		" WHEN NOT MATCHED THEN INSERT (a, id) VALUES (source.a, source.id)", sql)
+	assert.Equal(t, []any{1}, args)
+}

@@ -210,7 +210,7 @@ query := qb.Select("*").
 
 **Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Nine of them follow the *Operand contract* above — the six compare doors, `In`, `NotIn` and `Between`, whose two bounds are each resolved as an ordering operand. `Like` does NOT: it takes a string pattern, so there is no operand to resolve.
 
-**Expression Support:** Every `jf` value door — the six compare doors, both `Between` bounds, `In` and `NotIn` — splices a `qb.Expr()` expression, or a non-nil pointer to one, without placeholders. The `f` value doors refuse one with `dbtypes.ErrExpressionInFilter`.
+**Expression Support:** Every `jf` value door — the six compare doors, both `Between` bounds, `In` and `NotIn` — splices a `qb.Expr()` expression, or a non-nil pointer to one, without placeholders. The `f` value doors refuse one with `dbtypes.ErrExpressionInFilter`; a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
 
 **Raw() Escape Hatch:** Use `jf.Raw()` only for conditions type-safe methods cannot express (e.g., spatial functions, exotic operators).
 
@@ -230,8 +230,8 @@ p := productCols.As("p")
 // SECURITY: Manual SQL review completed - constant literal, no user input
 subquery := qb.Select(qb.MustExpr("1")).From("reviews").
     Where(f.And(
-        // SECURITY: Manual SQL review completed - correlated column identifier from struct tags, no user input
-        f.Eq("reviews."+reviewCols.Col("ProductID"), qb.MustExpr(p.Col("ID"))),
+        // SECURITY: Manual SQL review completed - correlated column identifiers from struct tags, no user input
+        f.Raw("reviews."+reviewCols.Col("ProductID")+" = "+p.Col("ID")),
         f.Eq(reviewCols.Col("Rating"), 5),
     ))
 
@@ -407,15 +407,15 @@ the builder. The grammar will not accept a computed one.
   so an empty SQL body, or an alias that is not an unquoted identifier, fails from
   `ToSQL()` (ADR-082 2026-08-24 addendum). The alias was a six-substring denylist
   until `[C61.9]` replaced it with the grammar. The doors that consume one are
-  the clause doors `Select`, `GroupBy`, `OrderBy` and `Having`, the nine `f`/`jf`
-  operand doors, and the value doors `Set`, `SetMap` (update and insert) and
-  `Values`: `qb.Update("t").Set("updated_at", qb.MustExpr("now()"))` renders
+  the clause doors `Select`, `GroupBy`, `OrderBy` and `Having`, the nine `jf`
+  operand doors, and the value doors `Set`, `SetMap` (update and insert),
+  `Values` and both `BuildUpsert` column maps:
+  `qb.Update("t").Set("updated_at", qb.MustExpr("now()"))` renders
   `SET updated_at = now()` with no placeholder and no argument, every other value
-  staying parameterized. An alias in a value position is a `ToSQL()` error
+  staying parameterized. An alias in a value position is an error
   (`ErrAliasInValue`) naming the column or one-based position — a `SET` or
-  `VALUES` cell projects nothing, so it could only be dropped silently.
-  `BuildUpsert`'s column maps are NOT value doors: a `RawExpression` there is
-  bound as a parameter and fails at the driver.
+  `VALUES` cell projects nothing, so it could only be dropped silently. The nine
+  `f` operand doors refuse an expression with `ErrExpressionInFilter`.
 - **`f.Raw()`, `jf.Raw()`, `database.Raw()`, an UPDATE `SetExpr()`, a STRING
   predicate passed to `Having()`, and every `RawExpression` SQL body** do. Each
   admits arbitrary SQL — the first two a WHERE/JOIN fragment, `database.Raw` the

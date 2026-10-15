@@ -2323,10 +2323,13 @@ func TestInDoorsBindAMapOrChanWithResolvableValuesWhole(t *testing.T) {
 // blank or not — fails the statement instead of binding a struct the driver
 // cannot encode.
 func TestFilterValueDoorsRefuseARawExpressionAtToSQL(t *testing.T) {
-	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword and a blank literal, neither rendered
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword, an aliased one and a blank literal, none rendered
 	expr := dbtypes.MustExpr("CURRENT_DATE")
+	aliased := dbtypes.MustExpr("CURRENT_DATE", "d")
 	blank := dbtypes.RawExpression{SQL: "  "}
-	operands := map[string]any{"expression": expr, "pointer_to_expression": &expr, "blank_expression": blank}
+	operands := map[string]any{
+		"expression": expr, "pointer_to_expression": &expr, "aliased_expression": aliased, "blank_expression": blank,
+	}
 	doors := map[string]func(f dbtypes.FilterFactory, v any) dbtypes.Filter{
 		"eq":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Eq("c", v) },
 		"not_eq":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotEq("c", v) },

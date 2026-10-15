@@ -13227,7 +13227,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   expression in an upsert map, still bound, as `Set` and `Values` bind one; `f.JSONContains`.
 - gate: match = a detect hit. no-match = no hit. (a) and (c) bound the expression struct as an
   argument, which the driver rejects at exec (pgx `cannot find encode plan`), so no working caller
-  depends on them; (b) bound the pointer the same way.
+  depends on them; (b) bound the dereferenced struct the same way.
 - before: (a) rendered `col = $1`, `col < $1` or `(col >= $1 AND col <= $2)` with the
   `RawExpression` struct among the args; (b) `jf.Eq("u.c", &e)` rendered `u.c = $1` bound to the
   struct; (c) `BuildUpsert` bound each expression as an argument (`VALUES ($1,…)` and
