@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -29,6 +31,65 @@ const (
 	holdDrainTenantsPerPass = 100
 	holdDrainRowsPerRead    = 50
 )
+
+// The drain's Counters: the scheduler reports them on its window line and as
+// metrics. None carries a tenant or consumer attribute — both are unbounded sets
+// at runtime, so they stay values on the event lines.
+const (
+	holdDrainPassesCounter  = "inbox.hold.drain.passes"
+	holdDrainTenantsCounter = "inbox.hold.drain.tenants"
+
+	holdRoleKey     = "role"
+	holdRoleActive  = "active"
+	holdRoleStandby = "standby"
+	holdOutcomeKey  = "outcome"
+)
+
+// holdOutcome is how one due tenant's turn in a pass ended. The zero value is no
+// outcome: a turn that ended in an error reports the error, not an outcome.
+type holdOutcome int
+
+const (
+	holdOutcomeNone holdOutcome = iota
+	holdOutcomeReleased
+	holdOutcomeYielded
+	holdOutcomeContended
+	holdOutcomeDeferred
+	holdOutcomeLeaseLost
+)
+
+// holdOutcomes names each outcome on the tenants Counter and whether it fails
+// the run.
+var holdOutcomes = [...]struct {
+	value string
+	fails bool
+}{
+	holdOutcomeReleased:  {"released", false},
+	holdOutcomeYielded:   {"yielded", false},
+	holdOutcomeContended: {"contended", false},
+	holdOutcomeDeferred:  {"deferred", true},
+	holdOutcomeLeaseLost: {"lease_lost", true},
+}
+
+// holdDrainCounters declares the Counters the drain's run reports against. The
+// scheduler refuses a call they do not allow, so every call names these.
+func holdDrainCounters() []scheduler.Counter {
+	outcomes := make([]string, 0, len(holdOutcomes))
+	for _, o := range holdOutcomes[holdOutcomeReleased:] {
+		outcomes = append(outcomes, o.value)
+	}
+	return []scheduler.Counter{
+		{Name: holdDrainPassesCounter, Attrs: []scheduler.AttrSet{{Key: holdRoleKey, Values: []string{holdRoleActive, holdRoleStandby}}}},
+		{Name: holdDrainTenantsCounter, Attrs: []scheduler.AttrSet{{Key: holdOutcomeKey, Values: outcomes}}},
+	}
+}
+
+// holdSink is what a pass reports its outcomes to: the scheduler's Recorder in
+// production.
+type holdSink interface {
+	Count(name string, n int64, attrs ...attribute.KeyValue)
+	Fail(name string, n int64, attrs ...attribute.KeyValue)
+}
 
 // HoldDrain replays held messages, tenant by tenant, in the order they were
 // parked. One pass leases a tenant, replays its rows oldest-first, and either
@@ -68,6 +129,9 @@ type holdPass struct {
 	store    HoldStore
 	replayer app.HoldReplayer
 	consumer string
+
+	// outcomes counts the pass's tenants by how their turn ended; run reports it.
+	outcomes [len(holdOutcomes)]int64
 }
 
 // heldTenant is one tenant's turn under a lease: the ledger's row for it, and the
@@ -80,17 +144,33 @@ type heldTenant struct {
 
 // Execute runs one drain pass over every holding consumer.
 func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
-	log := jobCtx.Logger()
+	return d.run(jobCtx, noopHoldSink{})
+}
+
+// noopHoldSink discards a pass's outcomes: the drain has no Recorder to report
+// them to until it registers as a Windowed job.
+type noopHoldSink struct{}
+
+func (noopHoldSink) Count(string, int64, ...attribute.KeyValue) { /* dropped: no Recorder yet */ }
+func (noopHoldSink) Fail(string, int64, ...attribute.KeyValue)  { /* dropped: no Recorder yet */ }
+
+// run is one pass. Each consumer's outcomes reach sink as soon as its pass
+// returns, so a later consumer's panic keeps them; a panic in a consumer's own
+// reload or snapshot, after its tenants drained, loses that consumer's.
+func (d *HoldDrain) run(jc scheduler.JobContext, sink holdSink) error {
+	log := jc.Logger()
 
 	replayer := d.replayer()
 	if replayer == nil {
 		// The ledger is configured but no stream consumer runs here — another
 		// replica's drain owns these holds.
 		log.Debug().Msg("Hold drain skipped: no stream consumers on this replica")
+		sink.Count(holdDrainPassesCounter, 1, attribute.String(holdRoleKey, holdRoleStandby))
 		return nil
 	}
+	sink.Count(holdDrainPassesCounter, 1, attribute.String(holdRoleKey, holdRoleActive))
 
-	db, store, err := d.resolve(jobCtx)
+	db, store, err := d.resolve(jc)
 	if err != nil {
 		return err
 	}
@@ -98,8 +178,21 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 	var errs []error
 	for _, consumer := range replayer.HoldConsumers() {
 		pass := &holdPass{db: db, store: store, replayer: replayer, consumer: consumer}
-		if err := d.drainConsumer(jobCtx, log, pass); err != nil {
+		if err := d.drainConsumer(jc, log, pass); err != nil {
 			errs = append(errs, err)
+		}
+
+		for outcome := holdOutcomeReleased; outcome < holdOutcome(len(holdOutcomes)); outcome++ {
+			n := pass.outcomes[outcome]
+			if n == 0 {
+				continue
+			}
+			attr := attribute.String(holdOutcomeKey, holdOutcomes[outcome].value)
+			if holdOutcomes[outcome].fails {
+				sink.Fail(holdDrainTenantsCounter, n, attr)
+			} else {
+				sink.Count(holdDrainTenantsCounter, n, attr)
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -116,9 +209,11 @@ func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *
 
 	var errs []error
 	for i := range due {
-		if err := d.drainTenant(ctx, log, pass, &due[i]); err != nil {
+		outcome, err := d.drainTenant(ctx, log, pass, &due[i])
+		if err != nil {
 			errs = append(errs, err)
 		}
+		pass.outcomes[outcome]++
 	}
 
 	// Reload and snapshot even when a tenant failed: the set and the gauges
@@ -129,25 +224,26 @@ func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *
 	return errors.Join(errs...)
 }
 
-// drainTenant replays one tenant's rows under a lease. A panic in a replay is
-// contained here: the tenant that caused it is reported by TYPE (ADR-081) and the
-// pass continues with the next one.
+// drainTenant replays one tenant's rows under a lease and reports how its turn
+// ended. A panic in a replay is contained here: the tenant that caused it is
+// reported by TYPE (ADR-081), with no outcome, and the pass continues with the
+// next one.
 func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *holdPass,
 	tenant *HoldTenant,
-) (err error) {
+) (outcome holdOutcome, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("inbox hold drain: tenant %q: panic (type: %T)", tenant.TenantID, recovered)
+			outcome, err = holdOutcomeNone, fmt.Errorf("inbox hold drain: tenant %q: panic (type: %T)", tenant.TenantID, recovered)
 		}
 	}()
 
 	taken, err := pass.store.AcquireLease(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner, d.cfg.LeaseDuration)
 	if err != nil {
-		return err
+		return holdOutcomeNone, err
 	}
 	if !taken {
 		// Another replica is replaying this tenant; its rows are not ours to touch.
-		return nil
+		return holdOutcomeContended, nil
 	}
 
 	d.warnIfTooOld(log, pass, tenant)
@@ -177,11 +273,11 @@ func (d *HoldDrain) leaseDeadline() time.Time {
 // stopped. A short batch means the tenant is drained, so it is released.
 func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pass *holdPass,
 	held *heldTenant,
-) error {
+) (holdOutcome, error) {
 	tenant := held.tenant
 	rows, err := pass.store.NextRows(ctx, pass.db, pass.consumer, tenant.TenantID, holdDrainRowsPerRead)
 	if err != nil {
-		return err
+		return holdOutcomeNone, err
 	}
 	if len(rows) == 0 {
 		return d.releaseTenant(ctx, log, pass, tenant)
@@ -200,9 +296,9 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pas
 			return d.yieldLease(ctx, pass, tenant)
 		}
 
-		done, err := d.replayRow(ctx, log, pass, held, &rows[i])
-		if err != nil || !done {
-			return err
+		outcome, err := d.replayRow(ctx, log, pass, held, &rows[i])
+		if err != nil || outcome != holdOutcomeNone {
+			return outcome, err
 		}
 	}
 
@@ -218,22 +314,26 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pas
 // yieldLease hands the tenant back while it is still held, so the next pass — on
 // this replica or another — starts immediately rather than after the lease runs
 // out.
-func (d *HoldDrain) yieldLease(ctx context.Context, pass *holdPass, tenant *HoldTenant) error {
-	return pass.store.ReleaseLease(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner)
+func (d *HoldDrain) yieldLease(ctx context.Context, pass *holdPass, tenant *HoldTenant) (holdOutcome, error) {
+	if err := pass.store.ReleaseLease(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner); err != nil {
+		return holdOutcomeNone, err
+	}
+	return holdOutcomeYielded, nil
 }
 
-// replayRow replays one row, reporting whether the tenant may continue. A failure
-// defers the tenant: everything behind this row stays parked, which is the order
-// the hold exists to keep.
+// replayRow replays one row. No outcome means the row is done and the tenant may
+// continue; any outcome ends the tenant's turn. A failure defers the tenant:
+// everything behind this row stays parked, which is the order the hold exists to
+// keep.
 func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *holdPass,
 	held *heldTenant, row *HoldRow,
-) (bool, error) {
+) (holdOutcome, error) {
 	tenant := held.tenant
 	msg, err := heldMessageOf(row)
 	if err != nil {
 		// The row is unreadable, which no retry fixes; deferring keeps it — and the
 		// tenant's order — while the WARN names the row an operator has to look at.
-		return false, d.deferTenant(ctx, log, pass, tenant, row, err)
+		return d.deferTenant(ctx, log, pass, tenant, row, err)
 	}
 
 	// The handler runs under the lease, not the job: a replay still running after
@@ -242,12 +342,12 @@ func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *hold
 	err = pass.replayer.Replay(replayCtx, pass.consumer, msg)
 	cancel()
 	if err != nil {
-		return false, d.deferTenant(ctx, log, pass, tenant, row, err)
+		return d.deferTenant(ctx, log, pass, tenant, row, err)
 	}
 
 	deleted, err := pass.store.DeleteRow(ctx, pass.db, pass.consumer, row.Stream, row.Offset, tenant.TenantID, d.owner)
 	if err != nil {
-		return false, err
+		return holdOutcomeNone, err
 	}
 	if !deleted {
 		// The fence refused the write: this replica no longer holds the lease, so
@@ -257,21 +357,21 @@ func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *hold
 			Str("tenant", tenant.TenantID).
 			Int64("offset", row.Offset).
 			Msg("Hold lease lost mid-replay; the row stays for the next pass")
-		return false, nil
+		return holdOutcomeLeaseLost, nil
 	}
-	return true, nil
+	return holdOutcomeNone, nil
 }
 
 // deferTenant records a failed replay and backs the tenant off.
 func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *holdPass,
 	tenant *HoldTenant, row *HoldRow, replayErr error,
-) error {
+) (holdOutcome, error) {
 	attempt := tenant.Attempts + 1
 	wait := d.backoffFor(attempt)
 
 	deferred, err := pass.store.Defer(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner, wait, replayErr.Error())
 	if err != nil {
-		return err
+		return holdOutcomeNone, err
 	}
 	if !deferred {
 		// The fence refused the write, as in replayRow: this replica no longer holds
@@ -282,7 +382,7 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 			Str("tenant", tenant.TenantID).
 			Int64("offset", row.Offset).
 			Msg("Hold lease lost before the tenant could be deferred")
-		return nil
+		return holdOutcomeLeaseLost, nil
 	}
 
 	log.Warn().
@@ -294,25 +394,28 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 		Dur("next_attempt_in", wait).
 		Str("error_type", fmt.Sprintf("%T", replayErr)).
 		Msg("Hold replay failed; tenant deferred")
-	return nil
+	return holdOutcomeDeferred, nil
 }
 
-// releaseTenant drops the tenant's marker once its last row is replayed.
+// releaseTenant drops the tenant's marker once its last row is replayed. A
+// refused release — a lost lease, or rows a concurrent park added — leaves the
+// tenant held for the next pass, which is a yield, not a failure.
 func (d *HoldDrain) releaseTenant(ctx context.Context, log logger.Logger, pass *holdPass,
 	tenant *HoldTenant,
-) error {
+) (holdOutcome, error) {
 	released, err := pass.store.Release(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner)
 	if err != nil {
-		return err
+		return holdOutcomeNone, err
 	}
-	if released {
-		log.Info().
-			Str("consumer", pass.consumer).
-			Str("tenant", tenant.TenantID).
-			Dur("held_for", d.now().Sub(tenant.HeldSince)).
-			Msg("Tenant released from hold")
+	if !released {
+		return holdOutcomeYielded, nil
 	}
-	return nil
+	log.Info().
+		Str("consumer", pass.consumer).
+		Str("tenant", tenant.TenantID).
+		Dur("held_for", d.now().Sub(tenant.HeldSince)).
+		Msg("Tenant released from hold")
+	return holdOutcomeReleased, nil
 }
 
 // warnIfTooOld reports a tenant held longer than the configured age. One line per
