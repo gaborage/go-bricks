@@ -147,7 +147,8 @@ with a construction-time-only guard.
 it returns; `QueryBuilder.Select`, `SelectQueryBuilder.GroupBy`,
 `SelectQueryBuilder.OrderBy` and the `JoinFilterFactory` value doors (`Eq`,
 `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, and both bounds of `Between`) call it again at
-consumption, where a struct literal is indistinguishable from a constructed value.
+consumption, where a struct literal is indistinguishable from a constructed value;
+so, since #2119, do `In` and `NotIn` on both families.
 One copy of the denylist (pre-`[C61.9]`; the identifier grammar since), two call
 sites for it.
 

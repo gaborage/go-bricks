@@ -2048,7 +2048,6 @@ type inListDoor struct {
 	call      func(qb *QueryBuilder, values any) (string, []any, error)
 }
 
-// render spells the full statement around one rendered predicate.
 func (d inListDoor) render(predicate string) string {
 	return d.clause + " " + predicate
 }
@@ -2092,18 +2091,18 @@ var inListDoors = []inListDoor{
 var inListVendors = []struct {
 	vendor      string
 	placeholder string
+	second      string
 }{
-	{vendor: dbtypes.PostgreSQL, placeholder: "$1"},
-	{vendor: dbtypes.Oracle, placeholder: ":1"},
+	{vendor: dbtypes.PostgreSQL, placeholder: "$1", second: "$2"},
+	{vendor: dbtypes.Oracle, placeholder: ":1", second: ":2"},
 }
 
 type inScalarStatus string
 
 type inScalarPoint struct{ X int }
 
-// TestInDoorsWrapEveryResolvedScalarType pins the IN doors' scalar contract for
-// an operand that is not a driver.Value: such a scalar reached the list path
-// unwrapped and panicked on the element type of a non-list (#2119).
+// TestInDoorsWrapEveryResolvedScalarType pins #2119: a scalar that is not a
+// driver.Value is one bound element.
 func TestInDoorsWrapEveryResolvedScalarType(t *testing.T) {
 	five := 5
 	scalars := []struct {
@@ -2167,44 +2166,46 @@ func TestInDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
 	}
 }
 
-// TestInDoorsKeepTheirOutputForOperandsThatAlreadyRendered pins the shapes the
-// scalar wrap and the expression splice must not move.
-func TestInDoorsKeepTheirOutputForOperandsThatAlreadyRendered(t *testing.T) {
+// TestInDoorsKeepTheDriverValueAndListShapes pins the output the scalar wrap and
+// the expression splice must not move. width is the bound placeholder count; 0
+// is the door's empty-set constant.
+func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 	raw := []byte("raw")
 	ids := []int{1, 2}
+	operands := []struct {
+		name     string
+		value    any
+		width    int
+		wantArgs []any
+	}{
+		{name: "int64", value: int64(5), width: 1, wantArgs: []any{int64(5)}},
+		{name: "string", value: "a", width: 1, wantArgs: []any{"a"}},
+		{name: "byte_slice", value: raw, width: 1, wantArgs: []any{raw}},
+		{name: "pointer_to_byte_slice", value: &raw, width: 1, wantArgs: []any{raw}},
+		{name: "untyped_nil", value: nil, width: 0, wantArgs: nil},
+		{name: "typed_nil_pointer", value: (*int)(nil), width: 1, wantArgs: []any{nil}},
+		{name: "slice", value: ids, width: 2, wantArgs: []any{1, 2}},
+		{name: "pointer_to_slice", value: &ids, width: 2, wantArgs: []any{1, 2}},
+		{name: "empty_slice", value: []int{}, width: 0, wantArgs: nil},
+	}
 
 	for _, v := range inListVendors {
-		second := "$2"
-		if v.vendor == dbtypes.Oracle {
-			second = ":2"
+		placeholders := map[int]string{
+			1: "(" + v.placeholder + ")",
+			2: "(" + v.placeholder + "," + v.second + ")",
 		}
-		one := "(" + v.placeholder + ")"
-		two := "(" + v.placeholder + "," + second + ")"
-
 		for _, door := range inListDoors {
-			operands := []struct {
-				name     string
-				value    any
-				wantPred string
-				wantArgs []any
-			}{
-				{name: "int64", value: int64(5), wantPred: door.predicate + " " + one, wantArgs: []any{int64(5)}},
-				{name: "string", value: "a", wantPred: door.predicate + " " + one, wantArgs: []any{"a"}},
-				{name: "byte_slice", value: raw, wantPred: door.predicate + " " + one, wantArgs: []any{raw}},
-				{name: "pointer_to_byte_slice", value: &raw, wantPred: door.predicate + " " + one, wantArgs: []any{raw}},
-				{name: "untyped_nil", value: nil, wantPred: door.emptySet, wantArgs: nil},
-				{name: "typed_nil_pointer", value: (*int)(nil), wantPred: door.predicate + " " + one, wantArgs: []any{nil}},
-				{name: "slice", value: ids, wantPred: door.predicate + " " + two, wantArgs: []any{1, 2}},
-				{name: "pointer_to_slice", value: &ids, wantPred: door.predicate + " " + two, wantArgs: []any{1, 2}},
-				{name: "empty_slice", value: []int{}, wantPred: door.emptySet, wantArgs: nil},
-			}
-
 			for _, op := range operands {
 				t.Run(v.vendor+"_"+door.name+"_"+op.name, func(t *testing.T) {
+					wantPred := door.emptySet
+					if op.width > 0 {
+						wantPred = door.predicate + " " + placeholders[op.width]
+					}
+
 					sql, args, err := door.build(t, v.vendor, op.value)
 
 					require.NoError(t, err)
-					assert.Equal(t, door.render(op.wantPred), sql)
+					assert.Equal(t, door.render(wantPred), sql)
 					assert.Equal(t, op.wantArgs, args)
 				})
 			}
