@@ -238,8 +238,8 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 
 // In creates an IN condition (column IN (values...)).
 // Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression is spliced as `column IN (<sql>)`, with no
-// placeholder and no argument.
+// in a one-element list. A RawExpression, or a pointer to one, is spliced as
+// `column IN (<sql>)`, with no placeholder and no argument.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -249,12 +249,13 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 //	jf.In("day", qb.MustExpr("CURRENT_DATE"))       // day IN (CURRENT_DATE)
 func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 	// Empty IN list - always false
-	return inListPredicate(jff.qb, column, values, false, wrapJoinFilter)
+	return inListPredicate(jff.qb, column, values, false, joinFilterFamily, wrapJoinFilter)
 }
 
 // NotIn creates a NOT IN condition (column NOT IN (values...)).
 // Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression is spliced as `column NOT IN (<sql>)`.
+// in a one-element list. A RawExpression, or a pointer to one, is spliced as
+// `column NOT IN (<sql>)`.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -263,7 +264,7 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 //	jf.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilter {
 	// Empty NOT IN list - always true
-	return inListPredicate(jff.qb, column, values, true, wrapJoinFilter)
+	return inListPredicate(jff.qb, column, values, true, joinFilterFamily, wrapJoinFilter)
 }
 
 // Like creates a LIKE condition.

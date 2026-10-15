@@ -45,11 +45,11 @@ func combineLogical[T squirrel.Sqlizer, C logicalContainer](
 }
 
 // inListPredicate is the shared body of Filter.In/NotIn and
-// JoinFilter.In/NotIn: quote the column, splice a RawExpression operand as
-// `col IN (<sql>)`, otherwise resolve the list operand through the same
-// normalization the compare doors use (nil/pointer/Valuer elements,
-// scalar-to-one-element wrapping), and render either squirrel's own
-// empty-list constant or the column-to-list comparison.
+// JoinFilter.In/NotIn: quote the column, resolve the list operand through the
+// same normalization the compare doors use (nil/pointer/Valuer elements,
+// scalar-to-one-element wrapping, a RawExpression judged by family — spliced as
+// `col IN (<sql>)` or refused), and render either squirrel's own empty-list
+// constant or the column-to-list comparison.
 //
 // negate selects NOT IN over IN. The three facts that vary between the two —
 // the operand-resolution error's operator name, the vendor-neutral constant
@@ -67,6 +67,7 @@ func inListPredicate[T squirrel.Sqlizer](
 	column string,
 	values any,
 	negate bool,
+	family doorFamily,
 	wrap func(squirrel.Sqlizer) T,
 ) T {
 	quotedColumn, err := qb.quoteColumnForQuery(column)
@@ -77,16 +78,12 @@ func inListPredicate[T squirrel.Sqlizer](
 	if negate {
 		op, emptySQL = "NOT IN", "(1=1)"
 	}
-	exprSQL, isExpr, err := expressionOperand(values)
+	normalized, exprSQL, empty, err := resolveListOperands(op, values, family)
 	if err != nil {
 		return wrap(errorSqlizer{err: err})
 	}
-	if isExpr {
+	if exprSQL != "" {
 		return wrap(squirrel.Expr(quotedColumn + " " + op + " (" + exprSQL + ")"))
-	}
-	normalized, empty, err := resolveListOperands(op, values)
-	if err != nil {
-		return wrap(errorSqlizer{err: err})
 	}
 	if empty {
 		return wrap(squirrel.Expr(emptySQL))

@@ -148,23 +148,23 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 
 // In creates an IN filter (column IN (values...)).
 // Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression is spliced as `column IN (<sql>)`, with no
-// placeholder and no argument.
+// in a one-element list. A RawExpression, or a pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL(); use JoinFilterFactory.In or f.Raw.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
 //
 //	f.In("status", []string{"active", "pending"})  // IN with multiple values
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
-//	f.In("day", qb.MustExpr("CURRENT_DATE"))       // day IN (CURRENT_DATE)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	// Empty slice special case: generate "1=0" to ensure no matches
-	return inListPredicate(ff.qb, column, values, false, wrapFilter)
+	return inListPredicate(ff.qb, column, values, false, filterFamily, wrapFilter)
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
 // Accepts both slices and scalar values. A scalar of any type is resolved and wrapped
-// in a one-element list. A RawExpression is spliced as `column NOT IN (<sql>)`.
+// in a one-element list. A RawExpression, or a pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter at ToSQL().
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -173,7 +173,7 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 //	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	// Empty NOT IN list - always true
-	return inListPredicate(ff.qb, column, values, true, wrapFilter)
+	return inListPredicate(ff.qb, column, values, true, filterFamily, wrapFilter)
 }
 
 // Like creates a case-insensitive LIKE filter.

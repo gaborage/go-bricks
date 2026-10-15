@@ -454,15 +454,29 @@ func (w *operandWalk) askValuer(value *any) (asked bool, err error) {
 	return true, nil
 }
 
-// expressionOperand recognizes the one predicate operand that is spliced rather
-// than resolved and bound: a dbtypes.RawExpression, whose SQL goes into the
-// predicate verbatim with no placeholder and no argument. It is validated HERE,
-// at consumption, because RawExpression is a plain struct a caller can build
+// doorFamily names the predicate family judging an operand: a FilterFactory
+// door takes values only, a JoinFilterFactory door also splices a
+// RawExpression (#1259).
+type doorFamily uint8
+
+const (
+	filterFamily doorFamily = iota
+	joinFilterFamily
+)
+
+// expressionOperand judges a RESOLVED operand that is a dbtypes.RawExpression —
+// so a pointer to one is judged the same — by the door's family: a filterFamily
+// door refuses it, a joinFilterFamily door splices its SQL verbatim, with no
+// placeholder and no argument. A spliced expression is validated HERE, at
+// consumption, because RawExpression is a plain struct a caller can build
 // without Expr() (#1153).
-func expressionOperand(value any) (sql string, isExpr bool, err error) {
-	expr, isExpr := value.(dbtypes.RawExpression)
+func expressionOperand(op string, resolved any, family doorFamily) (sql string, isExpr bool, err error) {
+	expr, isExpr := resolved.(dbtypes.RawExpression)
 	if !isExpr {
 		return "", false, nil
+	}
+	if family != joinFilterFamily {
+		return "", true, fmt.Errorf("%w: %s", dbtypes.ErrExpressionInFilter, op)
 	}
 	if validateErr := expr.Validate(); validateErr != nil {
 		return "", true, validateErr
@@ -620,28 +634,41 @@ var valuerType = reflect.TypeOf((*driver.Valuer)(nil)).Elem()
 // []byte, which is a driver.Value and therefore ONE operand, not N.
 //
 // The returned `empty` reports the empty-set case for the caller's constant,
-// which the pass-through path could not answer from a []any length.
-func resolveListOperands(op string, values any) (normalized any, empty bool, err error) {
+// which the pass-through path could not answer from a []any length. A non-empty
+// `exprSQL` is a RawExpression the family splices in place of a list.
+func resolveListOperands(op string, values any, family doorFamily) (normalized any, exprSQL string, empty bool, err error) {
 	if values == nil {
-		return []any{}, true, nil
+		return []any{}, "", true, nil
 	}
 
 	v := reflect.ValueOf(values)
-	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
-		element, nullOrList, resolveErr := resolveOperand(values)
-		if resolveErr != nil {
-			return nil, false, wrapOperandErr(op, resolveErr)
-		}
-		// Route on what resolution PRODUCED, not the operand's surface form: a
-		// nil or a scalar of any type is one element, and a list — a pointer to
-		// a slice resolves to one — is expanded.
-		if element == nil || !nullOrList {
-			return []any{element}, false, nil
-		}
-		return resolveList(op, reflect.ValueOf(element), element)
+	if v.Kind() == reflect.Slice || v.Kind() == reflect.Array {
+		normalized, empty, err = resolveList(op, v, values)
+		return normalized, "", empty, err
 	}
 
-	return resolveList(op, v, values)
+	element, nullOrList, resolveErr := resolveOperand(values)
+	if resolveErr != nil {
+		return nil, "", false, wrapOperandErr(op, resolveErr)
+	}
+	exprSQL, isExpr, exprErr := expressionOperand(op, element, family)
+	if isExpr {
+		return nil, exprSQL, false, exprErr
+	}
+	// Route on what resolution PRODUCED, not the operand's surface form: a list —
+	// a pointer to a slice resolves to one — is expanded; a map or chan passes
+	// through whole, squirrel binding it as one `= ?` operand, or the empty set
+	// when it holds nothing, and its elements are never walked; a nil or any
+	// other scalar is one element.
+	resolved := reflect.ValueOf(element)
+	if element != nil && nullOrList {
+		normalized, empty, err = resolveList(op, resolved, element)
+		return normalized, "", empty, err
+	}
+	if kind := resolved.Kind(); kind == reflect.Map || kind == reflect.Chan {
+		return element, "", resolved.Len() == 0, nil
+	}
+	return []any{element}, "", false, nil
 }
 
 // resolveList resolves an already-classified list operand. It takes both the

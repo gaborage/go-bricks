@@ -2045,15 +2045,16 @@ type inListDoor struct {
 	clause    string
 	predicate string
 	emptySet  string
+	boundOne  string
 	call      func(qb *QueryBuilder, values any) (string, []any, error)
 }
 
-func (d inListDoor) render(predicate string) string {
+func (d *inListDoor) render(predicate string) string {
 	return d.clause + " " + predicate
 }
 
 // build renders the door's statement and fails the test on a panic.
-func (d inListDoor) build(t *testing.T, vendor string, values any) (sql string, args []any, err error) {
+func (d *inListDoor) build(t *testing.T, vendor string, values any) (sql string, args []any, err error) {
 	t.Helper()
 	require.NotPanics(t, func() {
 		sql, args, err = d.call(NewQueryBuilder(vendor), values)
@@ -2061,32 +2062,37 @@ func (d inListDoor) build(t *testing.T, vendor string, values any) (sql string, 
 	return sql, args, err
 }
 
-var inListDoors = []inListDoor{
+var inFilterDoors = []inListDoor{
 	{
-		name: "filter_in", clause: "SELECT * FROM t WHERE", predicate: "c IN", emptySet: "(1=0)",
+		name: "filter_in", clause: "SELECT * FROM t WHERE", predicate: "c IN", emptySet: "(1=0)", boundOne: "c =",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
 			return qb.Select("*").From("t").Where(qb.Filter().In("c", values)).ToSQL()
 		},
 	},
 	{
-		name: "filter_not_in", clause: "SELECT * FROM t WHERE", predicate: "c NOT IN", emptySet: "(1=1)",
+		name: "filter_not_in", clause: "SELECT * FROM t WHERE", predicate: "c NOT IN", emptySet: "(1=1)", boundOne: "c <>",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
 			return qb.Select("*").From("t").Where(qb.Filter().NotIn("c", values)).ToSQL()
 		},
 	},
+}
+
+var inJoinFilterDoors = []inListDoor{
 	{
-		name: "join_filter_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c IN", emptySet: "(1=0)",
+		name: "join_filter_in", clause: "SELECT * FROM t JOIN u ON", predicate: "u.c IN", emptySet: "(1=0)", boundOne: "u.c =",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
-			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().In("c", values)).ToSQL()
+			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().In("u.c", values)).ToSQL()
 		},
 	},
 	{
-		name: "join_filter_not_in", clause: "SELECT * FROM t JOIN u ON", predicate: "c NOT IN", emptySet: "(1=1)",
+		name: "join_filter_not_in", clause: "SELECT * FROM t JOIN u ON", predicate: "u.c NOT IN", emptySet: "(1=1)", boundOne: "u.c <>",
 		call: func(qb *QueryBuilder, values any) (string, []any, error) {
-			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().NotIn("c", values)).ToSQL()
+			return qb.Select("*").From("t").JoinOn("u", qb.JoinFilter().NotIn("u.c", values)).ToSQL()
 		},
 	},
 }
+
+var inListDoors = append(append([]inListDoor{}, inFilterDoors...), inJoinFilterDoors...)
 
 var inListVendors = []struct {
 	vendor      string
@@ -2134,29 +2140,51 @@ func TestInDoorsWrapEveryResolvedScalarType(t *testing.T) {
 	}
 }
 
-func TestInDoorsSpliceARawExpression(t *testing.T) {
+func TestJoinFilterInDoorsSpliceARawExpression(t *testing.T) {
 	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword, no user input
 	expr := dbtypes.MustExpr("CURRENT_DATE")
+	operands := map[string]any{"expression": expr, "pointer_to_expression": &expr}
 
 	for _, v := range inListVendors {
-		for _, door := range inListDoors {
-			t.Run(v.vendor+"_"+door.name, func(t *testing.T) {
-				sql, args, err := door.build(t, v.vendor, expr)
+		for _, door := range inJoinFilterDoors {
+			for name, operand := range operands {
+				t.Run(v.vendor+"_"+door.name+"_"+name, func(t *testing.T) {
+					sql, args, err := door.build(t, v.vendor, operand)
 
-				require.NoError(t, err)
-				assert.Equal(t, door.render(door.predicate+" (CURRENT_DATE)"), sql)
-				assert.Empty(t, args)
-			})
+					require.NoError(t, err)
+					assert.Equal(t, door.render(door.predicate+" (CURRENT_DATE)"), sql)
+					assert.Empty(t, args)
+				})
+			}
 		}
 	}
 }
 
-func TestInDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
+func TestFilterInDoorsRefuseARawExpressionAtToSQL(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword and a blank literal, neither rendered
+	expr := dbtypes.MustExpr("CURRENT_DATE")
+	blank := dbtypes.RawExpression{SQL: "  "}
+	operands := map[string]any{"expression": expr, "pointer_to_expression": &expr, "blank_expression": blank}
+
+	for _, v := range inListVendors {
+		for _, door := range inFilterDoors {
+			for name, operand := range operands {
+				t.Run(v.vendor+"_"+door.name+"_"+name, func(t *testing.T) {
+					_, _, err := door.build(t, v.vendor, operand)
+
+					require.ErrorIs(t, err, dbtypes.ErrExpressionInFilter)
+				})
+			}
+		}
+	}
+}
+
+func TestJoinFilterInDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
 	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
 	blank := dbtypes.RawExpression{SQL: "  "}
 
 	for _, v := range inListVendors {
-		for _, door := range inListDoors {
+		for _, door := range inJoinFilterDoors {
 			t.Run(v.vendor+"_"+door.name, func(t *testing.T) {
 				_, _, err := door.build(t, v.vendor, blank)
 
@@ -2167,7 +2195,7 @@ func TestInDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
 }
 
 // TestInDoorsKeepTheDriverValueAndListShapes pins the output the scalar wrap and
-// the expression splice must not move. width is the bound placeholder count; 0
+// the expression judgment must not move. width is the bound placeholder count; 0
 // is the door's empty-set constant.
 func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 	raw := []byte("raw")
@@ -2207,6 +2235,68 @@ func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 					require.NoError(t, err)
 					assert.Equal(t, door.render(wantPred), sql)
 					assert.Equal(t, op.wantArgs, args)
+				})
+			}
+		}
+	}
+}
+
+// TestInDoorsKeepTheMapAndChanRendering pins the 50820b01 rendering of a map or
+// chan operand: bound as one `=` / `<>` argument, or the empty-set constant when
+// it holds nothing.
+func TestInDoorsKeepTheMapAndChanRendering(t *testing.T) {
+	var nilMap map[string]int
+	values := map[string]int{"a": 1}
+	operands := []struct {
+		name     string
+		value    any
+		bound    bool
+		wantArgs []any
+	}{
+		{name: "map", value: values, bound: true, wantArgs: []any{values}},
+		{name: "empty_map", value: map[string]int{}, bound: false, wantArgs: nil},
+		{name: "nil_map", value: nilMap, bound: false, wantArgs: nil},
+		{name: "empty_chan", value: make(chan int), bound: false, wantArgs: nil},
+	}
+
+	for _, v := range inListVendors {
+		for _, door := range inListDoors {
+			for _, op := range operands {
+				t.Run(v.vendor+"_"+door.name+"_"+op.name, func(t *testing.T) {
+					wantPred := door.emptySet
+					if op.bound {
+						wantPred = door.boundOne + " " + v.placeholder
+					}
+
+					sql, args, err := door.build(t, v.vendor, op.value)
+
+					require.NoError(t, err)
+					assert.Equal(t, door.render(wantPred), sql)
+					assert.Equal(t, op.wantArgs, args)
+				})
+			}
+		}
+	}
+}
+
+// TestInDoorsRenderAnInterfaceOrPointerValuedMapLikeAConcreteOne pins #2119: a
+// map whose values could need resolution panicked walking its elements.
+func TestInDoorsRenderAnInterfaceOrPointerValuedMapLikeAConcreteOne(t *testing.T) {
+	five := 5
+	operands := map[string]any{
+		"interface_valued_map": map[string]any{"a": 1},
+		"pointer_valued_map":   map[string]*int{"a": &five},
+	}
+
+	for _, v := range inListVendors {
+		for _, door := range inListDoors {
+			for name, operand := range operands {
+				t.Run(v.vendor+"_"+door.name+"_"+name, func(t *testing.T) {
+					sql, args, err := door.build(t, v.vendor, operand)
+
+					require.NoError(t, err)
+					assert.Equal(t, door.render(door.boundOne+" "+v.placeholder), sql)
+					assert.Equal(t, []any{operand}, args)
 				})
 			}
 		}
