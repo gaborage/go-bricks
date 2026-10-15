@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -203,22 +204,21 @@ func TestBuildPostgreSQLUpsertRefusesAnAliasedRawExpression(t *testing.T) {
 	}
 }
 
-// TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAnUpdateOnlyQuotedKey pins the
-// pre-#2120 rendering: the update clause goes through squirrel's placeholder
-// pass, which must not rewrite a `?` inside a quoted update-column identifier.
+// TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAnUpdateOnlyQuotedKey pins that
+// squirrel's placeholder pass leaves a `?` in a quoted update column as written.
 func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAnUpdateOnlyQuotedKey(t *testing.T) {
 	cases := map[string]string{
-		`"a?b"`:  `INSERT INTO t ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "a?b" = $2`,
-		`"a??b"`: `INSERT INTO t ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "a??b" = $2`,
+		"single_question_mark":  `"a?b"`,
+		"doubled_question_mark": `"a??b"`,
 	}
 
-	for key, wantSQL := range cases {
-		t.Run(key, func(t *testing.T) {
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
 			sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{"id"},
 				map[string]any{"id": 1}, map[string]any{key: 2})
 
 			require.NoError(t, err)
-			assert.Equal(t, wantSQL, sql)
+			assert.Equal(t, `INSERT INTO t ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET `+key+` = $2`, sql)
 			assert.Equal(t, []any{1, 2}, args)
 		})
 	}
@@ -236,4 +236,46 @@ func TestBuildPostgreSQLUpsertBindsAPointerToARawExpression(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `INSERT INTO t ("created","id") VALUES ($1,$2) ON CONFLICT ("id") DO UPDATE SET "updated" = $3`, sql)
 	assert.Equal(t, []any{&now, 1, &now}, args)
+}
+
+func TestBuildPostgreSQLUpsertRefusesABlankRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
+	blank := dbtypes.RawExpression{SQL: "  "}
+	cases := map[string]struct{ insert, update map[string]any }{
+		"in_insert_columns": {insert: map[string]any{"id": 1, "created": blank}, update: map[string]any{"name": "b"}},
+		"in_update_columns": {insert: map[string]any{"id": 1}, update: map[string]any{"updated": blank}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{"id"}, tc.insert, tc.update)
+
+			require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+		})
+	}
+}
+
+// TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedConflictKey pins that the
+// ON CONFLICT target keeps a `?` in a quoted key as written, and that the SET
+// placeholder continues the statement's own numbering after it. The INSERT
+// column list is not pinned: squirrel's pass rewrites a `?` there, as it did
+// before #2120.
+func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedConflictKey(t *testing.T) {
+	cases := map[string]struct {
+		update     map[string]any
+		wantSuffix string
+	}{
+		"do_update":  {update: map[string]any{"n": "y"}, wantSuffix: ` ON CONFLICT ("a?b") DO UPDATE SET "n" = $4`},
+		"do_nothing": {update: nil, wantSuffix: ` ON CONFLICT ("a?b") DO NOTHING`},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			sql, _, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{`"a?b"`},
+				map[string]any{`"a?b"`: 1, "n": "x"}, tc.update)
+
+			require.NoError(t, err)
+			assert.True(t, strings.HasSuffix(sql, tc.wantSuffix), "got %s", sql)
+		})
+	}
 }

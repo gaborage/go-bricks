@@ -113,7 +113,7 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	escapedCC := qb.escapeIdentifiers(cc)
 	updateCols := sortedKeys(updateKeys)
 
-	onConflict := "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ")"
+	onConflict := "ON CONFLICT (" + suffixIdentifier(strings.Join(escapedCC, ", ")) + ")"
 	if len(updateCols) == 0 {
 		return insertBuilder.Suffix(onConflict + " DO NOTHING").ToSql()
 	}
@@ -123,12 +123,16 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	}
 	// Bind the caller's update values rather than reusing EXCLUDED, which ignored
 	// them and broke update columns absent from the insert (EXCLUDED.<not-inserted>).
-	// The clause goes through squirrel's placeholder pass, which does not know
-	// quotes, so a `?` in a quoted identifier is escaped as `??` to come out as
-	// written.
 	setParts := make([]string, len(updateCols))
 	for i, col := range updateCols {
-		setParts[i] = strings.ReplaceAll(qb.EscapeIdentifier(col), "?", "??") + " = ?"
+		setParts[i] = suffixIdentifier(qb.EscapeIdentifier(col)) + " = ?"
 	}
 	return insertBuilder.Suffix(onConflict+" DO UPDATE SET "+strings.Join(setParts, ", "), updateVals...).ToSql()
+}
+
+// suffixIdentifier prepares a rendered identifier for the ON CONFLICT suffix,
+// which goes through squirrel's placeholder pass: the pass does not know
+// quotes, so each `?` is escaped as `??` to come out as written.
+func suffixIdentifier(identifier string) string {
+	return strings.ReplaceAll(identifier, "?", "??")
 }

@@ -1090,8 +1090,13 @@ func TestBuildUpsertOracleResolvesTheEscapedPlaceholderLikeSet(t *testing.T) {
 // hand-built MERGE renders a `?` inside a quoted update-column identifier as
 // written.
 func TestBuildUpsertOracleKeepsAQuestionMarkInAnUpdateOnlyQuotedKey(t *testing.T) {
-	for _, key := range []string{`"a?b"`, `"a??b"`} {
-		t.Run(key, func(t *testing.T) {
+	cases := map[string]string{
+		"single_question_mark":  `"a?b"`,
+		"doubled_question_mark": `"a??b"`,
+	}
+
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
 			sql, args, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"},
 				map[string]any{"id": 1}, map[string]any{key: 2})
 
@@ -1116,4 +1121,21 @@ func TestBuildUpsertOracleBindsAPointerToARawExpression(t *testing.T) {
 	assert.Equal(t, "MERGE INTO t target USING (SELECT :1 AS created, :2 AS id FROM dual) source ON (target.id = source.id)"+
 		" WHEN MATCHED THEN UPDATE SET updated = :3 WHEN NOT MATCHED THEN INSERT (created, id) VALUES (source.created, source.id)", sql)
 	assert.Equal(t, []any{&now, 1, &now}, args)
+}
+
+func TestBuildUpsertOracleRefusesABlankRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
+	blank := dbtypes.RawExpression{SQL: "  "}
+	cases := map[string]struct{ insert, update map[string]any }{
+		"in_insert_columns": {insert: map[string]any{"id": 1, "created": blank}, update: map[string]any{"name": "b"}},
+		"in_update_columns": {insert: map[string]any{"id": 1}, update: map[string]any{"updated": blank}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"}, tc.insert, tc.update)
+
+			require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+		})
+	}
 }
