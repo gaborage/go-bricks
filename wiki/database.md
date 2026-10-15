@@ -405,7 +405,8 @@ the builder. The grammar will not accept a computed one.
   whitespace-only body — and the rest of a `RawExpression` is validated too: a
   struct literal built without the constructor is checked where it is consumed,
   so an empty SQL body, or an alias that is not an unquoted identifier, fails from
-  `ToSQL()` (ADR-082 2026-08-24 addendum). The alias was a six-substring denylist
+  `ToSQL()`, or from `BuildUpsert`'s own returned error (ADR-082 2026-08-24
+  addendum). The alias was a six-substring denylist
   until `[C61.9]` replaced it with the grammar. The doors that consume one are
   the clause doors `Select`, `GroupBy`, `OrderBy` and `Having`, the nine `jf`
   operand doors, and the value doors `Set`, `SetMap` (update and insert),

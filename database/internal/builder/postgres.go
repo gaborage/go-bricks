@@ -123,9 +123,12 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	}
 	// Bind the caller's update values rather than reusing EXCLUDED, which ignored
 	// them and broke update columns absent from the insert (EXCLUDED.<not-inserted>).
+	// The clause goes through squirrel's placeholder pass, which does not know
+	// quotes, so a `?` in a quoted identifier is escaped as `??` to come out as
+	// written.
 	setParts := make([]string, len(updateCols))
 	for i, col := range updateCols {
-		setParts[i] = qb.EscapeIdentifier(col) + " = ?"
+		setParts[i] = strings.ReplaceAll(qb.EscapeIdentifier(col), "?", "??") + " = ?"
 	}
 	return insertBuilder.Suffix(onConflict+" DO UPDATE SET "+strings.Join(setParts, ", "), updateVals...).ToSql()
 }

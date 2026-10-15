@@ -202,3 +202,38 @@ func TestBuildPostgreSQLUpsertRefusesAnAliasedRawExpression(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAnUpdateOnlyQuotedKey pins the
+// pre-#2120 rendering: the update clause goes through squirrel's placeholder
+// pass, which must not rewrite a `?` inside a quoted update-column identifier.
+func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAnUpdateOnlyQuotedKey(t *testing.T) {
+	cases := map[string]string{
+		`"a?b"`:  `INSERT INTO t ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "a?b" = $2`,
+		`"a??b"`: `INSERT INTO t ("id") VALUES ($1) ON CONFLICT ("id") DO UPDATE SET "a??b" = $2`,
+	}
+
+	for key, wantSQL := range cases {
+		t.Run(key, func(t *testing.T) {
+			sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{"id"},
+				map[string]any{"id": 1}, map[string]any{key: 2})
+
+			require.NoError(t, err)
+			assert.Equal(t, wantSQL, sql)
+			assert.Equal(t, []any{1, 2}, args)
+		})
+	}
+}
+
+// TestBuildPostgreSQLUpsertBindsAPointerToARawExpression pins that a pointer to
+// an expression stays a bound value in either map, as Set and Values bind one.
+func TestBuildPostgreSQLUpsertBindsAPointerToARawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword, bound not rendered
+	now := dbtypes.MustExpr("CURRENT_TIMESTAMP")
+
+	sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{"id"},
+		map[string]any{"id": 1, "created": &now}, map[string]any{"updated": &now})
+
+	require.NoError(t, err)
+	assert.Equal(t, `INSERT INTO t ("created","id") VALUES ($1,$2) ON CONFLICT ("id") DO UPDATE SET "updated" = $3`, sql)
+	assert.Equal(t, []any{&now, 1, &now}, args)
+}

@@ -1085,3 +1085,35 @@ func TestBuildUpsertOracleResolvesTheEscapedPlaceholderLikeSet(t *testing.T) {
 		" WHEN NOT MATCHED THEN INSERT (a, id) VALUES (source.a, source.id)", sql)
 	assert.Equal(t, []any{1}, args)
 }
+
+// TestBuildUpsertOracleKeepsAQuestionMarkInAnUpdateOnlyQuotedKey pins that the
+// hand-built MERGE renders a `?` inside a quoted update-column identifier as
+// written.
+func TestBuildUpsertOracleKeepsAQuestionMarkInAnUpdateOnlyQuotedKey(t *testing.T) {
+	for _, key := range []string{`"a?b"`, `"a??b"`} {
+		t.Run(key, func(t *testing.T) {
+			sql, args, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"},
+				map[string]any{"id": 1}, map[string]any{key: 2})
+
+			require.NoError(t, err)
+			assert.Equal(t, "MERGE INTO t target USING (SELECT :1 AS id FROM dual) source ON (target.id = source.id)"+
+				" WHEN MATCHED THEN UPDATE SET "+key+" = :2 WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)", sql)
+			assert.Equal(t, []any{1, 2}, args)
+		})
+	}
+}
+
+// TestBuildUpsertOracleBindsAPointerToARawExpression pins that a pointer to an
+// expression stays a bound value in either map, as Set and Values bind one.
+func TestBuildUpsertOracleBindsAPointerToARawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword, bound not rendered
+	now := dbtypes.MustExpr("CURRENT_TIMESTAMP")
+
+	sql, args, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"},
+		map[string]any{"id": 1, "created": &now}, map[string]any{"updated": &now})
+
+	require.NoError(t, err)
+	assert.Equal(t, "MERGE INTO t target USING (SELECT :1 AS created, :2 AS id FROM dual) source ON (target.id = source.id)"+
+		" WHEN MATCHED THEN UPDATE SET updated = :3 WHEN NOT MATCHED THEN INSERT (created, id) VALUES (source.created, source.id)", sql)
+	assert.Equal(t, []any{&now, 1, &now}, args)
+}
