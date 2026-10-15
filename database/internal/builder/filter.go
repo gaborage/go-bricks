@@ -81,6 +81,9 @@ func (ff *FilterFactory) equality(column, op string, value any) dbtypes.Filter {
 	if err != nil {
 		return filterOf(nil, wrapOperandErr(op, err))
 	}
+	if _, isExpr, exprErr := expressionOperand(op, resolved, filterFamily); isExpr {
+		return filterOf(nil, exprErr)
+	}
 	if op == opEqual {
 		return filterOf(ff.qb.Eq(column, resolved))
 	}
@@ -106,7 +109,7 @@ func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand("<", value)
+	resolved, _, err := orderingOperand("<", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -117,7 +120,7 @@ func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand("<=", value)
+	resolved, _, err := orderingOperand("<=", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -128,7 +131,7 @@ func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand(">", value)
+	resolved, _, err := orderingOperand(">", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -139,7 +142,7 @@ func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
 // Column names are automatically quoted according to database vendor rules.
 // A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
-	resolved, err := orderingOperand(">=", value)
+	resolved, _, err := orderingOperand(">=", value, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
@@ -251,11 +254,11 @@ func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbty
 	// A BETWEEN bound is an ordering operand, so it takes the ordering contract:
 	// there is no rendering of `col >= NULL`, and a nil pointer to a Valuer would
 	// otherwise reach squirrel's GtOrEq prologue and panic (#1209).
-	lower, err := orderingOperand(">=", lowerBound)
+	lower, _, err := orderingOperand(">=", lowerBound, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}
-	upper, err := orderingOperand("<=", upperBound)
+	upper, _, err := orderingOperand("<=", upperBound, filterFamily)
 	if err != nil {
 		return filterOf(nil, err)
 	}

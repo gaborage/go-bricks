@@ -95,7 +95,10 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	// builder's own output by the rule meant for a caller's input, and would
 	// validate the table a second time.
 	orderedCols := sortedKeys(insertColumns)
-	vals := valuesByKeyOrder(insertColumns, orderedCols)
+	vals, err := valueCells(valuesByKeyOrder(insertColumns, orderedCols), func(i int) string { return orderedCols[i] })
+	if err != nil {
+		return "", nil, fmt.Errorf("BuildUpsert: %w", err)
+	}
 	cols := qb.escapeIdentifiers(orderedCols)
 
 	insertBuilder := qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
@@ -110,8 +113,12 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	escapedCC := qb.escapeIdentifiers(cc)
 	updateCols := sortedKeys(updateKeys)
 
+	sql, args, err := insertBuilder.ToSql()
+	if err != nil {
+		return "", nil, err
+	}
+
 	var conflictClause string
-	var updateVals []any
 	if len(updateCols) == 0 {
 		// If no update columns are provided, do nothing on conflict
 		conflictClause = "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO NOTHING"
@@ -120,24 +127,24 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 		// proposed-insert values). EXCLUDED silently ignored the updateColumns values —
 		// diverging from Oracle's MERGE — and broke update columns absent from the insert
 		// set (EXCLUDED.<not-inserted> references a non-existent column). The update
-		// placeholders continue numbering after the insert placeholders ($len(vals)+i).
-		updateVals = valuesByKeyOrder(updateKeys, updateCols)
+		// placeholders continue numbering after the insert's bound arguments; an
+		// expression is spliced and numbers nothing.
 		setParts := make([]string, 0, len(updateCols))
-		for i, col := range updateCols {
-			escapedCol := qb.EscapeIdentifier(col)
-			setParts = append(setParts, fmt.Sprintf("%s = $%d", escapedCol, len(vals)+1+i))
+		for _, col := range updateCols {
+			value := updateKeys[col]
+			exprSQL, isExpr, cellErr := valueExpression(col, value)
+			if cellErr != nil {
+				return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
+			}
+			if isExpr {
+				setParts = append(setParts, qb.EscapeIdentifier(col)+" = "+exprSQL)
+				continue
+			}
+			args = append(args, value)
+			setParts = append(setParts, fmt.Sprintf("%s = $%d", qb.EscapeIdentifier(col), len(args)))
 		}
 		conflictClause = "ON CONFLICT (" + strings.Join(escapedCC, ", ") + ") DO UPDATE SET " + strings.Join(setParts, ", ")
 	}
-
-	// Generate the final SQL with conflict resolution
-	sql, args, err := insertBuilder.ToSql()
-	if err != nil {
-		return "", nil, err
-	}
-
-	// Append the update values (bound by the placeholders above) after the insert args.
-	args = append(args, updateVals...)
 
 	query = sql + " " + conflictClause
 	return query, args, nil

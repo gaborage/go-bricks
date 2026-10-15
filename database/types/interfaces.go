@@ -31,6 +31,11 @@ type Filter interface {
 
 // FilterFactory provides methods for creating composable, type-safe query filters.
 // Filters maintain vendor-specific quoting rules and can be combined with AND/OR/NOT logic.
+//
+// The value doors — Eq, NotEq, Lt, Lte, Gt, Gte, both Between bounds, In and NotIn —
+// take values: a RawExpression, or a non-nil pointer to one, fails ToSQL() with
+// ErrExpressionInFilter. A WHERE-side expression uses Raw with its SECURITY
+// annotation, or a JoinFilterFactory door.
 type FilterFactory interface {
 	// Comparison operators
 	Eq(column string, value any) Filter
@@ -97,7 +102,8 @@ type JoinFilter interface {
 // JoinFilters support both column-to-column comparisons and column-to-value comparisons,
 // enabling mixed JOIN conditions without requiring Raw() for common cases.
 //
-// Column-to-value methods accept RawExpression for complex SQL expressions:
+// Column-to-value methods splice a RawExpression, or a non-nil pointer to one, for
+// complex SQL expressions:
 //
 //	jf.Eq("amount", qb.MustExpr("TO_NUMBER('100')"))  // Expression support (no placeholders inside expressions)
 //	jf.Eq("status", "active")                         // Simple value with placeholder
@@ -623,6 +629,11 @@ type QueryBuilderInterface interface {
 	// you (SELECT ... FOR UPDATE or equivalent). Splitting one atomic upsert into
 	// two statements lets a concurrent writer interleave, and under READ COMMITTED
 	// a shared transaction alone does not stop it.
+	//
+	// A RawExpression value in insertColumns or updateColumns is spliced, as Set and
+	// Values splice one: no placeholder and no argument, the remaining placeholders
+	// numbered contiguously across insert and update. An aliased one is refused with
+	// ErrAliasInValue.
 	//
 	// Precondition failures match the ErrUpsert* sentinels in this package via errors.Is.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)

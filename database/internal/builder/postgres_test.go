@@ -3,6 +3,7 @@ package builder
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -164,6 +165,40 @@ func TestBuildPostgreSQLUpsertRejectsConflictColumnInUpdateSet(t *testing.T) {
 				require.Contains(t, sql, "DO NOTHING",
 					"an empty update set must still build, emitting DO NOTHING")
 			}
+		})
+	}
+}
+
+// TestBuildPostgreSQLUpsertSplicesARawExpression pins #2120: an expression in
+// either map is spliced through valueCell, and only the bound values number
+// placeholders, contiguously across the insert and the update.
+func TestBuildPostgreSQLUpsertSplicesARawExpression(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword, no user input
+	now := dbtypes.MustExpr("CURRENT_TIMESTAMP")
+
+	sql, args, err := qb.BuildUpsert("t", []string{"id"},
+		map[string]any{"id": 1, "created": now, "name": "a"},
+		map[string]any{"name": "b", "updated": now})
+
+	require.NoError(t, err)
+	assert.Equal(t, `INSERT INTO t ("created","id","name") VALUES (CURRENT_TIMESTAMP,$1,$2) ON CONFLICT ("id") DO UPDATE SET "name" = $3, "updated" = CURRENT_TIMESTAMP`, sql)
+	assert.Equal(t, []any{1, "a", "b"}, args)
+}
+
+func TestBuildPostgreSQLUpsertRefusesAnAliasedRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword with an alias, never rendered
+	aliased := dbtypes.MustExpr("CURRENT_TIMESTAMP", "ts")
+	cases := map[string]struct{ insert, update map[string]any }{
+		"in_insert_columns": {insert: map[string]any{"id": 1, "created": aliased}, update: map[string]any{"name": "b"}},
+		"in_update_columns": {insert: map[string]any{"id": 1}, update: map[string]any{"updated": aliased}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{"id"}, tc.insert, tc.update)
+
+			require.ErrorIs(t, err, dbtypes.ErrAliasInValue)
 		})
 	}
 }

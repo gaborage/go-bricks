@@ -4,6 +4,7 @@ import (
 	dbsql "database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1176,4 +1177,100 @@ func TestNotEqSpellsInequalityLikeTheFilterFamily(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, wantSQL, sql)
 	assert.Equal(t, wantArgs, args)
+}
+
+// TestJoinFilterValueDoorsSpliceAResolvedRawExpression pins #2120: the jf value
+// doors judge an expression after resolution, so a pointer to one splices
+// exactly like the expression itself.
+func TestJoinFilterValueDoorsSpliceAResolvedRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword, no user input
+	expr := dbtypes.MustExpr("CURRENT_DATE")
+	doors := []struct {
+		name     string
+		build    func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter
+		wantPred string
+		wantArgs bool
+	}{
+		{name: "eq", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) }, wantPred: "u.c = CURRENT_DATE"},
+		{name: "not_eq", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("u.c", v) }, wantPred: "u.c <> CURRENT_DATE"},
+		{name: "lt", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("u.c", v) }, wantPred: "u.c < CURRENT_DATE"},
+		{name: "lte", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lte("u.c", v) }, wantPred: "u.c <= CURRENT_DATE"},
+		{name: "gt", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gt("u.c", v) }, wantPred: "u.c > CURRENT_DATE"},
+		{name: "gte", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gte("u.c", v) }, wantPred: "u.c >= CURRENT_DATE"},
+		{name: "between_lower", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", v, 5) }, wantPred: "(u.c >= CURRENT_DATE AND u.c <= %s)", wantArgs: true},
+		{name: "between_upper", build: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", 5, v) }, wantPred: "(u.c >= %s AND u.c <= CURRENT_DATE)", wantArgs: true},
+	}
+	operands := map[string]any{"expression": expr, "pointer_to_expression": &expr}
+
+	for _, v := range []struct{ vendor, placeholder string }{{dbtypes.PostgreSQL, "$1"}, {dbtypes.Oracle, ":1"}} {
+		for _, door := range doors {
+			for name, operand := range operands {
+				t.Run(v.vendor+"_"+door.name+"_"+name, func(t *testing.T) {
+					qb := NewQueryBuilder(v.vendor)
+					wantPred, wantArgs := door.wantPred, []any(nil)
+					if door.wantArgs {
+						wantPred, wantArgs = fmt.Sprintf(door.wantPred, v.placeholder), []any{5}
+					}
+
+					sql, args, err := qb.Select("t.id").From("t").JoinOn("u", door.build(qb.JoinFilter(), operand)).ToSQL()
+
+					require.NoError(t, err)
+					assert.Equal(t, "SELECT t.id FROM t JOIN u ON "+wantPred, sql)
+					assert.Equal(t, wantArgs, args)
+				})
+			}
+		}
+	}
+}
+
+func TestJoinFilterValueDoorsRefuseABlankRawExpressionAtToSQL(t *testing.T) {
+	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
+	blank := dbtypes.RawExpression{SQL: "  "}
+	operands := map[string]any{"blank_expression": blank, "pointer_to_blank_expression": &blank}
+	doors := map[string]func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter{
+		"eq":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) },
+		"lt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("u.c", v) },
+		"between_lower": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", v, 5) },
+		"between_upper": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", 5, v) },
+	}
+
+	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		for doorName, door := range doors {
+			for name, operand := range operands {
+				t.Run(vendor+"_"+doorName+"_"+name, func(t *testing.T) {
+					qb := NewQueryBuilder(vendor)
+
+					_, _, err := qb.Select("t.id").From("t").JoinOn("u", door(qb.JoinFilter(), operand)).ToSQL()
+
+					require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+				})
+			}
+		}
+	}
+}
+
+// TestJoinFilterValueDoorsTreatANilExpressionPointerAsNil pins the unchanged
+// nil path: a nil *RawExpression resolves to nil before any expression
+// judgment.
+func TestJoinFilterValueDoorsTreatANilExpressionPointerAsNil(t *testing.T) {
+	var nilExpr *dbtypes.RawExpression
+
+	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor+"_eq_renders_is_null", func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+
+			sql, args, err := qb.Select("t.id").From("t").JoinOn("u", qb.JoinFilter().Eq("u.c", nilExpr)).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, "SELECT t.id FROM t JOIN u ON u.c IS NULL", sql)
+			assert.Empty(t, args)
+		})
+		t.Run(vendor+"_between_refuses_an_ordering_against_nil", func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+
+			_, _, err := qb.Select("t.id").From("t").JoinOn("u", qb.JoinFilter().Between("u.c", nilExpr, 5)).ToSQL()
+
+			require.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+		})
+	}
 }

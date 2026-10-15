@@ -1029,3 +1029,39 @@ func TestStructDoorsRefuseDbTagOnUnknownVendor(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildUpsertOracleSplicesARawExpression pins #2120: an expression in
+// either map is spliced into the MERGE through valueCell, and only the bound
+// values number placeholders, contiguously across USING and UPDATE SET.
+func TestBuildUpsertOracleSplicesARawExpression(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword, no user input
+	now := dbtypes.MustExpr("CURRENT_TIMESTAMP")
+
+	sql, args, err := qb.BuildUpsert("t", []string{"id"},
+		map[string]any{"id": 1, "created": now, "name": "a"},
+		map[string]any{"name": "b", "updated": now})
+
+	require.NoError(t, err)
+	assert.Equal(t, "MERGE INTO t target USING (SELECT CURRENT_TIMESTAMP AS created, :1 AS id, :2 AS name FROM dual) source"+
+		" ON (target.id = source.id) WHEN MATCHED THEN UPDATE SET name = :3, updated = CURRENT_TIMESTAMP"+
+		" WHEN NOT MATCHED THEN INSERT (created, id, name) VALUES (source.created, source.id, source.name)", sql)
+	assert.Equal(t, []any{1, "a", "b"}, args)
+}
+
+func TestBuildUpsertOracleRefusesAnAliasedRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_TIMESTAMP keyword with an alias, never rendered
+	aliased := dbtypes.MustExpr("CURRENT_TIMESTAMP", "ts")
+	cases := map[string]struct{ insert, update map[string]any }{
+		"in_insert_columns": {insert: map[string]any{"id": 1, "created": aliased}, update: map[string]any{"name": "b"}},
+		"in_update_columns": {insert: map[string]any{"id": 1}, update: map[string]any{"updated": aliased}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := NewQueryBuilder(dbtypes.Oracle).BuildUpsert("t", []string{"id"}, tc.insert, tc.update)
+
+			require.ErrorIs(t, err, dbtypes.ErrAliasInValue)
+		})
+	}
+}

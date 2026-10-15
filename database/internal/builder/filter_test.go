@@ -2317,3 +2317,65 @@ func TestInDoorsBindAMapOrChanWithResolvableValuesWhole(t *testing.T) {
 		}
 	}
 }
+
+// TestFilterValueDoorsRefuseARawExpressionAtToSQL pins #2120: a FilterFactory
+// value door takes values, so an expression — or a non-nil pointer to one,
+// blank or not — fails the statement instead of binding a struct the driver
+// cannot encode.
+func TestFilterValueDoorsRefuseARawExpressionAtToSQL(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword and a blank literal, neither rendered
+	expr := dbtypes.MustExpr("CURRENT_DATE")
+	blank := dbtypes.RawExpression{SQL: "  "}
+	operands := map[string]any{"expression": expr, "pointer_to_expression": &expr, "blank_expression": blank}
+	doors := map[string]func(f dbtypes.FilterFactory, v any) dbtypes.Filter{
+		"eq":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Eq("c", v) },
+		"not_eq":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotEq("c", v) },
+		"lt":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lt("c", v) },
+		"lte":           func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lte("c", v) },
+		"gt":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gt("c", v) },
+		"gte":           func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gte("c", v) },
+		"between_lower": func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Between("c", v, 5) },
+		"between_upper": func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Between("c", 5, v) },
+	}
+
+	for _, v := range inListVendors {
+		for doorName, door := range doors {
+			for name, operand := range operands {
+				t.Run(v.vendor+"_"+doorName+"_"+name, func(t *testing.T) {
+					qb := NewQueryBuilder(v.vendor)
+					var err error
+					require.NotPanics(t, func() {
+						_, _, err = qb.Select("id").From("t").Where(door(qb.Filter(), operand)).ToSQL()
+					})
+
+					require.ErrorIs(t, err, dbtypes.ErrExpressionInFilter)
+				})
+			}
+		}
+	}
+}
+
+// TestFilterValueDoorsTreatANilExpressionPointerAsNil pins the unchanged nil
+// path: a nil *RawExpression resolves to nil before any expression judgment.
+func TestFilterValueDoorsTreatANilExpressionPointerAsNil(t *testing.T) {
+	var nilExpr *dbtypes.RawExpression
+
+	for _, v := range inListVendors {
+		t.Run(v.vendor+"_eq_renders_is_null", func(t *testing.T) {
+			qb := NewQueryBuilder(v.vendor)
+
+			sql, args, err := qb.Select("id").From("t").Where(qb.Filter().Eq("c", nilExpr)).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, "SELECT id FROM t WHERE c IS NULL", sql)
+			assert.Empty(t, args)
+		})
+		t.Run(v.vendor+"_lt_refuses_an_ordering_against_nil", func(t *testing.T) {
+			qb := NewQueryBuilder(v.vendor)
+
+			_, _, err := qb.Select("id").From("t").Where(qb.Filter().Lt("c", nilExpr)).ToSQL()
+
+			require.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+		})
+	}
+}

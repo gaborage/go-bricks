@@ -148,8 +148,10 @@ it returns; `QueryBuilder.Select`, `SelectQueryBuilder.GroupBy`,
 `SelectQueryBuilder.OrderBy` and the `JoinFilterFactory` value doors (`Eq`,
 `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, and both bounds of `Between`) call it again at
 consumption, where a struct literal is indistinguishable from a constructed value;
-so, since #2119, do `jf.In` and `jf.NotIn`, while `f.In` and `f.NotIn` refuse an
-expression with `ErrExpressionInFilter` without validating it.
+so, since #2119 and #2120, do `jf.In`, `jf.NotIn` and `BuildUpsert`'s values (through
+`valueCell`, as `Set` and `Values`), while every `FilterFactory` value door — the six
+compare doors, both `Between` bounds, `In` and `NotIn` — refuses an expression with
+`ErrExpressionInFilter` without validating it.
 One copy of the denylist (pre-`[C61.9]`; the identifier grammar since), two call
 sites for it.
 

@@ -38,26 +38,39 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 	return vals
 }
 
-// valueCell prepares one SET/VALUES cell for squirrel. A dbtypes.RawExpression
-// is validated here — a plain struct can reach this door without passing
-// Expr() — and spliced as squirrel.Expr so no placeholder or argument is
-// emitted; the alias is judged first because a SET or VALUES cell projects
-// nothing. Any other value is returned untouched and stays parameterized.
-// The label names the column or one-based position in the deferred error.
-// args, when given, bind the expression's `?` placeholders (SetExpr's door);
-// Set/Values pass none.
-func valueCell(label string, value any, args ...any) (any, error) {
-	expr, ok := value.(dbtypes.RawExpression)
-	if !ok {
-		return value, nil
+// valueExpression judges one SET/VALUES cell: a dbtypes.RawExpression is
+// validated here — a plain struct can reach this door without passing Expr() —
+// and its SQL returned to splice, with the alias judged first because a SET or
+// VALUES cell projects nothing. Any other value reports isExpr false and stays
+// parameterized. The label names the column or one-based position in the
+// error.
+func valueExpression(label string, value any) (sql string, isExpr bool, err error) {
+	expr, isExpr := value.(dbtypes.RawExpression)
+	if !isExpr {
+		return "", false, nil
 	}
 	if expr.Alias != "" {
-		return nil, fmt.Errorf("%s: %w: %s", label, dbtypes.ErrAliasInValue, expr.Alias)
+		return "", true, fmt.Errorf("%s: %w: %s", label, dbtypes.ErrAliasInValue, expr.Alias)
 	}
-	if err := expr.Validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", label, err)
+	if validateErr := expr.Validate(); validateErr != nil {
+		return "", true, fmt.Errorf("%s: %w", label, validateErr)
 	}
-	return squirrel.Expr(expr.SQL, args...), nil
+	return expr.SQL, true, nil
+}
+
+// valueCell prepares one SET/VALUES cell for squirrel: an expression judged by
+// valueExpression is spliced as squirrel.Expr so no placeholder or argument is
+// emitted, and any other value is returned untouched. args, when given, bind
+// the expression's `?` placeholders (SetExpr's door); Set/Values pass none.
+func valueCell(label string, value any, args ...any) (any, error) {
+	sql, isExpr, err := valueExpression(label, value)
+	if !isExpr {
+		return value, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return squirrel.Expr(sql, args...), nil
 }
 
 // valueCells applies valueCell to every cell, copying the slice on the first
@@ -586,22 +599,27 @@ func isListKind(kind reflect.Kind) bool {
 	return kind == reflect.Slice || kind == reflect.Array
 }
 
-// orderingOperand resolves an ordering operand and fails closed on the shapes an
-// ordering has no rendering for. Both families call it, so nil, a set and a
-// Valuer reporting NULL take the SAME sentinel at `f` and at `jf` and errors.Is
-// works on either (#1167, #1205). Squirrel, which FilterFactory delegated to,
-// returned its own text for those, rendered `col < ?` bound to a typed nil
-// pointer — the silent-no-rows shape — and panicked on a nil pointer to a
-// Valuer (#1209).
-func orderingOperand(op string, value any) (resolved any, err error) {
+// orderingOperand resolves an ordering operand, judges a RawExpression by the
+// door's family, and fails closed on the shapes an ordering has no rendering
+// for. Both families call it, so nil, a set and a Valuer reporting NULL take
+// the SAME sentinel at `f` and at `jf` and errors.Is works on either (#1167,
+// #1205). Squirrel, which FilterFactory delegated to, returned its own text for
+// those, rendered `col < ?` bound to a typed nil pointer — the silent-no-rows
+// shape — and panicked on a nil pointer to a Valuer (#1209). A non-empty
+// exprSQL is an expression the family splices in place of a bound value.
+func orderingOperand(op string, value any, family doorFamily) (resolved any, exprSQL string, err error) {
 	resolved, nullOrList, err := resolveOperand(value)
 	if err != nil {
-		return nil, wrapOperandErr(op, err)
+		return nil, "", wrapOperandErr(op, err)
+	}
+	exprSQL, isExpr, err := expressionOperand(op, resolved, family)
+	if isExpr {
+		return nil, exprSQL, err
 	}
 	if nullOrList {
-		return nil, orderingOperandErr(op)
+		return nil, "", orderingOperandErr(op)
 	}
-	return resolved, nil
+	return resolved, "", nil
 }
 
 // wrapOperandErr and orderingOperandErr are the two spellings every door shares.
