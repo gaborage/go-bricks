@@ -1,7 +1,6 @@
 package builder
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -260,20 +259,30 @@ func TestBuildPostgreSQLUpsertRefusesABlankRawExpression(t *testing.T) {
 // placeholder continues the statement's own numbering after it.
 func TestBuildPostgreSQLUpsertKeepsAQuestionMarkInAQuotedConflictKey(t *testing.T) {
 	cases := map[string]struct {
-		update     map[string]any
-		wantSuffix string
+		update   map[string]any
+		wantSQL  string
+		wantArgs []any
 	}{
-		"do_update":  {update: map[string]any{"n": "y"}, wantSuffix: ` ON CONFLICT ("a?b") DO UPDATE SET "n" = $3`},
-		"do_nothing": {update: nil, wantSuffix: ` ON CONFLICT ("a?b") DO NOTHING`},
+		"do_update": {
+			update:   map[string]any{"n": "y"},
+			wantSQL:  `INSERT INTO t ("a?b","n") VALUES ($1,$2) ON CONFLICT ("a?b") DO UPDATE SET "n" = $3`,
+			wantArgs: []any{1, "x", "y"},
+		},
+		"do_nothing": {
+			update:   nil,
+			wantSQL:  `INSERT INTO t ("a?b","n") VALUES ($1,$2) ON CONFLICT ("a?b") DO NOTHING`,
+			wantArgs: []any{1, "x"},
+		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			sql, _, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{`"a?b"`},
+			sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).BuildUpsert("t", []string{`"a?b"`},
 				map[string]any{`"a?b"`: 1, "n": "x"}, tc.update)
 
 			require.NoError(t, err)
-			assert.True(t, strings.HasSuffix(sql, tc.wantSuffix), "got %s", sql)
+			assert.Equal(t, tc.wantSQL, sql)
+			assert.Equal(t, tc.wantArgs, args)
 		})
 	}
 }
