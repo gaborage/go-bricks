@@ -465,9 +465,6 @@ func (ff *FilterFactory) buildExistsFilter(subquery dbtypes.SelectQueryBuilder, 
 // This is a separate method from In() to maintain type safety and explicit API design
 // (following the "Explicit > Implicit" principle from the developer manifesto).
 //
-// A subquery from another SelectQueryBuilder implementation must render `?`
-// placeholders; one that renders $N or :N fails ToSQL() (ADR-148).
-//
 // Example:
 //
 //	subquery := qb.Select("category_id").From("featured_categories").Where(f.Eq("active", true))

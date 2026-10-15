@@ -975,38 +975,35 @@ func TestFilterInSubqueryRefusesAForeignVendorPlaceholder(t *testing.T) {
 		{name: "oracle_dollar", vendor: dbtypes.Oracle, placeholder: "$1"},
 		{name: "oracle_colon", vendor: dbtypes.Oracle, placeholder: ":1"},
 	}
+	statements := []struct {
+		name  string
+		build func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error)
+	}{
+		{name: "select_beside_another_parameter", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			f := qb.Filter()
+			return qb.Select(colID).From(tableUsers).Where(f.And(f.Eq("x", 1), in)).ToSQL()
+		}},
+		{name: "select_alone", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			return qb.Select(colID).From(tableUsers).Where(in).ToSQL()
+		}},
+		{name: "update", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			return qb.Update(tableUsers).Set("x", 1).Where(in).ToSQL()
+		}},
+		{name: "delete", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
+			return qb.Delete(tableUsers).Where(in).ToSQL()
+		}},
+	}
 	for _, tt := range tests {
-		for _, stmt := range inSubqueryStatements {
+		for _, stmt := range statements {
 			t.Run(tt.name+"_"+stmt.name, func(t *testing.T) {
 				qb := NewQueryBuilder(tt.vendor)
-				sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = " + tt.placeholder, args: []any{7}}
+				sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = " + tt.placeholder}
 
-				_, _, err := stmt.build(qb, qb.Filter().InSubquery("id", sub))
+				_, _, err := stmt.build(qb, qb.Filter().InSubquery(colID, sub))
 				require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
 			})
 		}
 	}
-}
-
-// inSubqueryStatements carries one InSubquery filter in every statement whose
-// WHERE clause accepts it, beside another parameter and as the only one.
-var inSubqueryStatements = []struct {
-	name  string
-	build func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error)
-}{
-	{name: "select_beside_another_parameter", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
-		f := qb.Filter()
-		return qb.Select("id").From(tableUsers).Where(f.And(f.Eq("x", 1), in)).ToSQL()
-	}},
-	{name: "select_alone", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
-		return qb.Select("id").From(tableUsers).Where(in).ToSQL()
-	}},
-	{name: "update", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
-		return qb.Update(tableUsers).Set("x", 1).Where(in).ToSQL()
-	}},
-	{name: "delete", build: func(qb *QueryBuilder, in dbtypes.Filter) (string, []any, error) {
-		return qb.Delete(tableUsers).Where(in).ToSQL()
-	}},
 }
 
 // TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery pins the accepted
@@ -1032,9 +1029,10 @@ func TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
 			sub := vendorRenderedSubquery{sql: "SELECT id FROM held WHERE consumer = ?", args: []any{7}}
 
-			sql, args, err := inSubqueryStatements[0].build(qb, qb.Filter().InSubquery("id", sub))
+			sql, args, err := qb.Select(colID).From(tableUsers).Where(f.And(f.Eq("x", 1), f.InSubquery(colID, sub))).ToSQL()
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectedSQL, sql)
 			assert.Equal(t, []any{1, 7}, args)
@@ -1047,9 +1045,9 @@ func TestFilterInSubqueryNumbersAForeignQuestionMarkSubquery(t *testing.T) {
 func TestFilterInSubqueryRefusesAMockQueryBuilderVendorPlaceholder(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	sub := &mocks.MockQueryBuilder{}
-	sub.On("ToSQL").Return("SELECT id FROM held WHERE consumer = $1", []any{7}, nil)
+	sub.On("ToSQL").Return("SELECT id FROM held WHERE consumer = $1", nil, nil)
 
-	_, _, err := qb.Select("id").From(tableUsers).Where(qb.Filter().InSubquery("id", sub)).ToSQL()
+	_, _, err := qb.Select(colID).From(tableUsers).Where(qb.Filter().InSubquery(colID, sub)).ToSQL()
 	require.ErrorIs(t, err, errSubqueryPlaceholderFormat)
 }
 
