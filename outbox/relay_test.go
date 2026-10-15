@@ -1183,6 +1183,7 @@ func TestRelayRunReportsALeaderCycleOnTheSink(t *testing.T) {
 		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
 		{ID: "A2", Exchange: "ex", RoutingKey: "b"},
 		{ID: "A3", Exchange: "ex", RoutingKey: "b"}, // parks behind A2
+		{ID: "A4", Exchange: "ex", RoutingKey: "b"}, // also parks behind A2
 	}}
 	r, amqpLane, _ := newRelayWithLanes(store)
 	r.tenants = []string{"t1"}
@@ -1194,7 +1195,7 @@ func TestRelayRunReportsALeaderCycleOnTheSink(t *testing.T) {
 	assert.Equal(t, map[string]int64{
 		"count outbox.relay.records{lane=amqp,outcome=published}": 1,
 		"fail outbox.relay.records{lane=amqp,outcome=failed}":     1,
-		"fail outbox.relay.records{lane=amqp,outcome=parked}":     1,
+		"fail outbox.relay.records{lane=amqp,outcome=parked}":     2,
 		"count outbox.relay.cycles{role=leader,tenant=t1}":        1,
 		"count outbox.relay.led":                                  1,
 	}, sink.calls)
