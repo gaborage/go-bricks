@@ -3,11 +3,13 @@ package outbox
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
@@ -18,6 +20,8 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
+	"github.com/gaborage/go-bricks/scheduler"
 )
 
 // fakeRegistrar captures FixedRate / DailyAt registrations and returns
@@ -833,9 +837,8 @@ func TestRegisterJobsSharedTenancySinglePass(t *testing.T) {
 	require.NoError(t, m.RegisterJobs(reg))
 	require.Len(t, reg.FixedRateCalls, 1, "relay registered exactly once")
 	assert.Equal(t, "outbox-relay", reg.FixedRateCalls[0].JobID)
-	require.NotNil(t, reg.FixedRateCalls[0].Job, "the registrar fake must capture the constructed relay")
-	relay, ok := reg.FixedRateCalls[0].Job.(*Relay)
-	require.True(t, ok, "the registered job must be a *Relay")
+	relay := m.relay
+	require.NotNil(t, relay, "RegisterJobs keeps the relay it registers")
 	assert.Equal(t, []string{""}, relay.tenants, "shared tenancy runs a single control-plane pass, not a fan-out")
 	assert.Equal(t, config.TenancyShared, relay.config.Tenancy,
 		"logCycle derives the tenancy stamp from the relay's config copy")
@@ -990,8 +993,8 @@ func TestModuleRegisterJobsWiresBothLaneShippers(t *testing.T) {
 	reg := &fakeRegistrar{}
 	require.NoError(t, m.RegisterJobs(reg))
 	require.Len(t, reg.FixedRateCalls, 1)
-	relay, ok := reg.FixedRateCalls[0].Job.(*Relay)
-	require.True(t, ok)
+	relay := m.relay
+	require.NotNil(t, relay)
 
 	require.Len(t, relay.shippers, 2, "one shipper per lane, and no more")
 	amqpLane, ok := relay.shippers[LaneAMQP].(*amqpShipper)
@@ -1349,4 +1352,130 @@ func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
 	assert.NotContains(t, err.Error(), "outbox.autocreatetable")
 	assert.NotContains(t, err.Error(), "is not usable")
 	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
+}
+
+// TestRegisterJobsRegistersTheRelayAsAWindowedJob pins that the relay reaches the scheduler
+// only as a Windowed job: the registered job is not the relay, and calling its Execute
+// directly runs no cycle.
+func TestRegisterJobsRegistersTheRelayAsAWindowedJob(t *testing.T) {
+	m, _ := initEnabledModule(t, "postgresql", 24*time.Hour)
+	resolves := 0
+	m.getDB = func(context.Context) (dbtypes.Interface, error) {
+		resolves++
+		return nil, errors.New("no database in this test")
+	}
+
+	reg := &fakeRegistrar{}
+	require.NoError(t, m.RegisterJobs(reg))
+
+	require.Len(t, reg.FixedRateCalls, 1)
+	job := reg.FixedRateCalls[0].Job
+	_, isRelay := job.(*Relay)
+	assert.False(t, isRelay)
+	executor, ok := job.(scheduler.Executor)
+	require.True(t, ok)
+	require.ErrorContains(t, executor.Execute(newFakeJobCtx(nil)), "runs only when registered with FixedRate")
+	assert.Zero(t, resolves, "no database resolve, so no store call")
+}
+
+// TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan registers through a real
+// scheduler, which refuses a declaration it cannot carry, and projects one cycle against
+// the declaration RegisterJobs made.
+func TestRegisterJobsDeclaresTheRelayTenantOnlyWhenTheSchedulerCan(t *testing.T) {
+	static := func(ids ...string) config.MultitenantConfig {
+		tenants := make(map[string]config.TenantEntry, len(ids))
+		for _, id := range ids {
+			tenants[id] = config.TenantEntry{}
+		}
+		return config.MultitenantConfig{Enabled: true, Tenants: tenants}
+	}
+	tests := []struct {
+		name        string
+		multitenant config.MultitenantConfig
+		tenantAttr  bool
+		reason      string
+		cycle       string
+	}{
+		{name: "control_plane_key", cycle: "count outbox.relay.cycles{role=leader}"},
+		{
+			name: "static_tenants", multitenant: static("t1", "t2"), tenantAttr: true,
+			cycle: "count outbox.relay.cycles{role=leader,tenant=t1}",
+		},
+		{
+			name: "key_at_65_bytes", multitenant: static(strings.Repeat("k", 65)),
+			reason: "does not match", cycle: "count outbox.relay.cycles{role=leader}",
+		},
+		{
+			name: "667_tenants", multitenant: static(tenantIDs(667)...),
+			reason: "667 tenants make 2001", cycle: "count outbox.relay.cycles{role=leader}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := outboxTestConfig()
+			cfg.Multitenant = tt.multitenant
+			deps := initDeps(cfg, func(context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil })
+			log := newRecordingLogger()
+			deps.Logger = log
+			m := NewModule()
+			require.NoError(t, m.Init(deps))
+
+			require.NoError(t, m.RegisterJobs(newWindowScheduler(t, nil)))
+
+			require.NotNil(t, m.relay)
+			assert.Equal(t, tt.tenantAttr, m.relay.tenantAttr)
+			warns := 0
+			for _, line := range log.leveled() {
+				if line == "WARN Outbox relay counts outbox.relay.cycles without a tenant attribute" {
+					warns++
+				}
+			}
+			if tt.reason == "" {
+				assert.Zero(t, warns)
+			} else {
+				assert.Equal(t, 1, warns)
+				assert.Contains(t, log.stringFields()["reason"], tt.reason)
+			}
+			counters, _, _ := relayCounters(m.relay.tenants, m.relay.laneOrder)
+			sink := &recordingSink{t: t, counters: counters, calls: map[string]int64{}}
+			m.relay.project(sink, m.relay.tenants[0], &tenantCycle{role: roleLeader})
+			assert.Contains(t, sink.calls, tt.cycle)
+		})
+	}
+}
+
+// TestRegisterJobsReportsTheRelayCyclesAsMetrics runs the registered relay on a real
+// scheduler tick: a cycle reaches outbox.relay.cycles only if RegisterJobs handed Windowed
+// both the relay's run and its Counters.
+func TestRegisterJobsReportsTheRelayCyclesAsMetrics(t *testing.T) {
+	m, _ := initEnabledModule(t, "postgresql", 24*time.Hour)
+	m.cfg.PollInterval = 10 * time.Millisecond
+	m.getDB = func(context.Context) (dbtypes.Interface, error) { return nil, errors.New("no database in this test") }
+	mp := obtest.NewTestMeterProvider()
+	t.Cleanup(func() { require.NoError(t, mp.Shutdown(context.Background())) })
+
+	require.NoError(t, m.RegisterJobs(newWindowScheduler(t, mp.MeterProvider)))
+
+	assert.Eventually(t, func() bool {
+		var rm metricdata.ResourceMetrics
+		if err := mp.Reader.Collect(context.Background(), &rm); err != nil {
+			return false
+		}
+		cycles := obtest.FindMetric(rm, "outbox.relay.cycles")
+		if cycles == nil {
+			return false
+		}
+		sum, ok := cycles.Data.(metricdata.Sum[int64])
+		if !ok {
+			return false
+		}
+		for _, point := range sum.DataPoints {
+			role, _ := point.Attributes.Value("role")
+			job, _ := point.Attributes.Value("job.id")
+			if role.AsString() == "unavailable" && job.AsString() == "outbox-relay" && point.Value > 0 {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "an unavailable relay cycle must reach outbox.relay.cycles")
 }

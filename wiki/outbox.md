@@ -87,7 +87,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 **How It Works:**
 
 1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing — on an AMQP row, since a stream row's event type rides no shortstr — an exchange, routing key, `EventType` (the fallback for an empty routing key, so an over-long one fails as the routing key as well as on its own account) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
-2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
+2. The **relay job** (`outbox-relay`, a `scheduler.Windowed` job — see [Relay Window Line and Metrics](#relay-window-line-and-metrics)) polls for pending events every `pollinterval`
 3. Each pending event is published to its target destination — the AMQP exchange on the AMQP lane, the super stream on the stream lane — with the `x-outbox-event-id` header, which the relay stamps on both lanes
 4. Successfully published events are marked as `published`
 5. Failed events have their `retry_count` advanced and stay `pending` for the next cycle — on **every** failed attempt, including while the broker is unavailable; only a **poison** event — one of the classes listed under [Retry & Dead-Lettering](#retry--dead-lettering) below — is parked once `retry_count` reaches `maxretries`
@@ -275,8 +275,10 @@ Consequences worth knowing:
   connectivity) rather than `ErrPublishRetriesExhausted` — keep that in mind when tuning the three
   knobs together.
 - **A relay cycle that has pending work but cannot reach the broker returns a job error** (after
-  advancing every record's `retry_count`), so the failure stays visible at the scheduler level and,
-  in multi-tenant mode, names the affected tenant. An idle relay (nothing pending) is not an error.
+  advancing every record's `retry_count`), so the failure stays visible at the scheduler level —
+  under `run.error` on the [edge line](#relay-window-line-and-metrics), whose `error` names the
+  affected tenant in multi-tenant mode (the window line's `error` is its last run's). An idle relay
+  (nothing pending) is not an error.
 - **`failed` rows accumulate:** `outbox-cleanup` purges only `published` events. Monitor and prune
   dead-lettered rows; they are intentionally never auto-deleted so they stay visible.
 
@@ -444,6 +446,84 @@ stored header: `Publish` persists it in the row, the relay strips it from the he
 ([ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md)) — re-stamps the frame from that
 context. A consumer still reads `x-tenant-id` as before, and a hand-written stamp in
 `OutboxEvent.Headers` is refused at `Publish` with `messaging.ErrTenantStampConflict`.
+
+## Relay Window Line and Metrics
+
+The relay registers as a `scheduler.Windowed` job (`outbox-relay`, `FixedRate` at
+`outbox.pollinterval`), so each replica writes one fixed-key window line per
+`scheduler.summary.window` (default 5m), plus an edge line when the relay turns failing or fails
+on a new key, instead of an action line per run. The window line, edge line, `<name>.ok`/`<name>.failing` and
+`failing.keys` vocabulary is defined in [scheduler.md](scheduler.md#windowed-jobs)
+([ADR-146](adr_146_windowed_job_summary.md)). Each tenant cycle reports on four Counters, and each
+Counter is also an OTel `Int64Counter` of the same name carrying `job.id`:
+
+| Counter | Attributes | `Count` | `Fail` |
+| --- | --- | --- | --- |
+| `outbox.relay.cycles` | `role`: `leader`, `follower`, `unavailable`; `tenant` when declarable (below) | 1 per `leader` or `follower` cycle | 1 per `unavailable` cycle |
+| `outbox.relay.led` | none | 1 per `leader` cycle | — |
+| `outbox.relay.records` | `outcome`: `published`, `failed`, `parked`, `deadlettered`; `lane`: each registered lane (`amqp`, `stream`) and `unknown` | `published` rows | `failed`, `parked` and `deadlettered` rows |
+| `outbox.relay.unrecorded` | none | — | deliveries whose `MarkPublished` failed (they re-deliver) |
+
+- **The role follows the path the cycle returns by.** A database error or nil database, a `Lead`
+  error other than `ErrNotLeader`, or a `FetchPending` error is `unavailable`; `ErrNotLeader` is
+  `follower`; every path past a successful fetch — an empty batch, an all-outage batch, a lead
+  lost mid-cycle — is `leader`.
+- **`led` duplicates `cycles{role=leader}` on purpose.** The window line's `.ok` sums over
+  attributes, so `outbox.relay.cycles.ok` mixes leader and follower cycles; only an
+  attribute-less Counter puts the leader count on the line.
+- **`parked` stays apart from `failed`:** a failed attempt advances `retry_count`, a row parked
+  behind it ([Lanes and Ordering](#lanes-and-ordering)) does not. A row naming a lane this build
+  lacks reports as `lane=unknown`, and a zero count is not reported.
+- **Per-tenant errors are still joined and returned**, so a cycle that fails lands under
+  `run.error`, its tenant named in the edge line's `error` (the window line's `error` is its last
+  run's). A cycle whose rows fail without an outage (a NACK, a
+  poison row) returns nil: `/_sys/job` and `job.execution.total` count it a success, and only the
+  `outbox.relay.records` failing key, `runs.failing` and the line's WARN level show it.
+
+An abridged window line (the `window.*`, other `runs.*`, `traceparent` and `correlation_id` keys,
+and the remaining Counter fields, are left out):
+
+```json
+{"level":"warn","log.type":"action","job.id":"outbox-relay","runs":60,"runs.failing":3,
+ "job.state":"failing","failing.keys":["run.error","outbox.relay.cycles{role=unavailable,tenant=acme}"],
+ "outbox.relay.cycles.ok":117,"outbox.relay.cycles.failing":3,"outbox.relay.led.ok":117,
+ "outbox.relay.records.ok":842,"outbox.relay.records.failing":0,
+ "error":"outbox relay: tenant \"acme\": database not available: …",
+ "message":"Job 'outbox-relay' window summary"}
+```
+
+**The `tenant` attribute.** `outbox.relay.cycles` carries `tenant` only when the scheduler can
+declare the tenant list: a static fan-out whose every id matches the attribute value rule
+`^[a-z0-9_-]{1,64}$`, at most 666 tenants (3 roles × N stays within the 1,999 series a Counter may
+declare). A ledger on the control-plane key `""` — single-tenant, or `outbox.tenancy: shared` — has
+no tenant to name and gets no attribute and no WARN. Otherwise the attribute is dropped with one
+startup WARN, `Outbox relay counts outbox.relay.cycles without a tenant attribute`, whose `reason`
+field names the rule that failed; that deployment has no per-tenant stuck-leader metric, and its
+failing key reads `outbox.relay.cycles{role=unavailable}`. The tenant is an attribute value, never
+a log field name — but as a value it does reach the window and edge lines, inside `failing.keys`,
+whenever that tenant's cycle is unavailable.
+
+**The per-cycle line** `Outbox relay cycle completed` is DEBUG (it was INFO), written for each
+tenant cycle that fetched rows, with its fields unchanged: `published`, `unrecorded`, `failed`,
+`deadlettered`, `parked`, `total`, `stall_wait_ms`, the per-lane `<outcome>_<lane>` fields, and
+`tenant` under fan-out, or `tenancy=shared` on a shared ledger. `stall_wait_ms` has no metric. The lost-leadership
+WARNs are unchanged.
+
+**Heartbeat checks.** Metrics temporality is cumulative by default, and a cumulative counter never
+returns to 0, so both checks take an increase over a range `w` of at least one window; under
+`observability.metrics.temporality: delta` a plain sum over `w` is the check. The queries are
+written for Prometheus, which exports `outbox.relay.led` as `outbox_relay_led_total` (dots become
+underscores, counters gain `_total`).
+
+| Signal | Window line | Metric |
+| --- | --- | --- |
+| Nobody led | one window's `outbox.relay.led.ok`, summed across replicas, is 0 | `(sum(increase(outbox_relay_led_total[w])) or vector(0)) == 0` |
+| One tenant's leader is stuck (needs the `tenant` attribute) | — | `sum by (tenant) (increase(outbox_relay_cycles_total[w])) unless on (tenant) (sum by (tenant) (increase(outbox_relay_cycles_total{role="leader"}[w])) > 0)` |
+
+A counter exports no series until its first add, and `outbox.relay.led` adds only on a leader
+cycle, so a relay that has not led since startup has no `led` series at all; `or vector(0)` turns
+that silence into the 0 the check alerts on. The per-tenant check takes its tenants from every
+cycle role, so a tenant whose cycles are all `follower` or `unavailable` still shows up.
 
 ## Outbox Defaults
 

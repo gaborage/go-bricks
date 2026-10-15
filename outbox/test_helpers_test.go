@@ -11,6 +11,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
@@ -357,10 +358,14 @@ type recordingLogger struct {
 	lines  *[]string
 	levels *[]string
 	fields *map[string]int64
+	texts  *map[string]string
 }
 
 func newRecordingLogger() *recordingLogger {
-	return &recordingLogger{mu: &sync.Mutex{}, lines: &[]string{}, levels: &[]string{}, fields: &map[string]int64{}}
+	return &recordingLogger{
+		mu: &sync.Mutex{}, lines: &[]string{}, levels: &[]string{},
+		fields: &map[string]int64{}, texts: &map[string]string{},
+	}
 }
 
 // leveled returns each recorded line as "<level> <message>".
@@ -380,13 +385,24 @@ func (l *recordingLogger) messages() []string {
 	return append([]string(nil), *l.lines...)
 }
 
-// numbers returns the numeric fields the recorded lines carried. logCycle's counts have
-// no other observable: Execute discards the result it summarizes.
+// numbers returns the numeric fields the recorded lines carried, which is how a test reads
+// logCycle's per-lane counts.
 func (l *recordingLogger) numbers() map[string]int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := make(map[string]int64, len(*l.fields))
 	for k, v := range *l.fields {
+		out[k] = v
+	}
+	return out
+}
+
+// stringFields returns the string fields the recorded lines carried, the last value per key.
+func (l *recordingLogger) stringFields() map[string]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[string]string, len(*l.texts))
+	for k, v := range *l.texts {
 		out[k] = v
 	}
 	return out
@@ -417,7 +433,13 @@ func (e *recordingEvent) Msg(msg string) {
 
 func (e *recordingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
 func (e *recordingEvent) Err(error) logger.LogEvent       { return e }
-func (e *recordingEvent) Str(_, _ string) logger.LogEvent { return e }
+func (e *recordingEvent) Str(key, value string) logger.LogEvent {
+	e.owner.mu.Lock()
+	defer e.owner.mu.Unlock()
+	(*e.owner.texts)[key] = value
+	return e
+}
+
 func (e *recordingEvent) Int(key string, value int) logger.LogEvent {
 	return e.Int64(key, int64(value))
 }
@@ -529,6 +551,21 @@ var (
 	_ relaySink = (*recordingSink)(nil)
 )
 
+// tenantIDs returns n distinct static tenant ids, each a valid metric attribute value.
+func tenantIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("t%04d", i)
+	}
+	return ids
+}
+
+// runRelay runs one relay pass on a sink that checks every Counter call.
+func runRelay(t *testing.T, r *Relay, jobCtx scheduler.JobContext) error {
+	t.Helper()
+	return r.run(jobCtx, newRecordingSink(t, r))
+}
+
 // newRecordingSink declares r's Counters and sets r.tenantAttr from that declaration.
 func newRecordingSink(t *testing.T, r *Relay) *recordingSink {
 	t.Helper()
@@ -583,11 +620,12 @@ func (s *recordingSink) declares(name string, n int64, attrs []attribute.KeyValu
 
 // newWindowScheduler is a real scheduler Module: registering a Windowed job with it
 // proves the scheduler accepts the declaration, which a fake registrar never checks.
-func newWindowScheduler(t *testing.T) *scheduler.Module {
+func newWindowScheduler(t *testing.T, meterProvider metric.MeterProvider) *scheduler.Module {
 	t.Helper()
 	sched := scheduler.NewModule()
 	if err := sched.Init(&app.ModuleDeps{
-		Logger: logger.New("disabled", true),
+		Logger:        logger.New("disabled", true),
+		MeterProvider: meterProvider,
 		Config: &config.Config{Scheduler: config.SchedulerConfig{
 			Timezone: config.DefaultTimezone,
 			Timeout:  config.SchedulerTimeoutConfig{Shutdown: time.Second, SlowJob: time.Minute},

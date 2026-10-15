@@ -206,7 +206,7 @@ func TestOutboxStoreManagedAlterIntegration(t *testing.T) {
 // at-least-once, and a row whose publish succeeded but whose mark failed is published again on
 // the next cycle (outcomePublishedUnrecorded).
 //
-// Each Relay keeps calling Execute until the Ledger has no pending rows, under one deadline:
+// Each Relay keeps running relay passes until the Ledger has no pending rows, under one deadline:
 // a cycle drains one batch, and a cycle that finds the other Relay leading returns at once,
 // so a fixed cycle budget can run out before the Ledger is empty.
 //
@@ -273,15 +273,15 @@ func TestOutboxRelayTwoInstancesOneLedgerIntegration(t *testing.T) {
 	assert.Empty(t, remaining, "the ledger drained")
 }
 
-// drainUntilEmpty calls rel.Execute until the Ledger has no pending rows, failing the test
+// drainUntilEmpty runs relay passes until the Ledger has no pending rows, failing the test
 // (off the test goroutine, so with t.Errorf) on an error or once deadline has passed.
 func drainUntilEmpty(ctx context.Context, t *testing.T, rel *Relay, store Store, conn dbtypes.Interface, rows int, deadline time.Time) {
 	t.Helper()
 	for {
 		// A cycle that finds another instance leading returns nil having done
 		// nothing; that is the mechanism working, not a failure.
-		if err := rel.Execute(newFakeJobCtx(conn)); err != nil {
-			t.Errorf("relay Execute: %v", err)
+		if err := runRelay(t, rel, newFakeJobCtx(conn)); err != nil {
+			t.Errorf("relay run: %v", err)
 			return
 		}
 		pending, err := store.FetchPending(ctx, conn, rows)

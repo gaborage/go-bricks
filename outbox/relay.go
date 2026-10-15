@@ -22,11 +22,11 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-// Relay is a scheduler.Executor that polls for pending outbox events
-// and hands them to the shipper for their lane.
+// Relay polls for pending outbox events and hands them to the shipper for their lane.
 //
-// The relay runs as a scheduled job (registered via scheduler.FixedRate),
-// getting overlapping prevention, panic recovery, and OTel metrics for free.
+// The relay runs as a scheduler.Windowed job (registered via FixedRate), getting
+// overlapping prevention, panic recovery and OTel metrics for free, and reports each
+// tenant cycle on the window's Counters.
 //
 // Resources are resolved through the tenant-aware getDB resolver and each
 // shipper's own (the module's deps.DB/deps.Messaging) rather than the scheduler
@@ -105,9 +105,9 @@ func newRelay(store Store, cfg *config.OutboxConfig, getDB func(context.Context)
 	}
 }
 
-// Execute runs one relay cycle per configured tenant, reporting no counts.
-func (r *Relay) Execute(jobCtx scheduler.JobContext) error {
-	return r.run(jobCtx, discardSink{})
+// Run is the run RegisterJobs wraps in scheduler.Windowed.
+func (r *Relay) Run(jobCtx scheduler.JobContext, rec *scheduler.Recorder) error {
+	return r.run(jobCtx, rec)
 }
 
 // The relay's window Counters, the outcomes the scheduler sums per window and exports
@@ -154,12 +154,6 @@ type relaySink interface {
 	Count(name string, n int64, attrs ...attribute.KeyValue)
 	Fail(name string, n int64, attrs ...attribute.KeyValue)
 }
-
-// discardSink drops every call, for a run outside a window.
-type discardSink struct{}
-
-func (discardSink) Count(string, int64, ...attribute.KeyValue) { /* dropped: no Recorder */ }
-func (discardSink) Fail(string, int64, ...attribute.KeyValue)  { /* dropped: no Recorder */ }
 
 // relayCounters declares the relay's window Counters over its tenants and lanes.
 // outbox.relay.cycles carries the tenant attribute only when the scheduler can declare
@@ -703,13 +697,14 @@ func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.In
 	}
 }
 
-// logCycle emits the per-cycle delivery summary. "unrecorded" counts events delivered to the
+// logCycle emits the per-cycle delivery summary at DEBUG; operators read the counts on the
+// window line and the outbox.relay.* metrics. "unrecorded" counts events delivered to the
 // broker whose MarkPublished failed (they re-deliver next cycle) — kept distinct from
 // "published" so the success count is not inflated by stuck-but-delivered records.
 // stall_wait_ms is what the cycle paid to discover a down lane or scope, zero when none did.
 func (r *Relay) logCycle(log logger.Logger, tenantID string, res *relayBatchResult, total int) {
 	totals := res.totals()
-	event := log.Info().
+	event := log.Debug().
 		Int("published", totals.published).
 		Int("unrecorded", res.unrecorded).
 		Int("failed", totals.failed).
