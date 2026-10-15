@@ -152,7 +152,9 @@ so, since #2119 and #2120, do `jf.In`, `jf.NotIn` and `BuildUpsert`'s values (ju
 by `valueExpression`, the rule `valueCell` applies at `Set` and `Values`), while every
 `FilterFactory` value door — the six compare doors, both `Between` bounds, `In` and
 `NotIn` — refuses an expression with `ErrExpressionInFilter` without validating it; a
-WHERE-side expression takes `f.Raw` with its `// SECURITY:` annotation.
+WHERE-side expression takes `f.Raw` with its `// SECURITY:` annotation. Since #2121 a
+`jf` value door refuses an aliased expression with `ErrAliasInPredicate` before
+`Validate()` runs ([ADR-147](adr_147_predicate_alias_refusal.md)).
 One copy of the denylist (pre-`[C61.9]`; the identifier grammar since), two call
 sites for it.
 

@@ -719,11 +719,10 @@ func TestJoinFilterRejectsRawExpressionLiteral(t *testing.T) {
 	}
 }
 
-// These doors validate an expression but never render its Alias, so a bad alias
-// is not a live sink here today. Pinned anyway: the guard is what makes that
-// true, and a future change that started rendering the alias would otherwise
-// have no regression test standing in its way.
+// These doors never render an Alias, so any alias is refused before the grammar
+// is judged: one outside it reports ErrAliasInPredicate, not ErrInvalidAlias.
 func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
+	// SECURITY: Manual SQL review completed - struct literal whose alias fails the grammar, never rendered
 	bad := dbtypes.RawExpression{SQL: "1", Alias: "x FROM users"}
 
 	tests := []struct {
@@ -743,7 +742,7 @@ func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
 
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
-			require.ErrorIs(t, err, dbtypes.ErrInvalidAlias)
+			require.ErrorIs(t, err, dbtypes.ErrAliasInPredicate)
 		})
 	}
 }
@@ -1278,5 +1277,65 @@ func TestJoinFilterValueDoorsTreatANilExpressionPointerAsNil(t *testing.T) {
 
 			require.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
 		})
+	}
+}
+
+// TestPredicatePositionsRefuseAnAliasedRawExpression pins #2121: an alias has
+// nowhere to render in a predicate operand. A jf door refuses it, judged before
+// Validate() so an alias outside the grammar reports the same sentinel; an f
+// door refuses the expression itself first.
+func TestPredicatePositionsRefuseAnAliasedRawExpression(t *testing.T) {
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword with an alias, never rendered
+	aliased := dbtypes.MustExpr("CURRENT_DATE", "d")
+	// SECURITY: Manual SQL review completed - struct literal whose alias fails the grammar, never rendered
+	badAlias := dbtypes.RawExpression{SQL: "CURRENT_DATE", Alias: "x FROM users"}
+	operands := map[string]any{"aliased": aliased, "pointer_to_aliased": &aliased, "alias_outside_the_grammar": badAlias}
+
+	jfDoors := map[string]func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter{
+		"eq":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("u.c", v) },
+		"not_eq":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("u.c", v) },
+		"lt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("u.c", v) },
+		"lte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lte("u.c", v) },
+		"gt":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gt("u.c", v) },
+		"gte":           func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gte("u.c", v) },
+		"between_lower": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", v, 5) },
+		"between_upper": func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Between("u.c", 5, v) },
+		"in":            func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.In("u.c", v) },
+		"not_in":        func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotIn("u.c", v) },
+	}
+	fDoors := map[string]func(f dbtypes.FilterFactory, v any) dbtypes.Filter{
+		"eq":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Eq("c", v) },
+		"not_eq":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotEq("c", v) },
+		"lt":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lt("c", v) },
+		"lte":           func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lte("c", v) },
+		"gt":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gt("c", v) },
+		"gte":           func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gte("c", v) },
+		"between_lower": func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Between("c", v, 5) },
+		"between_upper": func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Between("c", 5, v) },
+		"in":            func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.In("c", v) },
+		"not_in":        func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotIn("c", v) },
+	}
+
+	for _, v := range inListVendors {
+		for name, operand := range operands {
+			for doorName, door := range jfDoors {
+				t.Run(v.vendor+"_jf_"+doorName+"_"+name, func(t *testing.T) {
+					qb := NewQueryBuilder(v.vendor)
+
+					_, _, err := qb.Select("t.id").From("t").JoinOn("u", door(qb.JoinFilter(), operand)).ToSQL()
+
+					require.ErrorIs(t, err, dbtypes.ErrAliasInPredicate)
+				})
+			}
+			for doorName, door := range fDoors {
+				t.Run(v.vendor+"_f_"+doorName+"_"+name, func(t *testing.T) {
+					qb := NewQueryBuilder(v.vendor)
+
+					_, _, err := qb.Select("id").From("t").Where(door(qb.Filter(), operand)).ToSQL()
+
+					require.ErrorIs(t, err, dbtypes.ErrExpressionInFilter)
+				})
+			}
+		}
 	}
 }

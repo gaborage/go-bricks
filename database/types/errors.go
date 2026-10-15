@@ -58,6 +58,15 @@ var (
 	// has nowhere to render; accepting one silently would drop it.
 	ErrAliasInValue = errors.New("alias is not allowed in a SET or VALUES value")
 
+	// ErrAliasInPredicate is returned when a RawExpression carrying an alias, or
+	// a non-nil pointer to one, reaches a JoinFilterFactory value door: Eq,
+	// NotEq, Lt, Lte, Gt, Gte, either Between bound, In or NotIn. A predicate
+	// operand projects nothing, so an alias has nowhere to render; at a value or
+	// predicate position, accepting one silently would drop it. GroupBy and
+	// OrderBy render the expression's body without its alias by design, so one
+	// aliased expression can serve Select, GroupBy and OrderBy.
+	ErrAliasInPredicate = errors.New("alias is not allowed in a predicate operand")
+
 	// ErrExpressionInFilter is returned when a RawExpression, or a non-nil
 	// pointer to one, reaches a FilterFactory value door: Eq, NotEq, Lt, Lte, Gt,
 	// Gte, either Between bound, In or NotIn. A FilterFactory door takes values:

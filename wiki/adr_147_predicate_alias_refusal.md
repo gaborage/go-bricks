@@ -1,0 +1,79 @@
+# ADR-147: A Predicate Operand Refuses an Aliased RawExpression
+
+**Status:** Accepted
+**Date:** 2026-10-15
+
+## Context
+
+A `RawExpression` carries an optional alias, and an alias renders only where a
+column is projected: `Select` writes `<sql> AS <alias>`. Two value positions
+already refuse one because a cell projects nothing and the alias would be
+dropped without a word: `Having` (`ErrAliasInHaving`) and `Set`/`SetMap`/`Values`
+(`ErrAliasInValue`, judged in `valueExpression` since #2120).
+
+The predicate operand doors did not. Since #2119 and #2120 a `JoinFilterFactory`
+value door (the six compare doors, both `Between` bounds, `In` and `NotIn`)
+splices an expression through the shared `expressionOperand`, and a
+`FilterFactory` door refuses one with `ErrExpressionInFilter`. An aliased
+expression at a `jf` door spliced its body and dropped the alias silently, and
+an alias outside the identifier grammar surfaced as `ErrInvalidAlias` from
+`Validate()`, a grammar complaint about text that was never going to render.
+Fixes #2121.
+
+## Decision
+
+**Every `jf` predicate position refuses an aliased expression with the new
+`dbtypes.ErrAliasInPredicate`.** The rule lives in `expressionOperand`, the one
+place a predicate operand is judged, applied to the RESOLVED operand, so a
+non-nil pointer to an aliased expression is refused the same way.
+
+- **Order:** the family refusal first, so an aliased expression at an `f` door
+  reports `ErrExpressionInFilter`; then the alias, BEFORE `Validate()`, the order
+  `Having` and `valueExpression` use, so an alias that also fails the grammar
+  still reports `ErrAliasInPredicate`.
+- **Surface:** the refusal surfaces at `ToSQL()`, with the operator in the
+  message: `<op>: alias is not allowed in a predicate operand: <alias>`.
+- **`GroupBy` and `OrderBy` keep rendering the body without its alias, by
+  design.** They are clause doors, not operands: one aliased expression can serve
+  `Select`, `GroupBy` and `OrderBy`, which is the idiom for grouping or ordering
+  by a computed column. Their godoc and `wiki/database.md` say so.
+
+## Alternatives considered
+
+- **Render the alias in the predicate.** Rejected: SQL has no alias syntax for
+  an operand.
+- **Drop the alias silently, as before.** Rejected: an alias the caller wrote is
+  intent, and the value positions already refuse that silence.
+- **Refuse the alias at `GroupBy`/`OrderBy` too.** Rejected: it would break the
+  shared-expression idiom for no safety gain, since nothing is dropped there that
+  `Select` does not render.
+- **Reuse `ErrAliasInValue`.** Rejected: its text names SET and VALUES, and a
+  matcher keyed on it would start firing for predicates.
+
+## Consequences
+
+- **Breaking** (`fix(database)!:`). A `jf` value door given an aliased
+  expression built and ran with the alias dropped; it now fails `ToSQL()` with
+  `ErrAliasInPredicate`. A caller with an alias outside the grammar used to get
+  `ErrInvalidAlias` there and now gets `ErrAliasInPredicate`.
+- `f` doors are unchanged: they refuse the expression itself first.
+- `Select`, `GroupBy`, `OrderBy`, `Having`, `Set`, `SetMap`, `Values` and
+  `BuildUpsert` are unchanged.
+- On PostgreSQL, `GroupBy`, `OrderBy` and `jf.Eq` still accept an alias such as
+  `a#b` that `Select`'s vendor alias check refuses. That is out of scope here.
+
+## References
+
+- `database/types/errors.go` — `ErrAliasInPredicate`
+- `database/internal/builder/helpers.go` — `expressionOperand`
+- `database/types/interfaces.go` — `GroupBy`, `OrderBy`, `JoinFilterFactory`
+  godoc
+- `database/internal/builder/join_filter_test.go` —
+  `TestPredicatePositionsRefuseAnAliasedRawExpression`,
+  `TestJoinFilterRejectsRawExpressionAlias`
+- `database/internal/builder/query_builder_test.go` —
+  `TestAnAliasedExpressionServesSelectGroupByAndOrderBy`
+- [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) — the
+  `Validate()` funnel and its consumption sites
+- gaborage/go-bricks#2121
+- See [migrations.md](migrations.md) `[C72.34]`.

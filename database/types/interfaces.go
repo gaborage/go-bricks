@@ -104,7 +104,8 @@ type JoinFilter interface {
 // enabling mixed JOIN conditions without requiring Raw() for common cases.
 //
 // Column-to-value methods splice a RawExpression, or a non-nil pointer to one, for
-// complex SQL expressions:
+// complex SQL expressions; one carrying an alias is refused with
+// ErrAliasInPredicate, since a predicate operand projects nothing:
 //
 //	jf.Eq("amount", qb.MustExpr("TO_NUMBER('100')"))  // Expression support (no placeholders inside expressions)
 //	jf.Eq("status", "active")                         // Simple value with placeholder
@@ -179,6 +180,9 @@ type SelectQueryBuilder interface {
 	InnerJoinOn(table any, filter JoinFilter) SelectQueryBuilder
 	CrossJoinOn(table any) SelectQueryBuilder
 
+	// GroupBy groups by columns or RawExpressions. An expression renders its body
+	// without its alias, by design: one aliased expression can serve Select,
+	// GroupBy and OrderBy.
 	GroupBy(groupBys ...any) SelectQueryBuilder
 
 	// Having adds a HAVING predicate. Prefer a RawExpression from qb.Expr() —
@@ -188,6 +192,8 @@ type SelectQueryBuilder interface {
 	// an error (ErrAliasInHaving), since a predicate projects nothing. Both forms are
 	// raw SQL needing the SECURITY annotation at every call site; see dbtypes.RawExpression.
 	Having(pred any, rest ...any) SelectQueryBuilder
+	// OrderBy orders by columns or RawExpressions. An expression renders its body
+	// without its alias, by design, as at GroupBy.
 	OrderBy(orderBys ...any) SelectQueryBuilder
 	Limit(limit uint64) SelectQueryBuilder
 	Offset(offset uint64) SelectQueryBuilder

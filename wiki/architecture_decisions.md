@@ -2455,6 +2455,24 @@ change is still reported at once.
 
 ---
 
+### [ADR-147: A Predicate Operand Refuses an Aliased RawExpression](adr_147_predicate_alias_refusal.md)
+
+**Date:** 2026-10-15 | **Status:** Accepted | **Breaking:** a `jf` value door refuses an aliased `RawExpression` with `ErrAliasInPredicate` at `ToSQL()`, where it spliced the body and dropped the alias
+
+An alias renders only where a column is projected, and `Having` and the SET/VALUES cells already
+refuse one rather than drop it. The ten `jf` predicate positions (six compare doors, both `Between`
+bounds, `In`, `NotIn`) spliced an aliased expression's body and dropped the alias silently. The
+shared `expressionOperand` now refuses it with the new `dbtypes.ErrAliasInPredicate`, judged on the
+resolved operand after the family refusal (an `f` door still reports `ErrExpressionInFilter`) and
+before `Validate()` (an alias outside the grammar reports the same sentinel). `GroupBy` and
+`OrderBy` keep rendering the body without the alias by design, so one aliased expression serves
+`Select`, `GroupBy` and `OrderBy`. See [migrations.md](migrations.md) `[C72.34]`.
+
+**Key Benefits:** no predicate drops an alias the caller wrote, and every alias refusal names the
+position it was refused at.
+
+---
+
 ### [ADR-148: Every Subquery Door Refuses a Vendor-Rendered Placeholder](adr_148_insubquery_placeholder_guard.md)
 
 **Date:** 2026-10-15 | **Status:** Accepted | **Breaking:** `f.InSubquery` refuses a subquery from another `SelectQueryBuilder` implementation whose SQL carries `$N` or `:N`, where it embedded it verbatim
