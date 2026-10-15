@@ -647,7 +647,7 @@ func resolveListOperands(op string, values any, family doorFamily) (normalized a
 		return normalized, "", empty, err
 	}
 
-	element, nullOrList, resolveErr := resolveOperand(values)
+	element, _, resolveErr := resolveOperand(values)
 	if resolveErr != nil {
 		return nil, "", false, wrapOperandErr(op, resolveErr)
 	}
@@ -661,11 +661,12 @@ func resolveListOperands(op string, values any, family doorFamily) (normalized a
 	// when it holds nothing, and its elements are never walked; a nil or any
 	// other scalar is one element.
 	resolved := reflect.ValueOf(element)
-	if element != nil && nullOrList {
+	kind := resolved.Kind()
+	if kind == reflect.Slice || kind == reflect.Array {
 		normalized, empty, err = resolveList(op, resolved, element)
 		return normalized, "", empty, err
 	}
-	if kind := resolved.Kind(); kind == reflect.Map || kind == reflect.Chan {
+	if kind == reflect.Map || kind == reflect.Chan {
 		return element, "", resolved.Len() == 0, nil
 	}
 	return []any{element}, "", false, nil

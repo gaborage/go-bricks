@@ -3,6 +3,7 @@ package builder
 import (
 	dbsql "database/sql"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -2092,7 +2093,7 @@ var inJoinFilterDoors = []inListDoor{
 	},
 }
 
-var inListDoors = append(append([]inListDoor{}, inFilterDoors...), inJoinFilterDoors...)
+var inListDoors = slices.Concat(inFilterDoors, inJoinFilterDoors)
 
 var inListVendors = []struct {
 	vendor      string

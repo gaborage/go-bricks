@@ -87,8 +87,8 @@ func TestClassifyJoinFilterSkipsNil(t *testing.T) {
 
 // inListPredicate and nullPredicate have no direct tests here: every branch
 // (empty/non-empty list, negate true/false, column-validation error, operand-
-// resolution error, expression splice and its blank-SQL refusal, Oracle
-// reserved-word quoting) is already exercised through
+// resolution error, the jf expression splice and its blank-SQL refusal, the f
+// expression refusal, Oracle reserved-word quoting) is already exercised through
 // both families' In/NotIn/Null/NotNull in filter_test.go and join_filter_test.go,
 // plus the shared column-validation and cyclic-pointer suites
 // (TestFilterColumnsValidateIdentifiers, TestOperandResolutionRefusesACyclicPointer).
