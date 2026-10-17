@@ -497,8 +497,7 @@ func TestSealSignsTheContextTenantWithAJTI(t *testing.T) {
 func TestSealAndOpenRecordOnTheMeterTheyWereBuiltWith(t *testing.T) {
 	keys(t)
 	store := withPair(withPair(kstest.NewMockKeyStore(), signFamily, "v1", signPriv), encFamily, "v1", encPriv)
-	readerA := sdkmetric.NewManualReader()
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: store, Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(readerA))})
+	readerA := configureConsumer(t, store)
 	rtA := sealruntime.Configured()
 	codec := sealruntime.Registered()
 	sealer, err := codec.NewSealer(spec(t), eventType, rtA)
@@ -508,11 +507,10 @@ func TestSealAndOpenRecordOnTheMeterTheyWereBuiltWith(t *testing.T) {
 	opener, err := provider.NewOpener(spec(t), eventType, rtA)
 	require.NoError(t, err)
 
-	readerB := sdkmetric.NewManualReader()
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: store, Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(readerB))})
+	readerB := configureConsumer(t, store)
 
 	ctx := context.Background()
-	data, _, err := sealer.Seal(ctx, paymentAuthorized{OrderID: "o1", Card: &cardData{PAN: testPAN}})
+	data, _, err := sealer.Seal(ctx, doorEvent())
 	require.NoError(t, err)
 	var out paymentAuthorized
 	_, err = opener.Open(ctx, data, sealruntime.TenantRule{}, &out)

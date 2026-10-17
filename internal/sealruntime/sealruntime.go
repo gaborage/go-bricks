@@ -231,10 +231,9 @@ func Registered() Codec {
 
 // Configure records the runtime facts. The app is the single writer and calls it before
 // collecting declarations; a later call replaces the facts (the app rebuilds them per
-// process start, tests per case) and builds fresh seal instruments from the meter, while
-// handles already built keep the instruments they were built with. The Activation
-// selector is copied: a caller's later write to its own map can neither re-aim a
-// generation after bootstrap nor race a declaration being collected.
+// process start, tests per case), and the seal instruments are rebuilt from the meter.
+// The Activation selector is copied: a caller's later write to its own map can neither
+// re-aim a generation after bootstrap nor race a declaration being collected.
 func Configure(rt *Runtime) {
 	if rt == nil {
 		panic("sealruntime: Configure called with nil")

@@ -110,9 +110,8 @@ func activeWithRole(families keystore.FamilyEnumerator, active map[string]string
 	return gen, nil
 }
 
-// sealer is bound to one declaration: its Spec, the active concrete kids, the
-// EventType and its runtime's seal instruments. It is immutable and shared by every
-// goroutine and tenant.
+// sealer is bound to one declaration: its Spec, the active concrete kids and the
+// EventType. It is immutable and shared by every goroutine and tenant.
 type sealer struct {
 	spec     *josesealed.Spec
 	template josesealed.Options

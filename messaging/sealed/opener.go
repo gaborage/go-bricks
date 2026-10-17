@@ -111,9 +111,9 @@ func resolveInRole(keys jose.KeyResolver, kid string, need keystore.Role) error 
 	return err
 }
 
-// opener is bound to one consumer declaration: its Spec, its EventType, the
-// resolver the wire kids resolve through per message and its runtime's seal
-// instruments. Immutable, shared by every worker and tenant.
+// opener is bound to one consumer declaration: its Spec, its EventType and the
+// resolver the wire kids resolve through per message. Immutable, shared by every
+// worker and tenant.
 type opener struct {
 	spec      *josesealed.Spec
 	eventType string
