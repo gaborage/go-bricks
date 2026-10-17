@@ -19,7 +19,9 @@ registration. Each App binds its own seal runtime (key store, a copy of the
 meter) to the Declarations it builds, before any `DeclareMessaging`. Every seal-tagged handle the
 App declares is built with that runtime, so another App's startup in the same process never
 re-aims it (#2010), and a Declarations built by hand with `messaging.NewDeclarations()` has none:
-a seal-tagged declaration on it fails `Validate` with `ErrNotConfigured`. A module reads
+a seal-tagged declaration on it fails `Validate` with `messaging: sealing runtime not configured
+before declarations were collected` (no exported sentinel; without the blank import
+`ErrSealingNotLinked` is still reported first). A module reads
 the same facts from `ModuleDeps`: `KeyStore`, `MeterProvider` and `Config.Messaging.Seal.Active`,
 with tenancy following `multitenant.enabled` and `messaging.tenancy`. `Declarations.Validate` fails a seal-tagged
 declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),
