@@ -5938,6 +5938,7 @@ fw, _, err = app.NewWithOptions(&app.Options{
 // Redact error MESSAGES (field-name masking cannot see inside them). Applies to
 // every LogEvent.Err(err) call, the framework's own included. Nil (the default)
 // keeps Err output unchanged; there is no YAML door, the value is a function.
+// A typed-nil pointer error never reaches the redactor; Err emits no field for it.
 var panRegexp = regexp.MustCompile(`\d{13,19}`)
 
 base = logger.DefaultFilterConfig()
