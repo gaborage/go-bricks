@@ -163,11 +163,11 @@ quoted type; set the tenant's `type` to `postgresql` or `oracle`
 ([ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md)). On
 `go-bricks-migrate`, whose runner is untyped, that covers a type-less tenant, an
 untyped `connectionstring` with an unrecognized scheme and a non-canonical type
-(`postgres`), and the run exits `1` once its routine go-bricks pin bump lands. An
-empty username or
-password, a password shorter than `config.MinDatabasePasswordLength` (too short
-to redact from Flyway output), or a CR, LF or NUL in either fails `MigrateAll`
-with `migration.ErrInvalidMigratorIdentity` before any tenant is listed. The role-separation model in
+(`postgres`), and the run exits `1` once its routine go-bricks pin bump lands.
+An empty username or password, a password shorter than
+`config.MinDatabasePasswordLength` (too short to redact from Flyway output), or a
+CR, LF or NUL in either fails `MigrateAll` with
+`migration.ErrInvalidMigratorIdentity` before any tenant is listed. The role-separation model in
 [migration_roles.md](migration_roles.md) needs the overlay. `go-bricks-migrate`
 reads it from `GOBRICKS_MIGRATE_MIGRATOR_USER` and
 `GOBRICKS_MIGRATE_MIGRATOR_PASSWORD` — both or neither, and no flag carries the
@@ -740,7 +740,7 @@ The `go-bricks-migrate` CLI exits on the same three classes:
 | Exit | Verdict | Meaning |
 | --- | --- | --- |
 | `0` | clean | Every listed tenant was dispatched and succeeded |
-| `1` | `ErrFleetSplit`, or any run error | At least one tenant was dispatched and at least one failed or was never reached — or the run itself errored while the fleet stayed consistent. A tenant refused with `ErrDuplicateMigrationTarget` (once the CLI's go-bricks pin includes the check) is an exit-1 cause fixed by configuration, not a re-run |
+| `1` | `ErrFleetSplit`, or any run error | At least one tenant was dispatched and at least one failed or was never reached — or the run itself errored while the fleet stayed consistent. A tenant refused with `ErrDuplicateMigrationTarget` or `ErrMigratorIdentityUndeliverable` (once the CLI's go-bricks pin includes the check) is an exit-1 cause fixed by configuration, not a re-run |
 | `2` | `ErrNothingAttempted` | No tenant was dispatched — empty listing, listing failure, unreadable tenant store, a credential provider that could not be built, a half-set `GOBRICKS_MIGRATE_MIGRATOR_USER`/`_PASSWORD` pair, an unparseable `GOBRICKS_MIGRATE_SHARED_MIGRATOR`, or a misuse (unknown flag, stray argument, flag combination that does not resolve). No schema was touched |
 
 Exit `1` is reserved for a split fleet so a pipeline can trust it: every misuse exits `2`, because a
