@@ -22,7 +22,7 @@ replica that logged the ERROR restarts. See
    project. After a broker wipe, one of its consumers stayed absent until the
    app restarted (#1797), and a restart already recovers that.
 2. **Cost.** The draft that failed review added about 1,400 lines, about
-   1,200 of them Go, and it still lacked the fences below. That is a
+   1,200 of them Go, and it still left the risks below open. That is a
    four-link stack for a feature nobody else has asked for.
 3. **The client cannot be stopped mid-retry.** In rabbitmq-stream-go-client
    v1.9.0, only the reliable super-stream consumer's `Close` interrupts a
@@ -45,7 +45,7 @@ replica that logged the ERROR restarts. See
      offsets under the shared consumer name. The client's retry recursion has
      no attempt cap, so no grace period bounds this.
    - *A re-declare resurrects a deliberate delete.* An operator sometimes
-     deletes a stream on purpose. For the same reason, ADR-123 rejects
+     deletes a stream on purpose. That is one of the reasons ADR-123 rejects
      re-creation by default.
    - *A partial super-stream loss cannot be repaired.* The client's
      `DeclareSuperStream` treats `StreamAlreadyExists` as success. A re-declare
