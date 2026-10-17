@@ -1756,3 +1756,38 @@ func TestMigrateForRejectsInvalidSchemaName(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr),
 		"schema rejected up front — the Flyway stub must never have executed")
 }
+
+func TestMigrateForTypesATypeLessTenantWithTheRunnerVendor(t *testing.T) {
+	requireShellStubs(t)
+	t.Setenv("DB_USER", "parent_user")
+	stub, capture := createEnvCapturingFlywayStub(t)
+	db := withType(pgTenant("tenant-host", 5432, "tenant_db", "", "tenant_user"), "")
+
+	_, err := newFlywayMigratorForTest(t).MigrateFor(context.Background(), db, makeBaseConfig(t, stub))
+
+	require.NoError(t, err)
+	env := readCapturedEnv(t, capture)
+	want := map[string]string{
+		"DB_USER": "tenant_user", "DB_PASSWORD": db.Password, "DB_HOST": "tenant-host", "DB_PORT": "5432", "DB_NAME": "tenant_db",
+	}
+	for key, value := range want {
+		assert.Equal(t, value, env[key], key)
+	}
+	assert.Contains(t, env["ARGS"], flagURL+"jdbc:postgresql://tenant-host:5432/tenant_db")
+	assert.Empty(t, db.Type, "the caller's config must not be mutated")
+}
+
+func TestTypedWithVendor(t *testing.T) {
+	assert.Nil(t, typedWithVendor(nil, config.PostgreSQL))
+
+	typed := &config.DatabaseConfig{Type: config.Oracle}
+	assert.Same(t, typed, typedWithVendor(typed, config.Oracle), "a config already typed with the vendor is not copied")
+
+	typeLess := &config.DatabaseConfig{Host: "h"}
+	assert.Same(t, typeLess, typedWithVendor(typeLess, ""), "an untyped runner leaves a type-less config as is")
+
+	got := typedWithVendor(typeLess, config.PostgreSQL)
+	assert.NotSame(t, typeLess, got)
+	assert.Equal(t, config.DatabaseConfig{Type: config.PostgreSQL, Host: "h"}, *got)
+	assert.Empty(t, typeLess.Type, "the caller's config must not be mutated")
+}

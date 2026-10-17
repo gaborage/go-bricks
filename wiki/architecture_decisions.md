@@ -2491,6 +2491,25 @@ fails at `ToSQL()` instead of reaching the database.
 
 ---
 
+### [ADR-149: A Type-less Tenant Runs With the Runner's Vendor, and an Undeliverable Migrator Identity Is Refused](adr_149_typeless_tenant_runs_with_runner_vendor.md)
+
+**Date:** 2026-10-17 | **Status:** Accepted | **Breaking:** a type-less tenant now receives its `DB_*`/`ORACLE_*` variables from its own fields or the `MigratorIdentity` overlay, and `MigrateAll` refuses an overlay whose tenant vendor is neither `postgresql` nor `oracle`
+
+The Flyway run path resolved a type-less tenant's vendor from the runner for the URL, schema
+args, conf and duplicate-target key, but the environment builder switched on the tenant's raw
+`type`, so no connection variable reached Flyway: the conf's or the parent's credentials (and, on
+Oracle, host and PDB) were used, with or without an overlay. The shared `MigrateFor`/`ValidateFor`/
+`InfoFor` path now hands every step a copy typed with the resolved vendor, which
+`TenantResult.Vendor` also reports. With `MigratorIdentity` set, a tenant whose vendor resolves to
+neither is refused before the claim and before Flyway with
+`migration.ErrMigratorIdentityUndeliverable`, naming only the tenant ID and type. Closes
+ADR-143's type-less blind spot. See [migrations.md](migrations.md) `[C73.1]`.
+
+**Key Benefits:** a type-less tenant connects as the identity the framework keyed and redacts,
+and an overlay is either delivered or refused, never silently dropped.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3300,7 +3319,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-148) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-149) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

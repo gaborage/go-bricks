@@ -50,6 +50,8 @@ type TenantLister interface {
 // TenantResult captures the outcome of running an Action against one tenant.
 type TenantResult struct {
 	TenantID string
+	// Vendor is the vendor the tenant ran with: its type, or the runner's when that is
+	// empty. Empty when neither is set or the config could not be resolved.
 	Vendor   string
 	Err      error
 	Duration time.Duration
@@ -159,7 +161,8 @@ type MigrateAllOptions struct {
 	// every tenant's resolved database config before Flyway runs; host, port,
 	// database, schema targeting and TLS stay the tenant's. Nil keeps the
 	// provider's credentials. Two tenants it leaves on one target are refused with
-	// ErrDuplicateMigrationTarget.
+	// ErrDuplicateMigrationTarget, and a tenant whose resolved vendor (TenantResult.Vendor)
+	// is neither postgresql nor oracle with ErrMigratorIdentityUndeliverable.
 	MigratorIdentity *MigratorIdentity
 }
 
@@ -196,12 +199,20 @@ type MigratorIdentity struct {
 // aliases (a CNAME, or an IP against a name), an Oracle port of 0 against 1521, Oracle's
 // case-insensitive unquoted user and service names (app against APP), distinct PostgreSQL roles
 // with no role-level search_path (all land in public), and two separate MigrateAll calls, which
-// rely on Flyway's own lock. A type-less tenant under a typed runner gets none of its connection
-// variables delivered, so its key may not be the target Flyway connects to: a possible false
-// negative; on a refusal, set the tenant's type so Flyway connects as the keyed user, and a
-// refusal that survives that is a real collision. A tenant that claims a target and then fails
-// its own run still holds the claim.
+// rely on Flyway's own lock. A type-less tenant runs typed with the runner's vendor (ADR-149), so
+// its key is the target Flyway is handed, as for a typed tenant. With MigratorIdentity set, a
+// tenant whose vendor resolves to neither is refused with ErrMigratorIdentityUndeliverable
+// instead of running unkeyed. A tenant that claims a target and then fails its own run still
+// holds the claim.
 var ErrDuplicateMigrationTarget = errors.New("migration: tenant resolves to a migration target another tenant of this run claimed")
+
+// ErrMigratorIdentityUndeliverable is a tenant's TenantResult.Err when MigrateAllOptions.MigratorIdentity
+// is set and the tenant's resolved vendor (TenantResult.Vendor) is neither postgresql nor oracle:
+// the framework has no environment to hand the overlay to Flyway, which would otherwise
+// connect with the conf's or the parent environment's credentials (ADR-149). The refused tenant
+// starts no Flyway process and claims no target, for migrate, validate and info alike. The message
+// names the tenant ID and its type, never the host, username, password or connection string.
+var ErrMigratorIdentityUndeliverable = errors.New("migration: migrator identity cannot be delivered to the tenant's database type")
 
 // ErrNoLister is returned when MigrateAll is called without a TenantLister.
 var ErrNoLister = errors.New("migration: TenantLister is nil")
@@ -281,6 +292,11 @@ func duplicateTargetError(tenantID, owner string) error {
 	}
 	return fmt.Errorf("%w: tenant %q resolves to the same migration target as tenant %q; give each tenant a distinct "+
 		"postgresql.schema or migrator role, or de-list the alias; a re-run collides again", ErrDuplicateMigrationTarget, tenantID, owner)
+}
+
+func undeliverableIdentityError(tenantID, vendor string) error {
+	return fmt.Errorf("%w: tenant %q has type %q; set its type to %q or %q",
+		ErrMigratorIdentityUndeliverable, tenantID, vendor, config.PostgreSQL, config.Oracle)
 }
 
 func validateMigratorIdentity(identity *MigratorIdentity) error {
@@ -489,14 +505,20 @@ func runOne(
 		res.Duration = time.Since(start)
 		return res
 	}
-	res.Vendor = dbCfg.Type
+	vendor := dbVendor(dbCfg, migrator.config.Database.Type)
+	res.Vendor = vendor
 	if identity := opts.MigratorIdentity; identity != nil {
+		if !deliversEnvironment(vendor) {
+			res.Err = undeliverableIdentityError(tenantID, vendor)
+			res.Duration = time.Since(start)
+			return res
+		}
 		overlaid := *dbCfg
 		overlaid.Username = identity.Username
 		overlaid.Password = identity.Password
 		dbCfg = &overlaid
 	}
-	if target, keyed := migrationTargetFor(dbCfg, migrator.config.Database.Type); keyed {
+	if target, keyed := migrationTargetFor(dbCfg, vendor); keyed {
 		if owner, claimed := claims.claim(&target, tenantID); !claimed {
 			res.Err = duplicateTargetError(tenantID, owner)
 			res.Duration = time.Since(start)
@@ -504,7 +526,7 @@ func runOne(
 		}
 	}
 
-	defaults := migrator.DefaultMigrationConfigForVendor(dbCfg.Type)
+	defaults := migrator.DefaultMigrationConfigForVendor(vendor)
 	cfg := mergeConfigs(defaults, opts.BaseConfig)
 
 	switch action {
