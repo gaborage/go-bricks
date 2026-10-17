@@ -684,8 +684,9 @@ reconnected. Because the component is non-critical, `/ready` keeps
 answering `200`, so alert on the ERROR — or on
 `app.readiness.status{readiness.kind="streams"} == 0` and the WARN `Readiness
 component unhealthy`, which the verdict does reach. Only a
-**restart** re-declares the stream. Opt-in re-creation is deferred to
-[#1826](https://github.com/gaborage/go-bricks/issues/1826). A replica that
+**restart** re-declares the stream. Opt-in re-creation is deferred; see
+[stream-recreation.md](../.out-of-scope/stream-recreation.md) for why and what
+would reopen it. A replica that
 restarts does not revive the others, so restart every replica that logged it.
 The supervisor leaves the consumer's offsets alone: a super-stream consumer whose
 client gave up on some partitions keeps delivering and committing on the ones that

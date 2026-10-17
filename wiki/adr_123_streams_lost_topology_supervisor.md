@@ -7,13 +7,17 @@
 ## Context
 
 The streams lane declares its topology once, in `Manager.Start`, and `Start` refuses to run again
-while an environment is open. The client's HA layer (rabbitmq-stream-go-client v1.8.3, `pkg/ha`)
-reattaches a consumer or producer after a broker outage by itself. It gives up when the stream is
-gone: its retry asks for the stream's metadata, gets `StreamDoesNotExist`, and sets the handle to
-`StatusClosed`, which is final. There is no further retry and no callback. A metadata query the
-broker answers with an error the retry does not classify, such as access refused or an internal
-error, ends the same way, although the stream still exists. A query that gets no answer, such as
-one that times out, is retried instead.
+while an environment is open. The client's HA layer (rabbitmq-stream-go-client `pkg/ha`, v1.8.3
+when this was decided, v1.9.0 since #2140) reattaches a consumer or producer after a broker outage
+by itself. It gives up when the stream is gone: its retry asks for the stream's metadata, gets
+`StreamDoesNotExist`, and sets the handle to `StatusClosed`. There is no callback. For a plain
+stream's consumer or producer, closed is final. A super-stream handle retries its dropped
+partitions one after another, and at v1.8.3 a partition still queued for retry set either kind of
+handle back to reconnecting. Since v1.9.0 a super-stream consumer that reached closed stays closed,
+and only a super-stream producer can still pass back to reconnecting and open (see Consequences).
+A metadata query the broker answers with an error the retry does not classify, such as access
+refused or an internal error, ends the same way, although the stream still exists. A query that
+gets no answer, such as one that times out, is retried instead.
 
 So a stream deleted by an operator, or lost with broker data, stopped consumption and publishing for
 the life of the process. The only traces were the vendor's unstructured `log.Printf` line and the
@@ -88,12 +92,15 @@ default and this one does not.
 
 - **Re-create a lost stream by default.** Rejected: it silently discards offsets and can skip
   messages, and a deleted stream is sometimes deliberate.
-- **Re-create a lost stream on opt-in.** Deferred to
-  [#1826](https://github.com/gaborage/go-bricks/issues/1826). A draft failed review: at client
-  v1.8.3 the super-stream consumer's `Close` was unguarded, so a second `Close` crashed, and closing
-  a super-stream consumer while the client retried its partitions raced the client. Client v1.9.0
-  fixes both: `SuperStreamConsumer.Close` is idempotent, and closing the reliable consumer interrupts
-  its partition retry, which then returns `AlreadyClosed` instead of reopening anything.
+- **Re-create a lost stream on opt-in.** Deferred: see
+  [stream-recreation.md](../.out-of-scope/stream-recreation.md) for why, the alternatives weighed,
+  and what reopens it ([#1826](https://github.com/gaborage/go-bricks/issues/1826) is the record).
+  A draft failed review: at client v1.8.3 the super-stream consumer's `Close` was unguarded, so a
+  second `Close` crashed, and closing a super-stream consumer while the client retried its
+  partitions raced the client. Client v1.9.0 fixes both for that consumer:
+  `SuperStreamConsumer.Close` is idempotent, and closing the reliable consumer interrupts its
+  partition retry, which then returns `AlreadyClosed` instead of reopening anything. Closing a
+  plain consumer or either producer while the client retries it still leaves the retry running.
 - **Call `Start` again.** Rejected: `Start` refuses while an environment is open, and closing and
   redialing would drop every healthy handle to repair one stream.
 - **Make the `streams` component critical on a loss.** Out of scope. The component stays

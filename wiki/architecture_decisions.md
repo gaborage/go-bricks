@@ -2017,7 +2017,8 @@ when it was refused, instead of being told it was delivered.
 **Date:** 2026-09-27 | **Status:** Accepted
 
 The streams lane declared its topology once, at startup, and the client's HA layer gives a handle up
-for good (`StatusClosed`, no callback) when its stream no longer exists, so a deleted stream stopped
+(`StatusClosed`, no callback; at client v1.9.0 that is final for every handle but a super-stream
+producer) when its stream no longer exists, so a deleted stream stopped
 consumption and publishing until the process restarted, with only an unstructured vendor log line to
 show for it. A supervisor owned by the manager now polls every handle's status and reports each one
 that closed without the manager closing it, once, at ERROR, naming the stream and the consumer or
