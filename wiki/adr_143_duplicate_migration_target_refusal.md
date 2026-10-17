@@ -7,7 +7,7 @@
 > a type-less tenant now runs as a copy typed with the runner's vendor, so the
 > environment builder reads the same vendor as the key and the type-less blind spot
 > below is closed. With `MigratorIdentity` set, a tenant whose vendor resolves to
-> neither is no longer unkeyed and run as today: it is refused with
+> neither no longer runs unkeyed as today: it is refused with
 > `ErrMigratorIdentityUndeliverable` before the claim.
 
 ## Context
