@@ -677,9 +677,10 @@ A super-stream publisher does not: the client retries its partitions one at a
 time, so a partition lost while another is still queued for retry can pass
 straight back to reconnecting and open, and go unreported.
 
-The handle stays closed and the `streams` component stays unhealthy, even when
-the client later reports a super-stream publisher open again because another of
-its partitions reconnected. Because the component is non-critical, `/ready` keeps
+Once the supervisor has reported a loss, the manager keeps that verdict and the
+`streams` component stays unhealthy, even when the client later reports the
+super-stream publisher's handle open again because another of its partitions
+reconnected. Because the component is non-critical, `/ready` keeps
 answering `200`, so alert on the ERROR — or on
 `app.readiness.status{readiness.kind="streams"} == 0` and the WARN `Readiness
 component unhealthy`, which the verdict does reach. Only a
