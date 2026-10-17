@@ -10661,7 +10661,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   ERROR per consumer or publisher on it, naming the stream and the consumer. A super-stream partition
   lost while the client still has another partition queued for retry can pass straight back to
   reconnecting and open, and go unreported. Nothing is re-declared
-  (opt-in re-creation is tracked as gaborage/go-bricks#1826): the handle stays down and the
+  (opt-in re-creation is deferred, see
+  [stream-recreation.md](../.out-of-scope/stream-recreation.md)): the handle stays down and the
   non-critical `streams` component stays unhealthy until the service restarts, as before, and now
   also when the client later reports a super-stream handle open again because another of its
   partitions reconnected. A lost consumer's shutdown offset flush is skipped, with a WARN naming it,

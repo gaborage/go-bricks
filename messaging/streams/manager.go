@@ -383,8 +383,7 @@ func (m *Manager) startConsumer(ctx context.Context, env environment, decl *cons
 }
 
 // openConsumer attaches one client consumer to runner, on the client API its
-// kind requires, and returns the flush target of each stream it reads, apart from
-// tracking it, so that a consumer can be reopened on the runner it already has.
+// kind requires, and returns the flush target of each stream it reads.
 func (m *Manager) openConsumer(env environment, decl *consumerDeclaration, runner *consumerRunner) (consumerHandle, func(string) offsetStorer, error) {
 	if decl.Super {
 		return m.openSuperStreamConsumer(env, decl, runner)
@@ -416,7 +415,7 @@ func (m *Manager) openStreamConsumer(env environment, decl *consumerDeclaration,
 			}))
 	}
 
-	handle, err := env.NewConsumer(decl.Stream, opts, runner.deliverer())
+	handle, err := env.NewConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
 	}
@@ -448,7 +447,7 @@ func (m *Manager) openSuperStreamConsumer(env environment, decl *consumerDeclara
 				return m.resolveOffset(env, decl.Name, partition, decl.Start, runner.offsets)
 			}))
 
-	handle, err := env.NewSuperStreamConsumer(decl.Stream, opts, runner.deliverer())
+	handle, err := env.NewSuperStreamConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
 	}
