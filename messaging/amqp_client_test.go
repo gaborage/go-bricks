@@ -23,7 +23,6 @@ import (
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -1407,9 +1406,6 @@ func TestAMQPClientCloseNotifyRecordsReason(t *testing.T) {
 			}
 			mp, cleanup := setupConsumeMetrics(t)
 			defer cleanup()
-			// Record*Event reads its counters before binding the meter, so the
-			// first event after a reset is dropped; bind it on another counter.
-			tracking.RecordChannelEvent("create", nil)
 
 			log := newRecordingLogger()
 			c := &AMQPClientImpl{m: &sync.RWMutex{}, log: log}
