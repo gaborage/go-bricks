@@ -3,6 +3,13 @@
 **Status:** Accepted
 **Date:** 2026-10-04
 
+> **Amended (2026-10-17, [ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md)):**
+> a type-less tenant now runs as a copy typed with the runner's vendor, so the
+> environment builder reads the same vendor as the key and the type-less blind spot
+> below is closed. With `MigratorIdentity` set, a tenant whose vendor resolves to
+> neither is no longer unkeyed and run as today: it is refused with
+> `ErrMigratorIdentityUndeliverable` before the claim.
+
 ## Context
 
 `MigrateAll` resolves each tenant's `*config.DatabaseConfig` through the
@@ -56,12 +63,14 @@ Flyway's own lock.
   host or database, and a vendor that resolves to neither (a type-less tenant
   under a runner with an empty `Database.Type`). This is the conf-owned boundary
   [ADR-085](adr_085_framework_owned_flyway_url.md) and
-  `ErrIncompleteMigrationTarget` already draw.
+  `ErrIncompleteMigrationTarget` already draw. With `MigratorIdentity` set, the
+  last of these is refused instead with `ErrMigratorIdentityUndeliverable`
+  ([ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md)).
 
 The key reuses the run path's own vendor resolution (`dbVendor`) and
 URL-ownership decision (`usesFrameworkOwnedURL`) rather than re-implementing
-them; the environment builder's switch on the tenant's own `type` is the one
-input it does not share (see the blind spots).
+them; since [ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md) the
+environment builder reads the same resolved vendor.
 
 **Normalization:** the host is lowercased and IPv6 brackets are stripped; a
 PostgreSQL port of 0 equals 5432, the driver default; database, schema and
@@ -100,13 +109,11 @@ names this.
   `APP`), compared byte-exact;
 - distinct PostgreSQL roles with no role-level `search_path`: all resolve to
   `public` through `$user, public`, but are keyed apart by username;
-- a type-less tenant under a typed runner: `runFor` resolves its vendor through
-  `dbVendor`, but the environment builder switches on the tenant's own `type`,
-  so none of its connection variables are delivered. Under a PostgreSQL runner
-  its keyed username may not be the user Flyway connects as; under an Oracle
-  runner none of the `ORACLE_*` variables reach Flyway, so its whole key may
-  differ from Flyway's target. That is a possible false negative; on a refusal,
-  set the tenant's `type` so Flyway connects as the keyed user; a refusal that survives that is a real collision. The mismatch predates this check (#2019);
+- a type-less tenant under a typed runner, until
+  [ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md): the environment
+  builder switched on the tenant's own `type`, so none of its connection variables
+  were delivered and its key could differ from Flyway's target. The tenant now
+  runs typed with the runner's vendor, so its key is the target Flyway is handed;
 - two separate `MigrateAll` calls, which rely on Flyway's own lock;
 - in the shared-migrator empty-schema case, the first tenant's own false green.
 

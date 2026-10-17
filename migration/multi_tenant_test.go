@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -73,8 +74,13 @@ func (f *fakeConfigProvider) DBConfig(_ context.Context, key string) (*config.Da
 
 func newFlywayMigratorForTest(t *testing.T) *FlywayMigrator {
 	t.Helper()
+	return newFlywayMigratorForVendor(t, config.PostgreSQL)
+}
+
+func newFlywayMigratorForVendor(t *testing.T, vendor string) *FlywayMigrator {
+	t.Helper()
 	cfg := &config.Config{
-		Database: config.DatabaseConfig{Type: "postgresql"},
+		Database: config.DatabaseConfig{Type: vendor},
 		App:      config.AppConfig{Env: "test"},
 	}
 	return NewFlywayMigrator(cfg, logger.New("disabled", true))
@@ -881,36 +887,42 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 			PostgreSQL: config.PostgreSQLConfig{Schema: "tenant_schema"},
 		}
 	}
+	newOracleTenant := func() *config.DatabaseConfig {
+		return &config.DatabaseConfig{
+			Type: "oracle", Host: "tenant-ora-host", Port: 1521, Database: "TENANTPDB",
+			Username: tenantUser, Password: tenantPassword,
+		}
+	}
+	typeLess := func(db *config.DatabaseConfig) *config.DatabaseConfig {
+		db.Type = ""
+		return db
+	}
 	pgMigratorEnv := map[string]string{
 		"DB_USER": "fleet_migrator", "DB_PASSWORD": migratorPassword,
 		"DB_HOST": "tenant-pg-host", "DB_PORT": "5432", "DB_NAME": "tenant_db",
+	}
+	oracleMigratorEnv := map[string]string{
+		"ORACLE_USER": "fleet_migrator", "ORACLE_PASSWORD": migratorPassword,
+		"ORACLE_HOST": "tenant-ora-host", "ORACLE_PORT": "1521", "ORACLE_PDB": "TENANTPDB",
 	}
 	pgSchemaArgs := []string{"-schemas=tenant_schema", "-defaultSchema=tenant_schema"}
 
 	cases := []struct {
 		name        string
+		runner      string
 		tenant      *config.DatabaseConfig
 		action      Action
 		identity    *MigratorIdentity
 		parallelism int
 		wantEnv     map[string]string
 		wantArgs    []string
+		rejectArgs  []string
 	}{
 		{name: "postgresql_migrate_connects_as_migrator", tenant: newPGTenant(), action: ActionMigrate, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
 		{name: "parallel_postgresql_migrate_connects_as_migrator", tenant: newPGTenant(), action: ActionMigrate, identity: migrator, parallelism: 2, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
 		{name: "postgresql_validate_connects_as_migrator", tenant: newPGTenant(), action: ActionValidate, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
 		{name: "postgresql_info_connects_as_migrator", tenant: newPGTenant(), action: ActionInfo, identity: migrator, wantEnv: pgMigratorEnv, wantArgs: pgSchemaArgs},
-		{
-			name: "oracle_migrate_connects_as_migrator", action: ActionMigrate, identity: migrator,
-			tenant: &config.DatabaseConfig{
-				Type: "oracle", Host: "tenant-ora-host", Port: 1521, Database: "TENANTPDB",
-				Username: tenantUser, Password: tenantPassword,
-			},
-			wantEnv: map[string]string{
-				"ORACLE_USER": "fleet_migrator", "ORACLE_PASSWORD": migratorPassword,
-				"ORACLE_HOST": "tenant-ora-host", "ORACLE_PORT": "1521", "ORACLE_PDB": "TENANTPDB",
-			},
-		},
+		{name: "oracle_migrate_connects_as_migrator", tenant: newOracleTenant(), action: ActionMigrate, identity: migrator, wantEnv: oracleMigratorEnv},
 		{
 			name: "nil_identity_connects_as_tenant_secret", tenant: newPGTenant(), action: ActionMigrate,
 			wantEnv: map[string]string{
@@ -919,14 +931,33 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 			},
 			wantArgs: pgSchemaArgs,
 		},
+		{
+			name: "type_less_under_postgresql_runner_connects_as_migrator", tenant: typeLess(newPGTenant()), action: ActionMigrate, identity: migrator,
+			wantEnv: pgMigratorEnv, wantArgs: append([]string{flagURL + "jdbc:postgresql://tenant-pg-host:5432/tenant_db"}, pgSchemaArgs...),
+		},
+		{
+			name: "type_less_under_oracle_runner_connects_as_migrator", runner: config.Oracle, tenant: typeLess(newOracleTenant()),
+			action: ActionMigrate, identity: migrator, wantEnv: oracleMigratorEnv,
+		},
+		{
+			name:   "type_less_connection_string_under_postgresql_runner_exports_its_own_fields",
+			tenant: &config.DatabaseConfig{ConnectionString: "postgres://dsn-host:5432/dsn_db", Username: tenantUser, Password: tenantPassword},
+			action: ActionMigrate,
+			wantEnv: map[string]string{
+				"DB_USER": tenantUser, "DB_PASSWORD": tenantPassword, "DB_HOST": "", "DB_PORT": "0", "DB_NAME": "",
+			},
+			rejectArgs: []string{flagURL},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			stub, capture := createEnvCapturingFlywayStub(t)
+			runner := cmp.Or(tc.runner, config.PostgreSQL)
+			wantType := tc.tenant.Type
 			res, err := MigrateAll(
 				context.Background(),
-				newFlywayMigratorForTest(t),
+				newFlywayMigratorForVendor(t, runner),
 				&fakeLister{ids: []string{"t1"}},
 				cachingConfigProvider{cfg: tc.tenant},
 				tc.action,
@@ -935,13 +966,19 @@ func TestMigrateAllMigratorIdentityOverlaysTenantCredentials(t *testing.T) {
 
 			require.NoError(t, err)
 			require.Len(t, res.Results, 1)
+			assert.Equal(t, cmp.Or(wantType, runner), res.Results[0].Vendor, "the resolved vendor, not the raw type")
 			env := readCapturedEnv(t, capture)
 			for key, want := range tc.wantEnv {
+				assert.Contains(t, env, key)
 				assert.Equal(t, want, env[key], key)
 			}
 			for _, arg := range tc.wantArgs {
 				assert.Contains(t, env["ARGS"], arg)
 			}
+			for _, arg := range tc.rejectArgs {
+				assert.NotContains(t, env["ARGS"], arg)
+			}
+			assert.Equal(t, wantType, tc.tenant.Type, "provider's document must not be mutated")
 			assert.Equal(t, tenantUser, tc.tenant.Username, "provider's document must not be mutated")
 			assert.Equal(t, tenantPassword, tc.tenant.Password, "provider's document must not be mutated")
 		})
@@ -1282,5 +1319,103 @@ func TestMigrateAllScopesTargetClaimsToOneCall(t *testing.T) {
 		require.NoError(t, err, "call %d", call)
 		require.NoError(t, res.Verdict(), "call %d", call)
 		assert.Equal(t, call, flywayRuns(t, runLog))
+	}
+}
+
+func TestMigrateAllKeysTypeLessTenantsByTheUserFlywayReceives(t *testing.T) {
+	requireShellStubs(t)
+	typeLess := func(username string) *config.DatabaseConfig {
+		db := pgTenant("db", 5432, "app", "", username)
+		db.Type = ""
+		return db
+	}
+	cfgs := map[string]*config.DatabaseConfig{"t1": typeLess("t1"), "t2": typeLess("t2")}
+
+	t.Run("no_overlay_each_connects_as_its_own_user", func(t *testing.T) {
+		stub, capture := createEnvCapturingFlywayStub(t)
+		res, err := MigrateAll(context.Background(), newFlywayMigratorForTest(t), &fakeLister{ids: []string{"t1", "t2"}},
+			newFakeConfigProvider(cfgs), ActionMigrate, MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), ContinueOnError: true})
+		require.NoError(t, err)
+		require.NoError(t, res.Verdict())
+		raw, readErr := os.ReadFile(capture)
+		require.NoError(t, readErr)
+		assert.Contains(t, string(raw), "DB_USER=t1\n")
+		assert.Contains(t, string(raw), "DB_USER=t2\n")
+	})
+
+	t.Run("shared_overlay_refuses_the_second", func(t *testing.T) {
+		res, runs := runDuplicateTargetFleet(t, []string{"t1", "t2"}, cfgs, sharedMigrator, ActionMigrate)
+		require.NoError(t, res.Results[0].Err)
+		require.ErrorIs(t, res.Results[1].Err, ErrDuplicateMigrationTarget)
+		assert.Equal(t, 1, runs)
+	})
+}
+
+func TestMigrateAllRefusesAnUndeliverableMigratorIdentity(t *testing.T) {
+	requireShellStubs(t)
+	nonCanonical := pgTenant("db", 5432, "app", "s", "u")
+	nonCanonical.Type = "postgres"
+	typeLess := pgTenant("db", 5432, "app", "s", "u")
+	typeLess.Type = ""
+	cases := []struct {
+		name     string
+		runner   string
+		tenant   *config.DatabaseConfig
+		wantType string
+	}{
+		{name: "type_less_tenant_under_untyped_runner", tenant: typeLess, wantType: ""},
+		{name: "non_canonical_type_under_postgresql_runner", runner: config.PostgreSQL, tenant: nonCanonical, wantType: "postgres"},
+	}
+	for _, tc := range cases {
+		for _, action := range []Action{ActionMigrate, ActionValidate, ActionInfo} {
+			for _, parallelism := range []int{1, 2} {
+				t.Run(fmt.Sprintf("%s_%s_parallelism_%d", tc.name, action, parallelism), func(t *testing.T) {
+					stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+					cfgs := map[string]*config.DatabaseConfig{"t1": tc.tenant, "t2": pgTenant("db", 5432, "other", "s", "u")}
+					res, err := MigrateAll(context.Background(), newFlywayMigratorForVendor(t, tc.runner), &fakeLister{ids: []string{"t1", "t2"}},
+						newFakeConfigProvider(cfgs), action, MigrateAllOptions{
+							BaseConfig: makeBaseConfig(t, stub), ContinueOnError: true, Parallelism: parallelism, MigratorIdentity: sharedMigrator,
+						})
+					require.NoError(t, err)
+					require.Len(t, res.Results, 2)
+					require.ErrorIs(t, res.Results[0].Err, ErrMigratorIdentityUndeliverable)
+					assert.Contains(t, res.Results[0].Err.Error(), fmt.Sprintf("tenant %q", "t1"))
+					assert.Contains(t, res.Results[0].Err.Error(), fmt.Sprintf("type %q", tc.wantType))
+					assert.Equal(t, tc.wantType, res.Results[0].Vendor)
+					require.NoError(t, res.Results[1].Err, "a valid sibling still runs")
+					assert.Equal(t, 1, flywayRuns(t, runLog), "the refused tenant starts no Flyway process")
+					require.ErrorIs(t, res.Verdict(), ErrFleetSplit)
+				})
+			}
+		}
+	}
+}
+
+func TestMigrateAllFailFastReturnsTheUndeliverableIdentityRefusal(t *testing.T) {
+	requireShellStubs(t)
+	stub, runLog := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+	typeLess := pgTenant("db", 5432, "app", "s", "u")
+	typeLess.Type = ""
+	res, err := MigrateAll(context.Background(), newFlywayMigratorForVendor(t, ""), &fakeLister{ids: []string{"t1", "t2"}},
+		newFakeConfigProvider(map[string]*config.DatabaseConfig{"t1": typeLess, "t2": pgTenant("db", 5432, "other", "s", "u")}), ActionMigrate,
+		MigrateAllOptions{BaseConfig: makeBaseConfig(t, stub), MigratorIdentity: sharedMigrator})
+	require.ErrorIs(t, err, ErrMigratorIdentityUndeliverable)
+	assert.Equal(t, []string{"t2"}, res.NeverDispatched)
+	assert.Zero(t, flywayRuns(t, runLog))
+	require.ErrorIs(t, res.Verdict(), ErrFleetSplit)
+}
+
+func TestMigrateAllUndeliverableIdentityErrorCarriesNoTargetOrCredential(t *testing.T) {
+	tenant := pgTenant("secret-host.internal", 5432, "secret_db", "", "tenant_user")
+	tenant.Type = "mysql"
+	tenant.ConnectionString = "mysql://secret-dsn-host:3306/secret_db"
+	res, runs := runDuplicateTargetFleet(t, []string{"t1"}, map[string]*config.DatabaseConfig{"t1": tenant}, sharedMigrator, ActionMigrate)
+	require.ErrorIs(t, res.Results[0].Err, ErrMigratorIdentityUndeliverable)
+	assert.Zero(t, runs)
+	msg := res.Results[0].Err.Error()
+	assert.Contains(t, msg, `tenant "t1"`)
+	assert.Contains(t, msg, `type "mysql"`)
+	for _, leaked := range []string{"secret-host", "secret_db", "secret-dsn-host", "tenant_user", tenant.Password, sharedMigrator.Username, sharedMigrator.Password} {
+		assert.NotContains(t, msg, leaked)
 	}
 }

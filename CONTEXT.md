@@ -318,6 +318,12 @@ quiesce, fail-fast). It has no row in `Results`; a dispatched tenant that a
 cancel or timeout interrupted is failed, never this.
 _Avoid_: skipped, not attempted (for one tenant), pending
 
+**Type-less tenant**:
+A tenant whose database section sets no `type`, so it runs with the vendor of
+the runner that migrates it. A tenant with a non-canonical `type` (`postgres`)
+is not type-less.
+_Avoid_: untyped tenant, default-vendor tenant
+
 ### Identity
 
 **Principal**:
