@@ -13366,6 +13366,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - Env: `git grep -n 'SERVER_TIMEOUT_IDLE'`, plus
     `grep -rn 'SERVER_TIMEOUT_IDLE' k8s/ deploy/ .env* 2>/dev/null` for env files and deployment
     manifests outside the repository's tracked files.
+  - Count a hit only in a file a deployment actually loads (its config YAML, env file or
+    manifest); a hit in an example file, a comment or documentation is not a setting.
   - `server.DefaultIdleTimeout` is deliberately NOT part of the detect: Go code that reads it
     now sees 75s too, so it is affected, and a hit there would wrongly mark it unaffected.
 - scope: `http.Server.IdleTimeout` on the application listener and the ADR-120 probe listener,
@@ -13383,7 +13385,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - after: an idle keep-alive connection closes after 75s, so a 60s proxy closes it first. Idle
   connections are held 15s longer, which matters for file-descriptor use on a directly exposed
   listener: net/http has no connection cap.
-- apply: none behind an L7 proxy whose upstream idle is below 75s. Otherwise set
+- apply: none when every L7 proxy in front has an upstream idle below 75s and every L4 load
+  balancer in front has a flow idle above 75s. Otherwise set
   `server.timeout.idle` as the [deployment note](troubleshooting.md#alb-httpcode_elb_502_count-with-zero-target-5xx)
   says: above the upstream idle of an L7 proxy (a raised ALB idle, a GCP external Application
   Load Balancer's fixed 600s backend keepalive; behind Envoy/Istio's 1h upstream idle, lower the

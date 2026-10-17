@@ -152,9 +152,9 @@ response_processing_time  -1
 error_reason              -
 ```
 
-`error_reason` stays `-` for this failure: the ALB fills it only for authentication, JWT, weighted-target-group, Lambda and WAF failures. The three `-1` processing times with a `-` target status are the signature.
+`error_reason` stays `-` for this failure: the ALB fills it only for authentication, JWT, weighted-target-group, Lambda and WAF failures. The three `-1` processing times with a `-` target status mean the ALB could not dispatch the request to a target. A target the ALB cannot connect to logs the same fields, so rule that out (target health, connection errors) before changing the idle timeout.
 
-**Root cause:** a keep-alive race. The ALB sent a request on a pooled connection at the moment the service closed it as idle. When `server.timeout.idle` is equal to or below the proxy's upstream idle, the service can close first: net/http arms the idle deadline as soon as it finishes writing a response, before the proxy has received the last byte. AWS's ALB 502 guidance names it: "The target closed the connection with a TCP RST or a TCP FIN while the load balancer had an outstanding request to the target."
+**Likely cause:** a keep-alive race. The ALB sent a request on a pooled connection at the moment the service closed it as idle. When `server.timeout.idle` is equal to or below the proxy's upstream idle, the service can close first: net/http arms the idle deadline as soon as it finishes writing a response, before the proxy has received the last byte. AWS's ALB 502 guidance names it: "The target closed the connection with a TCP RST or a TCP FIN while the load balancer had an outstanding request to the target."
 
 **The rule:**
 
