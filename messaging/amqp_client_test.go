@@ -28,6 +28,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
+	gbtesting "github.com/gaborage/go-bricks/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -3583,7 +3584,7 @@ func (h *redialHarness) dial(string) (amqpConnection, error) {
 func serveFakeBroker(hold time.Duration) (amqpConnection, error) {
 	client, server := net.Pipe()
 	go runFakeBroker(server, hold)
-	conn, err := amqp.Open(client, amqp.Config{SASL: []amqp.Authentication{&amqp.PlainAuth{Username: "guest", Password: "guest"}}})
+	conn, err := amqp.Open(client, amqp.Config{SASL: []amqp.Authentication{&amqp.PlainAuth{Username: "guest", Password: gbtesting.FakePassword("amqp")}}})
 	if err != nil {
 		_ = client.Close()
 		return nil, err
