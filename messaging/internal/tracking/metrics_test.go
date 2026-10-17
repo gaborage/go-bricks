@@ -3,6 +3,7 @@ package tracking
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -251,6 +252,90 @@ func TestRecordChannelEvent(t *testing.T) {
 	// Assert channel close counter
 	obtest.AssertMetricExists(t, rm, metricChannelClose)
 	obtest.AssertMetricValue(t, rm, metricChannelClose, int64(1))
+}
+
+// coldMeter installs a test provider and leaves the meter unbound, so the
+// first recorder call runs initialization; the reset cleanup runs before the
+// provider restore.
+func coldMeter(t *testing.T) *obtest.TestMeterProvider {
+	t.Helper()
+	mp := obtest.InstallTestMeterProvider(t)
+	ResetMeterForTesting()
+	t.Cleanup(ResetMeterForTesting)
+	return mp
+}
+
+// counterValue sums an int64 counter's data points, 0 when it never recorded.
+func counterValue(t *testing.T, rm metricdata.ResourceMetrics, name string) int64 {
+	t.Helper()
+	m := obtest.FindMetric(rm, name)
+	if m == nil {
+		return 0
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "%s is not an int64 sum", name)
+	var total int64
+	for _, dp := range sum.DataPoints {
+		total += dp.Value
+	}
+	return total
+}
+
+func TestRecordConnectionEventCountsFirstEventOnColdMeter(t *testing.T) {
+	mp := coldMeter(t)
+
+	RecordConnectionEvent("create", nil)
+
+	assert.Equal(t, int64(1), counterValue(t, mp.Collect(t), metricConnectionCreate))
+}
+
+func TestRecordChannelEventCountsFirstEventOnColdMeter(t *testing.T) {
+	mp := coldMeter(t)
+
+	RecordChannelEvent("create", nil)
+
+	assert.Equal(t, int64(1), counterValue(t, mp.Collect(t), metricChannelCreate))
+}
+
+func TestRecordConnectionEventDoesNotRaceForeignMeterInit(t *testing.T) {
+	mp := coldMeter(t)
+
+	// The delay is the only ordering between the workers: any sync edge from
+	// the init goroutine to the reader would hide the race from -race.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		time.Sleep(100 * time.Millisecond)
+		RecordConnectionEvent("create", nil)
+	}()
+	go func() {
+		defer wg.Done()
+		RecordAMQPPublishMetrics(context.Background(), testExchange, testRoutingKey, time.Millisecond, nil)
+	}()
+	wg.Wait()
+
+	assert.Equal(t, int64(1), counterValue(t, mp.Collect(t), metricConnectionCreate))
+}
+
+func TestRecordConnectionEventConcurrentColdCreatesAllCounted(t *testing.T) {
+	const n = 32
+	mp := coldMeter(t)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			<-start
+			RecordConnectionEvent("create", nil)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int64(n), counterValue(t, mp.Collect(t), metricConnectionCreate))
 }
 
 func TestHistogramBucketBoundaries(t *testing.T) {

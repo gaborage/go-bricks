@@ -382,12 +382,25 @@ func RecordPublishRetry(ctx context.Context, exchange, routingKey, reason string
 	}
 }
 
-// recordLifecycleEvent is a helper function to record connection or channel lifecycle events.
-// It reduces code duplication between RecordConnectionEvent and RecordChannelEvent.
-func recordLifecycleEvent(eventType string, err error, createCounter, closeCounter metric.Int64Counter) {
+// lifecycleKind selects the counter pair recordLifecycleEvent records on.
+type lifecycleKind int
+
+const (
+	lifecycleConnection lifecycleKind = iota
+	lifecycleChannel
+)
+
+// recordLifecycleEvent records a connection or channel lifecycle event. It
+// reads the counters only after getAMQPMeter, so a cold meter is bound first.
+func recordLifecycleEvent(eventType string, err error, kind lifecycleKind) {
 	meter := getAMQPMeter()
 	if meter == nil {
 		return
+	}
+
+	createCounter, closeCounter := amqpChannelCreate, amqpChannelClose
+	if kind == lifecycleConnection {
+		createCounter, closeCounter = amqpConnectionCreate, amqpConnectionClose
 	}
 
 	errorType := extractErrorType(err)
@@ -414,13 +427,13 @@ func recordLifecycleEvent(eventType string, err error, createCounter, closeCount
 // RecordConnectionEvent records AMQP connection lifecycle events.
 // eventType should be "create" or "close".
 func RecordConnectionEvent(eventType string, err error) {
-	recordLifecycleEvent(eventType, err, amqpConnectionCreate, amqpConnectionClose)
+	recordLifecycleEvent(eventType, err, lifecycleConnection)
 }
 
 // RecordChannelEvent records AMQP channel lifecycle events.
 // eventType should be "create" or "close".
 func RecordChannelEvent(eventType string, err error) {
-	recordLifecycleEvent(eventType, err, amqpChannelCreate, amqpChannelClose)
+	recordLifecycleEvent(eventType, err, lifecycleChannel)
 }
 
 // RecordSettlement records one settle result after the lane's ack, nack, or
