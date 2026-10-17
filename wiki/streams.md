@@ -670,14 +670,16 @@ error, although the stream still exists. Nothing in the client retries after tha
 The manager's supervisor reads every handle's status every 5s. A handle that
 closed without the manager closing it is reported **once, at ERROR**, naming the
 stream and the consumer (a publisher is named by its stream). An orderly shutdown
-is never reported. Detection needs the handle to stay closed until the next pass:
-the client retries a super stream's partitions one at a time, so a partition lost
-while another is still queued for retry can pass straight back to reconnecting and
-open, and go unreported.
+is never reported. Detection needs the handle to stay closed until the next pass.
+A super-stream consumer does: once one partition is found lost, the client skips
+the partitions still queued for retry, and they stay detached until the restart.
+A super-stream publisher does not: the client retries its partitions one at a
+time, so a partition lost while another is still queued for retry can pass
+straight back to reconnecting and open, and go unreported.
 
 The handle stays closed and the `streams` component stays unhealthy, even when
-the client later reports a super-stream handle open again because another of its
-partitions reconnected. Because the component is non-critical, `/ready` keeps
+the client later reports a super-stream publisher open again because another of
+its partitions reconnected. Because the component is non-critical, `/ready` keeps
 answering `200`, so alert on the ERROR — or on
 `app.readiness.status{readiness.kind="streams"} == 0` and the WARN `Readiness
 component unhealthy`, which the verdict does reach. Only a
@@ -685,7 +687,8 @@ component unhealthy`, which the verdict does reach. Only a
 [#1826](https://github.com/gaborage/go-bricks/issues/1826). A replica that
 restarts does not revive the others, so restart every replica that logged it.
 The supervisor leaves the consumer's offsets alone: a super-stream consumer whose
-client gave up on some partitions keeps delivering and committing on the others.
+client gave up on some partitions keeps delivering and committing on the ones that
+are still attached.
 Only its **shutdown flush is skipped**, with a WARN naming it, because that flush
 commits by name and another replica may have re-created the stream by then. What
 it handled since its last commit replays after the restart.

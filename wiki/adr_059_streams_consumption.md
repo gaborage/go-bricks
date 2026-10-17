@@ -278,12 +278,13 @@ broker flap would be worse than the flap.
 - Trace-context propagation from AMQP-published stream messages (stream
   deliveries are AMQP 1.0; nothing is extracted today).
 - RabbitMQ 3.13 stream filtering.
-- A TLS configuration surface. `rabbitmq-stream+tls://` works today — the client
-  builds a `tls.Config` with `MinVersion: TLS 1.2` and never sets
-  `InsecureSkipVerify` — but `ManagerOptions` exposes no `tls.Config`, so a private
-  CA or a client certificate has no seam. Until one exists, plaintext outside
-  development only WARNs rather than failing closed, because failing would leave
-  those deployments no working option.
+- A TLS configuration surface. `rabbitmq-stream+tls://` works as of client v1.9.0 —
+  the client builds a `tls.Config` with `MinVersion: TLS 1.2`, verifies the
+  certificate against the host it dials (v1.8.3 left `ServerName` unset, so the
+  handshake failed), and never sets `InsecureSkipVerify` — but `ManagerOptions`
+  exposes no `tls.Config`, so a private CA or a client certificate has no seam.
+  Until one exists, plaintext outside development only WARNs rather than failing
+  closed, because failing would leave those deployments no working option.
 
 ## References
 

@@ -312,9 +312,9 @@ func (r *consumerRunner) deliverFrom(src deliverySource, streamName string, offs
 	//
 	// Blocking here stalls this consumer's own dispatch goroutine, not the
 	// connection: the client drains one chunk channel per consumer
-	// (rabbitmq-stream-go-client v1.8.3, client.go:1087). That isolation holds only
-	// while the chunk buffer absorbs — sendChunk blocks once it is full
-	// (consumer.go:418) — after which the wait back-pressures the broker, which is
+	// (rabbitmq-stream-go-client v1.9.0, the chunkForConsumer loop in client.go).
+	// That isolation holds only while the chunk buffer absorbs — sendChunk blocks
+	// once it is full — after which the wait back-pressures the broker, which is
 	// what a consumer that cannot safely consume should be saying. The reload that
 	// opens the gate runs on its own goroutine, so it is not waiting on this one.
 	if r.hold != nil && !r.held.awaitOpen(r.baseCtx) {
