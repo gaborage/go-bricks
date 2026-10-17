@@ -5,38 +5,37 @@
 **Amends:** [ADR-097](adr_097_sealed_amqp_messages.md) (the adapter wiring: registration, configuration and the module read of the runtime), [ADR-131](adr_131_sealed_bytes_publish_door.md) (the external `Sealer` implementer and the verifier/opener providers it names)
 **Related:** [ADR-091](adr_091_streams_opt_in_registration.md) (the root-`internal/` seam precedent) · [ADR-136](adr_136_app_hypothetical_seams.md) (the same deletion of an exported runtime door) · [ADR-096](adr_096_typed_publish_door.md) (`internal/publishdoor`, a separate seam this one does not merge into)
 
-## Amendment (2026-10-17, #2010): each App owns its seal runtime
-
-Re-aim path 2 below, a second App's `Run`, is closed. `sealruntime.Configure`, `Configured`,
-`Instruments` and the process-global runtime and metrics are deleted. Each App binds its own
-facts (key store, a copy of `messaging.seal.active`, tenancy, meter) and seal instruments built
-once from that meter to the `*messaging.Declarations` it builds, after `messaging.NewDeclarations()`
-and before `DeclareMessaging`, through the root-internal `sealruntime.Bind`. The seam cannot name
-`*messaging.Declarations`, because `messaging` imports it, so `messaging` registers the binder
-from `init` and type-asserts the value (the `internal/publishdoor` dispatcher shape). A second
-bind of one Declarations panics, and `Clone` carries the binding. Every `Sealer`, `Opener` and
-`Verifier` receives a copy of its Declarations' binding at construction, and the sealer and
-opener record on the instruments bound into them. Nothing reads a process-global fact or
-instrument at declaration time or per seal or open.
-
-- A second App's `Run`, whether it succeeds or fails after its declarations are built, changes
-  no handle of another App, declared before or after it.
-- A seal-tagged declaration on a `messaging.NewDeclarations()` that no App bound fails `Validate`
-  with `messaging: sealing runtime not configured before declarations were collected`, even after
-  an App ran in the same binary; it used to inherit the last App's runtime (`[C73.2]`). The codec
-  check still runs first, so a build without `messaging/sealed` still reports
-  `ErrSealingNotLinked`. Nothing exported changes.
-- Path 1, a module's `Init` writing `ModuleDeps` or the shared `*config.Config`, moved to #2146.
-  This amendment keeps the current fact sources and does not harden them.
-- **Threat-model floor.** In-build code outside the module can still reach the internal seam with
-  a pull `go:linkname`; the Go 1.23 linkname restriction covers the standard library only.
-  ADR-096 already excludes linkname: the bar is ordinary exported API, so later audits should not
-  reopen this.
-- **Rejected: refuse a second `Configure` while an App is live.** Test binaries keep several Apps
-  live (`TestCreateAppKeepsEachAppsOwnRouteTable` runs `prepareRuntime` on two with no
-  `Shutdown`), and it inverts the per-case replace the tests relied on.
-- **Rejected: accept the residual and document it.** It reverses this ADR's open-and-tracked
-  disposition of path 2.
+> **Amended (2026-10-17, #2010 — each App owns its seal runtime, breaking):** re-aim path 2
+> below, a second App's `Run`, is closed. `sealruntime.Configure`, `Configured`,
+> `Instruments` and the process-global runtime and metrics are deleted. Each App binds its own
+> facts (key store, a copy of `messaging.seal.active`, tenancy, meter) and seal instruments built
+> once from that meter to the `*messaging.Declarations` it builds, after `messaging.NewDeclarations()`
+> and before `DeclareMessaging`, through the root-internal `sealruntime.Bind`. The seam cannot name
+> `*messaging.Declarations`, because `messaging` imports it, so `messaging` registers the binder
+> from `init` and type-asserts the value (the `internal/publishdoor` dispatcher shape). A second
+> bind of one Declarations panics, and `Clone` carries the binding. Every `Sealer`, `Opener` and
+> `Verifier` receives a copy of its Declarations' binding at construction, and the sealer and
+> opener record on the instruments bound into them. Nothing reads a process-global fact or
+> instrument at declaration time or per seal or open.
+>
+> - A second App's `Run`, whether it succeeds or fails after its declarations are built, changes
+>   no handle of another App, declared before or after it.
+> - A seal-tagged declaration on a `messaging.NewDeclarations()` that no App bound fails `Validate`
+>   with `messaging: sealing runtime not configured before declarations were collected`, even after
+>   an App ran in the same binary; it used to inherit the last App's runtime (`[C73.2]`). The codec
+>   check still runs first, so a build without `messaging/sealed` still reports
+>   `ErrSealingNotLinked`. Nothing exported changes.
+> - Path 1, a module's `Init` writing `ModuleDeps` or the shared `*config.Config`, moved to #2146.
+>   This amendment keeps the current fact sources and does not harden them.
+> - **Threat-model floor.** In-build code outside the module can still reach the internal seam with
+>   a pull `go:linkname`; the Go 1.23 linkname restriction covers the standard library only.
+>   ADR-096 already excludes linkname: the bar is ordinary exported API, so later audits should not
+>   reopen this.
+> - **Rejected: refuse a second `Configure` while an App is live.** Test binaries keep several Apps
+>   live (`TestCreateAppKeepsEachAppsOwnRouteTable` runs `prepareRuntime` on two with no
+>   `Shutdown`), and it inverts the per-case replace the tests relied on.
+> - **Rejected: accept the residual and document it.** It reverses this ADR's open-and-tracked
+>   disposition of path 2.
 
 ## Context
 

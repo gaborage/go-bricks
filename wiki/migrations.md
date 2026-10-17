@@ -13437,7 +13437,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: `git grep -n 'messaging.NewDeclarations()' -- '*.go'`, keeping files that declare a
   type carrying `seal:` struct tags on that Declarations with `DeclareTypedPublisher` or
-  `DeclareTypedConsumerWithMeta`.
+  `DeclareTypedConsumerWithMeta`, or that pass it to a module's `DeclareMessaging` whose module
+  declares one.
 - scope: where the seal runtime lives (key store, `messaging.seal.active`, tenancy, meter, seal
   instruments): on each App's Declarations instead of the process. **Unchanged**: every
   declaration a module makes in `DeclareMessaging`, every exported signature, the wire, the seal

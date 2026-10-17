@@ -45,9 +45,10 @@ const sealSignFamily = "app-sign"
 // recordingCodec stands in for messaging/sealed, which this package cannot link: it records
 // the runtime every handle was built with, and its sealer and opener act on that runtime only.
 type recordingCodec struct {
-	mu      sync.Mutex
-	built   []*sealruntime.Runtime
-	openers []*stubOpener
+	mu       sync.Mutex
+	built    []*sealruntime.Runtime
+	openers  []*stubOpener
+	verified []string
 }
 
 func (c *recordingCodec) record(rt *sealruntime.Runtime) {
@@ -84,6 +85,27 @@ func (c *recordingCodec) NewOpener(_ sealruntime.Spec, _ string, rt *sealruntime
 	defer c.mu.Unlock()
 	c.openers = append(c.openers, opener)
 	return opener, nil
+}
+
+// NewVerifier records "<key store>/<active sign generation>" for each verifier it builds.
+func (c *recordingCodec) NewVerifier(_ sealruntime.Spec, _ string, rt *sealruntime.Runtime) (sealruntime.Verifier, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.verified = append(c.verified, fmt.Sprintf("%v/%s", rt.KeyStore, rt.Active[sealSignFamily]))
+	return stubVerifier{}, nil
+}
+
+// verifiedWith is the facts every verifier was built with, in declaration order.
+func (c *recordingCodec) verifiedWith() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.verified...)
+}
+
+type stubVerifier struct{}
+
+func (stubVerifier) Verify(context.Context, []byte) (sealruntime.Envelope, error) {
+	return sealruntime.Envelope{}, nil
 }
 
 // judged is every tid rule the codec's openers were asked to apply.
@@ -213,6 +235,7 @@ func (a firstApp) requireOwnFacts(t *testing.T, codec *recordingCodec, other *ob
 		"shared tenancy requires a signed tid; the delivery carries no stamp")
 	assert.Equal(t, map[string]uint64{sealruntime.OpSeal: 2, sealruntime.OpOpen: 2}, sealOps(t, a.mp))
 	assert.Empty(t, sealOps(t, other), "nothing of A's records on B's meter")
+	assert.Equal(t, []string{"ks-a/v1", "ks-a/v1"}, codec.verifiedWith(), "every verifier keeps A's key store and Activation")
 }
 
 // newSecondApp is App B: single-tenant, sign generation v2 active, its own meter, and ks as
