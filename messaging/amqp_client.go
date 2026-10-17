@@ -1455,9 +1455,8 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 			select {
 			case <-c.done:
 				return true
-			case <-c.notifyConnClose:
-				c.log.Info().Msg("AMQP connection closed, reconnecting...")
-				tracking.RecordConnectionEvent("close", nil)
+			case amqpErr := <-c.notifyConnClose:
+				c.onConnClose(amqpErr)
 				return false
 			case <-time.After(c.reInitDelay):
 			}
@@ -1467,15 +1466,37 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 		select {
 		case <-c.done:
 			return true
-		case <-c.notifyConnClose:
-			c.log.Info().Msg("AMQP connection closed, reconnecting...")
-			tracking.RecordConnectionEvent("close", nil)
+		case amqpErr := <-c.notifyConnClose:
+			c.onConnClose(amqpErr)
 			return false
-		case <-c.notifyChanClose:
-			c.log.Info().Msg("AMQP channel closed, reinitializing...")
-			tracking.RecordChannelEvent("close", nil)
+		case amqpErr := <-c.notifyChanClose:
+			c.onChanClose(amqpErr)
 		}
 	}
+}
+
+// onConnClose logs and counts a connection close notification.
+func (c *AMQPClientImpl) onConnClose(amqpErr *amqp.Error) {
+	closeErr := closeReason(amqpErr)
+	c.log.Info().Err(closeErr).Msg("AMQP connection closed, reconnecting...")
+	tracking.RecordConnectionEvent("close", closeErr)
+}
+
+// onChanClose logs and counts a channel close notification.
+func (c *AMQPClientImpl) onChanClose(amqpErr *amqp.Error) {
+	closeErr := closeReason(amqpErr)
+	c.log.Info().Err(closeErr).Msg("AMQP channel closed, reinitializing...")
+	tracking.RecordChannelEvent("close", closeErr)
+}
+
+// closeReason keeps the nil *amqp.Error of a close without a reason (graceful,
+// or one that landed before NotifyClose registered) from becoming a typed-nil
+// error, whose Error method panics.
+func closeReason(amqpErr *amqp.Error) error {
+	if amqpErr == nil {
+		return nil
+	}
+	return amqpErr
 }
 
 // init initializes the AMQP channel and sets up confirmation mode.

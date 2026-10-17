@@ -23,6 +23,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -1346,16 +1347,87 @@ func TestHandleReInitExitOnDoneAfterInitError(t *testing.T) {
 	_ = c.handleReInit(nil)
 }
 
-func TestHandleReInitInitErrorNotifyConnClose(t *testing.T) {
-	t.Helper()
-	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, reInitDelay: 5 * time.Millisecond}
-	c.done = make(chan bool)
-	c.connection = stubConn{}
-	c.notifyConnClose = make(chan *amqp.Error, 1)
-	c.notifyConnClose <- &amqp.Error{} // trigger path
-	// Should return false on notifyConnClose when init fails
-	if c.handleReInit(nil) != false {
-		t.Fatalf("expected handleReInit to return false when connection closed")
+// TestAMQPClientCloseNotifyRecordsReason drives each close handler: a graceful close (nil receive)
+// must log and count without an error, a server close with one, on its own close counter only.
+func TestAMQPClientCloseNotifyRecordsReason(t *testing.T) {
+	type closeHandler struct {
+		onClose     func(*testing.T, *AMQPClientImpl, *amqp.Error)
+		msg         string
+		metric      string
+		otherMetric string
+	}
+	const (
+		connMetric = "messaging.connection.close"
+		chanMetric = "messaging.channel.close"
+	)
+	connClose := closeHandler{
+		onClose:     func(_ *testing.T, c *AMQPClientImpl, amqpErr *amqp.Error) { c.onConnClose(amqpErr) },
+		msg:         "AMQP connection closed, reconnecting...",
+		metric:      connMetric,
+		otherMetric: chanMetric,
+	}
+	chanClose := closeHandler{
+		onClose:     func(_ *testing.T, c *AMQPClientImpl, amqpErr *amqp.Error) { c.onChanClose(amqpErr) },
+		msg:         "AMQP channel closed, reinitializing...",
+		metric:      chanMetric,
+		otherMetric: connMetric,
+	}
+	// stubConn fails init, so the receive lands in handleReInit's init-error arm.
+	reInitConnClose := connClose
+	reInitConnClose.onClose = func(t *testing.T, c *AMQPClientImpl, amqpErr *amqp.Error) {
+		c.reInitDelay = time.Minute
+		c.connection = stubConn{}
+		c.notifyConnClose = make(chan *amqp.Error, 1)
+		if amqpErr == nil {
+			close(c.notifyConnClose)
+		} else {
+			c.notifyConnClose <- amqpErr
+		}
+		assert.False(t, c.handleReInit(nil), "a connection close must hand back to reconnect")
+	}
+
+	serverErr := &amqp.Error{Code: amqp.ConnectionForced, Reason: "CONNECTION_FORCED"}
+	tests := []struct {
+		name    string
+		handler closeHandler
+		amqpErr *amqp.Error
+	}{
+		{name: "conn_close_graceful", handler: connClose},
+		{name: "conn_close_server_error", handler: connClose, amqpErr: serverErr},
+		{name: "chan_close_graceful", handler: chanClose},
+		{name: "chan_close_server_error", handler: chanClose, amqpErr: serverErr},
+		{name: "reinit_conn_close_graceful", handler: reInitConnClose},
+		{name: "reinit_conn_close_server_error", handler: reInitConnClose, amqpErr: serverErr},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var wantLogErr, wantErrType string
+			if tc.amqpErr != nil {
+				wantLogErr, wantErrType = tc.amqpErr.Error(), "*amqp091.Error"
+			}
+			mp, cleanup := setupConsumeMetrics(t)
+			defer cleanup()
+			// Record*Event reads its counters before binding the meter, so the
+			// first event after a reset is dropped; bind it on another counter.
+			tracking.RecordChannelEvent("create", nil)
+
+			log := newRecordingLogger()
+			c := &AMQPClientImpl{m: &sync.RWMutex{}, log: log}
+
+			require.NotPanics(t, func() { tc.handler.onClose(t, c, tc.amqpErr) })
+
+			assertOptionalField(t, log.Line(t, tc.handler.msg), "error", wantLogErr)
+
+			rm := mp.Collect(t)
+			assert.Nil(t, obtest.FindMetric(rm, tc.handler.otherMetric), "close must count on %s only", tc.handler.metric)
+			closeMetric := obtest.FindMetric(rm, tc.handler.metric)
+			require.NotNil(t, closeMetric)
+			sum, ok := closeMetric.Data.(metricdata.Sum[int64])
+			require.True(t, ok)
+			require.Len(t, sum.DataPoints, 1)
+			assert.Equal(t, int64(1), sum.DataPoints[0].Value)
+			assertOptionalAttribute(t, sum.DataPoints[0].Attributes.ToSlice(), "error.type", wantErrType)
+		})
 	}
 }
 
