@@ -129,8 +129,13 @@ type ServerConfig struct {
 
 // TimeoutConfig holds various timeout durations for the server.
 type TimeoutConfig struct {
-	Read       time.Duration `koanf:"read" json:"read" yaml:"read" toml:"read" mapstructure:"read"`
-	Write      time.Duration `koanf:"write" json:"write" yaml:"write" toml:"write" mapstructure:"write"`
+	Read  time.Duration `koanf:"read" json:"read" yaml:"read" toml:"read" mapstructure:"read"`
+	Write time.Duration `koanf:"write" json:"write" yaml:"write" toml:"write" mapstructure:"write"`
+	// Idle is how long a keep-alive connection waits for its next request, on both
+	// listeners. Keep it ABOVE the upstream idle timeout of any L7 proxy in front (AWS
+	// ALB and ingress-nginx default to 60s), so the proxy closes an idle connection
+	// first, and BELOW the flow idle timeout of an L4 load balancer (350s on an AWS
+	// NLB). See wiki/troubleshooting.md for other proxies.
 	Idle       time.Duration `koanf:"idle" json:"idle" yaml:"idle" toml:"idle" mapstructure:"idle"`
 	Middleware time.Duration `koanf:"middleware" json:"middleware" yaml:"middleware" toml:"middleware" mapstructure:"middleware"`
 	Shutdown   time.Duration `koanf:"shutdown" json:"shutdown" yaml:"shutdown" toml:"shutdown" mapstructure:"shutdown"`

@@ -20,7 +20,7 @@ server:
   timeout:
     read: 15s
     write: 30s
-    idle: 60s
+    idle: 75s
     middleware: 5s
     shutdown: 10s
   path:

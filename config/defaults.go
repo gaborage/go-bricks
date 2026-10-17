@@ -20,6 +20,20 @@ const (
 	DefaultPublisherCleanupInterval = 2 * time.Minute
 )
 
+// Server timeout defaults, each declared once: koanfOnlyDefaults,
+// server.Default*Timeout and app's shutdown fallback derive from these.
+const (
+	// DefaultServerReadTimeout is the default for server.timeout.read.
+	DefaultServerReadTimeout = 15 * time.Second
+	// DefaultServerWriteTimeout is the default for server.timeout.write.
+	DefaultServerWriteTimeout = 30 * time.Second
+	// DefaultServerIdleTimeout is the default for server.timeout.idle, above the 60s
+	// upstream idle of an AWS ALB (see TimeoutConfig.Idle).
+	DefaultServerIdleTimeout = 75 * time.Second
+	// DefaultServerShutdownTimeout is the default for server.timeout.shutdown.
+	DefaultServerShutdownTimeout = 10 * time.Second
+)
+
 // Database pool defaults
 const (
 	defaultSlowQueryThreshold = 200 * time.Millisecond

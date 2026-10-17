@@ -11,7 +11,7 @@ Every operation that crosses an external boundary already has a configured timeo
 | HTTP request handler (deadline applied to `c.Request().Context()`) | `server.timeout.middleware` | **5s** | Set by the framework's `Timeout` middleware. This is the budget every handler inherits. |
 | HTTP server read | `server.timeout.read` | 15s | Time to read the request body |
 | HTTP server write | `server.timeout.write` | 30s | Time to write the response (must exceed `middleware`) |
-| HTTP server idle | `server.timeout.idle` | 60s | Keep-alive idle |
+| HTTP server idle | `server.timeout.idle` | 75s | Keep-alive idle. Keep it above the upstream idle of any L7 proxy in front (AWS ALB and ingress-nginx: 60s) and below the flow idle of an L4 load balancer (AWS NLB: 350s) — see [troubleshooting.md](troubleshooting.md#alb-httpcode_elb_502_count-with-zero-target-5xx) |
 | HTTP server graceful shutdown | `server.timeout.shutdown` | 10s | Drain inflight requests on SIGTERM |
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s | Per-request timeout on the underlying `http.Client` |
 | Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s | Per-operation socket timeouts |
