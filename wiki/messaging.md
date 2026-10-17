@@ -797,7 +797,7 @@ An explicit value always overrides either default.
 ```yaml
 messaging:
   reconnect:
-    delay: 10s            # Slower initial reconnect
+    delay: 10s            # Larger backoff base and stability window
     maxdelay: 120s       # Higher backoff cap
   publisher:
     maxcached: 100       # More cached publishers for high-throughput

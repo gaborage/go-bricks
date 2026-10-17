@@ -3753,3 +3753,15 @@ func TestHandleReconnectCloseDuringRedialWait(t *testing.T) {
 		})
 	}
 }
+
+func TestWaitBeforeRedialReturnsAtOnceAfterClose(t *testing.T) {
+	log := newRecordingLogger()
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: log, done: make(chan bool)}
+	close(c.done)
+
+	next, waited := c.waitBeforeRedial(3, 0)
+
+	assert.False(t, waited)
+	assert.Equal(t, 3, next, "a closing client must not climb the ladder")
+	assert.Empty(t, log.Matching(pacedRedialMsg), "a closing client must log no paced wait")
+}
