@@ -50,10 +50,7 @@ func (lea *LogEventAdapter) Err(err error) LogEvent {
 	// redactor. Neither does a disabled level: zerolog hands back a nil *Event
 	// there and drops the field, but a redactor is unbounded consumer code, so
 	// the framework checks before paying for it rather than after — unlike the
-	// bounded needle lookups the other typed methods run. Redaction writes the
-	// returned string under the same field name zerolog's Err would have used,
-	// bypassing FilterString: the value is already the consumer's redacted
-	// rendering, not raw field content.
+	// bounded needle lookups the other typed methods run.
 	if err != nil && lea.event != nil && lea.filter != nil && lea.rewriteErr(err) {
 		return lea
 	}
@@ -72,9 +69,10 @@ func (lea *LogEventAdapter) rewriteErr(err error) bool {
 		return true
 	}
 	if redacted, ok := lea.filter.redactError(err); ok {
-		// Masking runs on the redactor's OUTPUT, not instead of it: both
-		// configured is the stricter-of-the-two case, and the redacted string
-		// is still a value under a field name the operator called sensitive.
+		// The redactor's output goes under zerolog's own field name. Masking
+		// runs on it, not instead of it: both configured is the
+		// stricter-of-the-two case, and the redacted string is still a value
+		// under a field name the operator called sensitive.
 		if masked, hit := lea.filter.maskField(zerolog.ErrorFieldName, redacted); hit {
 			redacted = masked
 		}

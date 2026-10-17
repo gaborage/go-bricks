@@ -1078,20 +1078,6 @@ func TestDefaultFilterConfigDoesNotMaskTheErrorField(t *testing.T) {
 // dereferences its receiver, so rendering it panics.
 var errTypedNil error = (*amqp.Error)(nil)
 
-func errorNeedleConfig() *FilterConfig {
-	config := DefaultFilterConfig()
-	config.SensitiveFields = append(config.SensitiveFields, zerolog.ErrorFieldName)
-	return config
-}
-
-func withCountingRedactor(config *FilterConfig, calls *int) *FilterConfig {
-	config.ErrorRedactor = func(error) string {
-		*calls++
-		return "[redacted]"
-	}
-	return config
-}
-
 func swapErrorMarshalFunc(t *testing.T, marshal func(error) any) {
 	t.Helper()
 	original := zerolog.ErrorMarshalFunc
@@ -1109,48 +1095,65 @@ func assertNoErrorField(t *testing.T, buf *bytes.Buffer) {
 	assert.NotContains(t, line, zerolog.ErrorFieldName)
 }
 
+// errLoggerCase names one Err configuration; logger builds it with a counting
+// redactor when redactor is set.
 type errLoggerCase struct {
-	name   string
-	logger func(t *testing.T, calls *int) (*ZeroLogger, *bytes.Buffer)
+	name                       string
+	filtered, needle, redactor bool
+}
+
+func (c errLoggerCase) logger(t *testing.T) (log *ZeroLogger, buf *bytes.Buffer, calls *int) {
+	t.Helper()
+	calls = new(int)
+	if !c.filtered {
+		log, buf = createTestLogger()
+		return log, buf, calls
+	}
+	config := DefaultFilterConfig()
+	if c.needle {
+		config.SensitiveFields = append(config.SensitiveFields, zerolog.ErrorFieldName)
+	}
+	if c.redactor {
+		config.ErrorRedactor = func(error) string {
+			*calls++
+			return "[redacted]"
+		}
+	}
+	log, buf = newFilteredEventLogger(t, config)
+	return log, buf, calls
 }
 
 var (
-	defaultConfigCase = errLoggerCase{"default_config", func(t *testing.T, _ *int) (*ZeroLogger, *bytes.Buffer) {
-		return newFilteredEventLogger(t, DefaultFilterConfig())
-	}}
-	noFilterCase = errLoggerCase{"no_filter", func(*testing.T, *int) (*ZeroLogger, *bytes.Buffer) {
-		return createTestLogger()
-	}}
-	errorNeedleCase = errLoggerCase{"error_needle", func(t *testing.T, _ *int) (*ZeroLogger, *bytes.Buffer) {
-		return newFilteredEventLogger(t, errorNeedleConfig())
-	}}
-	errorRedactorCase = errLoggerCase{"error_redactor", func(t *testing.T, calls *int) (*ZeroLogger, *bytes.Buffer) {
-		return newFilteredEventLogger(t, withCountingRedactor(DefaultFilterConfig(), calls))
-	}}
-	needleAndRedactorCase = errLoggerCase{"needle_and_redactor", func(t *testing.T, calls *int) (*ZeroLogger, *bytes.Buffer) {
-		return newFilteredEventLogger(t, withCountingRedactor(errorNeedleConfig(), calls))
-	}}
+	defaultConfigCase     = errLoggerCase{name: "default_config", filtered: true}
+	noFilterCase          = errLoggerCase{name: "no_filter"}
+	errorNeedleCase       = errLoggerCase{name: "error_needle", filtered: true, needle: true}
+	errorRedactorCase     = errLoggerCase{name: "error_redactor", filtered: true, redactor: true}
+	needleAndRedactorCase = errLoggerCase{name: "needle_and_redactor", filtered: true, needle: true, redactor: true}
 )
 
 func TestLogEventAdapterErrTypedNilPointerEmitsNoField(t *testing.T) {
 	for _, tc := range []errLoggerCase{defaultConfigCase, noFilterCase, errorNeedleCase, errorRedactorCase, needleAndRedactorCase} {
 		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			log, buf := tc.logger(t, &calls)
+			log, buf, calls := tc.logger(t)
 
 			require.NotPanics(t, func() { log.Error().Err(errTypedNil).Msg("error occurred") })
 
 			assertNoErrorField(t, buf)
-			assert.Zero(t, calls, "a typed-nil error must not reach the redactor")
+			assert.Zero(t, *calls, "a typed-nil error must not reach the redactor")
 		})
 	}
 }
 
 func TestLogEventAdapterErrTypedNilAtDisabledLevelSkipsRedactor(t *testing.T) {
 	calls := 0
+	config := DefaultFilterConfig()
+	config.ErrorRedactor = func(error) string {
+		calls++
+		return "[redacted]"
+	}
 	var buf bytes.Buffer
 	zl := zerolog.New(&buf).Level(zerolog.WarnLevel)
-	log := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(withCountingRedactor(DefaultFilterConfig(), &calls))}
+	log := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(config)}
 
 	log.Debug().Err(errTypedNil).Msg("dropped")
 
@@ -1167,16 +1170,15 @@ func TestLogEventAdapterErrRewritesANonNilError(t *testing.T) {
 		{"non_nil_pointer", &amqp.Error{Code: amqp.NotFound, Reason: "card 4111111111111111"}},
 	} {
 		t.Run(errCase.name+"/redactor", func(t *testing.T) {
-			calls := 0
-			log, buf := errorRedactorCase.logger(t, &calls)
+			log, buf, calls := errorRedactorCase.logger(t)
 
 			require.NotPanics(t, func() { log.Error().Err(errCase.err).Msg("error occurred") })
 
 			assert.Equal(t, "[redacted]", loggedField(t, buf, zerolog.ErrorFieldName))
-			assert.Equal(t, 1, calls)
+			assert.Equal(t, 1, *calls)
 		})
 		t.Run(errCase.name+"/needle", func(t *testing.T) {
-			log, buf := errorNeedleCase.logger(t, nil)
+			log, buf, _ := errorNeedleCase.logger(t)
 
 			require.NotPanics(t, func() { log.Error().Err(errCase.err).Msg("error occurred") })
 
@@ -1186,7 +1188,7 @@ func TestLogEventAdapterErrRewritesANonNilError(t *testing.T) {
 }
 
 func TestLogEventAdapterErrKeepsAnEmptyMessageUnderTheNeedle(t *testing.T) {
-	log, buf := errorNeedleCase.logger(t, nil)
+	log, buf, _ := errorNeedleCase.logger(t)
 	log.Error().Err(errors.New("")).Msg("error occurred")
 
 	assert.Empty(t, loggedField(t, buf, zerolog.ErrorFieldName))
@@ -1209,7 +1211,7 @@ func TestLogEventAdapterErrPlainPathMatchesErrorMarshalFunc(t *testing.T) {
 				goldenLogger := zerolog.New(&golden)
 				goldenLogger.Error().Err(errCase.err).Msg("error occurred")
 
-				log, buf := tc.logger(t, nil)
+				log, buf, _ := tc.logger(t)
 				require.NotPanics(t, func() { log.Error().Err(errCase.err).Msg("error occurred") })
 
 				assert.Equal(t, golden.String(), buf.String())
@@ -1221,15 +1223,14 @@ func TestLogEventAdapterErrPlainPathMatchesErrorMarshalFunc(t *testing.T) {
 func TestLogEventAdapterErrRewritePathDropsTypedNilUnderErrorMarshalFunc(t *testing.T) {
 	swapErrorMarshalFunc(t, marshalByType)
 
-	for _, tc := range []errLoggerCase{errorNeedleCase, errorRedactorCase} {
+	for _, tc := range []errLoggerCase{errorNeedleCase, errorRedactorCase, needleAndRedactorCase} {
 		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			log, buf := tc.logger(t, &calls)
+			log, buf, calls := tc.logger(t)
 
 			require.NotPanics(t, func() { log.Error().Err(errTypedNil).Msg("error occurred") })
 
 			assertNoErrorField(t, buf)
-			assert.Zero(t, calls)
+			assert.Zero(t, *calls)
 		})
 	}
 }
@@ -1244,7 +1245,7 @@ func (e *countingError) Error() string {
 
 func TestLogEventAdapterErrRendersADefaultConfigMissOnce(t *testing.T) {
 	testErr := &countingError{}
-	log, buf := defaultConfigCase.logger(t, nil)
+	log, buf, _ := defaultConfigCase.logger(t)
 
 	log.Error().Err(testErr).Msg("error occurred")
 
