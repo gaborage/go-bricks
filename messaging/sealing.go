@@ -19,8 +19,10 @@ import (
 // bindSealRuntime is the binder messaging registers with the seam: sealruntime.Bind lands
 // here with the App's Declarations, which the seam cannot name.
 func bindSealRuntime(decls any, rt *sealruntime.Runtime) {
-	d, ok := decls.(*Declarations)
-	if !ok || d == nil {
+	// A failed assertion yields a nil *Declarations, so one check refuses both a foreign
+	// value and a nil one.
+	d, _ := decls.(*Declarations)
+	if d == nil {
 		panic(fmt.Sprintf("messaging: seal runtime bound to %T, not a non-nil *Declarations", decls))
 	}
 	d.bindSeal(rt)

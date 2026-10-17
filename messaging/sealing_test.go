@@ -345,6 +345,16 @@ func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 	}
 }
 
+// requireCodecCopy pins that the codec got decls' bound instruments in its own copy of the
+// binding (decls bound with Active svc-sign=v2).
+func requireCodecCopy(t *testing.T, decls *Declarations, got *sealruntime.Runtime) {
+	t.Helper()
+	require.NotNil(t, got)
+	assert.Same(t, decls.seal.Metrics, got.Metrics, "the codec gets the bound instruments")
+	got.Active["svc-sign"] = "v9"
+	assert.Equal(t, "v2", decls.seal.Active["svc-sign"], "the codec gets a copy, never the binding itself")
+}
+
 func TestDeclareTypedPublisherSealedHappyPath(t *testing.T) {
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)
@@ -362,9 +372,7 @@ func TestDeclareTypedPublisherSealedHappyPath(t *testing.T) {
 	require.NotNil(t, codec.gotRT)
 	assert.Equal(t, "v2", codec.gotRT.Active["svc-sign"])
 	assert.Equal(t, sealruntime.TenancyShared, codec.gotRT.Tenancy)
-	assert.Same(t, decls.seal.Metrics, codec.gotRT.Metrics, "the codec gets the bound instruments")
-	codec.gotRT.Active["svc-sign"] = "v9"
-	assert.Equal(t, "v2", decls.seal.Active["svc-sign"], "the codec gets a copy, never the binding itself")
+	requireCodecCopy(t, decls, codec.gotRT)
 
 	client := &capturingClient{}
 	require.NoError(t, h.Publish(context.Background(), client, sealedEvent{ID: "o1", Card: "4111"}))

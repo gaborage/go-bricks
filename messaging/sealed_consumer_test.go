@@ -64,6 +64,7 @@ type consumerCodec struct {
 	opener  *fakeOpener
 	newErr  error
 	scanned int
+	gotRT   *sealruntime.Runtime
 }
 
 func (c *consumerCodec) ScanType(t reflect.Type) (sealruntime.Spec, error) {
@@ -78,7 +79,8 @@ func (*consumerCodec) NewSealer(sealruntime.Spec, string, *sealruntime.Runtime) 
 	return nil, errors.New("not the side under test")
 }
 
-func (c *consumerCodec) NewOpener(sealruntime.Spec, string, *sealruntime.Runtime) (sealruntime.Opener, error) {
+func (c *consumerCodec) NewOpener(_ sealruntime.Spec, _ string, rt *sealruntime.Runtime) (sealruntime.Opener, error) {
+	c.gotRT = rt
 	if c.newErr != nil {
 		return nil, c.newErr
 	}
@@ -135,6 +137,20 @@ func declareSealed(t *testing.T, opener *fakeOpener, tenancy sealruntime.Tenancy
 	require.NoError(t, decls.Validate())
 	require.IsType(t, &sealedHandler[sealedEvt]{}, opts.Handler)
 	return opts.Handler
+}
+
+func TestSealedOpenerGetsACopyOfTheBinding(t *testing.T) {
+	sealruntime.Reset()
+	t.Cleanup(sealruntime.Reset)
+	codec := &consumerCodec{opener: &fakeOpener{}}
+	sealruntime.Register(codec)
+	decls := NewDeclarations()
+	decls.DeclareQueue("q")
+	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}, Active: map[string]string{"svc-sign": "v2"}})
+
+	DeclareTypedConsumerWithMeta(decls, consumerOpts(false), func(context.Context, sealedEvt, Metadata) error { return nil })
+	require.NoError(t, decls.Validate())
+	requireCodecCopy(t, decls, codec.gotRT)
 }
 
 func TestDeclareTypedConsumerRefusesSealTaggedTOnTheMetaLessDoor(t *testing.T) {
