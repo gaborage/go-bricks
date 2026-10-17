@@ -44,14 +44,23 @@ var (
 	_ offsetStorer = (*ha.ReliableConsumer)(nil)
 )
 
+// reconnectBackOff is the wait the client's HA layer takes before each reattach
+// attempt. MinInterval and MaxInterval are whole seconds: the client's fields are
+// ints, not time.Duration. The values are owned here rather than taken from the
+// client's defaults, so a client bump cannot move the detection timing ADR-123
+// documents. A fresh value per handle, because the client keeps the pointer.
+func reconnectBackOff() *ha.BackOffConfiguration {
+	return &ha.BackOffConfiguration{MinInterval: 3, MaxInterval: 8, EnableRandom: true}
+}
+
 // dialVendorEnvironment opens the port against a real broker.
 //
 // NewEnvironment returns a non-nil Environment BESIDE a non-nil error, so the
 // failure path has something to dispose and `env != nil` is not a success test.
-// v1.8.3 does tear the locator socket down itself, but only through an internal
-// `defer client.Close()` it documents nowhere, and Client.connect opens the
-// socket and starts its read goroutine before authentication — so disposing it
-// here is what keeps a rejected credential from depending on that detail.
+// v1.9.0 closes each seed's bootstrap socket itself before trying the next, but
+// Client.connect opens that socket and starts its read goroutine before
+// authentication — so disposing the Environment here is what keeps a rejected
+// credential from depending on the client's own cleanup.
 func dialVendorEnvironment(opts *stream.EnvironmentOptions) (environment, error) {
 	env, err := stream.NewEnvironment(opts)
 	if err != nil {
@@ -87,7 +96,7 @@ func (e vendorEnvironment) StoreOffset(consumer, streamName string, offset int64
 func (e vendorEnvironment) NewConsumer(streamName string, opts *stream.ConsumerOptions,
 	handler messageHandler,
 ) (consumerHandle, error) {
-	consumer, err := ha.NewReliableConsumer(e.env, streamName, opts, vendorMessagesHandler(handler))
+	consumer, err := ha.NewReliableConsumerWithBackOffConfiguration(e.env, streamName, opts, vendorMessagesHandler(handler), reconnectBackOff())
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +109,7 @@ func (e vendorEnvironment) NewConsumer(streamName string, opts *stream.ConsumerO
 func (e vendorEnvironment) NewSuperStreamConsumer(superStream string, opts *stream.SuperStreamConsumerOptions,
 	handler messageHandler,
 ) (consumerHandle, error) {
-	consumer, err := ha.NewReliableSuperStreamConsumer(e.env, superStream, vendorMessagesHandler(handler), opts)
+	consumer, err := ha.NewReliableSuperStreamConsumerWithBackOffConfiguration(e.env, superStream, vendorMessagesHandler(handler), opts, reconnectBackOff())
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +119,7 @@ func (e vendorEnvironment) NewSuperStreamConsumer(superStream string, opts *stre
 func (e vendorEnvironment) NewProducer(streamName string, opts *stream.ProducerOptions,
 	confirmed ha.ConfirmMessageHandler,
 ) (producerHandle, error) {
-	producer, err := ha.NewReliableProducer(e.env, streamName, opts, confirmed)
+	producer, err := ha.NewReliableProducerWithBackOffConfiguration(e.env, streamName, opts, confirmed, reconnectBackOff())
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +129,7 @@ func (e vendorEnvironment) NewProducer(streamName string, opts *stream.ProducerO
 func (e vendorEnvironment) NewSuperStreamProducer(superStream string, opts *stream.SuperStreamProducerOptions,
 	confirmed ha.PartitionConfirmMessageHandler,
 ) (producerHandle, error) {
-	producer, err := ha.NewReliableSuperStreamProducer(e.env, superStream, opts, confirmed)
+	producer, err := ha.NewReliableSuperStreamProducerWithBackOffConfiguration(e.env, superStream, opts, confirmed, reconnectBackOff())
 	if err != nil {
 		return nil, err
 	}

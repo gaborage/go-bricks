@@ -916,7 +916,7 @@ func TestStreamsPublisherRejectedAfterStopIntegration(t *testing.T) {
 }
 
 // lostStreamWait bounds how long a deleted stream takes to surface: the client
-// waits a random 3-11s before it asks the broker whether the stream still exists,
+// waits a random 3-8s before it asks the broker whether the stream still exists,
 // and a producer waits twice.
 const lostStreamWait = 90 * time.Second
 

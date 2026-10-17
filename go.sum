@@ -186,8 +186,8 @@ github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 h1:o4JXh1EVt
 github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55/go.mod h1:OmDBASR4679mdNQnz2pUhc2G8CO2JrUAVFDRBDP/hJE=
 github.com/rabbitmq/amqp091-go v1.15.0 h1:LEQL4/yp48/Wigt6A6XOu18RQRo8ZHtB5I/KZJn+gkw=
 github.com/rabbitmq/amqp091-go v1.15.0/go.mod h1:Hy4jKW5kQART1u+JkDTF9YYOQUHXqMuhrgxOEeS7G4o=
-github.com/rabbitmq/rabbitmq-stream-go-client v1.8.3 h1:vbq4TFWTkSy8Nq2UYPWpRs/M+xbDTE/3EUZ+/+ZZZ7A=
-github.com/rabbitmq/rabbitmq-stream-go-client v1.8.3/go.mod h1:K7ZMRvdpEu3joY5aVNl5gqBeLq1ks9swo4KxMq5ln1o=
+github.com/rabbitmq/rabbitmq-stream-go-client v1.9.0 h1:SZ+/6gVsNr2bGROMh6SKTNAO/09TSyWE7Mv8S3iAY10=
+github.com/rabbitmq/rabbitmq-stream-go-client v1.9.0/go.mod h1:5DrhDeg3HHGjI7dqfdXayeuQ5ouzgmIMom+7ZeQl/Lc=
 github.com/redis/go-redis/v9 v9.23.0 h1:/TTVdJa8BRNsybwwGGnmiYktHNlUXtbOQxlWpHBPL3s=
 github.com/redis/go-redis/v9 v9.23.0/go.mod h1:EWP2UUk+XDaI1s5nQB5mablZN6vccXlmBQTyfnF87D0=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=

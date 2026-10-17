@@ -74,9 +74,10 @@ func (w *waiter) resolve(err error) {
 
 // waiters correlates in-flight sends with their confirmations by POINTER
 // IDENTITY of the client message: ConfirmationStatus.GetMessage returns the exact
-// message that was passed to Send (v1.8.3, producer.go:386), which holds at the
-// default SubEntrySize of 1. Each entry also carries the routing key, because the
-// hash routing extractor is called with that same pointer.
+// message that was passed to Send (v1.9.0 builds every ConfirmationStatus from
+// it), which holds at the default SubEntrySize of 1. Each entry also carries the
+// routing key, because the hash routing extractor is called with that same
+// pointer.
 //
 // ENTRY LIFECYCLE (load-bearing — the super-stream router depends on it): an
 // entry is REMOVED only when its send resolves, that is on a confirmation or on

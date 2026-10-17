@@ -65,11 +65,11 @@ Delivery stays at-least-once, exactly as on the consume side, and consumers must
 ### Confirmations are correlated by message pointer, which requires `SubEntrySize = 1`
 
 Each in-flight send registers a waiter keyed by the `message.StreamMessage` handed to `Send`.
-`ConfirmationStatus.GetMessage()` returns that exact value (`producer.go:386` stores `ps.sourceMsg`),
-so pointer identity is a valid correlation key and no framework-side sequence number, header or
-publishing ID is needed.
+`ConfirmationStatus.GetMessage()` returns that exact value (the producer builds every status from the
+message's `sourceMsg`), so pointer identity is a valid correlation key and no framework-side sequence
+number, header or publishing ID is needed.
 
-This holds **only at the client's default `SubEntrySize` of 1** (`producer.go:219`). Sub-entry
+This holds **only at the client's default `SubEntrySize` of 1** (`NewProducerOptions`). Sub-entry
 aggregation would batch several messages behind one entry and break the one-to-one mapping, so on the
 plain lane the production producer options are the client's defaults verbatim — no `Name`, no
 `SubEntrySize`, no compression — and `messaging/streams/manager.go`'s `constructProducer` carries
@@ -78,11 +78,10 @@ that note at the call site.
 The super lane reaches the same guarantee by a different route, which is worth stating because the
 framework cannot state it directly: `SuperStreamProducerOptions` has no `SubEntrySize` field at all,
 and each partition's producer is built inside the client by `SuperStreamProducer.ConnectPartition`,
-which calls `NewProducerOptions()` itself (`super_stream_producer.go:267`). The default therefore
-holds per partition — but it is the client's own construction holding it, not anything this framework
-passes, so a change there would break the correlation with nothing on our side to notice. Either way
-this is not an oversight to be tuned later: it is a precondition of the correlation, and changing it
-means revisiting this decision.
+which calls `NewProducerOptions()` itself. The default therefore holds per partition — but it is the
+client's own construction holding it, not anything this framework passes, so a change there would
+break the correlation with nothing on our side to notice. Either way this is not an oversight to be
+tuned later: it is a precondition of the correlation, and changing it means revisiting this decision.
 
 The correlation is proven end to end against a real broker rather than argued
 (`TestStreamsPublisherRoundTripIntegration`): if `GetMessage` ever stopped returning the message
@@ -98,7 +97,7 @@ send path unblocks, whatever the caller's context did.
 
 Abandoning that goroutine leaks it until the client's send path releases it: during a reconnect that
 is as long as the reconnect lasts, but on the close path it can be permanent — see the close sweep
-below for why the broadcast that would release it never arrives. This is the same trade
+below for why nothing releases it. This is the same trade
 `Manager.flushOffsetsLocked` already documents and accepts: a leaked goroutine parked on a vendor
 condition variable is cheaper than a handler thread that cannot be interrupted, and the alternative —
 bounding a call that accepts neither context nor deadline — means reimplementing the client.
@@ -123,10 +122,10 @@ routed yet.
 
 A context-abandoned send holds both its goroutine and its tombstoned entry until the publisher closes,
 and **nothing caps how many of those can accumulate.** The client's `QueueSize` back-pressure does not:
-`isReadyToSend` parks in the `ha` layer on a bare cond wait (`reliable_common.go:114`, the `Wait` at
-`:126`) *before* `ReliableProducer.Send` delegates to the inner `stream.Producer` where that queue
-lives (`ha_publisher.go:116-120`), so a parked send never occupies queue capacity and never exerts
-back-pressure. The real bound is the caller's publish rate multiplied by the outage duration.
+`isReadyToSend` parks in the `ha` layer on a bare cond wait *before* `ReliableProducer.Send` delegates
+to the inner `stream.Producer` where that queue lives, so a parked send never occupies queue capacity
+and never exerts back-pressure. The real bound is the caller's publish rate multiplied by the outage
+duration.
 
 This is accepted for v1 rather than solved. The fix is an **outstanding-send limit** — a semaphore
 admitting N in-flight sends and failing the rest fast with a dedicated sentinel — which needs both
@@ -146,13 +145,14 @@ first, publishers close after them, because a handler may publish on its way out
 ### Closing sweeps every outstanding waiter with `ErrPublisherClosed`
 
 `Publisher` close resolves and removes every entry still in the map. This is mandatory, not
-belt-and-braces. The client's `entityClosed` confirmations (`markUnsentAsUnconfirmed`,
-`producer.go:374-395`) cover only messages that reached its internal queue; a send parked in
-`isReadyToSend` was never enqueued and gets no
-confirmation at all — and the super producer's normal-close path `break`s out of its event loop
-*before* the reconnection broadcast (`ha_super_stream_publisher.go:91-94`), so that goroutine may stay
-parked for good. Without the sweep, a `Publish` caller with no deadline of its own hangs across the
-whole shutdown. Resolution is idempotent, so a late `entityClosed` for a swept message is a no-op.
+belt-and-braces. The client's `entityClosed` confirmations (`markUnsentAsUnconfirmed`) cover only
+messages that reached its internal queue; a send parked in `isReadyToSend` was never enqueued and gets
+no confirmation at all. On a super producer it may stay parked for good: since client v1.9.0 the
+normal-close path broadcasts before it `break`s out of its event loop, but the woken send finds the
+closed producer holding no partition producers, gets `ErrProducerNotFound`, and
+`ReliableSuperStreamProducer.Send` waits on the same condition again — which nothing broadcasts once
+the loop has exited. Without the sweep, a `Publish` caller with no deadline of its own hangs across
+the whole shutdown. Resolution is idempotent, so a late `entityClosed` for a swept message is a no-op.
 
 ### Super streams route by murmur3 hash of a caller-supplied key
 
