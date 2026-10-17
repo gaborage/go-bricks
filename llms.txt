@@ -5573,8 +5573,8 @@ When `observability.enabled: true`, the framework auto-emits:
 | Messaging | `messaging.client.operation.duration` | Histogram (s) | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type`, `messaging.rabbitmq.{exchange,routing_key,queue}` when set |
 | Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name`, `error.type` (consumed only, on failure), `messaging.rabbitmq.{exchange,routing_key,queue}` when set |
 | Messaging | `messaging.client.publish.retries` | Counter | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.{exchange,routing_key}` when set, `retry.reason` (`publish_error`/`nack`/`returned`/`timeout`); an exhausted publish counts `maxpublishattempts − 1` (the last attempt is not a retry) |
-| Messaging | `messaging.connection.create` / `.close` | Counter | — |
-| Messaging | `messaging.channel.create` / `.close` | Counter | — |
+| Messaging | `messaging.connection.create` / `.close` | Counter | `messaging.system`; `error.type` (`*amqp091.Error`) on `.close` only, when the close carried an error (a broker or network close; absent on a graceful close) |
+| Messaging | `messaging.channel.create` / `.close` | Counter | `messaging.system`; `error.type` (`*amqp091.Error`) on `.close` only, when the close carried an error (a broker or network close; absent on a graceful close) |
 | Messaging | `messaging.settlement.total` | Counter | `lane` (`classic`/`streams`), `outcome` (`acked`/`nacked`/`committed`/`failed`) |
 | Cache | `cache.hit` / `cache.miss` | Counter | `cache.operation` |
 | Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system.name=redis` |

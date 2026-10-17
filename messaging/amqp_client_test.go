@@ -1,7 +1,9 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -23,6 +26,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -1357,6 +1361,99 @@ func TestHandleReInitInitErrorNotifyConnClose(t *testing.T) {
 	if c.handleReInit(nil) != false {
 		t.Fatalf("expected handleReInit to return false when connection closed")
 	}
+}
+
+// TestAMQPClientCloseNotifyRecordsReason drives each close handler through a
+// real framework logger: a graceful close (nil receive) must log and count
+// without an error, a server close with one, on its own close counter only.
+func TestAMQPClientCloseNotifyRecordsReason(t *testing.T) {
+	const (
+		connMsg    = "AMQP connection closed, reconnecting..."
+		chanMsg    = "AMQP channel closed, reinitializing..."
+		connMetric = "messaging.connection.close"
+		chanMetric = "messaging.channel.close"
+	)
+	serverErr := &amqp.Error{Code: amqp.ConnectionForced, Reason: "CONNECTION_FORCED"}
+	onConnClose := func(_ *testing.T, c *AMQPClientImpl, amqpErr *amqp.Error) { c.onConnClose(amqpErr) }
+	onChanClose := func(_ *testing.T, c *AMQPClientImpl, amqpErr *amqp.Error) { c.onChanClose(amqpErr) }
+	// stubConn fails init, so the receive lands in handleReInit's init-error arm.
+	reInitConnClose := func(t *testing.T, c *AMQPClientImpl, amqpErr *amqp.Error) {
+		c.reInitDelay = time.Minute
+		c.done = make(chan bool)
+		c.connection = stubConn{}
+		c.notifyConnClose = make(chan *amqp.Error, 1)
+		if amqpErr == nil {
+			close(c.notifyConnClose)
+		} else {
+			c.notifyConnClose <- amqpErr
+		}
+		assert.False(t, c.handleReInit(nil), "a connection close must hand back to reconnect")
+	}
+
+	tests := []struct {
+		name        string
+		onClose     func(*testing.T, *AMQPClientImpl, *amqp.Error)
+		amqpErr     *amqp.Error
+		msg         string
+		metric      string
+		otherMetric string
+	}{
+		{name: "conn_close_graceful", onClose: onConnClose, msg: connMsg, metric: connMetric, otherMetric: chanMetric},
+		{name: "conn_close_server_error", onClose: onConnClose, amqpErr: serverErr, msg: connMsg, metric: connMetric, otherMetric: chanMetric},
+		{name: "chan_close_graceful", onClose: onChanClose, msg: chanMsg, metric: chanMetric, otherMetric: connMetric},
+		{name: "chan_close_server_error", onClose: onChanClose, amqpErr: serverErr, msg: chanMsg, metric: chanMetric, otherMetric: connMetric},
+		{name: "reinit_conn_close_graceful", onClose: reInitConnClose, msg: connMsg, metric: connMetric, otherMetric: chanMetric},
+		{name: "reinit_conn_close_server_error", onClose: reInitConnClose, amqpErr: serverErr, msg: connMsg, metric: connMetric, otherMetric: chanMetric},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp, cleanup := setupConsumeMetrics(t)
+			defer cleanup()
+			// Record*Event reads its counters before binding the meter, so the
+			// first event after a reset is dropped; bind it on another counter.
+			tracking.RecordChannelEvent("create", nil)
+
+			var sink bytes.Buffer
+			log := logger.New("info", false).WithContext(zerolog.New(&sink).WithContext(context.Background()))
+			c := &AMQPClientImpl{m: &sync.RWMutex{}, log: log}
+
+			require.NotPanics(t, func() { tc.onClose(t, c, tc.amqpErr) })
+
+			line := findJSONLogLine(t, sink.Bytes(), tc.msg)
+			logErr, hasLogErr := line["error"]
+
+			rm := mp.Collect(t)
+			assert.Nil(t, obtest.FindMetric(rm, tc.otherMetric), "close must count on %s only", tc.metric)
+			closeMetric := obtest.FindMetric(rm, tc.metric)
+			require.NotNil(t, closeMetric)
+			sum, ok := closeMetric.Data.(metricdata.Sum[int64])
+			require.True(t, ok)
+			require.Len(t, sum.DataPoints, 1)
+			errType, hasErrType := sum.DataPoints[0].Attributes.Value(attribute.Key("error.type"))
+
+			if tc.amqpErr == nil {
+				assert.False(t, hasLogErr, "graceful close must log no error, got %v", logErr)
+				assert.False(t, hasErrType, "graceful close must not stamp error.type, got %q", errType.AsString())
+				return
+			}
+			assert.Equal(t, tc.amqpErr.Error(), logErr)
+			assert.Equal(t, "*amqp091.Error", errType.AsString())
+		})
+	}
+}
+
+// findJSONLogLine returns the decoded JSON log line whose message is msg.
+func findJSONLogLine(t *testing.T, out []byte, msg string) map[string]any {
+	t.Helper()
+	for raw := range bytes.Lines(out) {
+		var line map[string]any
+		require.NoError(t, json.Unmarshal(raw, &line))
+		if line["message"] == msg {
+			return line
+		}
+	}
+	t.Fatalf("no %q line in log output:\n%s", msg, out)
+	return nil
 }
 
 func TestNewAMQPClientConstructsAndStarts(t *testing.T) {
