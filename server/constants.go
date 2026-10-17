@@ -1,6 +1,10 @@
 package server
 
-import "time"
+import (
+	"time"
+
+	"github.com/gaborage/go-bricks/config"
+)
 
 // Standardized API error codes used in APIErrorResponse envelopes.
 const (
@@ -64,19 +68,19 @@ var reservedMetaKeys = map[string]struct{}{
 const (
 	// DefaultReadTimeout is the maximum duration for reading the entire request.
 	// This includes reading the request body and headers.
-	DefaultReadTimeout = 15 * time.Second
+	DefaultReadTimeout = config.DefaultServerReadTimeout
 
 	// DefaultWriteTimeout is the maximum duration before timing out writes of the response.
 	// This is set from the start of the request handler to the end of the response write.
-	DefaultWriteTimeout = 30 * time.Second
+	DefaultWriteTimeout = config.DefaultServerWriteTimeout
 
 	// DefaultIdleTimeout is the maximum amount of time to wait for the next request
 	// when keep-alives are enabled.
-	DefaultIdleTimeout = 60 * time.Second
+	DefaultIdleTimeout = config.DefaultServerIdleTimeout
 
 	// DefaultShutdownTimeout is the maximum time to wait for graceful shutdown.
 	// This allows in-flight requests to complete before forceful termination.
-	DefaultShutdownTimeout = 10 * time.Second
+	DefaultShutdownTimeout = config.DefaultServerShutdownTimeout
 
 	// DefaultAPITimeout is the maximum duration for external API calls.
 	DefaultAPITimeout = 30 * time.Second

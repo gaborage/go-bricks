@@ -20,6 +20,23 @@ const (
 	DefaultPublisherCleanupInterval = 2 * time.Minute
 )
 
+// Server timeout defaults. Each is the single declaration of its key's default:
+// koanfOnlyDefaults renders it, and the server package's exported Default*Timeout
+// constants, like app's shutdown fallback, are defined from it rather than
+// repeating the value.
+const (
+	// DefaultServerReadTimeout is the default for server.timeout.read.
+	DefaultServerReadTimeout = 15 * time.Second
+	// DefaultServerWriteTimeout is the default for server.timeout.write.
+	DefaultServerWriteTimeout = 30 * time.Second
+	// DefaultServerIdleTimeout is the default for server.timeout.idle. It sits above
+	// the 60s upstream idle of an AWS ALB and of ingress-nginx, so the proxy, not the
+	// server, closes an idle keep-alive connection.
+	DefaultServerIdleTimeout = 75 * time.Second
+	// DefaultServerShutdownTimeout is the default for server.timeout.shutdown.
+	DefaultServerShutdownTimeout = 10 * time.Second
+)
+
 // Database pool defaults
 const (
 	defaultSlowQueryThreshold = 200 * time.Millisecond

@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -345,12 +346,12 @@ func (a *App) waitForShutdownOrServerError(serverErrCh <-chan error) (bool, erro
 }
 
 // shutdownTimeouts returns the inner timeout (passed to module Shutdown calls)
-// and the outer hard-stop deadline (inner + 5s headroom). Falls back to 10s/15s
-// when cfg is nil or the configured value is non-positive — matching the
-// documented server.timeout.shutdown default. Reading both values from a single
-// helper keeps drainServerError and the main shutdown sequence in lockstep.
+// and the outer hard-stop deadline (inner + 5s headroom). Falls back to
+// config.DefaultServerShutdownTimeout, the server.timeout.shutdown default, when
+// cfg is nil or the configured value is non-positive. Reading both values from a
+// single helper keeps drainServerError and the main shutdown sequence in lockstep.
 func (a *App) shutdownTimeouts() (inner, outer time.Duration) {
-	inner = 10 * time.Second
+	inner = config.DefaultServerShutdownTimeout
 	if a.cfg != nil && a.cfg.Server.Timeout.Shutdown > 0 {
 		inner = a.cfg.Server.Timeout.Shutdown
 	}
