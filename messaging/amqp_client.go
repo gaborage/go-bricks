@@ -1354,11 +1354,6 @@ func (c *AMQPClientImpl) handleReconnect() {
 		if c.handleReInit(conn) {
 			break
 		}
-		// handleReInit's select can take a close notification over done, so
-		// a Close that has begun ends the loop here, before any wait.
-		if c.isClosed() {
-			return
-		}
 		if attempt, waited = c.waitBeforeRedial(attempt, time.Since(connectedAt)); !waited {
 			return
 		}
@@ -1385,8 +1380,14 @@ func (c *AMQPClientImpl) waitAfterDialFailure(attempt int, err error) (next int,
 // waitBeforeRedial paces the redial after a connection close. A connection
 // that stayed up at least the reconnect base is stable: the ladder resets and
 // the wait is U[0, base). A shorter one climbs the ladder toward the cap. It
-// returns the attempt the wait used, and false when Close ended the wait.
+// returns the attempt the wait used, and false when Close has begun or ended
+// the wait.
 func (c *AMQPClientImpl) waitBeforeRedial(attempt int, uptime time.Duration) (next int, waited bool) {
+	// handleReInit's select can take a close notification over done, so a
+	// Close that has begun must not start a wait.
+	if c.isClosed() {
+		return attempt, false
+	}
 	event := c.log.Info
 	if uptime >= effectiveReconnectBase(c.reconnectDelay) {
 		attempt = 0

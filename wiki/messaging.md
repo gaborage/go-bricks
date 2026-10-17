@@ -773,7 +773,7 @@ cross-field validators like the outbox `publishtimeout` guards read these effect
 
 | Setting | Default | Purpose |
 | --------- | --------- | --------- |
-| `reconnect.delay` | 5s | Full-jitter backoff base, an upper bound, not a minimum spacing: the redial after a connection that stayed up at least this long waits `U[0, delay)`; it is also that stability window |
+| `reconnect.delay` | 5s | Full-jitter backoff base and stability window: a redial after a connection up at least this long waits `U[0, delay)` (an upper bound, not a minimum spacing) |
 | `reconnect.reinitdelay` | 2s | Delay between channel re-initialization |
 | `reconnect.resenddelay` | 5s | Delay before resending failed messages |
 | `reconnect.connectiontimeout` | 30s | Per-publish broker confirmation (ACK/NACK) timeout |

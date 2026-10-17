@@ -3501,7 +3501,6 @@ func TestPreparePublishingDefaultsTheFrameworkSources(t *testing.T) {
 
 const (
 	pacedRedialMsg  = "AMQP connection closed, waiting before redial"
-	dialFailureMsg  = "Failed to connect to AMQP broker, retrying with exponential backoff"
 	redialDialBound = 20
 )
 
@@ -3514,15 +3513,13 @@ type redialStep struct {
 }
 
 // redialHarness drives handleReconnect through a scripted dialer inside a
-// synctest bubble, recording the fake instant of every dial and close.
+// synctest bubble, recording the fake instant of every dial.
 type redialHarness struct {
-	t      *testing.T
-	c      *AMQPClientImpl
-	log    *recordingLogger
-	steps  []redialStep
-	mu     sync.Mutex
-	dials  []time.Time
-	closes []time.Time
+	c     *AMQPClientImpl
+	log   *recordingLogger
+	steps []redialStep
+	mu    sync.Mutex
+	dials []time.Time
 }
 
 // runRedialBubble restores the dialer on the outer test, so the restore runs
@@ -3539,7 +3536,7 @@ func runRedialBubble(t *testing.T, f func(t *testing.T)) {
 func newRedialHarness(t *testing.T, base, maxDelay time.Duration, steps ...redialStep) *redialHarness {
 	t.Helper()
 	log := newRecordingLogger()
-	h := &redialHarness{t: t, log: log, steps: steps}
+	h := &redialHarness{log: log, steps: steps}
 	h.c = &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               log,
@@ -3570,13 +3567,7 @@ func (h *redialHarness) dial(string) (amqpConnection, error) {
 	if step.err != nil {
 		return nil, step.err
 	}
-	return &redialConn{h: h, hold: step.hold}, nil
-}
-
-func (h *redialHarness) recordClose() {
-	h.mu.Lock()
-	h.closes = append(h.closes, time.Now())
-	h.mu.Unlock()
+	return &redialConn{hold: step.hold}, nil
 }
 
 func (h *redialHarness) dialCount() int {
@@ -3585,20 +3576,10 @@ func (h *redialHarness) dialCount() int {
 	return len(h.dials)
 }
 
-func (h *redialHarness) timeline() (dials, closes []time.Time) {
+func (h *redialHarness) dialTimes() []time.Time {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return slices.Clone(h.dials), slices.Clone(h.closes)
-}
-
-func (h *redialHarness) lines(msg string) []recordedLine {
-	var out []recordedLine
-	for _, ln := range h.log.Lines() {
-		if ln.Msg == msg {
-			out = append(out, ln)
-		}
-	}
-	return out
+	return slices.Clone(h.dials)
 }
 
 // stop closes the client and waits for handleReconnect to exit; safe after an
@@ -3608,13 +3589,10 @@ func (h *redialHarness) stop() {
 	<-h.c.reconnectDone
 }
 
+// redialConn is a stubConn whose close fires hold after it opened.
 type redialConn struct {
-	h    *redialHarness
+	stubConn
 	hold time.Duration
-}
-
-func (*redialConn) Channel() (*amqp.Channel, error) {
-	return nil, errors.New("redial harness: no channel")
 }
 
 // NotifyClose arms the close when changeConnection registers it, which is the
@@ -3624,7 +3602,6 @@ func (r *redialConn) NotifyClose(ch chan *amqp.Error) chan *amqp.Error {
 	if r.hold >= 0 {
 		go func() {
 			time.Sleep(r.hold)
-			r.h.recordClose()
 			select {
 			case ch <- &amqp.Error{Code: amqp.ConnectionForced, Reason: "CONNECTION_FORCED"}:
 			default:
@@ -3633,8 +3610,6 @@ func (r *redialConn) NotifyClose(ch chan *amqp.Error) chan *amqp.Error {
 	}
 	return ch
 }
-
-func (*redialConn) Close() error { return nil }
 
 func TestHandleReconnectPacesRedialAfterImmediateClose(t *testing.T) {
 	runRedialBubble(t, func(t *testing.T) {
@@ -3660,10 +3635,10 @@ func TestHandleReconnectStableCloseRedialsWithinBase(t *testing.T) {
 		assert.Equal(t, logger.LevelInfo, line.Level)
 		assert.Equal(t, []string{"0"}, line.Values("attempt"))
 		assert.Equal(t, []string{(2 * base).String()}, line.Values("uptime"))
-		dials, closes := h.timeline()
+		dials := h.dialTimes()
 		require.Len(t, dials, 2)
-		require.Len(t, closes, 1)
-		assert.Less(t, dials[1].Sub(closes[0]), base, "a stable close redials within U[0, base)")
+		closedAt := dials[0].Add(2 * base)
+		assert.Less(t, dials[1].Sub(closedAt), base, "a stable close redials within U[0, base)")
 	})
 }
 
@@ -3742,7 +3717,7 @@ func TestHandleReconnectStableCloseResetsLadder(t *testing.T) {
 		paced := h.log.Line(t, pacedRedialMsg)
 		assert.Equal(t, logger.LevelInfo, paced.Level)
 		assert.Equal(t, []string{"0"}, paced.Values("attempt"))
-		failures := h.lines(dialFailureMsg)
+		failures := h.log.Matching(msgConnectFailed)
 		require.Len(t, failures, 2)
 		assert.Equal(t, []string{"1"}, failures[1].Values("attempt"), "the stable close must reset the ladder the first dial error climbed")
 	})
