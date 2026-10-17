@@ -667,6 +667,11 @@ func buildEnvironmentVariables(db *config.DatabaseConfig) ([]string, error) {
 	return envVars, nil
 }
 
+// deliversEnvironment reports whether buildEnvironmentVariables has an arm for vendor.
+func deliversEnvironment(vendor string) bool {
+	return vendor == config.PostgreSQL || vendor == config.Oracle
+}
+
 const (
 	envFieldHost     = "Host"
 	envFieldUsername = "Username"

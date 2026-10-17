@@ -161,9 +161,8 @@ type MigrateAllOptions struct {
 	// every tenant's resolved database config before Flyway runs; host, port,
 	// database, schema targeting and TLS stay the tenant's. Nil keeps the
 	// provider's credentials. Two tenants it leaves on one target are refused with
-	// ErrDuplicateMigrationTarget, and a tenant whose vendor (its type, or the runner's
-	// when that is empty) is neither postgresql nor oracle is refused with
-	// ErrMigratorIdentityUndeliverable, since the overlay could not reach Flyway.
+	// ErrDuplicateMigrationTarget, and a tenant whose resolved vendor (TenantResult.Vendor)
+	// is neither postgresql nor oracle with ErrMigratorIdentityUndeliverable.
 	MigratorIdentity *MigratorIdentity
 }
 
@@ -208,8 +207,8 @@ type MigratorIdentity struct {
 var ErrDuplicateMigrationTarget = errors.New("migration: tenant resolves to a migration target another tenant of this run claimed")
 
 // ErrMigratorIdentityUndeliverable is a tenant's TenantResult.Err when MigrateAllOptions.MigratorIdentity
-// is set and the tenant's vendor (its type, or the runner's when that is empty) is neither postgresql
-// nor oracle: the framework has no environment to hand the overlay to Flyway, which would otherwise
+// is set and the tenant's resolved vendor (TenantResult.Vendor) is neither postgresql nor oracle:
+// the framework has no environment to hand the overlay to Flyway, which would otherwise
 // connect with the conf's or the parent environment's credentials (ADR-149). The refused tenant
 // starts no Flyway process and claims no target, for migrate, validate and info alike. The message
 // names the tenant ID and its type, never the host, username, password or connection string.
@@ -295,8 +294,6 @@ func duplicateTargetError(tenantID, owner string) error {
 		"postgresql.schema or migrator role, or de-list the alias; a re-run collides again", ErrDuplicateMigrationTarget, tenantID, owner)
 }
 
-// undeliverableIdentityError names the tenant ID and its resolved type only: the host and the
-// connection string can carry a whole DSN.
 func undeliverableIdentityError(tenantID, vendor string) error {
 	return fmt.Errorf("%w: tenant %q has type %q; set its type to %q or %q",
 		ErrMigratorIdentityUndeliverable, tenantID, vendor, config.PostgreSQL, config.Oracle)
@@ -511,7 +508,7 @@ func runOne(
 	vendor := dbVendor(dbCfg, migrator.config.Database.Type)
 	res.Vendor = vendor
 	if identity := opts.MigratorIdentity; identity != nil {
-		if vendor != config.PostgreSQL && vendor != config.Oracle {
+		if !deliversEnvironment(vendor) {
 			res.Err = undeliverableIdentityError(tenantID, vendor)
 			res.Duration = time.Since(start)
 			return res
@@ -521,7 +518,7 @@ func runOne(
 		overlaid.Password = identity.Password
 		dbCfg = &overlaid
 	}
-	if target, keyed := migrationTargetFor(dbCfg, migrator.config.Database.Type); keyed {
+	if target, keyed := migrationTargetFor(dbCfg, vendor); keyed {
 		if owner, claimed := claims.claim(&target, tenantID); !claimed {
 			res.Err = duplicateTargetError(tenantID, owner)
 			res.Duration = time.Since(start)
