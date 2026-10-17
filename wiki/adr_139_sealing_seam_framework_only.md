@@ -78,7 +78,8 @@ stays jose-free (`TestMessagingStaysJoseFree`'s direct-import walk now covers th
 
 - `messaging/sealed`'s `init` calls `sealruntime.Register`, so the blank import is the only
   registration. The app's bootstrap calls `sealruntime.Configure` at the same point (before
-  `DeclareMessaging`) with the same facts: key store, `messaging.seal.active`, tenancy, meter.
+  `DeclareMessaging`) with the same facts: key store, `messaging.seal.active`, tenancy, meter
+  (superseded by the 2026-10-17 amendment: each App binds them to its own Declarations).
 - **Deleted from `messaging`, with no shim and no `Deprecated:`:** `RegisterSealCodec`,
   `ConfigureSealing`, `SealingRuntime`; the aliases `SealCodec`, `SealSpec`, `Sealer`,
   `SealOpener`, `SealOpenerProvider`, `SealVerifier`, `SealVerifierProvider`, `SealRuntime`,

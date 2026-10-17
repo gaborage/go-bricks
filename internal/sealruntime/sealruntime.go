@@ -266,11 +266,8 @@ func Bind(decls any, rt *Runtime) {
 	(*b)(decls, bound)
 }
 
-// Snapshot copies the runtime with its own Active map (nil stays nil); nil yields nil.
+// Snapshot copies the runtime with its own Active map (nil stays nil).
 func (rt *Runtime) Snapshot() *Runtime {
-	if rt == nil {
-		return nil
-	}
 	out := *rt
 	out.Active = maps.Clone(rt.Active)
 	return &out

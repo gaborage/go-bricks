@@ -29,7 +29,7 @@ func pairStore(t *testing.T) *kstest.MockKeyStore {
 }
 
 // producerRuntime is a single-tenant producer's runtime over store with the active selector.
-func producerRuntime(store *kstest.MockKeyStore, active map[string]string) *sealruntime.Runtime {
+func producerRuntime(store sealruntime.KeyStore, active map[string]string) *sealruntime.Runtime {
 	return &sealruntime.Runtime{KeyStore: store, Active: active, Tenancy: sealruntime.TenancyDisabled}
 }
 
@@ -53,7 +53,7 @@ func publicOnlySignStore(t *testing.T) *kstest.MockKeyStore {
 // sealOnPair seals one event under the canonical pair store's sign v1.
 func sealOnPair(t *testing.T) []byte {
 	t.Helper()
-	data, _, err := declare(t, producerRuntime(pairStore(t), nil)).Seal(context.Background(), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
+	data, _, err := pairHandle(t).Seal(context.Background(), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
 	require.NoError(t, err)
 	return data
 }

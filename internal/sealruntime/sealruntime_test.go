@@ -83,7 +83,6 @@ func TestRegisterBinderIsSetOnce(t *testing.T) {
 }
 
 func TestSnapshotOwnsItsSelector(t *testing.T) {
-	assert.Nil(t, (*Runtime)(nil).Snapshot())
 	rt := &Runtime{Active: map[string]string{"fam": "v2"}, Tenancy: TenancyShared}
 	got := rt.Snapshot()
 	got.Active["fam"] = "v8"

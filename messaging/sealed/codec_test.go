@@ -197,8 +197,9 @@ func TestNewSealerStartupMatrix(t *testing.T) {
 	assert.ErrorIs(t, err, sealruntime.ErrKeyStoreMissing)
 }
 
-// configure is the canonical producer's runtime under tenancy, metered through the returned reader.
-func configure(t *testing.T, tenancy sealruntime.Tenancy) (*sealruntime.Runtime, *sdkmetric.ManualReader) {
+// meteredProducerRuntime is the canonical producer's runtime under tenancy, metered through the
+// returned reader.
+func meteredProducerRuntime(t *testing.T, tenancy sealruntime.Tenancy) (*sealruntime.Runtime, *sdkmetric.ManualReader) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	return &sealruntime.Runtime{
@@ -265,7 +266,7 @@ func sealCount(t *testing.T, reader *sdkmetric.ManualReader) uint64 {
 }
 
 func TestSealedPublishLandsOneJWSOnTheDeclaredDestination(t *testing.T) {
-	rt, reader := configure(t, sealruntime.TenancyShared)
+	rt, reader := meteredProducerRuntime(t, sealruntime.TenancyShared)
 	h := declare(t, rt)
 	client := &capturingClient{}
 	ctx := multitenant.SetTenant(context.Background(), "tenant-a")
@@ -295,7 +296,7 @@ func TestSealedPublishLandsOneJWSOnTheDeclaredDestination(t *testing.T) {
 }
 
 func TestSealedPublishOmitsTidWithoutATenant(t *testing.T) {
-	rt, _ := configure(t, sealruntime.TenancyDisabled)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
 	h := declare(t, rt)
 	client := &capturingClient{}
 	require.NoError(t, h.Publish(context.Background(), client, paymentAuthorized{OrderID: "o2", Card: &cardData{PAN: testPAN}}))
@@ -313,7 +314,7 @@ func mustSpec(t *testing.T) *josesealed.Spec {
 }
 
 func TestSealAndPublishProduceTheSameShapeWithFreshJTI(t *testing.T) {
-	rt, reader := configure(t, sealruntime.TenancyDisabled)
+	rt, reader := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
 	h := declare(t, rt)
 	evt := paymentAuthorized{OrderID: "o3", Card: &cardData{PAN: testPAN}}
 	client := &capturingClient{}
@@ -337,7 +338,7 @@ func TestPublishBytesAreWhatTheClientRetriesWith(t *testing.T) {
 	// The handle seals once and hands ONE byte slice to the client; the client's retry loop
 	// re-sends that slice, so every attempt carries the same jti. A caller-side retry after
 	// the client gives up is a NEW Publish and therefore a new seal — by design.
-	rt, _ := configure(t, sealruntime.TenancyDisabled)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
 	h := declare(t, rt)
 	client := &capturingClient{}
 	evt := paymentAuthorized{OrderID: "o4", Card: &cardData{PAN: testPAN}}
@@ -350,7 +351,7 @@ func TestPublishBytesAreWhatTheClientRetriesWith(t *testing.T) {
 }
 
 func TestSealerRefusesAConflictingTenant(t *testing.T) {
-	rt, _ := configure(t, sealruntime.TenancyPerTenant)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyPerTenant)
 	h := declare(t, rt)
 	client := &capturingClient{}
 	// tenantstamp.Resolve with an empty replay key accepts any context tenant; a conflict
@@ -372,7 +373,7 @@ type pooledClient struct {
 func (c *pooledClient) ReplayKey() string { return c.key }
 
 func TestSignedTidFollowsThePoolKeyWhenTheContextHasNoTenant(t *testing.T) {
-	rt, _ := configure(t, sealruntime.TenancyPerTenant)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyPerTenant)
 	h := declare(t, rt)
 	client := &pooledClient{key: "tenant-pool"}
 	require.NoError(t, h.Publish(context.Background(), &client.capturingClient, paymentAuthorized{OrderID: "o6", Card: &cardData{PAN: testPAN}}))
@@ -386,7 +387,7 @@ func TestSignedTidFollowsThePoolKeyWhenTheContextHasNoTenant(t *testing.T) {
 }
 
 func TestPlainTypeIsUntouchedByTheCodec(t *testing.T) {
-	rt, _ := configure(t, sealruntime.TenancyDisabled)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
 	decls := messaging.NewDeclarations()
 	sealruntime.Bind(decls, rt)
 	decls.DeclareTopicExchange("payments")
@@ -485,7 +486,7 @@ func TestNewSealerTagsTheActiveKidsAsSeal(t *testing.T) {
 }
 
 func TestSealSignsTheContextTenantWithAJTI(t *testing.T) {
-	rt, _ := configure(t, sealruntime.TenancyDisabled)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
 	h := declare(t, rt)
 	data, jti, err := h.Seal(multitenant.SetTenant(context.Background(), "tenant-a"), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
 	require.NoError(t, err)

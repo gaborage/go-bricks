@@ -156,43 +156,32 @@ func TestDeclareTypedConsumerRefusesSealTaggedTOnTheMetaLessDoor(t *testing.T) {
 
 func TestDeclareTypedConsumerWithMetaSealedStartupMatrix(t *testing.T) {
 	newOpenerErr := errors.New("families not provisioned")
+	bound := &sealruntime.Runtime{KeyStore: stubKeyStore{}}
 	cases := []struct {
 		name  string
-		setup func() *sealruntime.Runtime
+		codec sealruntime.Codec // nil: not linked
+		rt    *sealruntime.Runtime
 		want  error
 		text  string
 	}{
-		{name: "codec_not_linked", setup: func() *sealruntime.Runtime { return nil }, want: ErrSealingNotLinked},
-		{name: "runtime_not_configured", setup: func() *sealruntime.Runtime {
-			sealruntime.Register(&consumerCodec{})
-			return nil
-		}, want: sealruntime.ErrNotConfigured},
-		{name: "keystore_missing", setup: func() *sealruntime.Runtime {
-			sealruntime.Register(&consumerCodec{})
-			return &sealruntime.Runtime{}
-		}, want: sealruntime.ErrKeyStoreMissing},
-		{name: "codec_without_consume_side", setup: func() *sealruntime.Runtime {
-			sealruntime.Register(producerOnlyCodec{})
-			return &sealruntime.Runtime{KeyStore: stubKeyStore{}}
-		}, want: ErrSealingNotLinked, text: "no consume side"},
-		{name: "opener_startup_failure", setup: func() *sealruntime.Runtime {
-			sealruntime.Register(&consumerCodec{newErr: newOpenerErr})
-			return &sealruntime.Runtime{KeyStore: stubKeyStore{}}
-		}, want: newOpenerErr, text: "sealed consumer for"},
-		{name: "codec_returns_no_opener", setup: func() *sealruntime.Runtime {
-			sealruntime.Register(nilOpenerCodec{})
-			return &sealruntime.Runtime{KeyStore: stubKeyStore{}}
-		}, text: "returned no opener"},
+		{name: "codec_not_linked", want: ErrSealingNotLinked},
+		{name: "runtime_not_configured", codec: &consumerCodec{}, want: sealruntime.ErrNotConfigured},
+		{name: "keystore_missing", codec: &consumerCodec{}, rt: &sealruntime.Runtime{}, want: sealruntime.ErrKeyStoreMissing},
+		{name: "codec_without_consume_side", codec: producerOnlyCodec{}, rt: bound, want: ErrSealingNotLinked, text: "no consume side"},
+		{name: "opener_startup_failure", codec: &consumerCodec{newErr: newOpenerErr}, rt: bound, want: newOpenerErr, text: "sealed consumer for"},
+		{name: "codec_returns_no_opener", codec: nilOpenerCodec{}, rt: bound, text: "returned no opener"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sealruntime.Reset()
 			t.Cleanup(sealruntime.Reset)
-			rt := tc.setup()
+			if tc.codec != nil {
+				sealruntime.Register(tc.codec)
+			}
 			decls := NewDeclarations()
 			decls.DeclareQueue("q")
-			if rt != nil {
-				sealruntime.Bind(decls, rt)
+			if tc.rt != nil {
+				sealruntime.Bind(decls, tc.rt)
 			}
 			opts := consumerOpts(false)
 			DeclareTypedConsumerWithMeta(decls, opts, func(context.Context, sealedEvt, Metadata) error { return nil })

@@ -105,7 +105,7 @@ func dottedEncryptEnv(t *testing.T) map[string]string {
 // built, and returns the bytes the broker would carry.
 func sealDotted(t *testing.T, cfg *config.Config, ks app.KeyStore, orderID string) []byte {
 	t.Helper()
-	h := declareAs[dottedPayment](t, &sealruntime.Runtime{KeyStore: ks, Active: cfg.Messaging.Seal.Active, Tenancy: sealruntime.TenancyDisabled}, eventType)
+	h := declareAs[dottedPayment](t, producerRuntime(ks, cfg.Messaging.Seal.Active), eventType)
 	client := &capturingClient{}
 	require.NoError(t, h.Publish(context.Background(), client, dottedPayment{OrderID: orderID, Card: &cardData{PAN: testPAN}}))
 	require.Len(t, client.data, 1)
@@ -117,7 +117,7 @@ func sealDotted(t *testing.T, cfg *config.Config, ks app.KeyStore, orderID strin
 func consumeDotted(t *testing.T, cfg *config.Config, ks app.KeyStore, body []byte) (dottedPayment, messaging.Metadata) {
 	t.Helper()
 	decls := messaging.NewDeclarations()
-	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: ks, Active: cfg.Messaging.Seal.Active, Tenancy: sealruntime.TenancyDisabled})
+	sealruntime.Bind(decls, producerRuntime(ks, cfg.Messaging.Seal.Active))
 	decls.DeclareQueue("q")
 	opts := &messaging.ConsumerOptions{Queue: "q", Consumer: "c", EventType: eventType}
 	var got dottedPayment

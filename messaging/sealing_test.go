@@ -295,51 +295,32 @@ func TestDeclareTypedPublisherPlainTypeNeverTouchesTheCodec(t *testing.T) {
 func TestDeclareTypedPublisherSealedStartupFailures(t *testing.T) {
 	scanErr := errors.New("bad tag")
 	sealerErr := errors.New("no active generation")
+	bound := &sealruntime.Runtime{KeyStore: stubKeyStore{}}
 	cases := []struct {
 		name  string
-		setup func(*fakeCodec) *sealruntime.Runtime
+		codec *fakeCodec // nil: not linked
+		rt    *sealruntime.Runtime
 		want  error
 		text  string
 	}{
-		{name: "codec_not_linked", setup: func(*fakeCodec) *sealruntime.Runtime { return nil }, want: ErrSealingNotLinked, text: "messaging/sealed"},
-		{name: "runtime_not_configured", setup: func(c *fakeCodec) *sealruntime.Runtime {
-			sealruntime.Register(c)
-			return nil
-		}, want: sealruntime.ErrNotConfigured},
-		{name: "keystore_missing", setup: func(c *fakeCodec) *sealruntime.Runtime {
-			sealruntime.Register(c)
-			return &sealruntime.Runtime{}
-		}, want: sealruntime.ErrKeyStoreMissing},
-		{name: "scan_refused", setup: func(c *fakeCodec) *sealruntime.Runtime {
-			c.scanErr = scanErr
-			sealruntime.Register(c)
-			return &sealruntime.Runtime{KeyStore: stubKeyStore{}}
-		}, want: scanErr, text: "seal declaration"},
-		{name: "codec_ignores_tags", setup: func(c *fakeCodec) *sealruntime.Runtime {
-			c.scanNil = true
-			sealruntime.Register(c)
-			return &sealruntime.Runtime{KeyStore: stubKeyStore{}}
-		}, text: "did not recognize"},
-		{name: "producer_startup_refused", setup: func(c *fakeCodec) *sealruntime.Runtime {
-			c.sealerErr = sealerErr
-			sealruntime.Register(c)
-			return &sealruntime.Runtime{KeyStore: stubKeyStore{}}
-		}, want: sealerErr, text: "sealing producer"},
-		{name: "codec_returns_no_sealer", setup: func(c *fakeCodec) *sealruntime.Runtime {
-			c.sealerNil = true
-			sealruntime.Register(c)
-			return &sealruntime.Runtime{KeyStore: stubKeyStore{}}
-		}, text: "returned no sealer"},
+		{name: "codec_not_linked", want: ErrSealingNotLinked, text: "messaging/sealed"},
+		{name: "runtime_not_configured", codec: &fakeCodec{}, want: sealruntime.ErrNotConfigured},
+		{name: "keystore_missing", codec: &fakeCodec{}, rt: &sealruntime.Runtime{}, want: sealruntime.ErrKeyStoreMissing},
+		{name: "scan_refused", codec: &fakeCodec{scanErr: scanErr}, rt: bound, want: scanErr, text: "seal declaration"},
+		{name: "codec_ignores_tags", codec: &fakeCodec{scanNil: true}, rt: bound, text: "did not recognize"},
+		{name: "producer_startup_refused", codec: &fakeCodec{sealerErr: sealerErr}, rt: bound, want: sealerErr, text: "sealing producer"},
+		{name: "codec_returns_no_sealer", codec: &fakeCodec{sealerNil: true}, rt: bound, text: "returned no sealer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sealruntime.Reset()
 			t.Cleanup(sealruntime.Reset)
-			codec := &fakeCodec{}
-			rt := tc.setup(codec)
+			if tc.codec != nil {
+				sealruntime.Register(tc.codec)
+			}
 			decls := newSealingDecls()
-			if rt != nil {
-				sealruntime.Bind(decls, rt)
+			if tc.rt != nil {
+				sealruntime.Bind(decls, tc.rt)
 			}
 			h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
 			assert.Nil(t, h.sealer, "a refused declaration leaves the handle sealer-less")
@@ -405,14 +386,8 @@ func TestDeclareTypedPublisherSealedHappyPath(t *testing.T) {
 }
 
 func TestPublishReturnsSealFailureAndPublishesNothing(t *testing.T) {
-	sealruntime.Reset()
-	t.Cleanup(sealruntime.Reset)
 	sealErr := errors.New("seal boom")
-	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{jti: "never-returned", err: sealErr}})
-	decls := newSealingDecls()
-	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}})
-	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
-	require.NoError(t, decls.Validate())
+	h := declareWithCodec(t, &fakeCodec{sealer: &fakeSealer{jti: "never-returned", err: sealErr}}, sealedOpts())
 	client := &capturingClient{}
 	err := h.Publish(context.Background(), client, sealedEvent{ID: "o1"})
 	require.Error(t, err)
@@ -457,14 +432,8 @@ func TestSealResolvesTheTenantLikeTheStampingWrapper(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sealruntime.Reset()
-			t.Cleanup(sealruntime.Reset)
 			sealer := &tenantSealer{}
-			sealruntime.Register(&fakeCodec{sealer: &fakeSealer{}})
-			decls := newSealingDecls()
-			sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}})
-			h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
-			require.NoError(t, decls.Validate())
+			h := declareWithCodec(t, &fakeCodec{sealer: &fakeSealer{}}, sealedOpts())
 			h.sealer = sealer // observe the context the door hands the sealer
 			ctx := context.Background()
 			if tc.ctxID != "" {
@@ -483,14 +452,8 @@ func TestSealResolvesTheTenantLikeTheStampingWrapper(t *testing.T) {
 }
 
 func TestSealWithoutAClientUsesTheContextOnly(t *testing.T) {
-	sealruntime.Reset()
-	t.Cleanup(sealruntime.Reset)
 	sealer := &tenantSealer{}
-	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{}})
-	decls := newSealingDecls()
-	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}})
-	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
-	require.NoError(t, decls.Validate())
+	h := declareWithCodec(t, &fakeCodec{sealer: &fakeSealer{}}, sealedOpts())
 	h.sealer = sealer
 	_, _, err := h.Seal(multitenant.SetTenant(context.Background(), "t-out"), sealedEvent{ID: "x"})
 	require.NoError(t, err)
@@ -569,14 +532,7 @@ func (c *capturingClient) publishBytes(_ context.Context, options publishOptions
 // content type names what it is — a compact JWS — and never application/json
 // (ADR-105). The plain arm lives in typed_publisher_test.go.
 func TestSealedPublishClaimsJOSEContentType(t *testing.T) {
-	sealruntime.Reset()
-	t.Cleanup(sealruntime.Reset)
-	sealruntime.Register(&fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}})
-
-	decls := newSealingDecls()
-	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}})
-	h := DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
-	require.NoError(t, decls.Validate())
+	h := declareWithCodec(t, &fakeCodec{sealer: &fakeSealer{out: []byte("eyJ.sealed.bytes")}}, sealedOpts())
 
 	client := &capturingClient{}
 	require.NoError(t, h.Publish(context.Background(), client, sealedEvent{}))
