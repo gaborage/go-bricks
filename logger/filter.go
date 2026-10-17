@@ -42,10 +42,10 @@ type FilterConfig struct {
 	// and what DefaultFilterConfig returns) keeps Err byte-identical to
 	// zerolog's own rendering. A typed-nil pointer error (a nil pointer inside a
 	// non-nil error) never reaches the redactor; Err emits no field for it, as
-	// zerolog does. Code door only: app.Options.LoggerFilterConfig,
-	// which replaces the whole config — start from DefaultFilterConfig() and
-	// set this field. The YAML log.sensitivefields merge path leaves it nil,
-	// the value being a function.
+	// zerolog does under its default ErrorMarshalFunc. Code door only:
+	// app.Options.LoggerFilterConfig, which replaces the whole config — start
+	// from DefaultFilterConfig() and set this field. The YAML
+	// log.sensitivefields merge path leaves it nil, the value being a function.
 	ErrorRedactor func(error) string
 	// MaxPayloadBytes caps how large an opaque payload may be before the filter
 	// stops trying to read it. A JSON-LOOKING payload past the cap is masked
@@ -165,8 +165,8 @@ func (f *SensitiveDataFilter) hasErrorRedactor() bool {
 }
 
 // maskField reports the masked rendering of a value when the deployment marked
-// that FIELD NAME sensitive, and false when it did not. Err runs it on the
-// ErrorRedactor's output: a hit masks the redacted string, a miss keeps it.
+// that FIELD NAME sensitive, and false when it did not. rewriteErr runs it on
+// the ErrorRedactor's output: a hit masks the redacted string, a miss keeps it.
 //
 // Nil-receiver safe, like redactError: a logger built without a filter masks
 // nothing.

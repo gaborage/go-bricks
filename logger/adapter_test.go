@@ -1252,3 +1252,38 @@ func TestLogEventAdapterErrRendersADefaultConfigMissOnce(t *testing.T) {
 	assert.Equal(t, "counted", loggedField(t, buf, zerolog.ErrorFieldName))
 	assert.Equal(t, 1, testErr.renders)
 }
+
+func TestLogEventAdapterErrRedactorPathNeverRendersTheMessage(t *testing.T) {
+	for _, tc := range []struct {
+		errLoggerCase
+		want string
+	}{
+		{errorRedactorCase, "[redacted]"},
+		{needleAndRedactorCase, DefaultFilterConfig().MaskValue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testErr := &countingError{}
+			log, buf, calls := tc.logger(t)
+
+			log.Error().Err(testErr).Msg("error occurred")
+
+			assert.Equal(t, tc.want, loggedField(t, buf, zerolog.ErrorFieldName))
+			assert.Equal(t, 1, *calls)
+			assert.Zero(t, testErr.renders)
+		})
+	}
+}
+
+// mapError is a map-kind error: a nil one is not a typed-nil pointer.
+type mapError map[string]string
+
+func (mapError) Error() string { return "map error" }
+
+func TestLogEventAdapterErrRewritesANilMapKindError(t *testing.T) {
+	log, buf, calls := errorRedactorCase.logger(t)
+
+	log.Error().Err(mapError(nil)).Msg("error occurred")
+
+	assert.Equal(t, "[redacted]", loggedField(t, buf, zerolog.ErrorFieldName))
+	assert.Equal(t, 1, *calls)
+}
