@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.72.1](https://github.com/gaborage/go-bricks/compare/v0.72.0...v0.72.1) (2026-10-17)
+
+
+### Fixed
+
+* **messaging:** bind AMQP close notifications instead of dropping them ([#2135](https://github.com/gaborage/go-bricks/issues/2135)) ([678166d](https://github.com/gaborage/go-bricks/commit/678166d4e3e8c81756cd78825a974c92dbe6bf14))
+* **streams:** adopt stream client v1.9.0 and own reconnect backoff ([#2140](https://github.com/gaborage/go-bricks/issues/2140)) ([8a99a20](https://github.com/gaborage/go-bricks/commit/8a99a206d52a5e36ab1861e8cedda22abb30c8cb))
+
 ## [0.72.0](https://github.com/gaborage/go-bricks/compare/v0.71.1...v0.72.0) (2026-10-15)
 
 
