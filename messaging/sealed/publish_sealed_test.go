@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	josesealed "github.com/gaborage/go-bricks/jose/sealed"
 	kstest "github.com/gaborage/go-bricks/keystore/testing"
 	"github.com/gaborage/go-bricks/messaging"
@@ -57,11 +58,16 @@ func tenantCtx(tenant string) context.Context {
 	return multitenant.SetTenant(context.Background(), tenant)
 }
 
-// pairHandle configures the canonical producer store and declares the handle under test on it.
+// pairRuntime is the canonical producer store's runtime.
+func pairRuntime(t *testing.T) *sealruntime.Runtime {
+	t.Helper()
+	return producerRuntime(pairStore(t), nil)
+}
+
+// pairHandle declares the handle under test on the canonical producer store's runtime.
 func pairHandle(t *testing.T) *messaging.Publisher[paymentAuthorized] {
 	t.Helper()
-	configureStore(t, pairStore(t), nil)
-	return declare(t)
+	return declare(t, pairRuntime(t))
 }
 
 // rotatingSignStore holds sign v1 and v2 (both pairs) and the encrypt v1 public key.
@@ -81,10 +87,8 @@ func sealFor[T any](t *testing.T, h *messaging.Publisher[T], tenant string, evt 
 // sealThenSwap seals under store a with active, then declares the handle under test on store b with bActive.
 func sealThenSwap(t *testing.T, a *kstest.MockKeyStore, active map[string]string, b *kstest.MockKeyStore, bActive map[string]string) doorCall {
 	t.Helper()
-	configureStore(t, a, active)
-	data := sealFor(t, declare(t), "", doorEvent())
-	configureStore(t, b, bActive)
-	return callOn(declare(t), "", data)
+	data := sealFor(t, declare(t, producerRuntime(a, active)), "", doorEvent())
+	return callOn(declare(t, producerRuntime(b, bActive)), "", data)
 }
 
 // flipSignatureBit toggles a middle character of the signature segment between 'A' and 'B'; never
@@ -175,19 +179,19 @@ func TestPublishSealedRefusesBeforeAnyPublish(t *testing.T) {
 		check   func(t *testing.T, err error)
 	}{
 		{name: "other_event_type", code: josesealed.CodeEventTypeMismatch, arrange: func(t *testing.T) doorCall {
-			h := pairHandle(t)
-			return callOn(h, "", sealFor(t, declareAs[paymentAuthorized](t, "payment.captured"), "", doorEvent()))
+			rt := pairRuntime(t)
+			return callOn(declare(t, rt), "", sealFor(t, declareAs[paymentAuthorized](t, rt, "payment.captured"), "", doorEvent()))
 		}},
 		{name: "other_sign_family", code: josesealed.CodeKidFamilyMismatch, arrange: func(t *testing.T) doorCall {
-			configureStore(t, withPair(pairStore(t), "other-payments-sign", "v1", sign2), nil)
-			h := declare(t)
+			rt := producerRuntime(withPair(pairStore(t), "other-payments-sign", "v1", sign2), nil)
+			h := declare(t, rt)
 			evt := otherFamilyEvent{OrderID: "o", Card: &cardData{PAN: testPAN}}
-			return callOn(h, "", sealFor(t, declareAs[otherFamilyEvent](t, eventType), "", evt))
+			return callOn(h, "", sealFor(t, declareAs[otherFamilyEvent](t, rt, eventType), "", evt))
 		}},
 		{name: "other_subject_member", code: josesealed.CodeManifestMismatch, arrange: func(t *testing.T) doorCall {
-			h := pairHandle(t)
+			rt := pairRuntime(t)
 			evt := otherSubjectEvent{OrderID: &cardData{PAN: testPAN}, Card: "c"}
-			return callOn(h, "", sealFor(t, declareAs[otherSubjectEvent](t, eventType), "", evt))
+			return callOn(declare(t, rt), "", sealFor(t, declareAs[otherSubjectEvent](t, rt, eventType), "", evt))
 		}},
 		{name: "flipped_signature_bit", code: josesealed.CodeSignatureInvalid, arrange: func(t *testing.T) doorCall {
 			h := pairHandle(t)
@@ -213,15 +217,15 @@ func TestPublishSealedRefusesBeforeAnyPublish(t *testing.T) {
 		}},
 		{name: "subject_not_a_jwe", code: josesealed.CodePayloadUndecodable, arrange: func(t *testing.T) doorCall {
 			store := withPair(kstest.NewMockKeyStore(), signFamily, "v2", vectorKey(t, vecSignKid))
-			configureStore(t, withPublic(store, encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey), nil)
-			return callOn(declare(t), vecTenant, publishedVector(t, "subject_not_a_jwe"))
+			rt := producerRuntime(withPublic(store, encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey), nil)
+			return callOn(declare(t, rt), vecTenant, publishedVector(t, "subject_not_a_jwe"))
 		}, check: func(t *testing.T, err error) {
 			assert.Equal(t, 10, openErrorOf(t, err).Rule)
 		}},
 		{name: "subject_case_fold_twin", code: josesealed.CodePayloadUndecodable, arrange: func(t *testing.T) doorCall {
 			store := withPair(kstest.NewMockKeyStore(), signFamily, "v2", vectorKey(t, vecSignKid))
-			configureStore(t, withPublic(store, encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey), nil)
-			return callOn(declare(t), vecTenant, publishedVector(t, "subject_case_fold_twin"))
+			rt := producerRuntime(withPublic(store, encFamily, "v1", &vectorKey(t, vecEncKid).PublicKey), nil)
+			return callOn(declare(t, rt), vecTenant, publishedVector(t, "subject_case_fold_twin"))
 		}, check: func(t *testing.T, err error) {
 			assert.Equal(t, 10, openErrorOf(t, err).Rule)
 			assert.NotContains(t, err.Error(), "5555555555554444", "the clear twin never reaches the error")
@@ -268,8 +272,7 @@ func TestPublishSealedRefusesBeforeAnyPublish(t *testing.T) {
 		}},
 		{name: "seal_startup_error", want: sealed.ErrRoleMismatch, arrange: func(t *testing.T) doorCall {
 			store := withPublic(kstest.NewMockKeyStore(), signFamily, "v1", &signPriv.PublicKey) // the sign generation holds no private key
-			configureStore(t, withPublic(store, encFamily, "v1", &encPriv.PublicKey), nil)
-			decls, h := declareIn[paymentAuthorized](eventType)
+			decls, h := declareIn[paymentAuthorized](producerRuntime(withPublic(store, encFamily, "v1", &encPriv.PublicKey), nil), eventType)
 			require.ErrorIs(t, decls.Validate(), sealed.ErrRoleMismatch)
 			return callOn(h, "", []byte("eyJ.stored.bytes"))
 		}},
@@ -294,15 +297,13 @@ func TestPublishSealedRefusesBeforeAnyPublish(t *testing.T) {
 
 func TestPublishSealedAcceptsBytesSealedBeforeAnActivationFlip(t *testing.T) {
 	store := rotatingSignStore(t)
-	configureStore(t, store, map[string]string{signFamily: "v1"})
-	data := sealFor(t, declare(t), "", doorEvent())
+	data := sealFor(t, declare(t, producerRuntime(store, map[string]string{signFamily: "v1"})), "", doorEvent())
 	v := newVerifier(t, store)
 	before, err := v.Verify(context.Background(), data)
 	require.NoError(t, err)
 	require.Equal(t, signFamily+"-v1", before.SignKid, "the stored bytes were sealed under v1")
 
-	configureStore(t, store, map[string]string{signFamily: "v2"})
-	after := declare(t)
+	after := declare(t, producerRuntime(store, map[string]string{signFamily: "v2"}))
 	rec := &capturingClient{}
 	require.NoError(t, after.PublishSealed(context.Background(), rec, data), "v1 is still provisioned: it verifies")
 	require.Len(t, rec.data, 1)

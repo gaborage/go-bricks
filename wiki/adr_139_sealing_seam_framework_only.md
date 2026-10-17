@@ -5,6 +5,39 @@
 **Amends:** [ADR-097](adr_097_sealed_amqp_messages.md) (the adapter wiring: registration, configuration and the module read of the runtime), [ADR-131](adr_131_sealed_bytes_publish_door.md) (the external `Sealer` implementer and the verifier/opener providers it names)
 **Related:** [ADR-091](adr_091_streams_opt_in_registration.md) (the root-`internal/` seam precedent) · [ADR-136](adr_136_app_hypothetical_seams.md) (the same deletion of an exported runtime door) · [ADR-096](adr_096_typed_publish_door.md) (`internal/publishdoor`, a separate seam this one does not merge into)
 
+## Amendment (2026-10-17, #2010): each App owns its seal runtime
+
+Re-aim path 2 below, a second App's `Run`, is closed. `sealruntime.Configure`, `Configured`,
+`Instruments` and the process-global runtime and metrics are deleted. Each App binds its own
+facts (key store, a copy of `messaging.seal.active`, tenancy, meter) and seal instruments built
+once from that meter to the `*messaging.Declarations` it builds, after `messaging.NewDeclarations()`
+and before `DeclareMessaging`, through the root-internal `sealruntime.Bind`. The seam cannot name
+`*messaging.Declarations`, because `messaging` imports it, so `messaging` registers the binder
+from `init` and type-asserts the value (the `internal/publishdoor` dispatcher shape). A second
+bind of one Declarations panics, and `Clone` carries the binding. Every `Sealer`, `Opener` and
+`Verifier` receives a copy of its Declarations' binding at construction, and the sealer and
+opener record on the instruments bound into them. Nothing reads a process-global fact or
+instrument at declaration time or per seal or open.
+
+- A second App's `Run`, whether it succeeds or fails after its declarations are built, changes
+  no handle of another App, declared before or after it.
+- A seal-tagged declaration on a `messaging.NewDeclarations()` that no App bound fails `Validate`
+  with `messaging: sealing runtime not configured before declarations were collected`, even after
+  an App ran in the same binary; it used to inherit the last App's runtime (`[C73.2]`). The codec
+  check still runs first, so a build without `messaging/sealed` still reports
+  `ErrSealingNotLinked`. Nothing exported changes.
+- Path 1, a module's `Init` writing `ModuleDeps` or the shared `*config.Config`, moved to #2146.
+  This amendment keeps the current fact sources and does not harden them.
+- **Threat-model floor.** In-build code outside the module can still reach the internal seam with
+  a pull `go:linkname`; the Go 1.23 linkname restriction covers the standard library only.
+  ADR-096 already excludes linkname: the bar is ordinary exported API, so later audits should not
+  reopen this.
+- **Rejected: refuse a second `Configure` while an App is live.** Test binaries keep several Apps
+  live (`TestCreateAppKeepsEachAppsOwnRouteTable` runs `prepareRuntime` on two with no
+  `Shutdown`), and it inverts the per-case replace the tests relied on.
+- **Rejected: accept the residual and document it.** It reverses this ADR's open-and-tracked
+  disposition of path 2.
+
 ## Context
 
 The seal-runtime seam (ADR-097) lived in `messaging/internal/sealruntime`. Go's `internal`
@@ -81,7 +114,8 @@ key are unchanged for a correctly wired service.
   that runs an App with `keystore.NewModule()` fixture keys and the blank import.
 - The inbox dedup tests keep their stub codec, registered and configured through the
   root-internal seam, and `inbox` still does not link `messaging/sealed`.
-- **Two re-aim paths stay OPEN, tracked in #2010.** This ADR closes the codec half and every
+- **Two re-aim paths stayed OPEN at acceptance, tracked in #2010** (amended 2026-10-17: the
+  second is closed, the first moved to #2146). This ADR closes the codec half and every
   exported sealing door; it does not establish that no code outside the framework can replace
   the seal runtime facts, and it picks no mechanism for the rest:
   - **Shared `ModuleDeps` writes.** The bootstrap reads the key store and meter from the
@@ -95,6 +129,6 @@ key are unchanged for a correctly wired service.
 
 ## References
 
-- [migrations.md](migrations.md) `[C72.9]`
+- [migrations.md](migrations.md) `[C72.9]`, `[C73.2]`
 - `internal/sealruntime/sealruntime.go`, `app/sealing.go` (`configureSealing`),
-  `messaging/sealed` (`init`), #1872, #2010
+  `messaging/sealed` (`init`), #1872, #2010, #2146

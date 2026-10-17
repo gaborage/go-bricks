@@ -14,8 +14,12 @@ make an app smaller, since HTTP JOSE already links go-jose.
 
 How the adapter is wired: the blank import of `messaging/sealed` registers the codec from
 `init` into the framework-only seam `internal/sealruntime` (ADR-139), and it is the only
-registration. The app's bootstrap configures the runtime (key store, the
-`messaging.seal.active` selector, tenancy, meter) before any `DeclareMessaging`. A module reads
+registration. Each App binds its own seal runtime (key store, a copy of the
+`messaging.seal.active` selector, tenancy, meter, and the seal instruments built once from that
+meter) to the Declarations it builds, before any `DeclareMessaging`. Every seal-tagged handle the
+App declares is built with that runtime, so another App's startup in the same process never
+re-aims it (#2010), and a Declarations built by hand with `messaging.NewDeclarations()` has none:
+a seal-tagged declaration on it fails `Validate` with `ErrNotConfigured`. A module reads
 the same facts from `ModuleDeps`: `KeyStore`, `MeterProvider` and `Config.Messaging.Seal.Active`,
 with tenancy following `multitenant.enabled` and `messaging.tenancy`. `Declarations.Validate` fails a seal-tagged
 declaration with `messaging.ErrSealingNotLinked` ("import messaging/sealed"),

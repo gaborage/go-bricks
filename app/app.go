@@ -127,9 +127,8 @@ func (a *App) buildMessagingDeclarations() error {
 		return errors.New("module registry not initialized")
 	}
 
-	a.configureSealing()
-
 	decls := messaging.NewDeclarations()
+	a.configureSealing(decls)
 	if err := a.registry.DeclareMessaging(decls); err != nil {
 		return err
 	}

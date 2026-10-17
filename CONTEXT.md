@@ -479,6 +479,12 @@ generations present and no choice made, startup refuses to guess.
 _Avoid_: cutover (the fleet event, not the setting), promotion, current key
 (as a config term)
 
+**Seal runtime**:
+The seal facts one App resolves at startup — its key material, its Activation
+and its instruments — which every seal-tagged handle that App declares is bound
+to. There is one per App, and another App's startup never changes it.
+_Avoid_: sealer, seal config, global seal state
+
 **Redelivery**:
 The broker or an operator presenting a message again — a crash before ack, a
 dead-letter drain, a shovel, an outbox row driven again. Always legitimate,

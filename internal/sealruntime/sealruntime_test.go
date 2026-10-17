@@ -29,36 +29,76 @@ func TestRegisterIsSetOnce(t *testing.T) {
 	assert.PanicsWithValue(t, "sealruntime: Register called with nil", func() { Register(nil) })
 }
 
-func TestConfigureCopiesAndReplaces(t *testing.T) {
-	Reset()
-	t.Cleanup(Reset)
-	assert.Nil(t, Configured())
-	rt := &Runtime{Active: map[string]string{"fam": "v2"}, Tenancy: TenancyShared}
-	Configure(rt)
-	rt.Tenancy = TenancyPerTenant // caller mutation after Configure must not leak
-	rt.Active["fam"] = "v9"       // nor a later write through the caller's map
-	got := Configured()
-	require.NotNil(t, got)
-	assert.Equal(t, TenancyShared, got.Tenancy)
-	assert.Equal(t, "v2", got.Active["fam"])
-	got.Active["fam"] = "v8" // nor a write through a returned snapshot
-	assert.Equal(t, "v2", Configured().Active["fam"])
-	require.NotNil(t, got.Metrics)
-	assert.Same(t, got.Metrics, Configured().Metrics, "the instruments are built once per Configure")
-	Configure(&Runtime{})
-	assert.Nil(t, Configured().Active, "a nil selector stays nil")
-	assert.NotSame(t, got.Metrics, Configured().Metrics, "a later Configure builds its own instruments")
-	Configure(&Runtime{Tenancy: TenancyPerTenant})
-	assert.Equal(t, TenancyPerTenant, Configured().Tenancy, "the app is the single writer and may replace")
-	assert.PanicsWithValue(t, "sealruntime: Configure called with nil", func() { Configure(nil) })
+// boundCall is one call a capturing binder received.
+type boundCall struct {
+	decls any
+	rt    *Runtime
 }
 
-func TestResetClearsEverything(t *testing.T) {
+// captureBinder installs a binder that records what Bind hands it and restores the
+// previous binder at cleanup.
+func captureBinder(t *testing.T) *[]boundCall {
+	t.Helper()
+	prev := binder.Swap(nil)
+	t.Cleanup(func() { binder.Store(prev) })
+	var calls []boundCall
+	RegisterBinder(func(decls any, rt *Runtime) { calls = append(calls, boundCall{decls: decls, rt: rt}) })
+	return &calls
+}
+
+func TestBindHandsTheBinderACopyWithItsOwnInstruments(t *testing.T) {
+	calls := captureBinder(t)
+	mp := sdkmetric.NewMeterProvider()
+	preset := NewMetrics(nil)
+	rt := &Runtime{Active: map[string]string{"fam": "v2"}, Tenancy: TenancyShared, Meter: mp, Metrics: preset}
+	decls := &struct{ name string }{name: "a"}
+	Bind(decls, rt)
+	rt.Tenancy = TenancyPerTenant // caller mutation after Bind must not leak
+	rt.Active["fam"] = "v9"       // nor a later write through the caller's map
+	require.Len(t, *calls, 1)
+	got := (*calls)[0]
+	assert.Same(t, decls, got.decls)
+	assert.Equal(t, TenancyShared, got.rt.Tenancy)
+	assert.Equal(t, "v2", got.rt.Active["fam"])
+	assert.Equal(t, mp, got.rt.Meter)
+	require.NotNil(t, got.rt.Metrics)
+	assert.NotSame(t, preset, got.rt.Metrics, "Bind builds the instruments from the meter")
+	Bind(decls, rt)
+	assert.NotSame(t, got.rt.Metrics, (*calls)[1].rt.Metrics, "every bind builds its own instruments")
+	Bind(decls, &Runtime{})
+	assert.Nil(t, (*calls)[2].rt.Active, "a nil selector stays nil")
+	assert.PanicsWithValue(t, "sealruntime: Bind called with nil", func() { Bind(decls, nil) })
+}
+
+func TestBindWithoutABinderPanics(t *testing.T) {
+	prev := binder.Swap(nil)
+	t.Cleanup(func() { binder.Store(prev) })
+	assert.PanicsWithValue(t, "sealruntime: no declarations binder registered (package messaging not linked)", func() { Bind(nil, &Runtime{}) })
+}
+
+func TestRegisterBinderIsSetOnce(t *testing.T) {
+	captureBinder(t)
+	assert.PanicsWithValue(t, "sealruntime: declarations binder already registered", func() { RegisterBinder(func(any, *Runtime) {}) })
+	assert.PanicsWithValue(t, "sealruntime: RegisterBinder called with nil", func() { RegisterBinder(nil) })
+}
+
+func TestSnapshotOwnsItsSelector(t *testing.T) {
+	assert.Nil(t, (*Runtime)(nil).Snapshot())
+	rt := &Runtime{Active: map[string]string{"fam": "v2"}, Tenancy: TenancyShared}
+	got := rt.Snapshot()
+	got.Active["fam"] = "v8"
+	got.Tenancy = TenancyDisabled
+	assert.Equal(t, "v2", rt.Active["fam"])
+	assert.Equal(t, TenancyShared, rt.Tenancy)
+	assert.Nil(t, (&Runtime{}).Snapshot().Active)
+}
+
+func TestResetClearsTheCodecOnly(t *testing.T) {
+	captureBinder(t)
 	Register(fakeCodec{})
-	Configure(&Runtime{})
 	Reset()
 	assert.Nil(t, Registered())
-	assert.Nil(t, Configured())
+	assert.NotNil(t, binder.Load(), "the binder outlives Reset, so a test that re-registers a codec can still bind")
 }
 
 func TestOpenRefusedErrorRendersCodeAndSortedDetailsOnly(t *testing.T) {
@@ -80,7 +120,7 @@ func TestTenancyString(t *testing.T) {
 }
 
 func TestMetricsAreNoopWithoutAMeterAndNilSafe(t *testing.T) {
-	m := newMetrics(nil)
+	m := NewMetrics(nil)
 	require.NotNil(t, m)
 	m.RecordOperation(context.Background(), OpSeal, time.Millisecond)
 	m.RecordOpenFailure(context.Background(), "SEAL_X")
@@ -89,12 +129,12 @@ func TestMetricsAreNoopWithoutAMeterAndNilSafe(t *testing.T) {
 	nilMetrics.RecordOpenFailure(context.Background(), "SEAL_X")
 }
 
-func TestConfiguredMetricsRecordThroughTheConfiguredMeter(t *testing.T) {
-	Reset()
-	t.Cleanup(Reset)
+func TestBoundMetricsRecordThroughTheBoundMeter(t *testing.T) {
+	calls := captureBinder(t)
 	reader := sdkmetric.NewManualReader()
-	Configure(&Runtime{Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))})
-	m := Configured().Metrics
+	Bind(nil, &Runtime{Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))})
+	require.Len(t, *calls, 1)
+	m := (*calls)[0].rt.Metrics
 	m.RecordOperation(context.Background(), OpSeal, 250*time.Millisecond)
 	m.RecordOperation(context.Background(), OpOpen, 50*time.Millisecond)
 	m.RecordOpenFailure(context.Background(), "SEAL_SIGNATURE_INVALID")

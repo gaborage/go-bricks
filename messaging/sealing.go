@@ -11,9 +11,20 @@ import (
 
 // Payload sealing is opt-in at the build graph (ADR-097, on the ADR-091 pattern): the
 // typed publish door only probes T for the `seal` tag family; the codec that scans and
-// seals lives in messaging/sealed and registers itself from init. The app configures the
-// runtime facts — key store, Activation selector, tenancy, meter — before declarations
-// are collected, so a seal-tagged declaration fails startup, never a publish.
+// seals lives in messaging/sealed and registers itself from init. Each App binds its
+// runtime facts — key store, Activation selector, tenancy, meter — to the Declarations it
+// builds before declarations are collected, so a seal-tagged declaration fails startup,
+// never a publish, and one App's handles never see another App's facts (#2010).
+
+// bindSealRuntime is the binder messaging registers with the seam: sealruntime.Bind lands
+// here with the App's Declarations, which the seam cannot name.
+func bindSealRuntime(decls any, rt *sealruntime.Runtime) {
+	d, ok := decls.(*Declarations)
+	if !ok || d == nil {
+		panic(fmt.Sprintf("messaging: seal runtime bound to %T, not a non-nil *Declarations", decls))
+	}
+	d.bindSeal(rt)
+}
 
 // ErrSealingNotLinked is the startup error for a seal-tagged type declared in a build
 // that never imported messaging/sealed.
@@ -153,17 +164,16 @@ func misplacedSealTagIn(t reflect.Type, path string, supported bool, seen map[se
 	return ""
 }
 
-// newSealer builds the sealer for a seal-tagged declaration, with the spec it scanned, or
-// reports why it cannot: codec not linked, runtime not configured, no key store, a refused
-// declaration, a producer that cannot resolve its Activation, or a codec that returns no
-// sealer. Every error is recorded on the Declarations and surfaces from Validate as a
-// startup failure.
-func newSealer(t reflect.Type, eventType string) (sealer sealruntime.Sealer, spec sealruntime.Spec, err error) {
+// newSealer builds the sealer for a seal-tagged declaration under rt, the runtime bound to
+// its Declarations, with the spec it scanned, or reports why it cannot: codec not linked,
+// no runtime bound, no key store, a refused declaration, a producer that cannot resolve
+// its Activation, or a codec that returns no sealer. Every error is recorded on the
+// Declarations and surfaces from Validate as a startup failure.
+func newSealer(rt *sealruntime.Runtime, t reflect.Type, eventType string) (sealer sealruntime.Sealer, spec sealruntime.Spec, err error) {
 	codec := sealruntime.Registered()
 	if codec == nil {
 		return nil, nil, fmt.Errorf("%w (event type %q, Go type %v)", ErrSealingNotLinked, eventType, t)
 	}
-	rt := sealruntime.Configured()
 	if rt == nil {
 		return nil, nil, fmt.Errorf("%w (event type %q)", sealruntime.ErrNotConfigured, eventType)
 	}
@@ -177,7 +187,7 @@ func newSealer(t reflect.Type, eventType string) (sealer sealruntime.Sealer, spe
 	if spec == nil {
 		return nil, nil, fmt.Errorf("messaging: %v carries seal tags the codec did not recognize (event type %q)", t, eventType)
 	}
-	sealer, err = codec.NewSealer(spec, eventType, rt)
+	sealer, err = codec.NewSealer(spec, eventType, rt.Snapshot())
 	if err != nil {
 		return nil, nil, fmt.Errorf("messaging: sealing producer for %v (event type %q): %w", t, eventType, err)
 	}
@@ -189,12 +199,12 @@ func newSealer(t reflect.Type, eventType string) (sealer sealruntime.Sealer, spe
 
 // newVerifier builds the handle's producer-side verification; its error stays on the handle for
 // PublishSealed alone, so a service that never republishes stored bytes still starts.
-func newVerifier(spec sealruntime.Spec, eventType string) (sealruntime.Verifier, error) {
+func newVerifier(rt *sealruntime.Runtime, spec sealruntime.Spec, eventType string) (sealruntime.Verifier, error) {
 	provider, ok := sealruntime.Registered().(sealruntime.VerifierProvider)
 	if !ok {
 		return nil, fmt.Errorf("%w: the registered codec has no producer-side verification (event type %q)", ErrSealingNotLinked, eventType)
 	}
-	verifier, err := provider.NewVerifier(spec, eventType, sealruntime.Configured())
+	verifier, err := provider.NewVerifier(spec, eventType, rt.Snapshot())
 	if err != nil {
 		return nil, fmt.Errorf("messaging: sealed-bytes verification for event type %q: %w", eventType, err)
 	}

@@ -69,8 +69,8 @@ func declareWithCodec(t *testing.T, codec sealruntime.Codec, opts *PublisherOpti
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)
 	sealruntime.Register(codec)
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
 	decls := newSealingDecls()
+	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}})
 	h := DeclareTypedPublisher[sealedEvent](decls, opts)
 	require.NoError(t, decls.Validate())
 	return h
