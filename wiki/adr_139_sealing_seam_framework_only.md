@@ -123,9 +123,9 @@ key are unchanged for a correctly wired service.
     after every module's `Init`. A direct `deps.KeyStore = x`, `deps.MeterProvider = nil` or a
     write to `deps.Config.Messaging.Seal.Active` in `Init` bypasses the single-provider guard and
     reaches sealing. Tenancy is not reachable this way.
-  - **A second App's `Run`.** A module that builds another App with a `KeyStoreProvider` and
-    calls `Run` reconfigures the process-global runtime, tenancy included, for every seal-tagged
-    handle declared afterward.
+  - **A second App's `Run`** (closed by the 2026-10-17 amendment). A module that built another
+    App with a `KeyStoreProvider` and called `Run` reconfigured the process-global runtime,
+    tenancy included, for every seal-tagged handle declared afterward.
 
 ## References
 
