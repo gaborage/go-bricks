@@ -663,9 +663,11 @@ consume side, through the shared delivery pipeline.
 The client reattaches consumers and publishers after a broker outage by itself.
 It gives up when the stream is gone — deleted by an operator, or lost with
 broker data: it checks the stream's metadata, finds no stream, and closes the
-handle for good. It gives up the same way when the broker answers that metadata
-check with an error it does not recognize, such as access refused or an internal
-error, although the stream still exists. Nothing in the client retries after that.
+handle. It gives up the same way when the broker answers that metadata check
+with an error it does not recognize, such as access refused or an internal
+error, although the stream still exists. For every handle but a super-stream
+publisher, that close is final: nothing in the client retries after it (see
+below).
 
 The manager's supervisor reads every handle's status every 5s. A handle that
 closed without the manager closing it is reported **once, at ERROR**, naming the

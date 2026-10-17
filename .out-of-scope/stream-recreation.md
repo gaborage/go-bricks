@@ -7,23 +7,22 @@ opt-in. This is a deferral, not a rejection: it waits for a trigger below.
 
 **What the framework does today
 ([ADR-123](../wiki/adr_123_streams_lost_topology_supervisor.md)):** the
-manager's supervisor reads every handle's status every 5s. A handle the client
-gave up on is reported once at ERROR, naming the stream and the consumer or
-publisher. The non-critical `streams` component stays unhealthy, and the lost
-consumer's shutdown flush is skipped. A restart is the recovery. It re-declares
-the stream from the service's declarations, and each consumer falls back to
-its declared `Start`. A restarted replica does not revive its peers, so every
-replica that logged the ERROR restarts. See
+manager's supervisor reports a handle the client gave up on once at ERROR, and
+the non-critical `streams` component stays unhealthy. A restart is the
+recovery: it re-declares the stream from the service's declarations, and each
+consumer falls back to its declared `Start`. A restarted replica does not
+revive its peers, so every replica that logged the ERROR needs a restart. See
 [streams.md](../wiki/streams.md#a-lost-stream).
 
 **Reason:**
 
 1. **No demand.** The only use case on record is the maintainer's demo
-   project. After a broker wipe, one of its consumers stayed absent until the
-   app restarted (#1797), and a restart already recovers that.
-2. **Cost.** The draft that failed review added about 1,400 lines, about
-   1,200 of them Go, and it still left the risks below open. That is a
-   four-link stack for a feature nobody else has asked for.
+   project. After a broker wipe, its `product-activity` super stream stayed
+   absent until the app restarted (#1797), and a restart already recovers
+   that.
+2. **Cost.** The draft that failed review changed about 1,300 Go lines, and
+   it still left the risks below open. That is a stack of three or four PRs
+   for a feature nobody else has asked for.
 3. **The client cannot be stopped mid-retry.** In rabbitmq-stream-go-client
    v1.9.0, only the reliable super-stream consumer's `Close` interrupts a
    pending reconnect retry: `retry()` takes its stop signal from an unexported
@@ -34,7 +33,8 @@ replica that logged the ERROR restarts. See
    the client is still retrying races the client. Upstream
    [rabbitmq/rabbitmq-stream-go-client#535](https://github.com/rabbitmq/rabbitmq-stream-go-client/pull/535)
    ("Stop reconnection when a reliable entity is closed while reconnecting")
-   would close this gap for all four handle types. It is still open.
+   would close this gap for the other three handle types. It is open as of
+   2026-10-17.
 4. **Some risks remain that no in-process fence can close.**
    - *A peer reattaches at its old position.* A replica's consumer may still
      have a retry pending when another replica re-declares the stream. That
@@ -60,42 +60,46 @@ already in flight (#1826, finding 4).
 
 **Alternatives considered:**
 
-- **A / B: re-declare in process.** A covers plain streams only and refuses
-  super streams at `Start`. B covers super-stream consumers too. Both carry
-  every residual risk above, and B still cannot repair a partial loss.
-- **E: reattach on reappearance.** Never re-declare. Poll the lost topology
-  and rebuild from `Start` once an operator, or a restarted replica,
-  re-creates it. This removes the resurrection and concurrent re-declares. It
-  still needs a close-once rule, action only on closed handles, and the
-  in-flight fence.
-- **F: restart on loss.** Give streams ADR-114's opt-in critical shape
-  (`messaging.consumers.critical`), or wire the loss to liveness, so the
-  orchestrator restarts the pod. F needs no vendor surface and no offset
-  reset, and it reuses the restart recovery documented today. But readiness
-  alone only drains the pod, and ADR-123 put "make streams critical" out of
-  scope, so F needs its own ADR.
-- **D: restart the component inside the manager.** Close the environment and
-  `Start` again. D avoids an offset reset by construction. But it drops every
-  healthy handle to repair one stream, and it reverses ADR-123's rejection of
-  calling `Start` again.
+- **In-process re-declare (plain streams only, or super-stream consumers
+  too).** The narrow form covers plain streams only and refuses super streams
+  at `Start`. The wide form covers super-stream consumers too. Both carry
+  every residual risk above, and the wide form still cannot repair a partial
+  loss.
+- **Reattach on reappearance.** Never re-declare. Poll the lost topology and
+  rebuild from `Start` once an operator, or a restarted replica, re-creates
+  it. This removes the resurrection and concurrent re-declares. It still
+  needs a close-once rule, action only on closed handles, and the in-flight
+  fence.
+- **Restart on loss.** Give streams ADR-114's opt-in critical shape (the
+  shape of AMQP's `messaging.consumers.critical`), or wire the loss to
+  liveness, so the orchestrator restarts the pod. This needs no vendor
+  surface and no offset reset, and it reuses the restart recovery documented
+  today. But readiness alone only drains the pod, and ADR-123 lists "Make the
+  `streams` component critical on a loss" as out of scope, so this needs its
+  own ADR.
+- **Component restart.** Close the environment inside the manager and
+  `Start` again. This avoids an offset reset by construction. But it drops
+  every healthy handle to repair one stream, and it reverses ADR-123's
+  rejection of calling `Start` again.
 
 **Reopen when either fires:**
 
 1. A second consuming service, besides the demo project, asks to recover a
    lost stream without a restart.
-2. Upstream rabbitmq-stream-go-client#535 ships in a release, so `Close`
-   cancels the pending reconnect retry of every reliable handle.
+2. Upstream rabbitmq-stream-go-client#535, or an equivalent fix, ships in a
+   release, so `Close` cancels the pending reconnect retry of every reliable
+   handle.
 
 **Aiming constraints for any future design:** re-check #1826's four findings
 against the pinned client. Act only on handles the client has settled to
 closed, and count `AlreadyClosed` as a successful close. Before any offset
 reset, drain the old handle's in-flight handler and commit work, with a bound.
-Derive any grace period from `reconnectBackOff` and pin it with a test. Keep
-refusing a held consumer together with re-creation at `Start`: the hold ledger
+Derive any grace period from `reconnectBackOff` and pin it with a test.
+Refuse a held consumer together with re-creation at `Start`: the hold ledger
 keys a row by consumer, stream and offset, and a re-created stream numbers its
 offsets from 0 again.
 
 **Prior requests:**
 
-- [#1826](https://github.com/gaborage/go-bricks/issues/1826) — deferred
-  2026-10-17 (this entry)
+- [#1826](https://github.com/gaborage/go-bricks/issues/1826) — closed
+  2026-10-17 (deferred, this entry)
