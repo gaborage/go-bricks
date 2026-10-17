@@ -3520,12 +3520,11 @@ type redialStep struct {
 // redialHarness drives handleReconnect through a scripted dialer inside a
 // synctest bubble, recording the fake instant of every dial.
 type redialHarness struct {
-	c      *AMQPClientImpl
-	log    *recordingLogger
-	steps  []redialStep
-	mu     sync.Mutex
-	dials  []time.Time
-	served int
+	c     *AMQPClientImpl
+	log   *recordingLogger
+	steps []redialStep
+	mu    sync.Mutex
+	dials []time.Time
 }
 
 // runRedialBubble restores the dialer on the outer test, so the restore runs
@@ -3574,32 +3573,22 @@ func (h *redialHarness) dial(string) (amqpConnection, error) {
 		return nil, step.err
 	}
 	if step.broker {
-		return h.serve(step.hold)
+		return serveFakeBroker(step.hold)
 	}
 	return &redialConn{hold: step.hold}, nil
 }
 
-// serve opens a real amqp091 connection to a fake broker over net.Pipe, which
-// blocks durably inside the bubble.
-func (h *redialHarness) serve(hold time.Duration) (amqpConnection, error) {
+// serveFakeBroker opens a real amqp091 connection to a fake broker over
+// net.Pipe, which blocks durably inside the bubble.
+func serveFakeBroker(hold time.Duration) (amqpConnection, error) {
 	client, server := net.Pipe()
-	go runFakeBroker(server, hold, func() {
-		h.mu.Lock()
-		h.served++
-		h.mu.Unlock()
-	})
+	go runFakeBroker(server, hold)
 	conn, err := amqp.Open(client, amqp.Config{SASL: []amqp.Authentication{&amqp.PlainAuth{Username: "guest", Password: "guest"}}})
 	if err != nil {
 		_ = client.Close()
 		return nil, err
 	}
 	return conn, nil
-}
-
-func (h *redialHarness) servedCount() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.served
 }
 
 func (h *redialHarness) dialCount() int {
@@ -3643,10 +3632,11 @@ func (r *redialConn) NotifyClose(ch chan *amqp.Error) chan *amqp.Error {
 	return ch
 }
 
-// fakeBrokerReply is the method frame the fake broker answers one with.
+// fakeBrokerReply is the method, within the request's class, and arguments
+// the fake broker answers a request with.
 type fakeBrokerReply struct {
-	class, method uint16
-	args          []byte
+	method uint16
+	args   []byte
 }
 
 // runFakeBroker answers one client connection over net.Pipe with the frames
@@ -3655,7 +3645,7 @@ type fakeBrokerReply struct {
 // net.Pipe is unbuffered, so it drains every inbound frame in one loop, and
 // after the 320 it only drains: amqp091's reader answers that close itself,
 // and a second write from here would block both directions.
-func runFakeBroker(conn net.Conn, hold time.Duration, served func()) {
+func runFakeBroker(conn net.Conn, hold time.Duration) {
 	defer conn.Close()
 	if _, err := io.ReadFull(conn, make([]byte, 8)); err != nil { // protocol header
 		return
@@ -3664,12 +3654,14 @@ func runFakeBroker(conn net.Conn, hold time.Duration, served func()) {
 	start = appendLongstr(start, "PLAIN")
 	start = appendLongstr(start, "en_US")
 	replies := map[[2]uint16]fakeBrokerReply{
-		{10, 11}: {10, 30, []byte{0x07, 0xff, 0, 2, 0, 0, 0, 0}}, // start-ok: tune, channel-max 2047, frame-max 131072, heartbeat 0
-		{10, 40}: {10, 41, []byte{0}},                            // connection.open: open-ok
-		{20, 10}: {20, 11, []byte{0, 0, 0, 0}},                   // channel.open: open-ok
-		{85, 10}: {85, 11, nil},                                  // confirm.select: select-ok
-		{20, 40}: {20, 41, nil},                                  // channel.close: close-ok
-		{10, 50}: {10, 51, nil},                                  // connection.close: close-ok
+		// start-ok: tune, channel-max 2047, frame-max 131072, heartbeat 0, so
+		// the client sends nothing while the fake holds the connection.
+		{10, 11}: {30, []byte{0x07, 0xff, 0, 2, 0, 0, 0, 0}},
+		{10, 40}: {41, []byte{0}},          // connection.open: open-ok
+		{20, 10}: {11, []byte{0, 0, 0, 0}}, // channel.open: open-ok
+		{85, 10}: {11, nil},                // confirm.select: select-ok
+		{20, 40}: {41, nil},                // channel.close: close-ok
+		{10, 50}: {51, nil},                // connection.close: close-ok
 	}
 	_ = writeMethodFrame(conn, 0, 10, 10, start)
 	for {
@@ -3681,11 +3673,10 @@ func runFakeBroker(conn net.Conn, hold time.Duration, served func()) {
 		if !ok {
 			continue
 		}
-		_ = writeMethodFrame(conn, channel, reply.class, reply.method, reply.args)
+		_ = writeMethodFrame(conn, channel, class, reply.method, reply.args)
 		if class != 85 || hold < 0 {
 			continue
 		}
-		served()
 		time.Sleep(hold)
 		_ = writeMethodFrame(conn, 0, 10, 50, connectionForcedArgs())
 		_, _ = io.Copy(io.Discard, conn)
@@ -3694,13 +3685,10 @@ func runFakeBroker(conn net.Conn, hold time.Duration, served func()) {
 }
 
 func connectionForcedArgs() []byte {
-	args := []byte{0x01, 0x40} // reply-code 320
-	args = appendShortstr(args, "CONNECTION_FORCED")
+	const reason = "CONNECTION_FORCED"
+	args := binary.BigEndian.AppendUint16(nil, amqp.ConnectionForced)
+	args = append(append(args, byte(len(reason))), reason...)
 	return append(args, 0, 0, 0, 0) // class-id, method-id
-}
-
-func appendShortstr(b []byte, s string) []byte {
-	return append(append(b, byte(len(s))), s...)
 }
 
 func appendLongstr(b []byte, s string) []byte {
@@ -3901,9 +3889,10 @@ func TestHandleReconnectPacesRedialAfterBrokerClose(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		synctest.Wait()
 
-		require.Positive(t, h.servedCount(), "the fake broker must serve the client")
+		ready := h.log.Matching(msgInitReady)
+		require.NotEmpty(t, ready, "the fake broker must serve the client")
 		assert.Less(t, h.dialCount(), 10, "a broker that closes a ready connection at once must not be redialed unpaced")
-		assert.Len(t, h.log.Matching(msgInitReady), h.servedCount(), "init must reach ready on every connection served")
+		assert.Len(t, ready, h.dialCount(), "init must reach ready on every connection served")
 	})
 }
 
