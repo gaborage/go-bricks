@@ -131,17 +131,11 @@ type ServerConfig struct {
 type TimeoutConfig struct {
 	Read  time.Duration `koanf:"read" json:"read" yaml:"read" toml:"read" mapstructure:"read"`
 	Write time.Duration `koanf:"write" json:"write" yaml:"write" toml:"write" mapstructure:"write"`
-	// Idle is how long a keep-alive connection may wait for its next request on both
-	// listeners; DefaultServerIdleTimeout (75s) applies when server.timeout.idle is unset.
-	// Keep it ABOVE the upstream (backend) idle timeout of any L7 proxy in front of the
-	// service, so the proxy closes an idle connection first: AWS ALB defaults to 60s
-	// (raising the ALB idle means raising this key), ingress-nginx's
-	// upstream-keepalive-timeout to 60s, a GCP external Application Load Balancer's
-	// backend keepalive is fixed at 600s, and Envoy/Istio's upstream idle defaults to 1h
-	// (lower the mesh's instead). Keep it BELOW the flow idle timeout of an L4 load
-	// balancer: 350s on an AWS NLB, 4 minutes on Azure Load Balancer. This is the
-	// opposite direction from the database pool rule, whose idle stays below the NAT/LB
-	// idle.
+	// Idle is how long a keep-alive connection waits for its next request, on both
+	// listeners. Keep it ABOVE the upstream idle timeout of any L7 proxy in front (AWS
+	// ALB and ingress-nginx default to 60s), so the proxy closes an idle connection
+	// first, and BELOW the flow idle timeout of an L4 load balancer (350s on an AWS
+	// NLB). See wiki/troubleshooting.md for other proxies.
 	Idle       time.Duration `koanf:"idle" json:"idle" yaml:"idle" toml:"idle" mapstructure:"idle"`
 	Middleware time.Duration `koanf:"middleware" json:"middleware" yaml:"middleware" toml:"middleware" mapstructure:"middleware"`
 	Shutdown   time.Duration `koanf:"shutdown" json:"shutdown" yaml:"shutdown" toml:"shutdown" mapstructure:"shutdown"`
