@@ -663,9 +663,11 @@ consume side, through the shared delivery pipeline.
 The client reattaches consumers and publishers after a broker outage by itself.
 It gives up when the stream is gone — deleted by an operator, or lost with
 broker data: it checks the stream's metadata, finds no stream, and closes the
-handle for good. It gives up the same way when the broker answers that metadata
-check with an error it does not recognize, such as access refused or an internal
-error, although the stream still exists. Nothing in the client retries after that.
+handle. It gives up the same way when the broker answers that metadata check
+with an error it does not recognize, such as access refused or an internal
+error, although the stream still exists. For every handle but a super-stream
+publisher, that close is final: nothing in the client retries after it (see
+below).
 
 The manager's supervisor reads every handle's status every 5s. A handle that
 closed without the manager closing it is reported **once, at ERROR**, naming the
@@ -684,8 +686,9 @@ reconnected. Because the component is non-critical, `/ready` keeps
 answering `200`, so alert on the ERROR — or on
 `app.readiness.status{readiness.kind="streams"} == 0` and the WARN `Readiness
 component unhealthy`, which the verdict does reach. Only a
-**restart** re-declares the stream. Opt-in re-creation is deferred to
-[#1826](https://github.com/gaborage/go-bricks/issues/1826). A replica that
+**restart** re-declares the stream. Opt-in re-creation is deferred; see
+[stream-recreation.md](../.out-of-scope/stream-recreation.md) for why and what
+would reopen it. A replica that
 restarts does not revive the others, so restart every replica that logged it.
 The supervisor leaves the consumer's offsets alone: a super-stream consumer whose
 client gave up on some partitions keeps delivering and committing on the ones that
