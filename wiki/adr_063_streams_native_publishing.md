@@ -96,8 +96,8 @@ for one. It does not bound the send behind that wait: the goroutine runs on unti
 send path unblocks, whatever the caller's context did.
 
 Abandoning that goroutine leaks it until the client's send path releases it: during a reconnect that
-is as long as the reconnect lasts, but on the close path it can be permanent — see the close sweep
-below for why nothing releases it. This is the same trade
+is as long as the reconnect lasts, but on a super producer whose partition reconnect fails it can be
+permanent — see the close sweep below for why nothing releases it. This is the same trade
 `Manager.flushOffsetsLocked` already documents and accepts: a leaked goroutine parked on a vendor
 condition variable is cheaper than a handler thread that cannot be interrupted, and the alternative —
 bounding a call that accepts neither context nor deadline — means reimplementing the client.
@@ -147,12 +147,16 @@ first, publishers close after them, because a handler may publish on its way out
 `Publisher` close resolves and removes every entry still in the map. This is mandatory, not
 belt-and-braces. The client's `entityClosed` confirmations (`markUnsentAsUnconfirmed`) cover only
 messages that reached its internal queue; a send parked in `isReadyToSend` was never enqueued and gets
-no confirmation at all. On a super producer it may stay parked for good: since client v1.9.0 the
-normal-close path broadcasts before it `break`s out of its event loop, but the woken send finds the
-closed producer holding no partition producers, gets `ErrProducerNotFound`, and
-`ReliableSuperStreamProducer.Send` waits on the same condition again — which nothing broadcasts once
-the loop has exited. Without the sweep, a `Publish` caller with no deadline of its own hangs across
-the whole shutdown. Resolution is idempotent, so a late `entityClosed` for a swept message is a no-op.
+no confirmation at all. On a super producer it may stay parked for good. Since client v1.9.0 a
+partition reconnect that fails (its stream was deleted, say) sets the producer closed and broadcasts
+once, but the woken send does not re-check the status: it finds no producer for that partition, gets
+`ErrProducerNotFound`, and `ReliableSuperStreamProducer.Send` waits on the same condition again,
+which only a later partition event broadcasts. That can happen while the publisher is still bound,
+not only at shutdown. The normal-close path reaches the same wait only when a send has missed an
+earlier broadcast, so the close one is what wakes it, and by then the event loop has exited. Without
+the sweep, a `Publish` caller with no deadline of its own never returns; with it, the caller is
+released when the publisher closes. Resolution is idempotent, so a late `entityClosed` for a swept
+message is a no-op.
 
 ### Super streams route by murmur3 hash of a caller-supplied key
 
