@@ -45,9 +45,10 @@ var (
 )
 
 // reconnectBackOff is the wait the client's HA layer takes before each reattach
-// attempt. The values are owned here rather than taken from the client's
-// defaults, so a client bump cannot move the detection timing ADR-123 documents.
-// A fresh value per handle, because the client keeps the pointer.
+// attempt. MinInterval and MaxInterval are whole seconds: the client's fields are
+// ints, not time.Duration. The values are owned here rather than taken from the
+// client's defaults, so a client bump cannot move the detection timing ADR-123
+// documents. A fresh value per handle, because the client keeps the pointer.
 func reconnectBackOff() *ha.BackOffConfiguration {
 	return &ha.BackOffConfiguration{MinInterval: 3, MaxInterval: 8, EnableRandom: true}
 }
