@@ -1776,3 +1776,18 @@ func TestMigrateForTypesATypeLessTenantWithTheRunnerVendor(t *testing.T) {
 	assert.Contains(t, env["ARGS"], flagURL+"jdbc:postgresql://tenant-host:5432/tenant_db")
 	assert.Empty(t, db.Type, "the caller's config must not be mutated")
 }
+
+func TestTypedWithVendor(t *testing.T) {
+	assert.Nil(t, typedWithVendor(nil, config.PostgreSQL))
+
+	typed := &config.DatabaseConfig{Type: config.Oracle}
+	assert.Same(t, typed, typedWithVendor(typed, config.Oracle), "a config already typed with the vendor is not copied")
+
+	typeLess := &config.DatabaseConfig{Host: "h"}
+	assert.Same(t, typeLess, typedWithVendor(typeLess, ""), "an untyped runner leaves a type-less config as is")
+
+	got := typedWithVendor(typeLess, config.PostgreSQL)
+	assert.NotSame(t, typeLess, got)
+	assert.Equal(t, config.DatabaseConfig{Type: config.PostgreSQL, Host: "h"}, *got)
+	assert.Empty(t, typeLess.Type, "the caller's config must not be mutated")
+}
