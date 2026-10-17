@@ -17,7 +17,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -84,6 +83,9 @@ type Runtime struct {
 	Tenancy Tenancy
 	// Meter feeds the seal metrics; nil means no-op instruments.
 	Meter metric.MeterProvider
+	// Metrics are the seal instruments, built once from Meter by Configure; the codec binds
+	// them into each sealer and opener at construction. nil records nothing.
+	Metrics *Metrics
 }
 
 // Spec is the codec's scanned declaration of one seal-tagged type, opaque here.
@@ -205,9 +207,6 @@ var (
 	mu      sync.RWMutex
 	codec   Codec
 	runtime *Runtime
-	// metrics is read on every seal and open; an atomic load keeps the publish path off
-	// the registration mutex.
-	metrics atomic.Pointer[Metrics]
 )
 
 // Register installs the codec. messaging/sealed calls it from init; a second call panics.
@@ -232,18 +231,19 @@ func Registered() Codec {
 
 // Configure records the runtime facts. The app is the single writer and calls it before
 // collecting declarations; a later call replaces the facts (the app rebuilds them per
-// process start, tests per case), and the seal instruments are rebuilt from the meter.
-// The Activation selector is copied: a caller's later write to its own map can neither
-// re-aim a generation after bootstrap nor race a declaration being collected.
+// process start, tests per case) and builds fresh seal instruments from the meter, while
+// handles already built keep the instruments they were built with. The Activation
+// selector is copied: a caller's later write to its own map can neither re-aim a
+// generation after bootstrap nor race a declaration being collected.
 func Configure(rt *Runtime) {
 	if rt == nil {
 		panic("sealruntime: Configure called with nil")
 	}
 	rtCopy := rt.snapshot()
+	rtCopy.Metrics = newMetrics(rtCopy.Meter)
 	mu.Lock()
 	defer mu.Unlock()
 	runtime = &rtCopy
-	metrics.Store(newMetrics(rtCopy.Meter))
 }
 
 // Configured returns an independent snapshot of the runtime facts, or nil before
@@ -270,12 +270,11 @@ func (rt *Runtime) snapshot() Runtime {
 	return out
 }
 
-// Reset clears codec, runtime and metrics. Tests only.
+// Reset clears codec and runtime. Tests only.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
 	codec, runtime = nil, nil
-	metrics.Store(nil)
 }
 
 // Metric names and attribute keys shared by the seal and open paths.
@@ -289,7 +288,7 @@ const (
 	OpOpen                  = "open"
 )
 
-// Metrics holds the seal instruments; nil-safe so an unconfigured process records nothing.
+// Metrics holds the seal instruments; nil-safe so a runtime without them records nothing.
 type Metrics struct {
 	duration     metric.Float64Histogram
 	openFailures metric.Int64Counter
@@ -315,14 +314,6 @@ func newMetrics(mp metric.MeterProvider) *Metrics {
 		failures, _ = noop.Int64Counter(MetricOpenFailures)
 	}
 	return &Metrics{duration: duration, openFailures: failures}
-}
-
-// Instruments returns the configured instruments, or a no-op set before Configure ran.
-func Instruments() *Metrics {
-	if m := metrics.Load(); m != nil {
-		return m
-	}
-	return newMetrics(nil)
 }
 
 // RecordOperation records one seal or open duration.

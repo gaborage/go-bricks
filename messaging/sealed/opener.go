@@ -55,7 +55,7 @@ func (codec) NewOpener(sp sealruntime.Spec, eventType string, rt *sealruntime.Ru
 			recordSealRole(rt.KeyStore, gen.Kid())
 		}
 	}
-	return &opener{spec: inner, eventType: eventType, keys: keys}, nil
+	return &opener{spec: inner, eventType: eventType, keys: keys, metrics: rt.Metrics}, nil
 }
 
 // recordSealRole tags the entries sealing startup resolved, so the app can warn when
@@ -111,13 +111,14 @@ func resolveInRole(keys jose.KeyResolver, kid string, need keystore.Role) error 
 	return err
 }
 
-// opener is bound to one consumer declaration: its Spec, its EventType and the
-// resolver the wire kids resolve through per message. Immutable, shared by every
-// worker and tenant.
+// opener is bound to one consumer declaration: its Spec, its EventType, the
+// resolver the wire kids resolve through per message and its runtime's seal
+// instruments. Immutable, shared by every worker and tenant.
 type opener struct {
 	spec      *josesealed.Spec
 	eventType string
 	keys      jose.KeyResolver
+	metrics   *sealruntime.Metrics
 }
 
 // Open runs jose/sealed.Open under the caller's tid rule and reports the outcome on
@@ -132,11 +133,10 @@ func (o *opener) Open(ctx context.Context, body []byte, want sealruntime.TenantR
 		Tenant:    josesealed.TenantExpectation(want),
 		Keys:      o.keys,
 	}, out)
-	metrics := sealruntime.Instruments()
-	metrics.RecordOperation(ctx, sealruntime.OpOpen, time.Since(start))
+	o.metrics.RecordOperation(ctx, sealruntime.OpOpen, time.Since(start))
 	if err != nil {
 		refused := refuse(err)
-		metrics.RecordOpenFailure(ctx, refused.Code)
+		o.metrics.RecordOpenFailure(ctx, refused.Code)
 		return sealruntime.Envelope{}, refused
 	}
 	return sealruntime.Envelope(*env), nil

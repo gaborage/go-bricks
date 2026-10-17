@@ -73,7 +73,7 @@ func (codec) NewSealer(sp sealruntime.Spec, eventType string, rt *sealruntime.Ru
 	}
 	// Only a producer that will start tags its kids for the dual-role check.
 	recordSealRole(rt.KeyStore, signGen.Kid(), encGen.Kid())
-	return &sealer{spec: inner, template: template}, nil
+	return &sealer{spec: inner, template: template, metrics: rt.Metrics}, nil
 }
 
 // bind is the precondition every constructor shares: a spec this codec scanned and a key store
@@ -110,11 +110,13 @@ func activeWithRole(families keystore.FamilyEnumerator, active map[string]string
 	return gen, nil
 }
 
-// sealer is bound to one declaration: its Spec, the active concrete kids and the
-// EventType. It is immutable and shared by every goroutine and tenant.
+// sealer is bound to one declaration: its Spec, the active concrete kids, the
+// EventType and its runtime's seal instruments. It is immutable and shared by every
+// goroutine and tenant.
 type sealer struct {
 	spec     *josesealed.Spec
 	template josesealed.Options
+	metrics  *sealruntime.Metrics
 }
 
 // Seal mirrors the ADR-087 tenant stamp into the signed tid — the tenant the context
@@ -130,6 +132,6 @@ func (s *sealer) Seal(ctx context.Context, evt any) (data []byte, jti string, er
 	}
 	opts.TenantID = tenant
 	data, jti, err = josesealed.Seal(evt, s.spec, &opts)
-	sealruntime.Instruments().RecordOperation(ctx, sealruntime.OpSeal, time.Since(start))
+	s.metrics.RecordOperation(ctx, sealruntime.OpSeal, time.Since(start))
 	return data, jti, err
 }
