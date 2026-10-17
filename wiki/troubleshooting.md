@@ -137,6 +137,38 @@ database:
       max: 1h
 ```
 
+## HTTP Server Issues
+
+### ALB `HTTPCode_ELB_502_Count` with zero target 5xx
+
+The load balancer reports 502s while the service logs no error and its own 5xx count stays at zero. With ALB access logs on, each of these requests reads:
+
+```text
+elb_status_code           502
+target_status_code        -
+request_processing_time   -1
+target_processing_time    -1
+response_processing_time  -1
+error_reason              -
+```
+
+`error_reason` stays `-` for this failure: the ALB fills it only for authentication, JWT, weighted-target-group, Lambda and WAF failures. The three `-1` processing times with a `-` target status mean the ALB could not dispatch the request to a target. A target the ALB cannot connect to logs the same fields, so rule that out (target health, connection errors) before changing the idle timeout.
+
+**Likely cause:** a keep-alive race. The ALB sent a request on a pooled connection at the moment the service closed it as idle. When `server.timeout.idle` is equal to or below the proxy's upstream idle, the service can close first: net/http arms the idle deadline as soon as it finishes writing a response, before the proxy has received the last byte. AWS's ALB 502 guidance names it: "The target closed the connection with a TCP RST or a TCP FIN while the load balancer had an outstanding request to the target."
+
+**The rule:**
+
+- Keep `server.timeout.idle` (default 75s) ABOVE the upstream (backend) idle timeout of any L7 proxy in front of the service:
+  - AWS ALB: 60s by default, configurable from 1 to 4000s. Raising the ALB idle means raising this key too.
+  - ingress-nginx: `upstream-keepalive-timeout` defaults to 60s.
+  - GCP external Application Load Balancer: the backend keepalive is fixed at 600s, so this key must be above 600s.
+  - Envoy/Istio: the upstream idle defaults to 1h, so lower the mesh's upstream idle below this key instead.
+- Keep it BELOW the flow idle timeout of an L4 load balancer: 350s by default on an AWS NLB, 4 minutes on Azure Load Balancer. An L4 balancer drops an idle flow without telling either end, so the service must close its idle connections first.
+
+This is the opposite direction from the database pool rule in [Connection Pool Issues](#connection-pool-issues-ora-01013-connection-reset): a client-side pool stays SHORTER than the NAT/LB idle, while a server listener stays LONGER than the L7 proxy's upstream idle.
+
+502s and 504s clustered in the minute a replica is removed have a different cause: the load balancer keeps routing to an instance that is shutting down. Endpoint removal or target deregistration takes it out of rotation; a `preStop` sleep keeps it serving until that update reaches the load balancer, and the deregistration delay drains the requests already in flight ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)).
+
 ## Cache Issues
 
 ```bash
