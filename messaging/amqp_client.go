@@ -1489,8 +1489,9 @@ func (c *AMQPClientImpl) onChanClose(amqpErr *amqp.Error) {
 	tracking.RecordChannelEvent("close", closeErr)
 }
 
-// closeReason keeps a graceful close's nil *amqp.Error (NotifyClose closed
-// without a send) from becoming a typed-nil error, whose Error method panics.
+// closeReason keeps the nil *amqp.Error of a close without a reason (graceful,
+// or one that landed before NotifyClose registered) from becoming a typed-nil
+// error, whose Error method panics.
 func closeReason(amqpErr *amqp.Error) error {
 	if amqpErr == nil {
 		return nil
