@@ -167,7 +167,7 @@ error_reason              -
 
 This is the opposite direction from the database pool rule in [Connection Pool Issues](#connection-pool-issues-ora-01013-connection-reset): a client-side pool stays SHORTER than the NAT/LB idle, while a server listener stays LONGER than the L7 proxy's upstream idle.
 
-502s and 504s clustered in the minute a replica is removed have a different cause: the load balancer keeps routing to an instance that is shutting down. A `preStop` sleep or the load balancer's deregistration delay is what takes it out of rotation ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)).
+502s and 504s clustered in the minute a replica is removed have a different cause: the load balancer keeps routing to an instance that is shutting down. Endpoint removal or target deregistration takes it out of rotation; a `preStop` sleep keeps it serving until that update reaches the load balancer, and the deregistration delay drains the requests already in flight ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)).
 
 ## Cache Issues
 
