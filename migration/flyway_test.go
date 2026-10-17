@@ -1756,3 +1756,22 @@ func TestMigrateForRejectsInvalidSchemaName(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr),
 		"schema rejected up front — the Flyway stub must never have executed")
 }
+
+func TestMigrateForTypesATypeLessTenantWithTheRunnerVendor(t *testing.T) {
+	requireShellStubs(t)
+	t.Setenv("DB_USER", "parent_user")
+	stub, capture := createEnvCapturingFlywayStub(t)
+	db := &config.DatabaseConfig{Host: "tenant-host", Port: 5432, Database: "tenant_db", Username: "tenant_user", Password: "tenant-password-long"}
+
+	_, err := newFlywayMigratorForTest(t).MigrateFor(context.Background(), db, makeBaseConfig(t, stub))
+
+	require.NoError(t, err)
+	env := readCapturedEnv(t, capture)
+	assert.Equal(t, "tenant_user", env["DB_USER"], "the tenant's user outranks the parent's")
+	assert.Equal(t, "tenant-password-long", env["DB_PASSWORD"])
+	assert.Equal(t, "tenant-host", env["DB_HOST"])
+	assert.Equal(t, "5432", env["DB_PORT"])
+	assert.Equal(t, "tenant_db", env["DB_NAME"])
+	assert.Contains(t, env["ARGS"], flagURL+"jdbc:postgresql://tenant-host:5432/tenant_db")
+	assert.Empty(t, db.Type, "the caller's config must not be mutated")
+}

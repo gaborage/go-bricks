@@ -311,8 +311,10 @@ func effectiveVerb(cfg *Config, verb string) string {
 func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config, verb string) (Result, error) {
 	startedAt := time.Now()
 
+	vendor := dbVendor(db, fm.config.Database.Type)
+	db = typedWithVendor(db, vendor)
 	if cfg == nil {
-		cfg = fm.DefaultMigrationConfigForVendor(dbVendor(db, fm.config.Database.Type))
+		cfg = fm.DefaultMigrationConfigForVendor(vendor)
 	}
 
 	// Honor DryRun: downgrade a dry-run migrate to validate so no schema is mutated.
@@ -330,8 +332,6 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 			return Result{}, err
 		}
 	}
-
-	vendor := dbVendor(db, fm.config.Database.Type)
 
 	schemaFlags, err := schemaArgs(db, vendor, fm.sharedMigrator)
 	if err != nil {
@@ -540,6 +540,19 @@ func dbVendor(db *config.DatabaseConfig, fallback string) string {
 		return db.Type
 	}
 	return fallback
+}
+
+// typedWithVendor returns db unchanged when its Type already is vendor, otherwise a copy
+// typed with it: a type-less tenant runs with the runner's vendor, so its environment
+// agrees with the URL, schema args and conf it already gets (ADR-149). The caller's
+// config is never mutated.
+func typedWithVendor(db *config.DatabaseConfig, vendor string) *config.DatabaseConfig {
+	if db == nil || db.Type == vendor {
+		return db
+	}
+	typed := *db
+	typed.Type = vendor
+	return &typed
 }
 
 // schemaArgs returns the explicit Flyway schema-targeting flags for the
