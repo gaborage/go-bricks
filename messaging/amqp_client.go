@@ -293,8 +293,11 @@ func WithPublishTimeout(d time.Duration) ClientOption {
 }
 
 // WithReconnectDelay overrides the base of the full-jitter reconnect backoff:
-// each wait is a uniform random sample in [0, min(base*2^attempt, max)), so this
-// is the first attempt's upper bound, not a minimum spacing between attempts.
+// each wait is a uniform random sample in [0, min(base*2^attempt, max)). The
+// wait after a stable connection closes is U[0, base); the first wait after a
+// dial failure or a short-lived connection is up to 2*base. The base is also the
+// stability window: a connection up at least this long resets the ladder. It is
+// an upper bound, not a minimum spacing between attempts.
 // Non-positive values are ignored, leaving the 5s default in place.
 func WithReconnectDelay(d time.Duration) ClientOption {
 	return func(c *AMQPClientImpl) {
@@ -305,6 +308,7 @@ func WithReconnectDelay(d time.Duration) ClientOption {
 }
 
 // WithReconnectMaxDelay overrides the ceiling of the connection-reconnect backoff.
+// It caps both ladders: dial failures and short-lived connections.
 // The consumer re-subscribe loop (registry.go) keeps its own fixed cap.
 // Non-positive values are ignored, leaving the 60s default in place.
 func WithReconnectMaxDelay(d time.Duration) ClientOption {
@@ -1337,36 +1341,96 @@ func (c *AMQPClientImpl) handleReconnect() {
 
 		c.log.Info().Str("broker_url", redactAMQPURL(c.brokerURL)).Msg("Attempting to connect to AMQP broker")
 
+		var waited bool
 		conn, err := c.connect()
 		if err != nil {
-			if c.isClosed() {
-				c.log.Debug().Err(err).Msg("AMQP connect ended after client close")
+			if attempt, waited = c.waitAfterDialFailure(attempt, err); !waited {
 				return
-			}
-			attempt++
-			delay := computeBackoff(c.reconnectDelay, c.reconnectMaxDelay, attempt)
-			c.log.Error().Err(err).
-				Dur("backoff", delay).
-				Int("attempt", attempt).
-				Msg("Failed to connect to AMQP broker, retrying with exponential backoff")
-
-			select {
-			case <-c.done:
-				return
-			case <-time.After(delay):
 			}
 			continue
 		}
 
-		// Reset attempt counter on successful connect — next outage starts fresh.
-		attempt = 0
+		connectedAt := time.Now()
 		if c.handleReInit(conn) {
 			break
+		}
+		// handleReInit's select can take a close notification over done, so
+		// a Close that has begun ends the loop here, before any wait.
+		if c.isClosed() {
+			return
+		}
+		if attempt, waited = c.waitBeforeRedial(attempt, time.Since(connectedAt)); !waited {
+			return
 		}
 	}
 }
 
-// computeBackoff returns a duration in [0, min(base*2^attempt, cap)] for use as
+// waitAfterDialFailure climbs the dial-failure ladder and waits out its
+// backoff. It returns the attempt the wait used, and false when Close has
+// begun or ended the wait.
+func (c *AMQPClientImpl) waitAfterDialFailure(attempt int, err error) (next int, waited bool) {
+	if c.isClosed() {
+		c.log.Debug().Err(err).Msg("AMQP connect ended after client close")
+		return attempt, false
+	}
+	attempt++
+	delay := computeBackoff(c.reconnectDelay, c.reconnectMaxDelay, attempt)
+	c.log.Error().Err(err).
+		Dur("backoff", delay).
+		Int("attempt", attempt).
+		Msg("Failed to connect to AMQP broker, retrying with exponential backoff")
+	return attempt, c.waitUnlessClosed(delay)
+}
+
+// waitBeforeRedial paces the redial after a connection close. A connection
+// that stayed up at least the reconnect base is stable: the ladder resets and
+// the wait is U[0, base). A shorter one climbs the ladder toward the cap. It
+// returns the attempt the wait used, and false when Close ended the wait.
+func (c *AMQPClientImpl) waitBeforeRedial(attempt int, uptime time.Duration) (next int, waited bool) {
+	event := c.log.Info
+	if uptime >= effectiveReconnectBase(c.reconnectDelay) {
+		attempt = 0
+	} else {
+		attempt++
+		event = c.log.Warn
+	}
+	delay := computeBackoff(c.reconnectDelay, c.reconnectMaxDelay, attempt)
+
+	// Not ready for the whole wait: /ready reads it, and a publish waits in
+	// waitForReady instead of taking the dead channel.
+	c.m.Lock()
+	c.isReady = false
+	c.m.Unlock()
+
+	event().Dur("uptime", uptime).
+		Int("attempt", attempt).
+		Dur("backoff", delay).
+		Msg("AMQP connection closed, waiting before redial")
+	return attempt, c.waitUnlessClosed(delay)
+}
+
+// waitUnlessClosed waits d and reports true, or returns false as soon as Close
+// begins.
+func (c *AMQPClientImpl) waitUnlessClosed(d time.Duration) bool {
+	select {
+	case <-c.done:
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// effectiveReconnectBase is the reconnect backoff base with its default
+// applied. It is also the stability window of waitBeforeRedial, so the two
+// cannot drift.
+func effectiveReconnectBase(d time.Duration) time.Duration {
+	if d <= 0 {
+		return defaultReconnectDelay
+	}
+	return d
+}
+
+// computeBackoff returns a duration in [0, min(base*2^attempt, cap)) for use as
 // a reconnection/retry delay. Implements "full jitter" exponential backoff
 // (https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) —
 // the upper bound grows exponentially with the attempt count but every actual
@@ -1383,9 +1447,7 @@ func computeBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 // reconnectBackoff is the raw (pre-jitter) reconnect/resubscribe series.
 // Zero-value handling stays here, not in the shared helper.
 func reconnectBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
-	if base <= 0 {
-		base = defaultReconnectDelay
-	}
+	base = effectiveReconnectBase(base)
 	if maxDelay <= 0 {
 		maxDelay = defaultReconnectMaxDelay
 	}

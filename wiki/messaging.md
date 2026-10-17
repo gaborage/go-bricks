@@ -773,13 +773,13 @@ cross-field validators like the outbox `publishtimeout` guards read these effect
 
 | Setting | Default | Purpose |
 | --------- | --------- | --------- |
-| `reconnect.delay` | 5s | Initial delay before reconnect attempts |
+| `reconnect.delay` | 5s | Full-jitter backoff base, an upper bound, not a minimum spacing: the redial after a connection that stayed up at least this long waits `U[0, delay)`; it is also that stability window |
 | `reconnect.reinitdelay` | 2s | Delay between channel re-initialization |
 | `reconnect.resenddelay` | 5s | Delay before resending failed messages |
 | `reconnect.connectiontimeout` | 30s | Per-publish broker confirmation (ACK/NACK) timeout |
 | `reconnect.readytimeout` | 5s | Bounded pre-flight wait for a not-yet-ready client before a publish begins (see below) |
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
-| `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
+| `reconnect.maxdelay` | 60s | Cap of both backoff ladders: dial failures, and connections that close within `reconnect.delay` of opening |
 | `messaging.publishtimeout` | unset (unbounded) | Aggregate bound on one whole publish — pre-flight plus the entire retry loop (see below). Spelled in full because it is the one key here that is NOT under `reconnect.` |
 | `publisher.maxcached` | 50 single-tenant and multi-tenant `tenancy: shared` / unset multi-tenant `tenancy: per-tenant` (pool scales to `multitenant.limits.tenants`) | Maximum cached publisher channels, one cap across all keys |
 | `publisher.idlettl` | 1h single-tenant and multi-tenant `tenancy: shared` / 10m multi-tenant `tenancy: per-tenant` | TTL for idle publisher channels |

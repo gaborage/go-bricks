@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -3494,4 +3495,286 @@ func TestPreparePublishingDefaultsTheFrameworkSources(t *testing.T) {
 	assert.Empty(t, pub.AppId)
 	assert.NotEmpty(t, pub.MessageId, "a publish with no relay id keeps a framework-minted one")
 	assert.False(t, pub.Timestamp.Before(before), "a struct-literal client still stamps a timestamp")
+}
+
+// ===== Redial pacing after a connection close (#2139) =====
+
+const (
+	pacedRedialMsg  = "AMQP connection closed, waiting before redial"
+	dialFailureMsg  = "Failed to connect to AMQP broker, retrying with exponential backoff"
+	redialDialBound = 20
+)
+
+// redialStep scripts one dial of a redialHarness: a dial error, or a connection
+// whose channel never opens and which closes hold after it opened (hold < 0:
+// never). The last step repeats.
+type redialStep struct {
+	err  error
+	hold time.Duration
+}
+
+// redialHarness drives handleReconnect through a scripted dialer inside a
+// synctest bubble, recording the fake instant of every dial and close.
+type redialHarness struct {
+	t      *testing.T
+	c      *AMQPClientImpl
+	log    *recordingLogger
+	steps  []redialStep
+	mu     sync.Mutex
+	dials  []time.Time
+	closes []time.Time
+}
+
+// runRedialBubble restores the dialer on the outer test, so the restore runs
+// only after every bubble goroutine, handleReconnect included, has exited.
+func runRedialBubble(t *testing.T, f func(t *testing.T)) {
+	t.Helper()
+	oldDial := getAmqpDialFunc()
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
+	synctest.Test(t, f)
+}
+
+// newRedialHarness must run inside the bubble: the client's channels are
+// selected on there.
+func newRedialHarness(t *testing.T, base, maxDelay time.Duration, steps ...redialStep) *redialHarness {
+	t.Helper()
+	log := newRecordingLogger()
+	h := &redialHarness{t: t, log: log, steps: steps}
+	h.c = &AMQPClientImpl{
+		m:                 &sync.RWMutex{},
+		log:               log,
+		brokerURL:         amqpHost,
+		reconnectDelay:    base,
+		reconnectMaxDelay: maxDelay,
+		reInitDelay:       time.Hour,
+		done:              make(chan bool),
+		reconnectDone:     make(chan struct{}),
+	}
+	setAmqpDialFunc(h.dial)
+	go h.c.handleReconnect()
+	return h
+}
+
+func (h *redialHarness) dial(string) (amqpConnection, error) {
+	h.mu.Lock()
+	n := len(h.dials)
+	h.dials = append(h.dials, time.Now())
+	h.mu.Unlock()
+	// An unpaced loop never blocks, so fake time never advances: closing the
+	// client here is what lets the test fail on the count instead of hanging.
+	if n >= redialDialBound {
+		_ = h.c.Close()
+		return nil, errors.New("redial harness: dial bound passed")
+	}
+	step := h.steps[min(n, len(h.steps)-1)]
+	if step.err != nil {
+		return nil, step.err
+	}
+	return &redialConn{h: h, hold: step.hold}, nil
+}
+
+func (h *redialHarness) recordClose() {
+	h.mu.Lock()
+	h.closes = append(h.closes, time.Now())
+	h.mu.Unlock()
+}
+
+func (h *redialHarness) dialCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.dials)
+}
+
+func (h *redialHarness) timeline() (dials, closes []time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.dials), slices.Clone(h.closes)
+}
+
+func (h *redialHarness) lines(msg string) []recordedLine {
+	var out []recordedLine
+	for _, ln := range h.log.Lines() {
+		if ln.Msg == msg {
+			out = append(out, ln)
+		}
+	}
+	return out
+}
+
+// stop closes the client and waits for handleReconnect to exit; safe after an
+// earlier Close.
+func (h *redialHarness) stop() {
+	_ = h.c.Close()
+	<-h.c.reconnectDone
+}
+
+type redialConn struct {
+	h    *redialHarness
+	hold time.Duration
+}
+
+func (*redialConn) Channel() (*amqp.Channel, error) {
+	return nil, errors.New("redial harness: no channel")
+}
+
+// NotifyClose arms the close when changeConnection registers it, which is the
+// fake instant connect() succeeds. The send cannot block: the client's notify
+// channel holds one close.
+func (r *redialConn) NotifyClose(ch chan *amqp.Error) chan *amqp.Error {
+	if r.hold >= 0 {
+		go func() {
+			time.Sleep(r.hold)
+			r.h.recordClose()
+			select {
+			case ch <- &amqp.Error{Code: amqp.ConnectionForced, Reason: "CONNECTION_FORCED"}:
+			default:
+			}
+		}()
+	}
+	return ch
+}
+
+func (*redialConn) Close() error { return nil }
+
+func TestHandleReconnectPacesRedialAfterImmediateClose(t *testing.T) {
+	runRedialBubble(t, func(t *testing.T) {
+		h := newRedialHarness(t, 10*time.Second, 10*time.Second, redialStep{hold: 0})
+		defer h.stop()
+
+		time.Sleep(200 * time.Millisecond)
+
+		assert.Less(t, h.dialCount(), 10, "a connection that closes at once must not be redialed unpaced")
+	})
+}
+
+func TestHandleReconnectStableCloseRedialsWithinBase(t *testing.T) {
+	const base = 5 * time.Second
+	runRedialBubble(t, func(t *testing.T) {
+		h := newRedialHarness(t, base, 0, redialStep{hold: 2 * base}, redialStep{hold: -1})
+		defer h.stop()
+
+		time.Sleep(3 * base)
+		synctest.Wait()
+
+		line := h.log.Line(t, pacedRedialMsg)
+		assert.Equal(t, logger.LevelInfo, line.Level)
+		assert.Equal(t, []string{"0"}, line.Values("attempt"))
+		assert.Equal(t, []string{(2 * base).String()}, line.Values("uptime"))
+		dials, closes := h.timeline()
+		require.Len(t, dials, 2)
+		require.Len(t, closes, 1)
+		assert.Less(t, dials[1].Sub(closes[0]), base, "a stable close redials within U[0, base)")
+	})
+}
+
+func TestHandleReconnectStabilityWindowBoundary(t *testing.T) {
+	const base = 5 * time.Second
+	tests := []struct {
+		name    string
+		hold    time.Duration
+		level   string
+		attempt string
+	}{
+		{name: "uptime_equal_to_window_is_stable", hold: base, level: logger.LevelInfo, attempt: "0"},
+		{name: "uptime_one_nanosecond_short_is_short_lived", hold: base - time.Nanosecond, level: logger.LevelWarn, attempt: "1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runRedialBubble(t, func(t *testing.T) {
+				h := newRedialHarness(t, base, 0, redialStep{hold: tc.hold}, redialStep{hold: -1})
+				defer h.stop()
+
+				time.Sleep(tc.hold)
+				synctest.Wait()
+
+				line := h.log.Line(t, pacedRedialMsg)
+				assert.Equal(t, tc.level, line.Level)
+				assert.Equal(t, []string{tc.attempt}, line.Values("attempt"))
+				assert.Equal(t, []string{tc.hold.String()}, line.Values("uptime"))
+			})
+		})
+	}
+}
+
+func TestHandleReconnectStabilityWindowDefaultsWithBase(t *testing.T) {
+	runRedialBubble(t, func(t *testing.T) {
+		h := newRedialHarness(t, 0, 0, redialStep{hold: time.Second}, redialStep{hold: -1})
+		defer h.stop()
+
+		time.Sleep(time.Second)
+		synctest.Wait()
+
+		line := h.log.Line(t, pacedRedialMsg)
+		assert.Equal(t, logger.LevelWarn, line.Level)
+		assert.Equal(t, []string{"1"}, line.Values("attempt"), "an unset reconnectDelay must still give the 5s window, not 0")
+	})
+}
+
+func TestHandleReconnectDialErrorThenShortLivedKeepsClimbing(t *testing.T) {
+	const base = 5 * time.Second
+	runRedialBubble(t, func(t *testing.T) {
+		h := newRedialHarness(t, base, 0,
+			redialStep{err: errors.New(dialFailMsg)}, redialStep{hold: time.Second}, redialStep{hold: -1})
+		defer h.stop()
+
+		// The dial error waits under 2*base, then the connection lives 1s.
+		time.Sleep(2*base + time.Second)
+		synctest.Wait()
+
+		line := h.log.Line(t, pacedRedialMsg)
+		assert.Equal(t, logger.LevelWarn, line.Level)
+		assert.Equal(t, []string{"2"}, line.Values("attempt"), "connect success must not reset the ladder")
+	})
+}
+
+func TestHandleReconnectStableCloseResetsLadder(t *testing.T) {
+	const base = 5 * time.Second
+	dialErr := errors.New(dialFailMsg)
+	runRedialBubble(t, func(t *testing.T) {
+		h := newRedialHarness(t, base, 0,
+			redialStep{err: dialErr}, redialStep{hold: 2 * base}, redialStep{err: dialErr}, redialStep{hold: -1})
+		defer h.stop()
+
+		// A dial-error wait under 2*base, 2*base of uptime, a stable wait under base.
+		time.Sleep(5 * base)
+		synctest.Wait()
+
+		paced := h.log.Line(t, pacedRedialMsg)
+		assert.Equal(t, logger.LevelInfo, paced.Level)
+		assert.Equal(t, []string{"0"}, paced.Values("attempt"))
+		failures := h.lines(dialFailureMsg)
+		require.Len(t, failures, 2)
+		assert.Equal(t, []string{"1"}, failures[1].Values("attempt"), "the stable close must reset the ladder the first dial error climbed")
+	})
+}
+
+func TestHandleReconnectCloseDuringRedialWait(t *testing.T) {
+	const base = 5 * time.Second
+	tests := []struct {
+		name string
+		hold time.Duration
+	}{
+		{name: "stable_wait", hold: 2 * base},
+		{name: "short_lived_wait", hold: time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runRedialBubble(t, func(t *testing.T) {
+				h := newRedialHarness(t, base, 0, redialStep{hold: tc.hold}, redialStep{hold: -1})
+				defer h.stop()
+
+				time.Sleep(tc.hold)
+				synctest.Wait()
+				h.log.Line(t, pacedRedialMsg)
+				dials := h.dialCount()
+
+				before := time.Now()
+				require.NoError(t, h.c.Close())
+				<-h.c.reconnectDone
+
+				assert.Zero(t, time.Since(before), "Close must end the wait without fake time advancing")
+				assert.Equal(t, dials, h.dialCount(), "no dial may follow Close")
+			})
+		})
+	}
 }
