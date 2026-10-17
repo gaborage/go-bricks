@@ -40,7 +40,11 @@ func (lea *LogEventAdapter) Msgf(format string, args ...any) {
 	lea.event.Msgf(format, args...)
 }
 
-// Err adds an error to the log event
+// Err adds an error to the log event. With neither an ErrorRedactor nor an
+// "error" needle configured, it hands the error to zerolog's own Err without
+// rendering it. Otherwise a typed-nil pointer error (a nil pointer inside a
+// non-nil error) emits no field and never reaches the redactor, and the message
+// is rendered only on a needle hit with no redactor.
 func (lea *LogEventAdapter) Err(err error) LogEvent {
 	// A nil err emits nothing (zerolog's own behavior) and never reaches the
 	// redactor. Neither does a disabled level: zerolog hands back a nil *Event
@@ -50,31 +54,45 @@ func (lea *LogEventAdapter) Err(err error) LogEvent {
 	// returned string under the same field name zerolog's Err would have used,
 	// bypassing FilterString: the value is already the consumer's redacted
 	// rendering, not raw field content.
-	if err != nil && lea.event != nil {
-		if redacted, ok := lea.filter.redactError(err); ok {
-			// Masking runs on the redactor's OUTPUT, not instead of it: both
-			// configured is the stricter-of-the-two case, and the redacted string
-			// is still a value under a field name the operator called sensitive.
-			if masked, sensitive := lea.filter.maskField(zerolog.ErrorFieldName, redacted); sensitive {
-				redacted = masked
-			}
-			lea.event = lea.event.Str(zerolog.ErrorFieldName, redacted)
-			return lea
-		}
-		// Field-name masking applies here too, so this door agrees with Str about a
-		// field the operator marked sensitive. Without it, moving a call site from
-		// Str("error", …) to Err would silently drop that masking and ship the
-		// message in clear (CWE-532, found reviewing #1182). The check is a needle
-		// lookup, and only a HIT rewrites anything — a miss falls through to
-		// zerolog's own Err below, so the default configuration, where "error" is
-		// not a needle, keeps its byte-identical rendering and its ErrorMarshalFunc.
-		if masked, sensitive := lea.filter.maskField(zerolog.ErrorFieldName, err.Error()); sensitive {
-			lea.event = lea.event.Str(zerolog.ErrorFieldName, masked)
-			return lea
-		}
+	if err != nil && lea.event != nil && lea.filter != nil && lea.rewriteErr(err) {
+		return lea
 	}
 	lea.event = lea.event.Err(err)
 	return lea
+}
+
+// rewriteErr writes Err's field itself when a redactor is set or "error" is a
+// needle, reporting whether it took over; false leaves zerolog's own Err to it.
+func (lea *LogEventAdapter) rewriteErr(err error) bool {
+	sensitive := lea.filter.isSensitiveField(zerolog.ErrorFieldName)
+	// Where the adapter writes the field itself, it drops a typed nil the way
+	// zerolog does on the plain path: its Error() may dereference nil, and a
+	// redactor is consumer code that would render it.
+	if (sensitive || lea.filter.hasErrorRedactor()) && isNilPointer(err) {
+		return true
+	}
+	if redacted, ok := lea.filter.redactError(err); ok {
+		// Masking runs on the redactor's OUTPUT, not instead of it: both
+		// configured is the stricter-of-the-two case, and the redacted string
+		// is still a value under a field name the operator called sensitive.
+		if masked, hit := lea.filter.maskField(zerolog.ErrorFieldName, redacted); hit {
+			redacted = masked
+		}
+		lea.event = lea.event.Str(zerolog.ErrorFieldName, redacted)
+		return true
+	}
+	// Field-name masking applies here too, so this door agrees with Str about a
+	// field the operator marked sensitive. Without it, moving a call site from
+	// Str("error", …) to Err would silently drop that masking and ship the
+	// message in clear (CWE-532, found reviewing #1182). Only a HIT renders the
+	// message — a miss falls through to zerolog's own Err, so the default
+	// configuration, where "error" is not a needle, keeps its byte-identical
+	// rendering and its ErrorMarshalFunc.
+	if sensitive {
+		lea.event = lea.event.Str(zerolog.ErrorFieldName, lea.filter.maskString(err.Error()))
+		return true
+	}
+	return false
 }
 
 // Str adds a string field to the log event
