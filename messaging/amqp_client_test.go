@@ -3709,6 +3709,11 @@ func writeMethodFrame(w io.Writer, channel, class, method uint16, args []byte) e
 	return err
 }
 
+// fakeFrameMax is the frame-max the fake's tune offers.
+const fakeFrameMax = 131072
+
+var errFakeFrameTooLarge = errors.New("fake broker: frame larger than frame-max")
+
 // readMethodFrame reads frames until a method frame and returns its channel,
 // class and method; other frames are drained unanswered.
 func readMethodFrame(r io.Reader) (channel, class, method uint16, err error) {
@@ -3717,7 +3722,11 @@ func readMethodFrame(r io.Reader) (channel, class, method uint16, err error) {
 		if _, err = io.ReadFull(r, header); err != nil {
 			return 0, 0, 0, err
 		}
-		body := make([]byte, binary.BigEndian.Uint32(header[3:])+1) // payload + frame-end
+		size := binary.BigEndian.Uint32(header[3:])
+		if size > fakeFrameMax {
+			return 0, 0, 0, errFakeFrameTooLarge
+		}
+		body := make([]byte, size+1) // payload + frame-end
 		if _, err = io.ReadFull(r, body); err != nil {
 			return 0, 0, 0, err
 		}
