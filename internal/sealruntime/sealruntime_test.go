@@ -43,8 +43,11 @@ func TestConfigureCopiesAndReplaces(t *testing.T) {
 	assert.Equal(t, "v2", got.Active["fam"])
 	got.Active["fam"] = "v8" // nor a write through a returned snapshot
 	assert.Equal(t, "v2", Configured().Active["fam"])
+	require.NotNil(t, got.Metrics)
+	assert.Same(t, got.Metrics, Configured().Metrics, "the instruments are built once per Configure")
 	Configure(&Runtime{})
 	assert.Nil(t, Configured().Active, "a nil selector stays nil")
+	assert.NotSame(t, got.Metrics, Configured().Metrics, "a later Configure builds its own instruments")
 	Configure(&Runtime{Tenancy: TenancyPerTenant})
 	assert.Equal(t, TenancyPerTenant, Configured().Tenancy, "the app is the single writer and may replace")
 	assert.PanicsWithValue(t, "sealruntime: Configure called with nil", func() { Configure(nil) })
@@ -76,10 +79,8 @@ func TestTenancyString(t *testing.T) {
 	assert.Equal(t, "unknown", Tenancy(9).String())
 }
 
-func TestInstrumentsAreNoopUntilConfiguredAndNilSafe(t *testing.T) {
-	Reset()
-	t.Cleanup(Reset)
-	m := Instruments()
+func TestMetricsAreNoopWithoutAMeterAndNilSafe(t *testing.T) {
+	m := newMetrics(nil)
 	require.NotNil(t, m)
 	m.RecordOperation(context.Background(), OpSeal, time.Millisecond)
 	m.RecordOpenFailure(context.Background(), "SEAL_X")
@@ -88,12 +89,12 @@ func TestInstrumentsAreNoopUntilConfiguredAndNilSafe(t *testing.T) {
 	nilMetrics.RecordOpenFailure(context.Background(), "SEAL_X")
 }
 
-func TestInstrumentsRecordThroughTheConfiguredMeter(t *testing.T) {
+func TestConfiguredMetricsRecordThroughTheConfiguredMeter(t *testing.T) {
 	Reset()
 	t.Cleanup(Reset)
 	reader := sdkmetric.NewManualReader()
 	Configure(&Runtime{Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))})
-	m := Instruments()
+	m := Configured().Metrics
 	m.RecordOperation(context.Background(), OpSeal, 250*time.Millisecond)
 	m.RecordOperation(context.Background(), OpOpen, 50*time.Millisecond)
 	m.RecordOpenFailure(context.Background(), "SEAL_SIGNATURE_INVALID")

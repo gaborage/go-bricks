@@ -490,3 +490,38 @@ func TestSealSignsTheContextTenantWithAJTI(t *testing.T) {
 	env, _ := openWire(t, data, josesealed.TenantExpectation{Expected: "tenant-a"})
 	assert.Equal(t, "tenant-a", env.TenantID)
 }
+
+// TestSealAndOpenRecordOnTheMeterTheyWereBuiltWith pins the seal instruments to construction:
+// a sealer and an opener keep recording on their own runtime's meter after a later runtime
+// with another meter replaced it.
+func TestSealAndOpenRecordOnTheMeterTheyWereBuiltWith(t *testing.T) {
+	keys(t)
+	store := withPair(withPair(kstest.NewMockKeyStore(), signFamily, "v1", signPriv), encFamily, "v1", encPriv)
+	readerA := configureConsumer(t, store)
+	rtA := sealruntime.Configured()
+	codec := sealruntime.Registered()
+	sealer, err := codec.NewSealer(spec(t), eventType, rtA)
+	require.NoError(t, err)
+	provider, ok := codec.(sealruntime.OpenerProvider)
+	require.True(t, ok)
+	opener, err := provider.NewOpener(spec(t), eventType, rtA)
+	require.NoError(t, err)
+
+	readerB := configureConsumer(t, store)
+
+	ctx := context.Background()
+	data, _, err := sealer.Seal(ctx, doorEvent())
+	require.NoError(t, err)
+	var out paymentAuthorized
+	_, err = opener.Open(ctx, data, sealruntime.TenantRule{}, &out)
+	require.NoError(t, err)
+	_, err = opener.Open(ctx, flipSignatureBit(data), sealruntime.TenantRule{}, &out)
+	require.Error(t, err)
+
+	assert.Equal(t, uint64(1), sealCount(t, readerA))
+	assert.Equal(t, uint64(2), openCount(t, readerA))
+	assert.Equal(t, int64(1), failureCount(t, readerA, ""))
+	assert.Zero(t, sealCount(t, readerB))
+	assert.Zero(t, openCount(t, readerB))
+	assert.Zero(t, failureCount(t, readerB, ""))
+}
