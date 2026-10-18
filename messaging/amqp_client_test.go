@@ -3727,7 +3727,7 @@ func readMethodFrame(r io.Reader) (channel, class, method uint16, err error) {
 			return 0, 0, 0, err
 		}
 		size := binary.BigEndian.Uint32(header[3:])
-		if size > fakeFrameMax {
+		if size > fakeFrameMax-8 { // frame-max counts the 7-byte header and the frame-end
 			return 0, 0, 0, errors.New("fake broker: frame larger than frame-max")
 		}
 		body := make([]byte, size+1) // payload + frame-end
