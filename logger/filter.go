@@ -40,10 +40,12 @@ type FilterConfig struct {
 	// consumer-authored errors at dozens of sites, so a consumer-side scrub
 	// helper never reaches those lines without this seam. Nil (the default,
 	// and what DefaultFilterConfig returns) keeps Err byte-identical to
-	// zerolog's own rendering. Code door only: app.Options.LoggerFilterConfig,
-	// which replaces the whole config — start from DefaultFilterConfig() and
-	// set this field. The YAML log.sensitivefields merge path leaves it nil,
-	// the value being a function.
+	// zerolog's own rendering. A typed-nil pointer error (a nil pointer inside a
+	// non-nil error) never reaches the redactor; Err emits no field for it, as
+	// zerolog does under its default ErrorMarshalFunc. Code door only:
+	// app.Options.LoggerFilterConfig, which replaces the whole config — start
+	// from DefaultFilterConfig() and set this field. The YAML
+	// log.sensitivefields merge path leaves it nil, the value being a function.
 	ErrorRedactor func(error) string
 	// MaxPayloadBytes caps how large an opaque payload may be before the filter
 	// stops trying to read it. A JSON-LOOKING payload past the cap is masked
@@ -150,17 +152,21 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 // adapter never reads FilterConfig's fields itself. Nil-receiver safe: a logger
 // built without a filter has no redactor.
 func (f *SensitiveDataFilter) redactError(err error) (string, bool) {
-	if f == nil || f.config.ErrorRedactor == nil {
+	if !f.hasErrorRedactor() {
 		return "", false
 	}
 	return f.config.ErrorRedactor(err), true
 }
 
+// hasErrorRedactor reports whether an ErrorRedactor is configured, without
+// calling it. Nil-receiver safe, like redactError.
+func (f *SensitiveDataFilter) hasErrorRedactor() bool {
+	return f != nil && f.config.ErrorRedactor != nil
+}
+
 // maskField reports the masked rendering of a value when the deployment marked
-// that FIELD NAME sensitive, and false when it did not. The miss is reported
-// rather than swallowed so a caller can keep a rendering it would otherwise have
-// to rebuild: Err hands zerolog the error itself in the overwhelming case, and
-// only diverts to a plain string when masking actually changes the value.
+// that FIELD NAME sensitive, and false when it did not. rewriteErr runs it on
+// the ErrorRedactor's output: a hit masks the redacted string, a miss keeps it.
 //
 // Nil-receiver safe, like redactError: a logger built without a filter masks
 // nothing.
@@ -250,10 +256,17 @@ func asRedactor(value any) (Redactor, bool) {
 	if !ok {
 		return nil, false
 	}
-	if rv := reflect.ValueOf(value); rv.Kind() == reflect.Pointer && rv.IsNil() {
+	if isNilPointer(value) {
 		return nil, false
 	}
 	return redactor, true
+}
+
+// isNilPointer reports a nil pointer held in a non-nil interface. Pointer kinds
+// only, the test zerolog's isNilValue makes: IsNil panics on a struct.
+func isNilPointer(value any) bool {
+	rv := reflect.ValueOf(value)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
 }
 
 // filterRedactedShape filters a Redactor's result without consulting the hook
