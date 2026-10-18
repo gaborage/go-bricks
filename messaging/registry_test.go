@@ -4073,14 +4073,20 @@ func (l *recordingLogger) Lines() []recordedLine {
 // count is not exactly one.
 func (l *recordingLogger) Line(t *testing.T, msg string) recordedLine {
 	t.Helper()
+	hits := l.Matching(msg)
+	require.Len(t, hits, 1, "expected exactly one %q line", msg)
+	return hits[0]
+}
+
+// Matching returns every line with the given message, in emission order.
+func (l *recordingLogger) Matching(msg string) []recordedLine {
 	var hits []recordedLine
 	for _, ln := range l.Lines() {
 		if ln.Msg == msg {
 			hits = append(hits, ln)
 		}
 	}
-	require.Len(t, hits, 1, "expected exactly one %q line", msg)
-	return hits[0]
+	return hits
 }
 
 func (l *recordingLogger) WithContext(_ any) gobrickslogger.Logger { return l }

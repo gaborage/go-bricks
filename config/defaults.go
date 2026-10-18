@@ -81,7 +81,7 @@ const (
 
 // Messaging reconnection defaults
 const (
-	defaultReconnectDelay    = 5 * time.Second  // Initial delay between reconnection attempts
+	defaultReconnectDelay    = 5 * time.Second  // Reconnect backoff base and stability window
 	defaultReinitDelay       = 2 * time.Second  // Delay before channel reinitialization
 	defaultResendDelay       = 5 * time.Second  // Delay before retrying failed publishes
 	defaultConnectionTimeout = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait

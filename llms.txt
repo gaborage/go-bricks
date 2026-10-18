@@ -3199,8 +3199,8 @@ messaging:
     x-app-name: my-service                 # Headers added to every published message
     x-environment: development
   reconnect:
-    delay: 5s                             # Initial delay between reconnection attempts
-    maxdelay: 60s                         # Exponential backoff cap (must be >= delay)
+    delay: 5s                             # Backoff base: redial after a stable connection waits U[0, delay); also the stability window
+    maxdelay: 60s                         # Cap of both ladders: dial failures and connections that close within delay (must be >= delay)
     reinitdelay: 2s                       # Delay before channel reinitialization after failure
     resenddelay: 5s                       # Delay before retrying a failed publish
     connectiontimeout: 30s                # Per-publish broker ACK/NACK confirmation wait

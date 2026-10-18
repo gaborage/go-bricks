@@ -5,8 +5,9 @@
 // Audit of the adopters (gaborage/go-bricks#1249 and later):
 //
 //	Site                         Jitter                         Reset                         base <= 0
-//	messaging computeBackoff     math/rand/v2 full jitter       reconnect resets on success;  package default
-//	                             (#nosec G404 stays at caller)  publish-retry is per-operation
+//	messaging computeBackoff     math/rand/v2 full jitter       reconnect resets after a      package default
+//	                             (#nosec G404 stays at caller)  connection up >= base;
+//	                                                            publish-retry is per-operation
 //	httpclient backoffDelay      crypto/rand full jitter        per-operation                 package default
 //	                             (RNG-failure fallback stays)
 //	delivery backoffFor          none                           per-operation                 0

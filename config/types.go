@@ -671,15 +671,18 @@ type StreamsOffsetStoreConfig struct {
 
 // ReconnectConfig holds AMQP reconnection settings.
 // Production-safe defaults are applied automatically:
-//   - Delay: 5s (initial delay between reconnection attempts)
+//   - Delay: 5s (reconnect backoff base and connection stability window)
 //   - ReinitDelay: 2s (delay before channel reinitialization)
 //   - ResendDelay: 5s (delay before retrying failed publishes)
 //   - ConnectionTimeout: 30s (per-publish broker ACK/NACK confirmation wait)
 //   - ReadyTimeout: 5s (pre-flight wait for a not-yet-ready client, before a publish begins)
 //   - MaxPublishAttempts: 5 (bounded publish retry attempts before giving up)
-//   - MaxDelay: 60s (maximum delay for exponential backoff cap)
+//   - MaxDelay: 60s (cap of both reconnect backoff ladders)
 type ReconnectConfig struct {
-	// Delay is the initial delay between reconnection attempts.
+	// Delay is the base of the full-jitter reconnect backoff, an upper bound
+	// rather than a minimum spacing. A redial after a connection that stayed up
+	// at least Delay waits U[0, Delay); after a dial failure or a connection that
+	// closed sooner, the wait climbs from up to 2*Delay toward MaxDelay.
 	// Default: 5s. Set higher for unstable networks.
 	Delay time.Duration `koanf:"delay" json:"delay" yaml:"delay" toml:"delay" mapstructure:"delay"`
 
@@ -709,7 +712,8 @@ type ReconnectConfig struct {
 	// Default: 5. Must be >= 1 (0 applies the default).
 	MaxPublishAttempts int `koanf:"maxpublishattempts" json:"maxpublishattempts" yaml:"maxpublishattempts" toml:"maxpublishattempts" mapstructure:"maxpublishattempts"`
 
-	// MaxDelay is the maximum delay for exponential backoff during reconnection.
+	// MaxDelay caps the reconnect backoff: both the dial-failure ladder and the
+	// ladder of connections that close within Delay of opening.
 	// Default: 60s. Prevents unbounded delays during prolonged outages.
 	MaxDelay time.Duration `koanf:"maxdelay" json:"maxdelay" yaml:"maxdelay" toml:"maxdelay" mapstructure:"maxdelay"`
 }

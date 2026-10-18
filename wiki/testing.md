@@ -361,6 +361,24 @@ event and returns placeholder `sealed-<n>`/`jti-<n>`, `Sealed()` returns the rec
 `Published()` the sealed bytes handed to `PublishSealed`; `FailSeal(err)`/`FailPublish(err)` make
 the later calls fail.
 
+## Fake Time with testing/synctest
+
+`messaging`'s reconnect tests (#2139) are the repo's first adopter of `testing/synctest`
+(`synctest.Test`, `synctest.Wait`). Inside a bubble, `time.Now`, `time.Sleep`, `time.After` and
+timers read a fake clock that advances only when every goroutine in the bubble is durably blocked,
+so a 60s backoff costs no wall time and the code under test needs no clock seam.
+
+- **What blocks durably:** channel operations and selects on channels made inside the bubble,
+  `time.Sleep`, and `synctest.Wait`. A mutex, real I/O, or a channel made outside the bubble does
+  not, so fake time never advances past it: build the client and every channel it selects on
+  inside the bubble. A `net.Pipe` created inside the bubble does block durably.
+- **Every goroutine exits before the bubble ends**, or `synctest.Test` fails with "blocked
+  goroutines remain": stop the component and wait for its goroutines inside the bubble, and give a
+  delayed sender a non-blocking send. A goroutine still asleep is fine, since fake time advances to
+  wake it.
+- A loop that never blocks never advances fake time either, so a test of an unpaced loop must
+  bound itself (count calls in the stub and stop the component) to fail instead of hanging.
+
 ## SQL Goldens
 
 A store port is judged by the SQL it emits, not by the unit tests that pin substrings of it: `database/testing.SQLGolden` renders everything a `TestDB` and its transactions recorded — each statement verbatim, then every bound argument with its type — and `dbtesting.AssertGolden(t, path, got, *update)` pins that text under `testdata/sql/`. Capture the goldens BEFORE the port in the port PR's first commit, diff them after, and name every deliberate text change in the commit body. `SQLGolden{FixedClock: fixedAt}` prints the fixture time verbatim and any other clock value (a store's own `time.Now()`) as `<time>`, so a wrong binding fails while a wall clock does not. See `outbox/store_sql_golden_test.go` and `inbox/store_sql_golden_test.go`.
