@@ -3655,9 +3655,7 @@ func runFakeBroker(conn net.Conn, hold time.Duration) {
 	start = appendLongstr(start, "PLAIN")
 	start = appendLongstr(start, "en_US")
 	replies := map[[2]uint16]fakeBrokerReply{
-		// start-ok: tune, channel-max 2047, frame-max 131072, heartbeat 0, so
-		// the client sends nothing while the fake holds the connection.
-		{10, 11}: {30, []byte{0x07, 0xff, 0, 2, 0, 0, 0, 0}},
+		{10, 11}: {30, tuneArgs()},         // start-ok: tune
 		{10, 40}: {41, []byte{0}},          // connection.open: open-ok
 		{20, 10}: {11, []byte{0, 0, 0, 0}}, // channel.open: open-ok
 		{85, 10}: {11, nil},                // confirm.select: select-ok
@@ -3692,6 +3690,17 @@ func connectionForcedArgs() []byte {
 	return append(args, 0, 0, 0, 0) // class-id, method-id
 }
 
+// fakeFrameMax is the frame-max the fake's tune offers.
+const fakeFrameMax = 131072
+
+// tuneArgs offers channel-max 2047, fakeFrameMax and heartbeat 0, so the
+// client sends nothing while the fake holds the connection.
+func tuneArgs() []byte {
+	args := binary.BigEndian.AppendUint16(nil, 2047)
+	args = binary.BigEndian.AppendUint32(args, fakeFrameMax)
+	return binary.BigEndian.AppendUint16(args, 0)
+}
+
 func appendLongstr(b []byte, s string) []byte {
 	return append(binary.BigEndian.AppendUint32(b, uint32(len(s))), s...)
 }
@@ -3709,11 +3718,6 @@ func writeMethodFrame(w io.Writer, channel, class, method uint16, args []byte) e
 	return err
 }
 
-// fakeFrameMax is the frame-max the fake's tune offers.
-const fakeFrameMax = 131072
-
-var errFakeFrameTooLarge = errors.New("fake broker: frame larger than frame-max")
-
 // readMethodFrame reads frames until a method frame and returns its channel,
 // class and method; other frames are drained unanswered.
 func readMethodFrame(r io.Reader) (channel, class, method uint16, err error) {
@@ -3724,7 +3728,7 @@ func readMethodFrame(r io.Reader) (channel, class, method uint16, err error) {
 		}
 		size := binary.BigEndian.Uint32(header[3:])
 		if size > fakeFrameMax {
-			return 0, 0, 0, errFakeFrameTooLarge
+			return 0, 0, 0, errors.New("fake broker: frame larger than frame-max")
 		}
 		body := make([]byte, size+1) // payload + frame-end
 		if _, err = io.ReadFull(r, body); err != nil {
