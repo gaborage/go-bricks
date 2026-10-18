@@ -3905,6 +3905,7 @@ func TestHandleReconnectPacesRedialAfterBrokerClose(t *testing.T) {
 
 		ready := h.log.Matching(msgInitReady)
 		require.NotEmpty(t, ready, "the fake broker must serve the client")
+		require.NotEmpty(t, h.log.Matching(pacedRedialMsg), "the broker's close must reach the redial wait")
 		assert.Less(t, h.dialCount(), 10, "a broker that closes a ready connection at once must not be redialed unpaced")
 		assert.Len(t, ready, h.dialCount(), "init must reach ready on every connection served")
 	})
