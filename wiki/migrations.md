@@ -13364,12 +13364,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 ### [C73.4] `LogEvent.Err` drops a typed-nil pointer error under a redactor or an `error` needle · silent-behavior · when: match
 
 - detect: read the needle list and the redactor at every filter door, as C61.13's detect does.
-  YAML door: `yq '.log.sensitivefields[]' config*.yaml` (or
-  `yq '.. | select(has("sensitivefields")).sensitivefields[]'` when the block is nested), piped
-  through `grep -i -E 'err|rror'`. Code door: `git grep -nE 'LoggerFilterConfig|NewWithFilter' -- '*.go'`
-  and read the `FilterConfig` each hit builds: whether it sets `ErrorRedactor`, and every
-  `SensitiveFields` entry. Match SUBSTRING-wise and case-insensitively — `error` fires, and so do
-  `err`, `Err` and `rror`.
+  YAML door: `yq -r '.log.sensitivefields[]' config*.yaml` (or
+  `yq -r '.. | select(has("sensitivefields")).sensitivefields[]'` when the block is nested), piped
+  through
+  `awk '{ n = tolower($0); gsub(/^[[:space:]]+|[[:space:]]+$/, "", n); if (n != "" && index("error", n)) print }'`.
+  Code door: `git grep -nE 'LoggerFilterConfig|NewWithFilter' -- '*.go'` and read the
+  `FilterConfig` each hit builds: whether it sets `ErrorRedactor`, and every `SensitiveFields`
+  entry. A needle fires when, trimmed and lowercased, it is a SUBSTRING of `error`: `error`,
+  `err`, `Err`, `rror` and `or` all do, and `errors` does not.
 - scope: `LogEvent.Err(err)` given a typed-nil pointer error, at an enabled level. **Unchanged**:
   every non-nil error on every path (under both a needle and a redactor the redactor's output is
   still masked, and a value-type error is never treated as nil); a nil error; a disabled level;
