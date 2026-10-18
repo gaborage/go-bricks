@@ -113,7 +113,9 @@ names this.
   [ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md): the environment
   builder switched on the tenant's own `type`, so none of its connection variables
   were delivered and its key could differ from Flyway's target. The tenant now
-  runs typed with the runner's vendor, so its key is the target Flyway is handed;
+  runs typed with the runner's vendor and is keyed as a typed tenant is (on
+  Oracle, the key is the target only where the conf's `flyway.url`
+  interpolates `${env.ORACLE_*}`);
 - two separate `MigrateAll` calls, which rely on Flyway's own lock;
 - in the shared-migrator empty-schema case, the first tenant's own false green.
 

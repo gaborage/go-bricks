@@ -199,8 +199,9 @@ type MigratorIdentity struct {
 // aliases (a CNAME, or an IP against a name), an Oracle port of 0 against 1521, Oracle's
 // case-insensitive unquoted user and service names (app against APP), distinct PostgreSQL roles
 // with no role-level search_path (all land in public), and two separate MigrateAll calls, which
-// rely on Flyway's own lock. A type-less tenant runs typed with the runner's vendor (ADR-149), so
-// its key is the target Flyway is handed, as for a typed tenant. With MigratorIdentity set, a
+// rely on Flyway's own lock. A type-less tenant runs typed with the runner's vendor (ADR-149) and
+// is keyed as a typed tenant is; an Oracle conf whose flyway.url does not interpolate the ORACLE_*
+// variables can still put tenants keyed apart on one target. With MigratorIdentity set, a
 // tenant whose vendor resolves to neither is refused with ErrMigratorIdentityUndeliverable
 // instead of running unkeyed. A tenant that claims a target and then fails its own run still
 // holds the claim.

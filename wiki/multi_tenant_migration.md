@@ -290,8 +290,10 @@ DNS aliases (a CNAME, or an IP against a name), an Oracle port of 0 against
 `APP`), distinct PostgreSQL roles with no role-level `search_path` (all land in
 `public`), and two separate `MigrateAll` calls, which rely on Flyway's own lock,
 are missed. A type-less tenant runs typed with the runner's vendor
-([ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md)), so its key is
-the target Flyway is handed, as for a typed tenant. In the shared-migrator
+([ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md)) and is keyed as
+a typed tenant is; on Oracle the key is the target only where the conf's
+`flyway.url` interpolates `${env.ORACLE_*}`, so a fixed URL can put tenants
+keyed apart on one target unrefused. In the shared-migrator
 empty-schema case the first tenant is a false green too, and only
 [`WithSharedMigrator`](#schema-targeting-postgresql) catches it. A tenant that
 claims a target and then fails its own run still holds the claim.

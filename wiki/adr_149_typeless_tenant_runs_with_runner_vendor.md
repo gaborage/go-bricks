@@ -95,8 +95,11 @@ field moves.
   untyped DSN with an unrecognized scheme, is refused: ADR-050's tolerance of
   that DSN yields to the overlay. `go-bricks-migrate` gets this at its routine pin bump
   and exits `1`.
-- ADR-143's type-less blind spot is closed: the key is the target Flyway is
-  handed, as for a typed tenant.
+- ADR-143's type-less blind spot is closed: the tenant is keyed as a typed
+  tenant is. On Oracle the conf's `flyway.url` owns the target, so the key
+  matches it only where that URL interpolates `${env.ORACLE_*}`; a fixed URL
+  can put tenants keyed apart on one target without
+  `ErrDuplicateMigrationTarget`.
 - A non-empty, non-canonical type (`postgres`, `PostgreSQL`) with no overlay
   keeps its current behavior; that is #2145.
 
