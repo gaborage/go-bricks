@@ -27,18 +27,19 @@ type sealedHandler[T any] struct {
 	opener    sealruntime.Opener
 	// tenancy and tenantOptional fix the tid rule for this consumer at
 	// declaration time (ADR-097, G2/G10): the deployment's tenancy comes from the
-	// runtime the app configured, TenantOptional from the declaration.
+	// runtime the App bound to the Declarations, TenantOptional from the declaration.
 	tenancy        sealruntime.Tenancy
 	tenantOptional bool
 	fn             func(context.Context, T, Metadata) error
 }
 
-// newSealedHandler builds the sealed handler for one declaration, or reports why
-// the consumer cannot start: codec not linked, runtime not configured, no key
-// store, a refused declaration, or a family the consumer cannot open with. Every
-// error is recorded on the Declarations and surfaces from Validate.
-func newSealedHandler[T any](t reflect.Type, opts *ConsumerOptions, fn func(context.Context, T, Metadata) error) (*sealedHandler[T], error) {
-	opener, tenancy, err := newOpener(t, opts.EventType)
+// newSealedHandler builds the sealed handler for one declaration under rt, the
+// runtime bound to its Declarations, or reports why the consumer cannot start: codec
+// not linked, no runtime bound, no key store, a refused declaration, or a family the
+// consumer cannot open with. Every error is recorded on the Declarations and surfaces
+// from Validate.
+func newSealedHandler[T any](rt *sealruntime.Runtime, t reflect.Type, opts *ConsumerOptions, fn func(context.Context, T, Metadata) error) (*sealedHandler[T], error) {
+	opener, tenancy, err := newOpener(rt, t, opts.EventType)
 	if err != nil {
 		return nil, err
 	}
@@ -66,12 +67,11 @@ func misplacedConsumerSealTag(t reflect.Type, eventType string) error {
 // type. It mirrors newSealer step for step and then asks the codec for its
 // OPTIONAL consume side: a codec without one is the same class of failure as no
 // codec at all.
-func newOpener(t reflect.Type, eventType string) (sealruntime.Opener, sealruntime.Tenancy, error) {
+func newOpener(rt *sealruntime.Runtime, t reflect.Type, eventType string) (sealruntime.Opener, sealruntime.Tenancy, error) {
 	codec := sealruntime.Registered()
 	if codec == nil {
 		return nil, 0, fmt.Errorf("%w (consumer event type %q, Go type %v)", ErrSealingNotLinked, eventType, t)
 	}
-	rt := sealruntime.Configured()
 	if rt == nil {
 		return nil, 0, fmt.Errorf("%w (consumer event type %q)", sealruntime.ErrNotConfigured, eventType)
 	}
@@ -89,7 +89,7 @@ func newOpener(t reflect.Type, eventType string) (sealruntime.Opener, sealruntim
 	if spec == nil {
 		return nil, 0, fmt.Errorf("messaging: %v carries seal tags the codec did not recognize (consumer event type %q)", t, eventType)
 	}
-	opener, err := factory.NewOpener(spec, eventType, rt)
+	opener, err := factory.NewOpener(spec, eventType, rt.Snapshot())
 	if err != nil {
 		return nil, 0, fmt.Errorf("messaging: sealed consumer for %v (event type %q): %w", t, eventType, err)
 	}

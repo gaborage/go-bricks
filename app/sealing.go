@@ -1,18 +1,22 @@
 package app
 
-import "github.com/gaborage/go-bricks/internal/sealruntime"
+import (
+	"github.com/gaborage/go-bricks/internal/sealruntime"
+	"github.com/gaborage/go-bricks/messaging"
+)
 
-// configureSealing hands the sealing seam the facts only the app knows — the
-// registered key store, the messaging.seal.active selector, the deployment's
-// tenancy and the meter — BEFORE declarations are collected, so a seal-tagged
-// declaration resolves its producer at declaration time and fails Validate,
-// never a publish (ADR-097). The order is load-bearing: DeclareTypedPublisher
-// reads these facts as the module declares. Unlike the database facts in
+// configureSealing binds this App's sealing facts — the registered key store, the
+// messaging.seal.active selector, the deployment's tenancy and the meter — to decls
+// BEFORE its declarations are collected, so a seal-tagged declaration resolves its
+// producer at declaration time and fails Validate, never a publish (ADR-097). The
+// order is load-bearing: DeclareTypedPublisher reads these facts as the module
+// declares. The facts belong to decls alone, so another App's startup, successful or
+// not, never re-aims this App's handles (#2010). Unlike the database facts in
 // bootstrap.go, none of them is per tenant or per dynamic source: there is one
-// KeyStoreProvider per process and the selector is a static messaging key, so
+// KeyStoreProvider per App and the selector is a static messaging key, so
 // dynamic-config and per-tenant deployments read the same facts (#1306: per-tenant
 // keys are forbidden in v1).
-func (a *App) configureSealing() {
+func (a *App) configureSealing(decls *messaging.Declarations) {
 	rt := sealruntime.Runtime{Tenancy: a.plan.sealTenancy()}
 	if a.cfg != nil {
 		rt.Active = a.cfg.Messaging.Seal.Active
@@ -23,5 +27,5 @@ func (a *App) configureSealing() {
 		}
 		rt.Meter = a.registry.deps.MeterProvider
 	}
-	sealruntime.Configure(&rt)
+	sealruntime.Bind(decls, &rt)
 }

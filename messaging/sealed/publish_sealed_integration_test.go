@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/testing/containers"
@@ -31,8 +32,8 @@ func TestPublishSealedFailsUnroutableOnAMandatoryHandleIntegration(t *testing.T)
 	t.Cleanup(func() { _ = client.Close() })
 	require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond)
 
-	configureStore(t, pairStore(t), nil)
 	decls := messaging.NewDeclarations()
+	sealruntime.Bind(decls, pairRuntime(t))
 	exchange := "sealed-unroutable-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	require.NoError(t, client.DeclareExchange(t.Context(), decls.DeclareTopicExchange(exchange)))
 	h := messaging.DeclareTypedPublisher[paymentAuthorized](decls, &messaging.PublisherOptions{

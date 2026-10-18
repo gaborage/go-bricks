@@ -50,9 +50,11 @@ type verifyingCodec struct {
 	*fakeCodec
 	verifier    sealruntime.Verifier
 	verifierErr error
+	verifyRT    *sealruntime.Runtime
 }
 
-func (c *verifyingCodec) NewVerifier(sealruntime.Spec, string, *sealruntime.Runtime) (sealruntime.Verifier, error) {
+func (c *verifyingCodec) NewVerifier(_ sealruntime.Spec, _ string, rt *sealruntime.Runtime) (sealruntime.Verifier, error) {
+	c.verifyRT = rt
 	if c.verifierErr != nil {
 		return nil, c.verifierErr
 	}
@@ -69,8 +71,8 @@ func declareWithCodec(t *testing.T, codec sealruntime.Codec, opts *PublisherOpti
 	sealruntime.Reset()
 	t.Cleanup(sealruntime.Reset)
 	sealruntime.Register(codec)
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: stubKeyStore{}})
 	decls := newSealingDecls()
+	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}})
 	h := DeclareTypedPublisher[sealedEvent](decls, opts)
 	require.NoError(t, decls.Validate())
 	return h
@@ -79,6 +81,19 @@ func declareWithCodec(t *testing.T, codec sealruntime.Codec, opts *PublisherOpti
 func declareVerifying(t *testing.T, opts *PublisherOptions, verifier sealruntime.Verifier) *Publisher[sealedEvent] {
 	t.Helper()
 	return declareWithCodec(t, &verifyingCodec{fakeCodec: sealedFakeCodec(), verifier: verifier}, opts)
+}
+
+func TestSealedVerifierGetsACopyOfTheBinding(t *testing.T) {
+	sealruntime.Reset()
+	t.Cleanup(sealruntime.Reset)
+	codec := &verifyingCodec{fakeCodec: sealedFakeCodec(), verifier: &fakeVerifier{}}
+	sealruntime.Register(codec)
+	decls := newSealingDecls()
+	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: stubKeyStore{}, Active: map[string]string{"svc-sign": "v2"}})
+
+	DeclareTypedPublisher[sealedEvent](decls, sealedOpts())
+	require.NoError(t, decls.Validate())
+	requireCodecCopy(t, decls, codec.verifyRT)
 }
 
 func TestPublishSealedRefusesAPlainHandle(t *testing.T) {

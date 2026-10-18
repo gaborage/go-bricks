@@ -28,9 +28,9 @@ func pairStore(t *testing.T) *kstest.MockKeyStore {
 	return producerStore(t).WithPublicKey(signFamily+"-v1", &signPriv.PublicKey)
 }
 
-func configureStore(t *testing.T, store *kstest.MockKeyStore, active map[string]string) {
-	t.Helper()
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: store, Active: active, Tenancy: sealruntime.TenancyDisabled})
+// producerRuntime is a single-tenant producer's runtime over store with the active selector.
+func producerRuntime(store sealruntime.KeyStore, active map[string]string) *sealruntime.Runtime {
+	return &sealruntime.Runtime{KeyStore: store, Active: active, Tenancy: sealruntime.TenancyDisabled}
 }
 
 // vectorProducerStore is the vector keys as the producer holds them: sign v1 PUBLIC, sign v2 (the
@@ -53,8 +53,7 @@ func publicOnlySignStore(t *testing.T) *kstest.MockKeyStore {
 // sealOnPair seals one event under the canonical pair store's sign v1.
 func sealOnPair(t *testing.T) []byte {
 	t.Helper()
-	configureStore(t, pairStore(t), nil)
-	data, _, err := declare(t).Seal(context.Background(), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
+	data, _, err := pairHandle(t).Seal(context.Background(), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
 	require.NoError(t, err)
 	return data
 }
@@ -183,8 +182,7 @@ func TestVerifierRefusesASignGenerationMissingFromTheIndex(t *testing.T) {
 
 func TestVerifierAcceptsWhatTheSealerProduced(t *testing.T) {
 	store := pairStore(t)
-	configureStore(t, store, nil)
-	h := declare(t)
+	h := declare(t, producerRuntime(store, nil))
 	data, jti, err := h.Seal(multitenant.SetTenant(context.Background(), "tenant-a"), paymentAuthorized{OrderID: "o8", Card: &cardData{PAN: testPAN}})
 	require.NoError(t, err)
 

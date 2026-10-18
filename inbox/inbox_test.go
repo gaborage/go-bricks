@@ -452,9 +452,9 @@ func runSealed(t *testing.T, body func(ctx context.Context, key messaging.DedupK
 func runSealedWithJTI(t *testing.T, jti string, body func(ctx context.Context, key messaging.DedupKey) error) error {
 	t.Helper()
 	registerStubCodec.Do(func() { sealruntime.Register(stubCodec{}) })
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: kstest.NewMockKeyStore()})
 
 	decls := messaging.NewDeclarations()
+	sealruntime.Bind(decls, &sealruntime.Runtime{KeyStore: kstest.NewMockKeyStore()})
 	decls.DeclareQueue("q")
 	opts := &messaging.ConsumerOptions{Queue: "q", Consumer: "c", EventType: "evt"}
 	var result error

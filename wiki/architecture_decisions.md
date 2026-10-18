@@ -2322,9 +2322,15 @@ The seal-runtime seam lived in `messaging/internal/sealruntime`, which `app` cou
 re-aim the key store, Activation and `tid` rule for every seal-tagged handle declared after it.
 The seam moves to root `internal/sealruntime` (the ADR-091 placement), `messaging/sealed`'s `init`
 and the app bootstrap call it directly, and every exported door is deleted;
-`SealOpenRefusedError` and `ErrSealingNotLinked` stay. Shared `ModuleDeps` writes and a second
-App's `Run` remain open re-aim paths, tracked in #2010. Amends ADR-097 and ADR-131. See
+`SealOpenRefusedError` and `ErrSealingNotLinked` stay. Amends ADR-097 and ADR-131. See
 [migrations.md](migrations.md) `[C72.9]`.
+
+Amended 2026-10-17 (#2010): each App binds its own seal runtime (facts and instruments) to the
+`*messaging.Declarations` it builds, so a second App's `Run`, successful or failed, re-aims no
+handle of another App, and a seal-tagged declaration on a Declarations no App bound fails
+`Validate` with the not-configured error. A module's `Init` writing `ModuleDeps` or the shared
+config stays open, tracked in #2146; a pull `go:linkname` is below the bar. See
+[migrations.md](migrations.md) `[C73.2]`.
 
 **Key Benefits:** the blank import of `messaging/sealed` is the only codec, and no exported
 symbol can install a replacement sealer or opener.

@@ -141,25 +141,25 @@ func loadVectors(t *testing.T) *vectorFile {
 	return &vf
 }
 
-// configureConsumer installs the runtime for a consumer over store and returns the
-// metrics reader.
-func configureConsumer(t *testing.T, store sealruntime.KeyStore) *sdkmetric.ManualReader {
-	t.Helper()
+// consumerRuntime is a consumer's runtime over store with its instruments built, as the app
+// binds it, metered through the returned reader.
+func consumerRuntime(store sealruntime.KeyStore) (*sealruntime.Runtime, *sdkmetric.ManualReader) {
 	reader := sdkmetric.NewManualReader()
-	sealruntime.Configure(&sealruntime.Runtime{
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	return &sealruntime.Runtime{
 		KeyStore: store,
 		Tenancy:  sealruntime.TenancyShared,
-		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)),
-	})
-	return reader
+		Meter:    mp,
+		Metrics:  sealruntime.NewMetrics(mp),
+	}, reader
 }
 
 func newVectorOpener(t *testing.T) (sealruntime.Opener, *sdkmetric.ManualReader) {
 	t.Helper()
-	reader := configureConsumer(t, vectorConsumerStore(t))
+	rt, reader := consumerRuntime(vectorConsumerStore(t))
 	factory, ok := sealruntime.Registered().(sealruntime.OpenerProvider)
 	require.True(t, ok)
-	opener, err := factory.NewOpener(spec(t), eventType, sealruntime.Configured())
+	opener, err := factory.NewOpener(spec(t), eventType, rt)
 	require.NoError(t, err)
 	return opener, reader
 }

@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 )
 
 // streamOffsetInterval matches the interval form of x-stream-offset ("7D", "30m").
@@ -68,6 +70,7 @@ type Declarations struct {
 	queueTypeErrs     []error                              // Queue types or dead-letter strategies a declaration helper refused, reported by Validate
 	atLeastOnceQueues map[string]struct{}                  // Primaries DeclareQueueWithDLQ opted into at-least-once dead-lettering, judged by Validate
 	sealErr           error                                // First seal-tagged declaration that cannot seal, reported by Validate
+	seal              *sealruntime.Runtime                 // Seal runtime the App bound, set once; nil until bound
 }
 
 // recordQueueTypeError keeps a helper's rejected queue type for Validate to
@@ -83,6 +86,15 @@ func (d *Declarations) recordSealError(err error) {
 	if d.sealErr == nil {
 		d.sealErr = err
 	}
+}
+
+// bindSeal sets the seal runtime every seal-tagged declaration on d is built with. The app
+// binds each Declarations once; a second bind is a wiring bug.
+func (d *Declarations) bindSeal(rt *sealruntime.Runtime) {
+	if d.seal != nil {
+		panic("messaging: seal runtime already bound to these declarations")
+	}
+	d.seal = rt
 }
 
 // NewDeclarations creates a new empty declarations store.
@@ -985,6 +997,7 @@ func (d *Declarations) Clone() *Declarations {
 	clone.queueTypeErrs = slices.Clone(d.queueTypeErrs)
 	clone.atLeastOnceQueues = maps.Clone(d.atLeastOnceQueues)
 	clone.sealErr = d.sealErr
+	clone.seal = d.seal
 
 	// Clone bindings
 	for _, binding := range d.Bindings {

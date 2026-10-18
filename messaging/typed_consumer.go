@@ -231,7 +231,7 @@ func DeclareTypedConsumerWithMeta[T any](decls *Declarations, opts *ConsumerOpti
 	if err := misplacedConsumerSealTag(t, opts.EventType); err != nil {
 		decls.recordSealError(err)
 	} else if hasSealTag(t) {
-		handler, err := newSealedHandler[T](t, opts, fn)
+		handler, err := newSealedHandler[T](decls.seal, t, opts, fn)
 		if err != nil {
 			decls.recordSealError(err)
 		}

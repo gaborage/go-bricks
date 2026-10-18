@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/gaborage/go-bricks/internal/publishdoor"
+	"github.com/gaborage/go-bricks/internal/sealruntime"
 )
 
 // bytePublisher is the framework's ONLY byte publish door (ADR-096). It is
@@ -40,10 +41,12 @@ func publishThroughDoor(ctx context.Context, client any, options publishOptions,
 
 // init registers the relay's dispatcher: internal/publishdoor.Publish lands here
 // with the relay's client and destination. The Options shape is restated in that
-// package because it cannot import this one.
+// package because it cannot import this one. It also registers the seal-runtime
+// binder each App binds its Declarations through (#2010).
 //
-//nolint:gochecknoinits // linking messaging is what arms the relay's byte door; same seam shape as messaging/streams (ADR-091, ADR-096)
+//nolint:gochecknoinits // linking messaging is what arms the relay's byte door and the seal-runtime binder; same seam shape as messaging/streams (ADR-091, ADR-096)
 func init() {
+	sealruntime.RegisterBinder(bindSealRuntime)
 	publishdoor.Register(func(ctx context.Context, client any, opts publishdoor.Options, data []byte) error {
 		return publishThroughDoor(ctx, client, publishOptions{
 			Exchange:   opts.Exchange,

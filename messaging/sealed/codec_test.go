@@ -197,33 +197,36 @@ func TestNewSealerStartupMatrix(t *testing.T) {
 	assert.ErrorIs(t, err, sealruntime.ErrKeyStoreMissing)
 }
 
-func configure(t *testing.T, tenancy sealruntime.Tenancy) *sdkmetric.ManualReader {
+// meteredProducerRuntime is the canonical producer's runtime under tenancy, metered through the
+// returned reader.
+func meteredProducerRuntime(t *testing.T, tenancy sealruntime.Tenancy) (*sealruntime.Runtime, *sdkmetric.ManualReader) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	sealruntime.Configure(&sealruntime.Runtime{
+	return &sealruntime.Runtime{
 		KeyStore: producerStore(t),
 		Tenancy:  tenancy,
 		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)),
-	})
-	return reader
+	}, reader
 }
 
-func declare(t *testing.T) *messaging.Publisher[paymentAuthorized] {
+func declare(t *testing.T, rt *sealruntime.Runtime) *messaging.Publisher[paymentAuthorized] {
 	t.Helper()
-	return declareAs[paymentAuthorized](t, eventType)
+	return declareAs[paymentAuthorized](t, rt, eventType)
 }
 
 // declareAs is declareIn plus a Validate that must pass.
-func declareAs[T any](t *testing.T, etyp string) *messaging.Publisher[T] {
+func declareAs[T any](t *testing.T, rt *sealruntime.Runtime, etyp string) *messaging.Publisher[T] {
 	t.Helper()
-	decls, h := declareIn[T](etyp)
+	decls, h := declareIn[T](rt, etyp)
 	require.NoError(t, decls.Validate())
 	return h
 }
 
-// declareIn declares a publisher of T under etyp on the "payments" exchange, without validating.
-func declareIn[T any](etyp string) (*messaging.Declarations, *messaging.Publisher[T]) {
+// declareIn declares a publisher of T under etyp on the "payments" exchange of a Declarations
+// bound to rt, as the app binds its own, without validating.
+func declareIn[T any](rt *sealruntime.Runtime, etyp string) (*messaging.Declarations, *messaging.Publisher[T]) {
 	decls := messaging.NewDeclarations()
+	sealruntime.Bind(decls, rt)
 	decls.DeclareTopicExchange("payments")
 	return decls, messaging.DeclareTypedPublisher[T](decls, &messaging.PublisherOptions{Exchange: "payments", RoutingKey: "payment.authorized", EventType: etyp})
 }
@@ -263,8 +266,8 @@ func sealCount(t *testing.T, reader *sdkmetric.ManualReader) uint64 {
 }
 
 func TestSealedPublishLandsOneJWSOnTheDeclaredDestination(t *testing.T) {
-	reader := configure(t, sealruntime.TenancyShared)
-	h := declare(t)
+	rt, reader := meteredProducerRuntime(t, sealruntime.TenancyShared)
+	h := declare(t, rt)
 	client := &capturingClient{}
 	ctx := multitenant.SetTenant(context.Background(), "tenant-a")
 	before := sealCount(t, reader)
@@ -293,8 +296,8 @@ func TestSealedPublishLandsOneJWSOnTheDeclaredDestination(t *testing.T) {
 }
 
 func TestSealedPublishOmitsTidWithoutATenant(t *testing.T) {
-	configure(t, sealruntime.TenancyDisabled)
-	h := declare(t)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
+	h := declare(t, rt)
 	client := &capturingClient{}
 	require.NoError(t, h.Publish(context.Background(), client, paymentAuthorized{OrderID: "o2", Card: &cardData{PAN: testPAN}}))
 	env, _ := openWire(t, client.data[0], josesealed.TenantExpectation{})
@@ -311,8 +314,8 @@ func mustSpec(t *testing.T) *josesealed.Spec {
 }
 
 func TestSealAndPublishProduceTheSameShapeWithFreshJTI(t *testing.T) {
-	reader := configure(t, sealruntime.TenancyDisabled)
-	h := declare(t)
+	rt, reader := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
+	h := declare(t, rt)
 	evt := paymentAuthorized{OrderID: "o3", Card: &cardData{PAN: testPAN}}
 	client := &capturingClient{}
 	before := sealCount(t, reader)
@@ -335,8 +338,8 @@ func TestPublishBytesAreWhatTheClientRetriesWith(t *testing.T) {
 	// The handle seals once and hands ONE byte slice to the client; the client's retry loop
 	// re-sends that slice, so every attempt carries the same jti. A caller-side retry after
 	// the client gives up is a NEW Publish and therefore a new seal — by design.
-	configure(t, sealruntime.TenancyDisabled)
-	h := declare(t)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
+	h := declare(t, rt)
 	client := &capturingClient{}
 	evt := paymentAuthorized{OrderID: "o4", Card: &cardData{PAN: testPAN}}
 	require.NoError(t, h.Publish(context.Background(), client, evt))
@@ -348,8 +351,8 @@ func TestPublishBytesAreWhatTheClientRetriesWith(t *testing.T) {
 }
 
 func TestSealerRefusesAConflictingTenant(t *testing.T) {
-	configure(t, sealruntime.TenancyPerTenant)
-	h := declare(t)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyPerTenant)
+	h := declare(t, rt)
 	client := &capturingClient{}
 	// tenantstamp.Resolve with an empty replay key accepts any context tenant; a conflict
 	// can only come from the wrapper below. Here the context carries a tenant and the tid follows it.
@@ -370,8 +373,8 @@ type pooledClient struct {
 func (c *pooledClient) ReplayKey() string { return c.key }
 
 func TestSignedTidFollowsThePoolKeyWhenTheContextHasNoTenant(t *testing.T) {
-	configure(t, sealruntime.TenancyPerTenant)
-	h := declare(t)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyPerTenant)
+	h := declare(t, rt)
 	client := &pooledClient{key: "tenant-pool"}
 	require.NoError(t, h.Publish(context.Background(), &client.capturingClient, paymentAuthorized{OrderID: "o6", Card: &cardData{PAN: testPAN}}))
 	env, _ := openWire(t, client.data[0], josesealed.TenantExpectation{})
@@ -384,8 +387,9 @@ func TestSignedTidFollowsThePoolKeyWhenTheContextHasNoTenant(t *testing.T) {
 }
 
 func TestPlainTypeIsUntouchedByTheCodec(t *testing.T) {
-	configure(t, sealruntime.TenancyDisabled)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
 	decls := messaging.NewDeclarations()
+	sealruntime.Bind(decls, rt)
 	decls.DeclareTopicExchange("payments")
 	h := messaging.DeclareTypedPublisher[plainEvent](decls, &messaging.PublisherOptions{Exchange: "payments", RoutingKey: "k", EventType: "plain"})
 	require.NoError(t, decls.Validate())
@@ -482,8 +486,8 @@ func TestNewSealerTagsTheActiveKidsAsSeal(t *testing.T) {
 }
 
 func TestSealSignsTheContextTenantWithAJTI(t *testing.T) {
-	configure(t, sealruntime.TenancyDisabled)
-	h := declare(t)
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyDisabled)
+	h := declare(t, rt)
 	data, jti, err := h.Seal(multitenant.SetTenant(context.Background(), "tenant-a"), paymentAuthorized{OrderID: "o7", Card: &cardData{PAN: testPAN}})
 	require.NoError(t, err)
 	require.NotEmpty(t, jti)
@@ -492,13 +496,12 @@ func TestSealSignsTheContextTenantWithAJTI(t *testing.T) {
 }
 
 // TestSealAndOpenRecordOnTheMeterTheyWereBuiltWith pins the seal instruments to construction:
-// a sealer and an opener keep recording on their own runtime's meter after a later runtime
-// with another meter replaced it.
+// a sealer and an opener keep recording on their own runtime's meter after another runtime
+// with another meter was bound.
 func TestSealAndOpenRecordOnTheMeterTheyWereBuiltWith(t *testing.T) {
 	keys(t)
 	store := withPair(withPair(kstest.NewMockKeyStore(), signFamily, "v1", signPriv), encFamily, "v1", encPriv)
-	readerA := configureConsumer(t, store)
-	rtA := sealruntime.Configured()
+	rtA, readerA := consumerRuntime(store)
 	codec := sealruntime.Registered()
 	sealer, err := codec.NewSealer(spec(t), eventType, rtA)
 	require.NoError(t, err)
@@ -507,7 +510,8 @@ func TestSealAndOpenRecordOnTheMeterTheyWereBuiltWith(t *testing.T) {
 	opener, err := provider.NewOpener(spec(t), eventType, rtA)
 	require.NoError(t, err)
 
-	readerB := configureConsumer(t, store)
+	rtB, readerB := consumerRuntime(store)
+	sealruntime.Bind(messaging.NewDeclarations(), rtB)
 
 	ctx := context.Background()
 	data, _, err := sealer.Seal(ctx, doorEvent())

@@ -105,8 +105,7 @@ func dottedEncryptEnv(t *testing.T) map[string]string {
 // built, and returns the bytes the broker would carry.
 func sealDotted(t *testing.T, cfg *config.Config, ks app.KeyStore, orderID string) []byte {
 	t.Helper()
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: ks, Active: cfg.Messaging.Seal.Active, Tenancy: sealruntime.TenancyDisabled})
-	h := declareAs[dottedPayment](t, eventType)
+	h := declareAs[dottedPayment](t, producerRuntime(ks, cfg.Messaging.Seal.Active), eventType)
 	client := &capturingClient{}
 	require.NoError(t, h.Publish(context.Background(), client, dottedPayment{OrderID: orderID, Card: &cardData{PAN: testPAN}}))
 	require.Len(t, client.data, 1)
@@ -117,8 +116,8 @@ func sealDotted(t *testing.T, cfg *config.Config, ks app.KeyStore, orderID strin
 // config built, returning the event and the delivery's metadata.
 func consumeDotted(t *testing.T, cfg *config.Config, ks app.KeyStore, body []byte) (dottedPayment, messaging.Metadata) {
 	t.Helper()
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: ks, Active: cfg.Messaging.Seal.Active, Tenancy: sealruntime.TenancyDisabled})
 	decls := messaging.NewDeclarations()
+	sealruntime.Bind(decls, producerRuntime(ks, cfg.Messaging.Seal.Active))
 	decls.DeclareQueue("q")
 	opts := &messaging.ConsumerOptions{Queue: "q", Consumer: "c", EventType: eventType}
 	var got dottedPayment
@@ -245,14 +244,14 @@ func TestSealedLookAlikeFamilyIsARenameNotARotation(t *testing.T) {
 	requireSealCode(t, err, josesealed.CodeKidUnknownGeneration)
 
 	// Through the consume seam the same refusal is the recoverable class.
-	sealruntime.Configure(&sealruntime.Runtime{KeyStore: kstest.NewMockKeyStore().
+	rt := &sealruntime.Runtime{KeyStore: kstest.NewMockKeyStore().
 		WithPublicKey("payments-sign-v1", &signPriv.PublicKey).WithGeneration("payments-sign", "v1", keystore.RolePublicOnly).
-		WithPrivateKey("payments-encrypt-v1", encPriv).WithGeneration("payments-encrypt", "v1", keystore.RolePrivate)})
+		WithPrivateKey("payments-encrypt-v1", encPriv).WithGeneration("payments-encrypt", "v1", keystore.RolePrivate)}
 	factory, ok := sealruntime.Registered().(sealruntime.OpenerProvider)
 	require.True(t, ok)
 	hyphenRuntimeSpec, err := sealruntime.Registered().ScanType(reflect.TypeFor[hyphenPayment]())
 	require.NoError(t, err)
-	opener, err := factory.NewOpener(hyphenRuntimeSpec, eventType, sealruntime.Configured())
+	opener, err := factory.NewOpener(hyphenRuntimeSpec, eventType, rt)
 	require.NoError(t, err)
 	_, err = opener.Open(t.Context(), rotated, sealruntime.TenantRule{}, &hyphenPayment{})
 	var refused *sealruntime.OpenRefusedError

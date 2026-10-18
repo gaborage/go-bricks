@@ -1,22 +1,25 @@
 // Package sealruntime is the link-time seam between the messaging package and the
 // payload-sealing codec (ADR-097). It mirrors internal/streamruntime (ADR-091): the
-// codec registers itself from messaging/sealed's init, the app configures the runtime
-// facts once at bootstrap, and messaging reads both without importing jose or the
-// keystore — so a process that never imports messaging/sealed carries no sealing code.
-// The app already links go-jose through HTTP jose; the import gate keeps `messaging`
-// itself jose-free. It lives in the module's root internal tree because app and messaging
-// both import it, so only go-bricks code can call Register and Configure; two indirect
-// re-aim paths stay open (#2010, ADR-139).
+// codec registers itself from messaging/sealed's init, each App binds its own runtime
+// facts and seal instruments to the *messaging.Declarations it builds, and messaging
+// reads both without importing jose or the keystore — so a process that never imports
+// messaging/sealed carries no sealing code. The app already links go-jose through HTTP
+// jose; the import gate keeps `messaging` itself jose-free. It lives in the module's root
+// internal tree because app and messaging both import it, so only go-bricks code can call
+// Register and Bind; a second App cannot re-aim another App's runtime (#2010), and a
+// module's Init writing the shared config or ModuleDeps stays open (#2146, ADR-139).
 package sealruntime
 
 import (
 	"context"
 	"crypto/rsa"
 	"errors"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -29,8 +32,8 @@ import (
 var ErrNotLinked = errors.New(
 	`a seal-tagged event type is declared but the sealing codec is not linked; import _ "github.com/gaborage/go-bricks/messaging/sealed"`)
 
-// ErrNotConfigured fires when a seal-tagged type is declared before the app configured
-// the sealing runtime — a wiring order mistake, never a per-message condition.
+// ErrNotConfigured fires when a seal-tagged type is declared on a Declarations no App
+// bound a runtime to — a wiring mistake, never a per-message condition.
 var ErrNotConfigured = errors.New("messaging: sealing runtime not configured before declarations were collected")
 
 // ErrKeyStoreMissing fires when a seal-tagged type is declared and no keystore module is
@@ -73,7 +76,7 @@ type KeyStore interface {
 	PrivateKey(name string) (*rsa.PrivateKey, error)
 }
 
-// Runtime is what the app knows and the codec needs, fixed once at bootstrap.
+// Runtime is what one App knows and the codec needs, fixed when the App binds it.
 type Runtime struct {
 	// KeyStore is the registered keystore, nil when no keystore module is registered.
 	KeyStore KeyStore
@@ -83,8 +86,8 @@ type Runtime struct {
 	Tenancy Tenancy
 	// Meter feeds the seal metrics; nil means no-op instruments.
 	Meter metric.MeterProvider
-	// Metrics are the seal instruments, built once from Meter by Configure; the codec binds
-	// them into each sealer and opener at construction. nil records nothing.
+	// Metrics are the seal instruments, built once from Meter by Bind; the codec binds them
+	// into each sealer and opener at construction. nil records nothing.
 	Metrics *Metrics
 }
 
@@ -204,9 +207,10 @@ type Codec interface {
 }
 
 var (
-	mu      sync.RWMutex
-	codec   Codec
-	runtime *Runtime
+	mu    sync.RWMutex
+	codec Codec
+	// binder is messaging's declarations binder; an atomic keeps Bind off the codec mutex.
+	binder atomic.Pointer[Binder]
 )
 
 // Register installs the codec. messaging/sealed calls it from init; a second call panics.
@@ -229,51 +233,51 @@ func Registered() Codec {
 	return codec
 }
 
-// Configure records the runtime facts. The app is the single writer and calls it before
-// collecting declarations; a later call replaces the facts (the app rebuilds them per
-// process start, tests per case), and the seal instruments are rebuilt from the meter.
-// The Activation selector is copied: a caller's later write to its own map can neither
-// re-aim a generation after bootstrap nor race a declaration being collected.
-func Configure(rt *Runtime) {
+// Binder attaches a bound runtime to decls, a *messaging.Declarations this seam cannot
+// name because messaging imports it.
+type Binder func(decls any, rt *Runtime)
+
+// RegisterBinder installs messaging's binder. messaging calls it from init; a second call
+// panics, as Register does.
+func RegisterBinder(b Binder) {
+	if b == nil {
+		panic("sealruntime: RegisterBinder called with nil")
+	}
+	if !binder.CompareAndSwap(nil, &b) {
+		panic("sealruntime: declarations binder already registered")
+	}
+}
+
+// Bind gives decls its own runtime: a copy of rt's facts, the Activation selector copied
+// so a caller's later write to its map cannot re-aim a generation, with the seal
+// instruments built once from rt.Meter. The app calls it once per Declarations it builds,
+// before collecting declarations; a seal-tagged declaration on a Declarations nobody
+// bound fails Validate with ErrNotConfigured.
+func Bind(decls any, rt *Runtime) {
 	if rt == nil {
-		panic("sealruntime: Configure called with nil")
+		panic("sealruntime: Bind called with nil")
 	}
-	rtCopy := rt.snapshot()
-	rtCopy.Metrics = newMetrics(rtCopy.Meter)
-	mu.Lock()
-	defer mu.Unlock()
-	runtime = &rtCopy
+	b := binder.Load()
+	if b == nil {
+		panic("sealruntime: no declarations binder registered (package messaging not linked)")
+	}
+	bound := rt.Snapshot()
+	bound.Metrics = NewMetrics(bound.Meter)
+	(*b)(decls, bound)
 }
 
-// Configured returns an independent snapshot of the runtime facts, or nil before
-// Configure ran. The stored facts cannot be reached through the result.
-func Configured() *Runtime {
-	mu.RLock()
-	defer mu.RUnlock()
-	if runtime == nil {
-		return nil
-	}
-	rtCopy := runtime.snapshot()
-	return &rtCopy
-}
-
-// snapshot copies the runtime with its own Active map (nil stays nil).
-func (rt *Runtime) snapshot() Runtime {
+// Snapshot copies the runtime with its own Active map (nil stays nil).
+func (rt *Runtime) Snapshot() *Runtime {
 	out := *rt
-	if rt.Active != nil {
-		out.Active = make(map[string]string, len(rt.Active))
-		for logical, version := range rt.Active {
-			out.Active[logical] = version
-		}
-	}
-	return out
+	out.Active = maps.Clone(rt.Active)
+	return &out
 }
 
-// Reset clears codec and runtime. Tests only.
+// Reset clears the codec. Tests only.
 func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
-	codec, runtime = nil, nil
+	codec = nil
 }
 
 // Metric names and attribute keys shared by the seal and open paths.
@@ -293,9 +297,9 @@ type Metrics struct {
 	openFailures metric.Int64Counter
 }
 
-// newMetrics builds the two instruments on mp (no-op when nil). An instrument the meter
+// NewMetrics builds the two instruments on mp (no-op when nil). An instrument the meter
 // refuses falls back to its no-op twin — metrics never break sealing.
-func newMetrics(mp metric.MeterProvider) *Metrics {
+func NewMetrics(mp metric.MeterProvider) *Metrics {
 	if mp == nil {
 		mp = metricnoop.NewMeterProvider()
 	}
