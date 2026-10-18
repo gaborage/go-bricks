@@ -172,7 +172,7 @@ fw, _, err = app.NewWithOptions(&app.Options{
 
 ### Redacting error messages
 
-`FilterConfig.ErrorRedactor func(error) string` is the one seam that sees error *content* — field-name masking also applies at `Err`, but only to replace the whole field, never to rewrite part of a message. When it is non-nil, every `LogEvent.Err(err)` call — the framework's own included — writes its return value under the `error` field instead of `err.Error()`. That matters because the framework calls `Err(err)` with consumer-authored errors at dozens of sites (handler failures, job failures, message-handler failures), which no service-layer scrub helper can reach.
+`FilterConfig.ErrorRedactor func(error) string` is the one seam that sees error *content* — field-name masking also applies at `Err`, but only to replace the whole field, never to rewrite part of a message. When it is non-nil, every `LogEvent.Err(err)` call — the framework's own included — writes its return value under the `error` field instead of `err.Error()`, except for a nil or typed-nil pointer error, which emits no field (see **Scoped to `Err`** below). That matters because the framework calls `Err(err)` with consumer-authored errors at dozens of sites (handler failures, job failures, message-handler failures), which no service-layer scrub helper can reach.
 
 ```go
 var panRegexp = regexp.MustCompile(`\d{13,19}`) // package level: compile once
