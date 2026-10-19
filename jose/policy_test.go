@@ -2,6 +2,7 @@ package jose
 
 import (
 	"crypto/rsa"
+	"errors"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -368,4 +369,78 @@ func TestPolicyValidateBareModeStillRequiresApprovedKeyAlg(t *testing.T) {
 	err := p.Validate()
 	require.ErrorIs(t, err, ErrAlgorithmDisallowed)
 	requireJOSEErrorCode(t, err, codeAlgorithmDisallowed)
+}
+
+// nestedInbound is a minimally valid JWE-of-JWS inbound policy.
+func nestedInbound() *Policy {
+	p := jwsOfJWEInbound()
+	p.Mode = SealModeJWEofJWS
+	return p
+}
+
+// refusingResolver fails the test if any key is resolved: a policy refusal must surface
+// before key resolution.
+type refusingResolver struct{ t *testing.T }
+
+func (r refusingResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
+	r.t.Errorf("PrivateKey(%q) resolved before the policy was refused", kid)
+	return nil, errors.New("unexpected key resolution")
+}
+
+func (r refusingResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
+	r.t.Errorf("PublicKey(%q) resolved before the policy was refused", kid)
+	return nil, errors.New("unexpected key resolution")
+}
+
+// throughDoor hands p to the door matching its Direction.
+func throughDoor(t *testing.T, p *Policy) error {
+	t.Helper()
+	if p.Direction == DirectionInbound {
+		_, _, _, err := Open("", p, refusingResolver{t})
+		return err
+	}
+	_, err := Seal([]byte(`{}`), p, refusingResolver{t})
+	return err
+}
+
+func TestPolicyValidateKidOptIns(t *testing.T) {
+	acceptMissingKid := func(p *Policy) { p.AcceptMissingKid = true }
+	tests := []struct {
+		name     string
+		base     func() *Policy
+		mutate   func(p *Policy)
+		wantCode string
+	}{
+		{"jwe_of_jws_inbound_accept_missing_kid", nestedInbound, acceptMissingKid, codePolicyModeMismatch},
+		{"jwe_of_jws_outbound_accept_missing_kid", nestedOutbound, acceptMissingKid, codePolicyModeMismatch},
+		{"jws_of_jwe_inbound_accept_missing_kid", jwsOfJWEInbound, acceptMissingKid, codePolicyModeMismatch},
+		{"jws_of_jwe_outbound_accept_missing_kid", jwsOfJWEOutbound, acceptMissingKid, codePolicyModeMismatch},
+		{"bare_outbound_accept_missing_kid", bareOutbound, acceptMissingKid, codePolicyDirectionMismatch},
+		{"unknown_mode_inbound_accept_missing_kid", bareInbound, func(p *Policy) {
+			p.Mode = SealMode(99)
+			p.AcceptMissingKid = true
+		}, codePolicyModeUnknown},
+		{"bare_inbound_accept_missing_kid_without_decrypt_kid", bareInbound, func(p *Policy) {
+			p.AcceptMissingKid = true
+			p.DecryptKid = ""
+		}, codePolicyIncomplete},
+		{"bare_inbound_accept_missing_kid_is_valid", bareInbound, acceptMissingKid, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.base()
+			tt.mutate(p)
+			err := p.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			requireJOSEErrorCode(t, err, tt.wantCode)
+
+			var doorErr *Error
+			require.ErrorAs(t, throughDoor(t, p), &doorErr)
+			assert.Equal(t, tt.wantCode, doorErr.Code)
+			assert.Zero(t, doorErr.Status)
+		})
+	}
 }

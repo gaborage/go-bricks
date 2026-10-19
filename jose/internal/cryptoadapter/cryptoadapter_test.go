@@ -291,3 +291,54 @@ func TestDecryptAndVerifyAcceptHeaderUnderTheBound(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"a":1}`, string(payload))
 }
+
+// mintJWE encrypts with go-jose directly and with no recipient key id, so the kid member is
+// exactly what extra writes: nothing, "", null or another kid.
+func mintJWE(t *testing.T, pub *rsa.PublicKey, payload []byte, extra map[jose.HeaderKey]any) string {
+	t.Helper()
+	encrypter, err := jose.NewEncrypter(jose.A256GCM, jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: pub},
+		&jose.EncrypterOptions{ExtraHeaders: extra})
+	require.NoError(t, err)
+	obj, err := encrypter.Encrypt(payload)
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	return compact
+}
+
+func TestDecryptAcceptMissingKid(t *testing.T) {
+	key := newKey(t)
+	kid := func(v any) map[jose.HeaderKey]any { return map[jose.HeaderKey]any{"kid": v} }
+	tests := []struct {
+		name    string
+		extra   map[jose.HeaderKey]any
+		accept  bool
+		wantErr error
+	}{
+		{"absent_kid_refused_by_default", nil, false, ErrKidMissing},
+		{"present_empty_kid_refused_by_default", kid(""), false, ErrKidMissing},
+		{"absent_kid", nil, true, nil},
+		{"present_expected_kid", kid("expected-kid"), true, nil},
+		{"present_wrong_kid", kid("wrong-kid"), true, ErrKidMismatch},
+		{"present_empty_kid", kid(""), true, ErrKidMismatch},
+		{"present_null_kid", kid(nil), true, ErrKidMismatch},
+	}
+	payload := []byte(`{"secret":"value"}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact := mintJWE(t, &key.PublicKey, payload, tt.extra)
+			got, _, err := Decrypt(compact, key, &DecryptOptions{
+				ExpectedKid:       "expected-kid",
+				AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
+				AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
+				AcceptMissingKid:  tt.accept,
+			})
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, payload, got)
+		})
+	}
+}

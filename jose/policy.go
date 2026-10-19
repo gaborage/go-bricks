@@ -78,6 +78,16 @@ type Policy struct {
 	// claim of the same name. SealModeBareJWE and SealModeJWSofJWE (inner JWE) OUTBOUND
 	// only. jose never judges its freshness on the way in; that is the caller's policy.
 	IATMillis bool
+
+	// AcceptMissingKid makes Open accept a JWE whose header has no kid member at all, for
+	// a peer that names keys out of band. SealModeBareJWE INBOUND only; DecryptKid stays
+	// required, since it names the resolver key, not the wire header. Only a literally
+	// absent member counts as missing: a written kid of any value, "" and null included,
+	// is still compared to DecryptKid and refused as JOSE_KID_UNKNOWN. That departs on
+	// purpose from go-jose, which reads a null kid as absent: go-bricks fails closed, so
+	// do not align it with go-jose. A kid-less token sealed to another key fails as
+	// JOSE_DECRYPT_FAILED, since there is no kid to report as unknown.
+	AcceptMissingKid bool
 }
 
 // hasInnerJWEHeaderFields reports whether the policy carries any of the inner-JWE header fields
@@ -120,12 +130,27 @@ func (p *Policy) validateMode() error {
 				Message:  "typ, protected headers and iat stamping require bare-JWE or JWS-of-JWE mode",
 			}
 		}
-		return nil
 	case SealModeBareJWE, SealModeJWSofJWE:
-		return p.validateInnerJWEHeaders()
+		if err := p.validateInnerJWEHeaders(); err != nil {
+			return err
+		}
 	default:
 		return errUnknownMode(p.Mode)
 	}
+	return p.validateKidOptInModes()
+}
+
+// validateKidOptInModes keeps each kid opt-in to the modes that admit it, one if per
+// opt-in so a mode can admit one without another.
+func (p *Policy) validateKidOptInModes() error {
+	if p.AcceptMissingKid && p.Mode != SealModeBareJWE {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyModeMismatch,
+			Message:  "accepting a missing kid requires bare-JWE mode",
+		}
+	}
+	return nil
 }
 
 func errUnknownMode(m SealMode) *Error {
@@ -178,6 +203,13 @@ func (p *Policy) validateDirection() error {
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyDirectionMismatch,
 			Message:  "typ, protected headers and iat stamping are outbound-only",
+		}
+	}
+	if p.Direction == DirectionOutbound && p.AcceptMissingKid {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "accepting a missing kid is inbound-only",
 		}
 	}
 	return nil
