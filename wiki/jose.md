@@ -601,7 +601,7 @@ func refuse(status int, code string) server.Result[envelopeReply] {
 | Outer `alg` other than `RS512` (checked before any key lookup) | `jose.Open` | `JOSE_ALGORITHM_DISALLOWED` | 400 |
 | A `kid` present on the outer JWS or the inner JWE (`""` and `null` included) that is not the resolver key name | `jose.Open` | `JOSE_KID_UNKNOWN` | 401 |
 | Tampered JWE string | `jose.Open` | `JOSE_SIGNATURE_INVALID` | 401 |
-| Outer `cty` present and not `JWE`, or inner `cty: JWS` | `jose.Open` | `JOSE_CTY_REJECTED` | 400 |
+| Outer `cty` present and not `JWE` (`""`, `null` and a non-string value included), or inner `cty: JWS` | `jose.Open` | `JOSE_CTY_REJECTED` | 400 |
 | Unsupported `alg` or `enc` on the inner JWE | `jose.Open` | `JOSE_MALFORMED` | 400 |
 | A key the tenant's store does not hold (the example's store also answers so for a nil key) | `jose.KeyStoreResolver` | `JOSE_KID_UNKNOWN` | 0 (the recipe answers 500) |
 
