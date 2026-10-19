@@ -8,16 +8,11 @@ import (
 
 // AttachDetachedJWS rebuilds the attached compact JWS Open takes from a detached one
 // (header..signature, RFC 7515 Appendix F) and the compact JWE string it signed, returning
-// header.base64url(jwe).signature. It does no crypto and touches no key: Open verifies the
-// result.
-//
-// detached gets the checks every door applies (surrounding whitespace trimmed, an encoded
-// protected header of at most 16 KiB, base64url only), then must be exactly three segments
-// with an empty middle and a non-empty header and signature. jwe must be non-empty and is
-// encoded verbatim, never trimmed or parsed: its exact bytes are what was signed, and Open
-// applies every inner-JWE check after the signature verifies. Every refusal is a 400
-// JOSE_MALFORMED. Finding the signature in an HTTP request (its header, the scheme prefix, a
-// missing or repeated header, a cap on the whole value) is the caller's job.
+// header.base64url(jwe).signature. It does no crypto: Open verifies the result. detached must
+// pass the compact checks every door applies and be exactly three segments with an empty
+// middle; jwe must be non-empty and is encoded verbatim, because its exact bytes are what was
+// signed. Every refusal is a 400 JOSE_MALFORMED. Locating the signature in an HTTP request is
+// the caller's job.
 func AttachDetachedJWS(detached, jwe string) (string, error) {
 	segments, err := cryptoadapter.CompactSegments(detached)
 	if err != nil {

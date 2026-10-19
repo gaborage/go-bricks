@@ -12,27 +12,19 @@ import (
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
-// signedSerializations signs payload RS512 with go-jose directly and returns three
-// serializations of the one signature object: detached, attached and JSON.
-func signedSerializations(t *testing.T, payload string) (detached, attached, full string) {
-	t.Helper()
-	signPriv, _ := signingKeys()
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS512, Key: signPriv}, nil)
-	require.NoError(t, err)
-	obj, err := signer.Sign([]byte(payload))
-	require.NoError(t, err)
-	detached, err = obj.DetachedCompactSerialize()
-	require.NoError(t, err)
-	attached, err = obj.CompactSerialize()
-	require.NoError(t, err)
-	return detached, attached, obj.FullSerialize()
-}
-
 // detachedJWE is a real kid-less inner JWE, the string the profile's peer signs.
 func detachedJWE(t *testing.T) string {
 	t.Helper()
 	_, encPub := bareKeys()
 	return mintMinimalInner(t, encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
+}
+
+// detachedSignature signs payload RS512 and returns the detached form. mintDetachedOuter also
+// asserts that AttachDetachedJWS rebuilds go-jose's own attached form byte for byte.
+func detachedSignature(t *testing.T, payload string) string {
+	t.Helper()
+	signPriv, _ := signingKeys()
+	return mintDetachedOuter(t, signPriv, jose.RS512, payload, nil)
 }
 
 func middleSegment(t *testing.T, compact string) string {
@@ -42,20 +34,18 @@ func middleSegment(t *testing.T, compact string) string {
 	return segments[1]
 }
 
-// The three payload lengths cover every residue mod 3, so a padded encoding cannot pass.
+// The three payload lengths cover every residue mod 3, so a padded encoding cannot pass the
+// byte-for-byte comparison detachedSignature makes.
 func TestAttachDetachedJWSMatchesGoJoseCompactSerialize(t *testing.T) {
 	jwe := detachedJWE(t)
 	for _, payload := range []string{jwe, jwe + "x", jwe + "xx"} {
-		detached, attached, _ := signedSerializations(t, payload)
-		got, err := AttachDetachedJWS(detached, payload)
-		require.NoError(t, err)
-		assert.Equal(t, attached, got)
+		detachedSignature(t, payload)
 	}
 }
 
 func TestAttachDetachedJWSEncodesJWEVerbatim(t *testing.T) {
 	jwe := detachedJWE(t)
-	detached, _, _ := signedSerializations(t, jwe)
+	detached := detachedSignature(t, jwe)
 	plain, err := AttachDetachedJWS(detached, jwe)
 	require.NoError(t, err)
 
@@ -73,55 +63,44 @@ func TestAttachDetachedJWSEncodesJWEVerbatim(t *testing.T) {
 
 func TestAttachDetachedJWSRefusals(t *testing.T) {
 	jwe := detachedJWE(t)
-	detached, attached, full := signedSerializations(t, jwe)
-	header, _, _ := strings.Cut(detached, ".")
-	signature := detached[strings.LastIndexByte(detached, '.')+1:]
+	detached := detachedSignature(t, jwe)
+	header, signature, _ := strings.Cut(detached, "..")
+	jsonSerialization := `{"protected":"` + header + `","payload":"","signature":"` + signature + `"}`
 
 	tests := []struct {
 		name     string
 		detached string
 		jwe      string
+		cause    error // the adapter's refusal; nil when a rule of this package refused
 	}{
-		{"embedded_payload", attached, jwe},
-		{"two_segments", header + "." + signature, jwe},
-		{"five_segment_jwe", jwe, jwe},
-		{"json_serialization", full, jwe},
-		{"jws_scheme_prefix", "JWS " + detached, jwe},
-		{"interior_whitespace", header[:8] + " " + header[8:] + ".." + signature, jwe},
-		{"non_base64url_character", header + ".." + signature[:10] + "+" + signature[11:], jwe},
-		{"empty_header_segment", ".." + signature, jwe},
-		{"empty_signature_segment", header + "..", jwe},
-		// Not 1 mod 4, so only the size bound can refuse it.
-		{"oversize_header", strings.Repeat("A", 16*1024+4) + ".." + signature, jwe},
-		{"empty_jwe", detached, ""},
+		{"embedded_payload", spliceDetached(t, detached, jwe), jwe, nil},
+		{"two_segments", header + "." + signature, jwe, cryptoadapter.ErrNotCompact},
+		{"five_segment_jwe", jwe, jwe, nil},
+		{"json_serialization", jsonSerialization, jwe, cryptoadapter.ErrNotCompact},
+		{"jws_scheme_prefix", "JWS " + detached, jwe, cryptoadapter.ErrNotCompact},
+		{"interior_whitespace", header[:8] + " " + header[8:] + ".." + signature, jwe, cryptoadapter.ErrNotCompact},
+		{"non_base64url_character", header + ".." + signature[:10] + "+" + signature[11:], jwe, cryptoadapter.ErrNotCompact},
+		{"empty_header_segment", ".." + signature, jwe, nil},
+		{"empty_signature_segment", header + "..", jwe, nil},
+		// 16 KiB + 4: over the adapter's bound and not 1 mod 4, so only the size bound refuses it.
+		{"oversize_header", strings.Repeat("A", 16*1024+4) + ".." + signature, jwe, cryptoadapter.ErrHeaderTooLarge},
+		{"empty_jwe", detached, "", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := AttachDetachedJWS(tt.detached, tt.jwe)
 			assert.Empty(t, got)
-			requireJOSEErrorStatus(t, err, codeMalformed, 400)
 			require.ErrorIs(t, err, ErrMalformed)
 			var jerr *Error
 			require.ErrorAs(t, err, &jerr)
+			assert.Equal(t, codeMalformed, jerr.Code)
+			assert.Equal(t, 400, jerr.Status)
 			assert.Equal(t, "Malformed detached JWS", jerr.Message)
+			if tt.cause == nil {
+				assert.NoError(t, jerr.Cause)
+				return
+			}
+			assert.ErrorIs(t, jerr.Cause, tt.cause)
 		})
 	}
-}
-
-// Cause carries the adapter's refusal and nothing for a rule this package applies itself.
-func TestAttachDetachedJWSRefusalCause(t *testing.T) {
-	jwe := detachedJWE(t)
-	detached, attached, _ := signedSerializations(t, jwe)
-	signature := detached[strings.LastIndexByte(detached, '.')+1:]
-	cause := func(detached, jwe string) error {
-		t.Helper()
-		_, err := AttachDetachedJWS(detached, jwe)
-		var jerr *Error
-		require.ErrorAs(t, err, &jerr)
-		return jerr.Cause
-	}
-
-	require.ErrorIs(t, cause(strings.Repeat("A", 16*1024+4)+".."+signature, jwe), cryptoadapter.ErrHeaderTooLarge)
-	assert.NoError(t, cause(attached, jwe), "embedded payload")
-	assert.NoError(t, cause(detached, ""), "empty jwe")
 }

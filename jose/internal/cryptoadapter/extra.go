@@ -139,10 +139,8 @@ func PeekProtectedHeader(compact string) (Header, error) {
 	return newHeader(params), nil
 }
 
-// CompactSegments returns the segments of a compact serialization after the checks every door
-// applies (boundedSegments), and judges nothing else: a caller with a narrower shape, such as
-// a detached JWS, applies its own rules to the result. The error is ErrNotCompact or
-// ErrHeaderTooLarge.
+// CompactSegments returns the segments boundedSegments admits, judging nothing else; the error
+// is ErrNotCompact or ErrHeaderTooLarge.
 func CompactSegments(compact string) ([]string, error) {
 	_, segments, err := boundedSegments(compact)
 	return segments, err
@@ -151,7 +149,7 @@ func CompactSegments(compact string) ([]string, error) {
 // boundedSegments prepares a compact for parsing and refuses it on three grounds, in
 // increasing cost: a part count that is not 3 or 5, an encoded segment 0 past
 // maxPeekHeaderBytes, and any segment that is not base64url. Every door that parses a
-// compact — Peek, Decrypt, Verify — runs this first, and CompactSegments exposes it. go-jose rejects a wrong part count
+// compact — Peek, Decrypt, Verify — runs this first. go-jose rejects a wrong part count
 // itself but imposes no size bound, and it accepts the JSON serialization too, whose
 // dot-delimited runs say nothing about the size of its protected member — so the charset
 // gate is what keeps the size bound meaningful. Surrounding whitespace is trimmed rather

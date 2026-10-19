@@ -410,9 +410,6 @@ func TestCompactSegmentsRefusals(t *testing.T) {
 	}{
 		{"two_segments", "aGRy.c2ln", ErrNotCompact},
 		{"oversize_header", strings.Repeat("A", maxPeekHeaderBytes+4) + "..c2ln", ErrHeaderTooLarge},
-		{"non_base64url_character", "aGRy..c2l+", ErrNotCompact},
-		{"interior_whitespace", "aGR yx..c2ln", ErrNotCompact},
-		{"json_serialization", `{"protected":"aGRy","signature":"c2ln"}`, ErrNotCompact},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
