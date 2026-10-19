@@ -394,3 +394,31 @@ func TestNewHeaderReportsCtyPresence(t *testing.T) {
 		})
 	}
 }
+
+// A detached JWS keeps an empty middle segment, which the shared checks accept; they still trim.
+func TestCompactSegmentsReturnsTrimmedSegments(t *testing.T) {
+	segments, err := CompactSegments(" aGRy..c2ln\n")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"aGRy", "", "c2ln"}, segments)
+}
+
+func TestCompactSegmentsRefusals(t *testing.T) {
+	tests := []struct {
+		name    string
+		compact string
+		want    error
+	}{
+		{"two_segments", "aGRy.c2ln", ErrNotCompact},
+		{"oversize_header", strings.Repeat("A", maxPeekHeaderBytes+4) + "..c2ln", ErrHeaderTooLarge},
+		{"non_base64url_character", "aGRy..c2l+", ErrNotCompact},
+		{"interior_whitespace", "aGR yx..c2ln", ErrNotCompact},
+		{"json_serialization", `{"protected":"aGRy","signature":"c2ln"}`, ErrNotCompact},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segments, err := CompactSegments(tt.compact)
+			assert.Nil(t, segments)
+			assert.ErrorIs(t, err, tt.want)
+		})
+	}
+}
