@@ -495,6 +495,7 @@ func (h *envelopeHandler) submit(req envelopeRequest, ctx server.HandlerContext)
     if err != nil {
         return h.fail(err), nil
     }
+    // Replay protection goes here, now that Open returned nil (note c).
 
     // The opened plaintext is unvalidated input: the pipeline's validate tags ran
     // on envelopeRequest only.
