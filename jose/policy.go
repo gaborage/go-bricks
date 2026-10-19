@@ -82,10 +82,10 @@ type Policy struct {
 	// AcceptMissingKid makes Open accept a JWE whose header has no kid member at all, for
 	// a peer that names keys out of band. SealModeBareJWE INBOUND only; DecryptKid stays
 	// required, since it names the resolver key, not the wire header. Only a literally
-	// absent member counts as missing: a written kid of any value, "" and null included,
-	// is still compared to DecryptKid and refused as JOSE_KID_UNKNOWN. That departs on
-	// purpose from go-jose, which reads a null kid as absent: go-bricks fails closed, so
-	// do not align it with go-jose.
+	// absent member counts as missing: a written kid is still compared to DecryptKid, and
+	// any other value, "" and null included, is JOSE_KID_UNKNOWN (a non-string kid stays
+	// JOSE_MALFORMED). That departs on purpose from go-jose, which reads a null kid as
+	// absent: go-bricks fails closed, so do not align it with go-jose.
 	AcceptMissingKid bool
 }
 
