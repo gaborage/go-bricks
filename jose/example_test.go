@@ -342,6 +342,18 @@ func (f fakeTenantKeys) ForTenant(ctx context.Context, tenantID string) (TenantK
 	return keys, nil
 }
 
+func (fakeTenantKeys) Authorize(context.Context, string) error {
+	return nil
+}
+
+// forbiddenTenantKeys refuses every principal. Its ForTenant fails, so a key lookup that
+// ran before Authorize would answer 500, not 403.
+type forbiddenTenantKeys struct{ noTenantKeys }
+
+func (forbiddenTenantKeys) Authorize(context.Context, string) error {
+	return errTenantForbidden
+}
+
 type fakeOperations struct {
 	submitted   []Order
 	statusCalls int
@@ -580,6 +592,19 @@ func TestDetachedSignatureEnvelopeRecipe(t *testing.T) {
 		assert.Equal(t, http.StatusOK, status)
 		assert.JSONEq(t, receiptJSON, string(f.openReply(t, reply["data"])))
 		assert.Equal(t, 1, ops.statusCalls)
+	})
+
+	t.Run("tenant_forbidden", func(t *testing.T) {
+		h, ops := newTestEnvelopeHandler(t, forbiddenTenantKeys{})
+		forbidden := refuse(http.StatusForbidden, codeTenantForbidden)
+		res, apiErr := h.submit(envelopeRequest{Data: v.jwe}, envelopeContext(t, http.MethodPost, tenantA, header))
+		require.Nil(t, apiErr)
+		assert.Equal(t, forbidden, res)
+		res, apiErr = h.status(statusRequest{}, envelopeContext(t, http.MethodGet, tenantA))
+		require.Nil(t, apiErr)
+		assert.Equal(t, forbidden, res, "the bodyless twin refuses too")
+		assert.Empty(t, ops.submitted)
+		assert.Zero(t, ops.statusCalls)
 	})
 
 	// Any change to the signed string breaks the signature, which Open checks before it decrypts.
