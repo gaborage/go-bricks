@@ -3,6 +3,8 @@ package httpclient_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -1654,13 +1656,38 @@ func TestJOSETransportUnboundedCapRule(t *testing.T) {
 	}
 }
 
-// TestJOSETransportOpensAKidlessBareReply pins that AcceptMissingKid reaches the transport
-// through the policy alone: no Envelope, an application/jose reply.
-func TestJOSETransportOpensAKidlessBareReply(t *testing.T) {
+// kidMemberPresent reports whether a compact's protected header has a kid member at all.
+// It reports through t.Errorf, so it is safe on httptest's handler goroutine.
+func kidMemberPresent(t *testing.T, compact string) bool {
+	t.Helper()
+	segment, _, _ := strings.Cut(compact, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(segment)
+	if err != nil {
+		t.Errorf("decode protected header: %v", err)
+		return true
+	}
+	var params map[string]any
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Errorf("unmarshal protected header: %v", err)
+		return true
+	}
+	_, ok := params["kid"]
+	return ok
+}
+
+// TestJOSETransportServesAKidlessBarePeer pins that the kid opt-ins reach the transport
+// through the policy alone: no Envelope, application/jose both ways.
+func TestJOSETransportServesAKidlessBarePeer(t *testing.T) {
 	keys, err := visaKeys()
 	require.NoError(t, err)
 	reply := mintKidlessJWE(t, &keys.client.PublicKey, []byte(`{"token":"tok-42"}`))
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	requestKid := make(chan bool, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Errorf("read request body: %v", readErr)
+		}
+		requestKid <- kidMemberPresent(t, string(body))
 		w.Header().Set("Content-Type", "application/jose")
 		_, _ = w.Write([]byte(reply))
 	}))
@@ -1668,18 +1695,28 @@ func TestJOSETransportOpensAKidlessBareReply(t *testing.T) {
 
 	client, err := httpclient.NewBuilder(logger.New("info", false)).
 		WithJOSE(httpclient.JOSEConfig{
+			Outbound: &jose.Policy{
+				Direction:  jose.DirectionOutbound,
+				Mode:       jose.SealModeBareJWE,
+				EncryptKid: "peer-key",
+				OmitKid:    true,
+			},
 			Inbound: &jose.Policy{
 				Direction:        jose.DirectionInbound,
 				Mode:             jose.SealModeBareJWE,
 				DecryptKid:       "our-key",
 				AcceptMissingKid: true,
 			},
-			Resolver: jositest.NewTestResolver(map[string]any{"our-key": keys.client}),
+			Resolver: jositest.NewTestResolver(map[string]any{"peer-key": keys.visa, "our-key": keys.client}),
 		}).Build()
 	require.NoError(t, err)
 
-	resp, err := client.Get(context.Background(), &httpclient.Request{URL: server.URL})
+	resp, err := client.Post(context.Background(), &httpclient.Request{
+		URL:  server.URL,
+		Body: []byte(`{"amount":1250}`),
+	})
 	require.NoError(t, err)
+	assert.False(t, <-requestKid, "the request JWE carries a kid member")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
 }

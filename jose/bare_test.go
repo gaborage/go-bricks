@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -649,7 +650,7 @@ func TestOpenRefusesADisallowedDeclaredAlgorithm(t *testing.T) {
 	}
 }
 
-// ---- kid-less peers: AcceptMissingKid ----
+// ---- kid-less peers: AcceptMissingKid / OmitKid ----
 
 // mintBareJWE encrypts with go-jose directly and with no recipient key id, so the kid
 // member is exactly what extra writes: nothing, "", null or a non-string.
@@ -735,4 +736,73 @@ func TestOpenBareJWEKidShapes(t *testing.T) {
 			assert.Equal(t, tt.wantKid, jerr.Kid)
 		})
 	}
+}
+
+// headerParams decodes segment 0 straight into a map, so an absent kid member can be told
+// from an empty one; peekHeader reads both as "".
+func headerParams(t *testing.T, compact string) map[string]any {
+	t.Helper()
+	segment, _, _ := strings.Cut(compact, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(segment)
+	require.NoError(t, err)
+	var params map[string]any
+	require.NoError(t, json.Unmarshal(raw, &params))
+	return params
+}
+
+// goJoseKeyID is the kid go-jose's own parse reports, checked independently of the map.
+func goJoseKeyID(t *testing.T, compact string) string {
+	t.Helper()
+	obj, err := jose.ParseEncrypted(compact, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A128GCM})
+	require.NoError(t, err)
+	return obj.Header.KeyID
+}
+
+func TestSealBareJWEOmitKid(t *testing.T) {
+	f := newBareFixture(t)
+	f.outbound.OmitKid = true
+	payload := []byte(`{"amount":1250}`)
+
+	compact, err := Seal(payload, f.outbound, f.resolver)
+	require.NoError(t, err)
+	_, hasKid := headerParams(t, compact)["kid"]
+	assert.False(t, hasKid)
+	assert.Empty(t, goJoseKeyID(t, compact))
+	assert.Equal(t, payload, decryptWithGoJose(t, compact, f.ourPriv, jose.A128GCM))
+
+	requireJOSEErrorCode(t, openErr(compact, f.inbound, f.resolver), codeKidMissing)
+	f.inbound.AcceptMissingKid = true
+	plaintext, _, _, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, payload, plaintext)
+}
+
+func TestSealBareJWEWritesKidWithoutOmitKid(t *testing.T) {
+	f := newBareFixture(t)
+
+	compact, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "our-key", headerParams(t, compact)["kid"])
+	assert.Equal(t, "our-key", goJoseKeyID(t, compact))
+}
+
+func TestSealBareJWEOmitKidLeavesTheOtherHeadersAlone(t *testing.T) {
+	original := nowMillis
+	t.Cleanup(func() { nowMillis = original })
+	nowMillis = func() int64 { return 1_700_000_000_123 }
+	f := newBareFixture(t)
+	f.outbound.Cty = DefaultCty
+	f.outbound.Typ = "JOSE"
+	f.outbound.IATMillis = true
+	f.outbound.ProtectedHeaders = map[string]any{"iss": "acme"}
+
+	withKid, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+	f.outbound.OmitKid = true
+	withoutKid, err := Seal([]byte(`{}`), f.outbound, f.resolver)
+	require.NoError(t, err)
+
+	want := headerParams(t, withKid)
+	delete(want, "kid")
+	assert.Equal(t, want, headerParams(t, withoutKid))
 }

@@ -87,6 +87,11 @@ type Policy struct {
 	// JOSE_MALFORMED). That departs on purpose from go-jose, which reads a null kid as
 	// absent: go-bricks fails closed, so do not align it with go-jose.
 	AcceptMissingKid bool
+
+	// OmitKid makes Seal write no kid: neither the protected-header member nor a recipient
+	// key id. SealModeBareJWE OUTBOUND only; EncryptKid stays required and still selects
+	// the resolver key.
+	OmitKid bool
 }
 
 // hasInnerJWEHeaderFields reports whether the policy carries any of the inner-JWE header fields
@@ -150,6 +155,13 @@ func (p *Policy) validateKidOptInModes() error {
 			Message:  "accepting a missing kid requires bare-JWE mode",
 		}
 	}
+	if p.OmitKid && p.Mode != SealModeBareJWE {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyModeMismatch,
+			Message:  "omitting the kid requires bare-JWE mode",
+		}
+	}
 	return nil
 }
 
@@ -203,6 +215,13 @@ func (p *Policy) validateDirection() error {
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyDirectionMismatch,
 			Message:  "typ, protected headers and iat stamping are outbound-only",
+		}
+	}
+	if p.Direction == DirectionInbound && p.OmitKid {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "omitting the kid is outbound-only",
 		}
 	}
 	if p.Direction == DirectionOutbound && p.AcceptMissingKid {

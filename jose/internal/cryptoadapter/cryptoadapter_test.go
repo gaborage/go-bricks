@@ -3,6 +3,8 @@ package cryptoadapter
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -336,6 +338,61 @@ func TestDecryptAcceptMissingKid(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
+			require.NoError(t, err)
+			assert.Equal(t, payload, got)
+		})
+	}
+}
+
+// protectedParams decodes segment 0 into a map, so an absent kid member can be told from an
+// empty one.
+func protectedParams(t *testing.T, compact string) map[string]any {
+	t.Helper()
+	segment, _, _ := strings.Cut(compact, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(segment)
+	require.NoError(t, err)
+	var params map[string]any
+	require.NoError(t, json.Unmarshal(raw, &params))
+	return params
+}
+
+func TestEncryptOmitKid(t *testing.T) {
+	key := newKey(t)
+	tests := []struct {
+		name    string
+		omit    bool
+		wantKid string
+	}{
+		{"writes_kid_by_default", false, "test-key"},
+		{"omits_kid", true, ""},
+	}
+	payload := []byte(`{"secret":"value"}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact, err := Encrypt(payload, &key.PublicKey, &EncryptOptions{
+				Kid:     "test-key",
+				KeyAlg:  jose.RSA_OAEP_256,
+				Enc:     jose.A256GCM,
+				OmitKid: tt.omit,
+			})
+			require.NoError(t, err)
+
+			kid, present := protectedParams(t, compact)["kid"]
+			assert.Equal(t, !tt.omit, present)
+			if present {
+				assert.Equal(t, tt.wantKid, kid)
+			}
+			obj, err := jose.ParseEncrypted(compact,
+				[]jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantKid, obj.Header.KeyID)
+
+			got, _, err := Decrypt(compact, key, &DecryptOptions{
+				ExpectedKid:       "test-key",
+				AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
+				AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
+				AcceptMissingKid:  true,
+			})
 			require.NoError(t, err)
 			assert.Equal(t, payload, got)
 		})

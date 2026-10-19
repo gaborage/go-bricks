@@ -25,12 +25,13 @@ func sealBare(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	}
 
 	jweCompact, err := cryptoadapter.Encrypt(payload, encKey, &cryptoadapter.EncryptOptions{
-		Kid:    p.EncryptKid,
-		KeyAlg: p.KeyAlg,
-		Enc:    p.Enc,
-		Cty:    p.Cty,
-		Typ:    p.Typ,
-		Extra:  p.bareExtraHeaders(),
+		Kid:     p.EncryptKid,
+		KeyAlg:  p.KeyAlg,
+		Enc:     p.Enc,
+		Cty:     p.Cty,
+		Typ:     p.Typ,
+		Extra:   p.bareExtraHeaders(),
+		OmitKid: p.OmitKid,
 	})
 	if err != nil {
 		return "", encryptFailed(p, err)

@@ -187,6 +187,9 @@ type EncryptOptions struct {
 	Typ    string
 	// Extra is written into the protected header verbatim; same collision rule as SignOptions.
 	Extra map[string]any
+	// OmitKid writes no kid: neither the header member nor go-jose's recipient key id. The
+	// zero value writes Kid. jose/sealed never sets it.
+	OmitKid bool
 }
 
 // Encrypt produces a compact JWE over payload using the public key.
@@ -194,8 +197,12 @@ func Encrypt(payload []byte, key *rsa.PublicKey, opts *EncryptOptions) (string, 
 	if err := CheckExtra(opts.Extra); err != nil {
 		return "", err
 	}
-	encrypterOpts := (&jose.EncrypterOptions{}).
-		WithHeader(jose.HeaderKey("kid"), opts.Kid)
+	encrypterOpts := &jose.EncrypterOptions{}
+	recipientKid := ""
+	if !opts.OmitKid {
+		encrypterOpts = encrypterOpts.WithHeader(jose.HeaderKey("kid"), opts.Kid)
+		recipientKid = opts.Kid
+	}
 	if opts.Cty != "" {
 		encrypterOpts = encrypterOpts.WithContentType(jose.ContentType(opts.Cty))
 	}
@@ -208,7 +215,7 @@ func Encrypt(payload []byte, key *rsa.PublicKey, opts *EncryptOptions) (string, 
 	encrypter, err := jose.NewEncrypter(opts.Enc, jose.Recipient{
 		Algorithm: opts.KeyAlg,
 		Key:       key,
-		KeyID:     opts.Kid,
+		KeyID:     recipientKid,
 	}, encrypterOpts)
 	if err != nil {
 		return "", ErrEncrypterCreation
