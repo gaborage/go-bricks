@@ -342,9 +342,13 @@ const (
     codePayloadInvalid         = "PAYLOAD_INVALID"
     codeInternal               = "INTERNAL"
     codeRequestRejected        = "REQUEST_REJECTED"
+    codeTenantForbidden        = "TENANT_FORBIDDEN"
 )
 
-var errUnknownKey = errors.New("unknown key name")
+var (
+    errUnknownKey      = errors.New("unknown key name")
+    errTenantForbidden = errors.New("principal not authorized for tenant") // Authorize's refusal; fail answers 403
+)
 
 // consumerCodes maps jose codes into the consumer's own vocabulary; any other
 // code answers codeRequestRejected.
@@ -379,9 +383,12 @@ type TenantKeySet struct {
     PeerSeal   *rsa.PublicKey
 }
 
-// TenantKeys is the consumer's per-tenant key source. ForTenant runs on every request,
-// so it returns keys already parsed and cached.
+// TenantKeys is the consumer's per-tenant source. Authorize reads the request's principal
+// from ctx (for example auth.PrincipalFromContext) and returns errTenantForbidden unless
+// that principal may act for tenantID, including when there is none. ForTenant runs on
+// every request, so it returns keys already parsed and cached.
 type TenantKeys interface {
+    Authorize(ctx context.Context, tenantID string) error
     ForTenant(ctx context.Context, tenantID string) (TenantKeySet, error)
 }
 
@@ -531,6 +538,11 @@ func (h *envelopeHandler) tenantResolver(ctx context.Context) (string, jose.KeyR
     if err != nil {
         return "", nil, err // ErrNoTenant: a wiring fault (multi-tenancy off, or a skipped route), so a 500
     }
+    // The tenant header is caller-written: authorize before any tenant-scoped lookup (note a).
+    err = h.keys.Authorize(ctx, tenantID)
+    if err != nil {
+        return "", nil, err
+    }
     keys, err := h.keys.ForTenant(ctx, tenantID)
     if err != nil {
         return "", nil, err
@@ -554,6 +566,10 @@ func (h *envelopeHandler) sealReply(out Receipt, resolver jose.KeyResolver) serv
 // fail maps any error to the consumer's envelope. Only jerr.Code is logged for a jose
 // refusal; Cause, Error() and plaintext never reach the wire.
 func (h *envelopeHandler) fail(err error) server.Result[envelopeReply] {
+    if errors.Is(err, errTenantForbidden) {
+        h.log.Warn().Msg("detached-signature envelope forbidden for the tenant")
+        return refuse(http.StatusForbidden, codeTenantForbidden)
+    }
     var jerr *jose.Error
     if !errors.As(err, &jerr) {
         h.log.Error().Err(err).Msg("detached-signature envelope failed")
@@ -578,7 +594,7 @@ func refuse(status int, code string) server.Result[envelopeReply] {
 
 ### Notes
 
-**a. Sender authentication.** On a body-carrying request, the detached `RS512` signature proves the sender holds the verify key the resolver chose for the header-named tenant. It covers the JWE compact string only, not the method, path, query, the caller-written tenant header or any other body member, so a signed body replayed to another route of the same tenant also verifies. The tie to the tenant holds only while each tenant has its own verify key: if two tenants share one verify key, a body signed for one verifies under the other tenant's header. A bodyless request carries no JWE, so nothing is signed over it; the bearer credential and the transport are its only sender authentication. `auth.Middleware(v)` on the route group is the framework's bearer door, and it is identification, not authorization: the handler still has to authorize the principal for the resolved tenant, because the tenant header is caller-written.
+**a. Sender authentication.** On a body-carrying request, the detached `RS512` signature proves the sender holds the verify key the resolver chose for the header-named tenant. It covers the JWE compact string only, not the method, path, query, the caller-written tenant header or any other body member, so a signed body replayed to another route of the same tenant also verifies. The tie to the tenant holds only while each tenant has its own verify key: if two tenants share one verify key, a body signed for one verifies under the other tenant's header. A bodyless request carries no JWE, so nothing is signed over it; the bearer credential and the transport are its only sender authentication. `auth.Middleware(v)` on the route group is the framework's bearer door, and it is identification, not authorization. Because the tenant header is caller-written, `tenantResolver` calls the consumer's `TenantKeys.Authorize` before any tenant-scoped key lookup or operation, on both routes. `Authorize` reads the principal from the request context and refuses one that may not act for the tenant, and also refuses when no principal is present, so a route group registered without a bearer door answers 403 instead of serving any tenant.
 
 **b. Reply sealing departs from the tagged path's rule.** The tagged path's invariant is that a response is sealed only when the inbound request verified (see the security invariant above). This recipe seals the reply `data` on every method, bodyless ones included, where nothing was verified. Sealing to the tenant's key gives confidentiality toward that key's holder; it does not authenticate the requester. The minimal mode is open-only, so the reply is a bare seal and carries no signature.
 
@@ -596,6 +612,7 @@ func refuse(status int, code string) server.Result[envelopeReply] {
 | --- | --- | --- | --- |
 | Signature header missing, duplicated, over the bound, or without the `JWS ` scheme | consumer handler | consumer's own | consumer's choice |
 | Empty `data`, including a body the binder skipped (no JSON `Content-Type`) | consumer handler | consumer's own | consumer's choice |
+| A principal not authorized for the resolved tenant, or no principal | consumer's `TenantKeys.Authorize` | consumer's own (`TENANT_FORBIDDEN` here) | consumer's choice (403 here) |
 | Detached token with an embedded payload, a non-compact value, or a header segment over 16 KiB | `jose.AttachDetachedJWS` | `JOSE_MALFORMED` | 400 |
 | Header segment that is not a JSON object, or an outer `kid` that is not a string | `jose.Open` | `JOSE_OUTER_NOT_JWS` | 400 |
 | Outer `alg` other than `RS512` (checked before any key lookup) | `jose.Open` | `JOSE_ALGORITHM_DISALLOWED` | 400 |

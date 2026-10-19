@@ -44,9 +44,13 @@ const (
 	codePayloadInvalid         = "PAYLOAD_INVALID"
 	codeInternal               = "INTERNAL"
 	codeRequestRejected        = "REQUEST_REJECTED"
+	codeTenantForbidden        = "TENANT_FORBIDDEN"
 )
 
-var errUnknownKey = errors.New("unknown key name")
+var (
+	errUnknownKey      = errors.New("unknown key name")
+	errTenantForbidden = errors.New("principal not authorized for tenant") // Authorize's refusal; fail answers 403
+)
 
 // consumerCodes maps jose codes into the consumer's own vocabulary; any other
 // code answers codeRequestRejected.
@@ -81,9 +85,12 @@ type TenantKeySet struct {
 	PeerSeal   *rsa.PublicKey
 }
 
-// TenantKeys is the consumer's per-tenant key source. ForTenant runs on every request,
-// so it returns keys already parsed and cached.
+// TenantKeys is the consumer's per-tenant source. Authorize reads the request's principal
+// from ctx (for example auth.PrincipalFromContext) and returns errTenantForbidden unless
+// that principal may act for tenantID, including when there is none. ForTenant runs on
+// every request, so it returns keys already parsed and cached.
 type TenantKeys interface {
+	Authorize(ctx context.Context, tenantID string) error
 	ForTenant(ctx context.Context, tenantID string) (TenantKeySet, error)
 }
 
@@ -233,6 +240,11 @@ func (h *envelopeHandler) tenantResolver(ctx context.Context) (string, bricksjos
 	if err != nil {
 		return "", nil, err // ErrNoTenant: a wiring fault (multi-tenancy off, or a skipped route), so a 500
 	}
+	// The tenant header is caller-written: authorize before any tenant-scoped lookup (note a).
+	err = h.keys.Authorize(ctx, tenantID)
+	if err != nil {
+		return "", nil, err
+	}
 	keys, err := h.keys.ForTenant(ctx, tenantID)
 	if err != nil {
 		return "", nil, err
@@ -256,6 +268,10 @@ func (h *envelopeHandler) sealReply(out Receipt, resolver bricksjose.KeyResolver
 // fail maps any error to the consumer's envelope. Only jerr.Code is logged for a jose
 // refusal; Cause, Error() and plaintext never reach the wire.
 func (h *envelopeHandler) fail(err error) server.Result[envelopeReply] {
+	if errors.Is(err, errTenantForbidden) {
+		h.log.Warn().Msg("detached-signature envelope forbidden for the tenant")
+		return refuse(http.StatusForbidden, codeTenantForbidden)
+	}
 	var jerr *bricksjose.Error
 	if !errors.As(err, &jerr) {
 		h.log.Error().Err(err).Msg("detached-signature envelope failed")
@@ -301,6 +317,10 @@ type Receipt struct {
 }
 
 type noTenantKeys struct{}
+
+func (noTenantKeys) Authorize(context.Context, string) error {
+	return nil
+}
 
 func (noTenantKeys) ForTenant(context.Context, string) (TenantKeySet, error) {
 	return TenantKeySet{}, errors.New("unknown tenant")
