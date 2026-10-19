@@ -4482,7 +4482,7 @@ if claims != nil {
 }
 ```
 
-A body that is not a 3-segment JWS — a 5-segment JWE-outer body included — is `JOSE_OUTER_NOT_JWS`, never a fallback to another mode. An outer header without `cty: "JWE"` is `JOSE_CTY_REJECTED`, and an `alg` other than the declared `SigAlg` is `JOSE_ALGORITHM_DISALLOWED` — a request-time 400 here and in `SealModeJWSofJWEMinimal`, unlike every other mode, where that code is registration-time only. Do not share a `DecryptKid` between this mode and a bare-JWE route: the inner JWE would decrypt there with nothing authenticating the sender.
+A body that is not a 3-segment JWS — a 5-segment JWE-outer body included — is `JOSE_OUTER_NOT_JWS`, never a fallback to another mode. An outer header without `cty: "JWE"` is `JOSE_CTY_REJECTED`. An `alg` other than the declared `SigAlg` is `JOSE_ALGORITHM_DISALLOWED` — a request-time 400 here and in `SealModeJWSofJWEMinimal`, unlike every other mode, where that code is registration-time only. Do not share a `DecryptKid` between this mode and a bare-JWE route: the inner JWE would decrypt there with nothing authenticating the sender.
 
 Deep dive: [wiki/jose.md](wiki/jose.md#jws-of-jwe-mode-visa-token-service-issuer-api).
 

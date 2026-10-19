@@ -402,6 +402,19 @@ func requireJOSEErrorStatus(t *testing.T, err error, wantCode string, wantStatus
 	assert.Equal(t, wantStatus, jerr.Status)
 }
 
+// requireOpen opens body under p and asserts the payload, or the refusal when wantCode is set.
+func (f *jwsOfJWEMinimalFixture) requireOpen(t *testing.T, body string, p *Policy, wantCode string, wantStatus int) {
+	t.Helper()
+	plaintext, _, _, err := Open(body, p, f.resolver)
+	if wantCode == "" {
+		require.NoError(t, err)
+		assert.Equal(t, minimalPayload, plaintext)
+		return
+	}
+	assert.Nil(t, plaintext)
+	requireJOSEErrorStatus(t, err, wantCode, wantStatus)
+}
+
 func TestOpenJWSofJWEMinimalOpensKidlessDetachedVector(t *testing.T) {
 	f := newJWSofJWEMinimalFixture(t)
 	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
@@ -450,14 +463,7 @@ func TestOpenJWSofJWEMinimalKidRules(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plaintext, _, _, err := Open(f.vector(t, tt.inner, tt.outer), f.withAcceptMissingKid(tt.accept), f.resolver)
-			if tt.wantCode == "" {
-				require.NoError(t, err)
-				assert.Equal(t, minimalPayload, plaintext)
-				return
-			}
-			assert.Nil(t, plaintext)
-			requireJOSEErrorStatus(t, err, tt.wantCode, tt.wantStatus)
+			f.requireOpen(t, f.vector(t, tt.inner, tt.outer), f.withAcceptMissingKid(tt.accept), tt.wantCode, tt.wantStatus)
 		})
 	}
 }
@@ -476,14 +482,7 @@ func TestOpenJWSofJWEMinimalOuterCty(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plaintext, _, _, err := Open(f.vector(t, nil, tt.outer), f.inbound, f.resolver)
-			if tt.wantCode == "" {
-				require.NoError(t, err)
-				assert.Equal(t, minimalPayload, plaintext)
-				return
-			}
-			assert.Nil(t, plaintext)
-			requireJOSEErrorStatus(t, err, tt.wantCode, 400)
+			f.requireOpen(t, f.vector(t, nil, tt.outer), f.inbound, tt.wantCode, 400)
 		})
 	}
 }
@@ -492,14 +491,7 @@ func TestOpenJWSofJWEMinimalRefusals(t *testing.T) {
 	f := newJWSofJWEMinimalFixture(t)
 	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
 	detached := mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, nil)
-	// One character of the JWE string changed after signing: the splice encodes it
-	// canonically, so the signed bytes no longer match.
-	at := len(jwe) / 2
-	flip := byte('A')
-	if jwe[at] == 'A' {
-		flip = 'B'
-	}
-	tamperedJWE := jwe[:at] + string(flip) + jwe[at+1:]
+	tamperedJWE := tamperSegment(t, jwe, jweCiphertextSegment)
 	signedInner := func(keyAlg jose.KeyAlgorithm, enc jose.ContentEncryption, opts *jose.EncrypterOptions) string {
 		inner := mintMinimalInner(t, f.encPub, keyAlg, enc, opts)
 		return spliceDetached(t, mintDetachedOuter(t, f.signPriv, jose.RS512, inner, nil), inner)
@@ -518,14 +510,12 @@ func TestOpenJWSofJWEMinimalRefusals(t *testing.T) {
 		{"five_segment_body_flag_off", jwe, false, codeOuterNotJWS, 400},
 		{"inner_a256cbc_hs512", signedInner(jose.RSA_OAEP_256, jose.A256CBC_HS512, nil), true, codeMalformed, 400},
 		{"inner_a128gcm", signedInner(jose.RSA_OAEP_256, jose.A128GCM, nil), true, codeMalformed, 400},
-		{"inner_cty_jws", signedInner(jose.RSA_OAEP_256, jose.A256GCM, innerCty("JWS")), true, codeCtyRejected, 400},
+		{"inner_cty_jws", f.vector(t, innerCty("JWS"), nil), true, codeCtyRejected, 400},
 		{"inner_rsa_oaep_sha1", signedInner(jose.RSA_OAEP, jose.A256GCM, nil), true, codeMalformed, 400},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plaintext, _, _, err := Open(tt.body, f.withAcceptMissingKid(tt.accept), f.resolver)
-			assert.Nil(t, plaintext)
-			requireJOSEErrorStatus(t, err, tt.wantCode, tt.wantStatus)
+			f.requireOpen(t, tt.body, f.withAcceptMissingKid(tt.accept), tt.wantCode, tt.wantStatus)
 		})
 	}
 }
@@ -538,8 +528,7 @@ func TestOpenJWSofJWEMinimalAlgPinResolvesNoKey(t *testing.T) {
 	for _, alg := range []jose.SignatureAlgorithm{jose.PS256, jose.RS256} {
 		body := spliceDetached(t, mintDetachedOuter(t, f.signPriv, alg, jwe, nil), jwe)
 		for _, accept := range []bool{true, false} {
-			_, _, _, err := Open(body, f.withAcceptMissingKid(accept), refusingResolver{t})
-			requireJOSEErrorStatus(t, err, codeAlgorithmDisallowed, 400)
+			requireJOSEErrorStatus(t, openErr(body, f.withAcceptMissingKid(accept), refusingResolver{t}), codeAlgorithmDisallowed, 400)
 		}
 	}
 }

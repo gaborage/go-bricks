@@ -47,9 +47,10 @@ func sealJWSofJWE(payload []byte, p *Policy, r KeyResolver) (string, error) {
 }
 
 // openJWSofJWE verifies the outer JWS against exactly Policy.SigAlg, requires cty JWE (or,
-// in SealModeJWSofJWEMinimal, no cty), then hands the payload to the bare opener. A body that is not a compact JWS — a JWE-outer
-// object included — is refused, never opened under another mode. The outer iat is seconds,
-// so it is never reported through Header.IATMillis; neither iat is judged.
+// in SealModeJWSofJWEMinimal, no cty), then hands the payload to the bare opener. A body
+// that is not a compact JWS — a JWE-outer object included — is refused, never opened under
+// another mode. The outer iat is seconds, so it is never reported through
+// Header.IATMillis; neither iat is judged.
 func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *Claims, hdr OpenHeader, err error) {
 	if strings.Count(compact, ".") != 2 {
 		return nil, nil, OpenHeader{}, errOuterNotJWS(nil)
