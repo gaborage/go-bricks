@@ -2,13 +2,16 @@ package jose_test
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -83,7 +86,8 @@ type TenantKeySet struct {
 	PeerSeal   *rsa.PublicKey
 }
 
-// TenantKeys is the consumer's per-tenant key source.
+// TenantKeys is the consumer's per-tenant key source. ForTenant runs on every request,
+// so it returns keys already parsed and cached.
 type TenantKeys interface {
 	ForTenant(ctx context.Context, tenantID string) (TenantKeySet, error)
 }
@@ -202,11 +206,7 @@ func (h *envelopeHandler) submit(req envelopeRequest, ctx server.HandlerContext)
 	// The opened plaintext is unvalidated input: the pipeline's validate tags ran
 	// on envelopeRequest only.
 	var in Order
-	err = json.Unmarshal(plaintext, &in)
-	if err == nil {
-		err = in.Validate()
-	}
-	if err != nil {
+	if json.Unmarshal(plaintext, &in) != nil || in.Validate() != nil {
 		return refuse(http.StatusBadRequest, codePayloadInvalid), nil
 	}
 
@@ -287,7 +287,8 @@ const (
 	signatureHeader = "X-Example-Signature"
 	tenantA         = "tenant-a"
 	tenantNoVerify  = "tenant-no-verify"
-	receiptJSON     = `{"id":"receipt-1"}`
+	receiptID       = "receipt-1"
+	receiptJSON     = `{"id":"` + receiptID + `"}`
 )
 
 // Order stands in for the consumer's request type.
@@ -324,12 +325,12 @@ type fakeOperations struct {
 
 func (f *fakeOperations) Submit(_ context.Context, _ string, in Order) (Receipt, error) {
 	f.submitted = append(f.submitted, in)
-	return Receipt{ID: "receipt-1"}, nil
+	return Receipt{ID: receiptID}, nil
 }
 
 func (f *fakeOperations) Status(_ context.Context, _ string) (Receipt, error) {
 	f.statusCalls++
-	return Receipt{ID: "receipt-1"}, nil
+	return Receipt{ID: receiptID}, nil
 }
 
 // routeRecorder is a minimal server.RouteRegistrar that keeps each route it is handed.
@@ -366,22 +367,35 @@ type envelopeFixture struct {
 	peerSealPriv  *rsa.PrivateKey
 }
 
+// envelopeKeys are the peer's signing, our decryption and the peer's sealing pairs, shared by
+// every test here. Keys are read-only, so generating them per test would only cost time.
+var envelopeKeys = sync.OnceValue(func() [3]*rsa.PrivateKey {
+	var keys [3]*rsa.PrivateKey
+	for i := range keys {
+		priv, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			panic(err)
+		}
+		keys[i] = priv
+	}
+	return keys
+})
+
 func newEnvelopeFixture(t *testing.T) *envelopeFixture {
 	t.Helper()
-	peerSignPriv, peerSignPub := jositest.GenerateTestKeyPair(t)
-	ourDecryptPriv, ourDecryptPub := jositest.GenerateTestKeyPair(t)
-	peerSealPriv, peerSealPub := jositest.GenerateTestKeyPair(t)
+	keys := envelopeKeys()
+	peerSign, ourDecrypt, peerSeal := keys[0], keys[1], keys[2]
 	cfg, err := config.LoadFromMap(map[string]any{"example.envelope.signatureheader": signatureHeader})
 	require.NoError(t, err)
 	return &envelopeFixture{
 		cfg: cfg,
 		keys: fakeTenantKeys{
-			tenantA:        {PeerVerify: peerSignPub, OurDecrypt: ourDecryptPriv, PeerSeal: peerSealPub},
-			tenantNoVerify: {OurDecrypt: ourDecryptPriv, PeerSeal: peerSealPub},
+			tenantA:        {PeerVerify: &peerSign.PublicKey, OurDecrypt: ourDecrypt, PeerSeal: &peerSeal.PublicKey},
+			tenantNoVerify: {OurDecrypt: ourDecrypt, PeerSeal: &peerSeal.PublicKey},
 		},
-		peerSignPriv:  peerSignPriv,
-		ourDecryptPub: ourDecryptPub,
-		peerSealPriv:  peerSealPriv,
+		peerSignPriv:  peerSign,
+		ourDecryptPub: &ourDecrypt.PublicKey,
+		peerSealPriv:  peerSeal,
 	}
 }
 
@@ -434,18 +448,23 @@ func (f *envelopeFixture) openReply(t *testing.T, sealed string) []byte {
 		Enc:              bricksjose.DefaultEnc,
 		AcceptMissingKid: true,
 	}
-	plaintext, _, _, err := bricksjose.Open(sealed, p, jositest.NewTestResolver(map[string]any{peerSealKid: f.peerSealPriv}))
-	require.NoError(t, err)
+	plaintext, _ := jositest.OpenForTest(t, sealed, p, jositest.NewTestResolver(map[string]any{peerSealKid: f.peerSealPriv}))
 	return plaintext
+}
+
+// newEnvelopeRequest builds a request for tenantID carrying each signature header value.
+func newEnvelopeRequest(t *testing.T, method, target, tenantID string, body io.Reader, signatures ...string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequestWithContext(multitenant.SetTenant(t.Context(), tenantID), method, target, body)
+	for _, s := range signatures {
+		r.Header.Add(signatureHeader, s)
+	}
+	return r
 }
 
 func envelopeContext(t *testing.T, method, tenantID string, signatures ...string) server.HandlerContext {
 	t.Helper()
-	ctx := multitenant.SetTenant(t.Context(), tenantID)
-	r := httptest.NewRequestWithContext(ctx, method, "/example/orders", http.NoBody)
-	for _, s := range signatures {
-		r.Header.Add(signatureHeader, s)
-	}
+	r := newEnvelopeRequest(t, method, "/example/orders", tenantID, http.NoBody, signatures...)
 	return server.NewHandlerContextForTest(httptest.NewRecorder(), r, nil)
 }
 
@@ -473,12 +492,8 @@ func TestDetachedSignatureEnvelopeRecipe(t *testing.T) {
 		assert.Equal(t, 1, ops.statusCalls)
 	})
 
-	at := len(v.jwe) / 2
-	flip := "A"
-	if v.jwe[at] == 'A' {
-		flip = "B"
-	}
-	tampered := v.jwe[:at] + flip + v.jwe[at+1:]
+	// Any change to the signed string breaks the signature, which Open checks before it decrypts.
+	tampered := v.jwe + "A"
 	invalid := f.mint(t, `{"amount":0}`)
 	refusals := []struct {
 		name       string
@@ -527,12 +542,10 @@ func TestDetachedSignatureEnvelopeRecipeServesRegisteredRoutes(t *testing.T) {
 		handler, ok := recorder.routes[route]
 		require.True(t, ok, "route %q not registered", route)
 		method, path, _ := strings.Cut(route, " ")
-		ctx := multitenant.SetTenant(t.Context(), tenantA)
-		r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
+		r := newEnvelopeRequest(t, method, path, tenantA, strings.NewReader(body), "JWS "+v.detached)
 		if contentType != "" {
 			r.Header.Set("Content-Type", contentType)
 		}
-		r.Header.Set(signatureHeader, "JWS "+v.detached)
 		w := httptest.NewRecorder()
 		require.NoError(t, handler(server.NewHandlerContextForTest(w, r, f.cfg)))
 		var reply map[string]string

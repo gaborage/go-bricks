@@ -379,7 +379,8 @@ type TenantKeySet struct {
     PeerSeal   *rsa.PublicKey
 }
 
-// TenantKeys is the consumer's per-tenant key source.
+// TenantKeys is the consumer's per-tenant key source. ForTenant runs on every request,
+// so it returns keys already parsed and cached.
 type TenantKeys interface {
     ForTenant(ctx context.Context, tenantID string) (TenantKeySet, error)
 }
@@ -498,11 +499,7 @@ func (h *envelopeHandler) submit(req envelopeRequest, ctx server.HandlerContext)
     // The opened plaintext is unvalidated input: the pipeline's validate tags ran
     // on envelopeRequest only.
     var in Order
-    err = json.Unmarshal(plaintext, &in)
-    if err == nil {
-        err = in.Validate()
-    }
-    if err != nil {
+    if json.Unmarshal(plaintext, &in) != nil || in.Validate() != nil {
         return refuse(http.StatusBadRequest, codePayloadInvalid), nil
     }
 
@@ -584,7 +581,7 @@ func refuse(status int, code string) server.Result[envelopeReply] {
 
 **b. Reply sealing departs from the tagged path's rule.** The tagged path's invariant is that a response is sealed only when the inbound request verified (see the security invariant above). This recipe seals the reply `data` on every method, bodyless ones included, where nothing was verified. Sealing to the tenant's key gives confidentiality toward that key's holder; it does not authenticate the requester. The minimal mode is open-only, so the reply is a bare seal and carries no signature.
 
-**c. Replay.** The `jose` package does not judge replay. A sound dedup key is a digest (for example SHA-256) of the JWE compact string from `data`, computed only after `jose.Open` returned nil. Before the detached signature has verified, two different strings can decode to the same bytes: go-jose's non-strict base64url decode lets a segment's spare trailing bits vary without changing the decoded bytes. Record the key through `jose.ReplayRecorder.GetOrSet` (`cache.Cache`, from `deps.Cache(ctx)`, satisfies it) under a tenant-namespaced key, with a window at least the consumer's acceptance horizon. Keep one ledger per tenant, shared across every route of the profile, not one per route, because the signature does not cover the route (note a). `jose.CheckJTIReplay` and `jose.CheckJTIReplayInNamespace` apply only when the opened plaintext carries a `jti` claim (they read the `*Claims` `Open` returns); the JWE-string digest, taken after `Open` returned nil, works whether or not it does. A canonical-base64url pre-check is tracked in [#2164](https://github.com/gaborage/go-bricks/issues/2164).
+**c. Replay.** The `jose` package does not judge replay. A sound dedup key is a digest (for example SHA-256) of the JWE compact string from `data`, computed only after `jose.Open` returned nil. Before the detached signature has verified, two different strings can decode to the same bytes: go-jose's non-strict base64url decode lets a segment's spare trailing bits vary without changing the decoded bytes. Record the key through `jose.ReplayRecorder.GetOrSet` (`cache.Cache`, from `deps.Cache(ctx)`, satisfies it) under a tenant-namespaced key, with a window at least the consumer's acceptance horizon. Keep one ledger per tenant, shared across every route of the profile, not one per route, because the signature does not cover the route (note a). `jose.CheckJTIReplay` and `jose.CheckJTIReplayInNamespace` apply only when the opened plaintext carries a `jti` claim (they read the `*Claims` `Open` returns); the JWE-string digest works whether or not it does. A canonical-base64url pre-check is tracked in [#2164](https://github.com/gaborage/go-bricks/issues/2164).
 
 **d. Telemetry.** On this path the framework records no `jose.*` span or metric: only the tagged path records `jose.decode_request`, `jose.encode_response`, `jose.failures.total` and `jose.operation.duration`, and the `jose` package itself imports no OpenTelemetry. The consumer instruments its own work (for example through `deps.Tracer` or `deps.MeterProvider`) and never records `Cause` or plaintext. `jose.IsInboundVerified` and `jose.ClaimsFromContext` stay unset on this path.
 
