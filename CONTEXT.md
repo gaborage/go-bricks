@@ -417,6 +417,7 @@ The JWS-of-JWE shape for an inbound peer that names keys out of band: an
 `RS512` outer signature, an outer `cty` that is absent or `JWE`, and no kid
 required on either JOSE object under the policy's opt-in. It signs the same
 bytes as the JWS-of-JWE mode, the compact JWE string, and it only opens.
+Pending: ADR-150 records it and #2142 implements it.
 _Avoid_: detached mode (detachment is the envelope, not the mode), kid-less
 mode (kid handling is a policy field), and any "over" spelling of the mode name
 
