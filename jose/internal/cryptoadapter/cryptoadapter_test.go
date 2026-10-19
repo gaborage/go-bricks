@@ -306,8 +306,10 @@ func mintJWE(t *testing.T, pub *rsa.PublicKey, payload []byte, extra map[jose.He
 	return compact
 }
 
-func TestDecryptAcceptMissingKid(t *testing.T) {
-	key := newKey(t)
+// runKidOptInCases runs the AcceptMissingKid matrix Decrypt and Verify share. open mints a
+// token whose header carries exactly extra and opens it expecting "expected-kid".
+func runKidOptInCases(t *testing.T, open func(t *testing.T, payload []byte, extra map[jose.HeaderKey]any, accept bool) ([]byte, error)) {
+	t.Helper()
 	kid := func(v any) map[jose.HeaderKey]any { return map[jose.HeaderKey]any{"kid": v} }
 	tests := []struct {
 		name    string
@@ -325,13 +327,7 @@ func TestDecryptAcceptMissingKid(t *testing.T) {
 	payload := []byte(`{"secret":"value"}`)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compact := mintJWE(t, &key.PublicKey, payload, tt.extra)
-			got, _, err := Decrypt(compact, key, &DecryptOptions{
-				ExpectedKid:       "expected-kid",
-				AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
-				AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
-				AcceptMissingKid:  tt.accept,
-			})
+			got, err := open(t, payload, tt.extra, tt.accept)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -340,6 +336,19 @@ func TestDecryptAcceptMissingKid(t *testing.T) {
 			assert.Equal(t, payload, got)
 		})
 	}
+}
+
+func TestDecryptAcceptMissingKid(t *testing.T) {
+	key := newKey(t)
+	runKidOptInCases(t, func(t *testing.T, payload []byte, extra map[jose.HeaderKey]any, accept bool) ([]byte, error) {
+		got, _, err := Decrypt(mintJWE(t, &key.PublicKey, payload, extra), key, &DecryptOptions{
+			ExpectedKid:       "expected-kid",
+			AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
+			AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
+			AcceptMissingKid:  accept,
+		})
+		return got, err
+	})
 }
 
 func TestEncryptOmitKid(t *testing.T) {
@@ -400,35 +409,12 @@ func mintJWS(t *testing.T, key *rsa.PrivateKey, payload []byte, extra map[jose.H
 
 func TestVerifyAcceptMissingKid(t *testing.T) {
 	key := newKey(t)
-	kid := func(v any) map[jose.HeaderKey]any { return map[jose.HeaderKey]any{"kid": v} }
-	tests := []struct {
-		name    string
-		extra   map[jose.HeaderKey]any
-		accept  bool
-		wantErr error
-	}{
-		{"absent_kid_refused_by_default", nil, false, ErrKidMissing},
-		{"absent_kid", nil, true, nil},
-		{"present_expected_kid", kid("expected-kid"), true, nil},
-		{"present_wrong_kid", kid("wrong-kid"), true, ErrKidMismatch},
-		{"present_empty_kid", kid(""), true, ErrKidMismatch},
-		{"present_null_kid", kid(nil), true, ErrKidMismatch},
-	}
-	payload := []byte(`{"secret":"value"}`)
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			compact := mintJWS(t, key, payload, tt.extra)
-			got, _, err := Verify(compact, &key.PublicKey, &VerifyOptions{
-				ExpectedKid:      "expected-kid",
-				AllowedSigAlgs:   []jose.SignatureAlgorithm{jose.RS512},
-				AcceptMissingKid: tt.accept,
-			})
-			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, payload, got)
+	runKidOptInCases(t, func(t *testing.T, payload []byte, extra map[jose.HeaderKey]any, accept bool) ([]byte, error) {
+		got, _, err := Verify(mintJWS(t, key, payload, extra), &key.PublicKey, &VerifyOptions{
+			ExpectedKid:      "expected-kid",
+			AllowedSigAlgs:   []jose.SignatureAlgorithm{jose.RS512},
+			AcceptMissingKid: accept,
 		})
-	}
+		return got, err
+	})
 }

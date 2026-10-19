@@ -405,12 +405,7 @@ func throughDoor(t *testing.T, p *Policy) error {
 func TestPolicyValidateKidOptIns(t *testing.T) {
 	acceptMissingKid := func(p *Policy) { p.AcceptMissingKid = true }
 	omitKid := func(p *Policy) { p.OmitKid = true }
-	tests := []struct {
-		name     string
-		base     func() *Policy
-		mutate   func(p *Policy)
-		wantCode string
-	}{
+	tests := []policyCodeCase{
 		{"jwe_of_jws_inbound_accept_missing_kid", nestedInbound, acceptMissingKid, codePolicyModeMismatch},
 		{"jwe_of_jws_outbound_accept_missing_kid", nestedOutbound, acceptMissingKid, codePolicyModeMismatch},
 		{"jws_of_jwe_inbound_accept_missing_kid", jwsOfJWEInbound, acceptMissingKid, codePolicyModeMismatch},
@@ -440,16 +435,30 @@ func TestPolicyValidateKidOptIns(t *testing.T) {
 		{"bare_inbound_accept_missing_kid_is_valid", bareInbound, acceptMissingKid, ""},
 		{"bare_outbound_omit_kid_is_valid", bareOutbound, omitKid, ""},
 	}
+	runPolicyCodeCases(t, tests)
+}
+
+// policyCodeCase mutates a fresh base policy; an empty wantCode means Validate accepts it.
+type policyCodeCase struct {
+	name     string
+	base     func() *Policy
+	mutate   func(p *Policy)
+	wantCode string
+}
+
+// runPolicyCodeCases asserts each case through Validate and, when refused, that p's door
+// refuses it pre-trust with the same code.
+func runPolicyCodeCases(t *testing.T, tests []policyCodeCase) {
+	t.Helper()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := tt.base()
 			tt.mutate(p)
-			err := p.Validate()
 			if tt.wantCode == "" {
-				require.NoError(t, err)
+				require.NoError(t, p.Validate())
 				return
 			}
-			requireJOSEErrorCode(t, err, tt.wantCode)
+			requireJOSEErrorCode(t, p.Validate(), tt.wantCode)
 
 			var doorErr *Error
 			require.ErrorAs(t, throughDoor(t, p), &doorErr)
@@ -483,12 +492,7 @@ func jwsOfJWEMinimalOutbound() *Policy {
 }
 
 func TestPolicyValidateJWSofJWEMinimalModeRules(t *testing.T) {
-	tests := []struct {
-		name     string
-		base     func() *Policy
-		mutate   func(p *Policy)
-		wantCode string
-	}{
+	tests := []policyCodeCase{
 		{"inbound_minimal_is_valid", jwsOfJWEMinimalInbound, func(*Policy) {}, ""},
 		{"inbound_accept_missing_kid_is_valid", jwsOfJWEMinimalInbound, func(p *Policy) { p.AcceptMissingKid = true }, ""},
 		{"inbound_rs256", jwsOfJWEMinimalInbound, func(p *Policy) { p.SigAlg = jose.RS256 }, codeAlgorithmDisallowed},
@@ -508,22 +512,7 @@ func TestPolicyValidateJWSofJWEMinimalModeRules(t *testing.T) {
 		{"inbound_omit_kid", jwsOfJWEMinimalInbound, func(p *Policy) { p.OmitKid = true }, codePolicyModeMismatch},
 		{"outbound_is_open_only", jwsOfJWEMinimalOutbound, func(*Policy) {}, codePolicyDirectionMismatch},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := tt.base()
-			tt.mutate(p)
-			err := p.Validate()
-			if tt.wantCode == "" {
-				require.NoError(t, err)
-				return
-			}
-			requireJOSEErrorCode(t, err, tt.wantCode)
-
-			var doorErr *Error
-			require.ErrorAs(t, throughDoor(t, p), &doorErr)
-			assert.Equal(t, tt.wantCode, doorErr.Code)
-		})
-	}
+	runPolicyCodeCases(t, tests)
 }
 
 // Open has no path for the minimal mode at this link yet: a valid inbound policy in it is

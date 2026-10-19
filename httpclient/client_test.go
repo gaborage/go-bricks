@@ -3072,19 +3072,18 @@ func TestBuildReachesJWSofJWEMinimalInboundOnly(t *testing.T) {
 		{name: "inbound_sig_alg_unset", cfg: JOSEConfig{Inbound: unsetSigAlg, Resolver: f.Resolver}, wantCode: "JOSE_ALGORITHM_DISALLOWED"},
 		{name: "outbound_rs512", cfg: JOSEConfig{Outbound: minimal(f.ClientOutbound), Resolver: f.Resolver}, wantCode: "JOSE_POLICY_DIRECTION_MISMATCH"},
 	}
+	buildCode := func(t *testing.T, cfg JOSEConfig) string {
+		_, err := NewBuilder(log).WithTransport(&stubRoundTripper{name: "base"}).WithJOSE(cfg).Build()
+		var jerr *jose.Error
+		if errors.As(err, &jerr) {
+			return jerr.Code
+		}
+		require.NoError(t, err)
+		return ""
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewBuilder(log).
-				WithTransport(&stubRoundTripper{name: "base"}).
-				WithJOSE(tc.cfg).
-				Build()
-			if tc.wantCode == "" {
-				require.NoError(t, err)
-				return
-			}
-			var jerr *jose.Error
-			require.ErrorAs(t, err, &jerr)
-			assert.Equal(t, tc.wantCode, jerr.Code)
+			assert.Equal(t, tc.wantCode, buildCode(t, tc.cfg))
 		})
 	}
 }
