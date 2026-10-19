@@ -1681,13 +1681,14 @@ func TestJOSETransportServesAKidlessBarePeer(t *testing.T) {
 	keys, err := visaKeys()
 	require.NoError(t, err)
 	reply := mintKidlessJWE(t, &keys.client.PublicKey, []byte(`{"token":"tok-42"}`))
-	requestKid := make(chan bool, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
 			t.Errorf("read request body: %v", readErr)
 		}
-		requestKid <- kidMemberPresent(t, string(body))
+		if kidMemberPresent(t, string(body)) {
+			t.Errorf("the request JWE carries a kid member")
+		}
 		w.Header().Set("Content-Type", "application/jose")
 		_, _ = w.Write([]byte(reply))
 	}))
@@ -1716,7 +1717,6 @@ func TestJOSETransportServesAKidlessBarePeer(t *testing.T) {
 		Body: []byte(`{"amount":1250}`),
 	})
 	require.NoError(t, err)
-	assert.False(t, <-requestKid, "the request JWE carries a kid member")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
 }
