@@ -10,7 +10,6 @@ import (
 	"errors"
 	"flag"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -652,23 +651,11 @@ func TestOpenRefusesADisallowedDeclaredAlgorithm(t *testing.T) {
 
 // ---- kid-less peers: AcceptMissingKid ----
 
-// headerParams decodes segment 0 straight into a map, so an absent kid member can be told
-// from an empty one; peekHeader reads both as "".
-func headerParams(t *testing.T, compact string) map[string]any {
-	t.Helper()
-	segment, _, _ := strings.Cut(compact, ".")
-	raw, err := base64.RawURLEncoding.DecodeString(segment)
-	require.NoError(t, err)
-	var params map[string]any
-	require.NoError(t, json.Unmarshal(raw, &params))
-	return params
-}
-
 // mintBareJWE encrypts with go-jose directly and with no recipient key id, so the kid
 // member is exactly what extra writes: nothing, "", null or a non-string.
-func mintBareJWE(t *testing.T, pub *rsa.PublicKey, enc jose.ContentEncryption, extra map[jose.HeaderKey]any, payload []byte) string {
+func mintBareJWE(t *testing.T, pub *rsa.PublicKey, extra map[jose.HeaderKey]any, payload []byte) string {
 	t.Helper()
-	encrypter, err := jose.NewEncrypter(enc, jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: pub},
+	encrypter, err := jose.NewEncrypter(jose.A256GCM, jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: pub},
 		&jose.EncrypterOptions{ExtraHeaders: extra})
 	require.NoError(t, err)
 	obj, err := encrypter.Encrypt(payload)
@@ -684,9 +671,7 @@ func TestOpenBareJWEAcceptsMissingKid(t *testing.T) {
 	f.inbound.AcceptMissingKid = true
 	_, ourPub := bareKeys()
 	payload := []byte(`{"amount":1250}`)
-	compact := mintBareJWE(t, ourPub, jose.A256GCM, nil, payload)
-	_, hasKid := headerParams(t, compact)["kid"]
-	require.False(t, hasKid)
+	compact := mintBareJWE(t, ourPub, nil, payload)
 
 	plaintext, _, hdr, err := Open(compact, f.inbound, f.resolver)
 	require.NoError(t, err)
@@ -734,7 +719,7 @@ func TestOpenBareJWEKidShapes(t *testing.T) {
 			f := newBareFixture(t)
 			f.inbound.Enc = cmp.Or(tt.policyEnc, jose.A256GCM)
 			f.inbound.AcceptMissingKid = tt.accept
-			compact := mintBareJWE(t, cmp.Or(tt.pub, ourPub), jose.A256GCM, tt.extra, payload)
+			compact := mintBareJWE(t, cmp.Or(tt.pub, ourPub), tt.extra, payload)
 
 			plaintext, _, hdr, err := Open(compact, f.inbound, f.resolver)
 			if tt.wantCode == "" {

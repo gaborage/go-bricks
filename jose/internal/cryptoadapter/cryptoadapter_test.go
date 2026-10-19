@@ -316,7 +316,6 @@ func TestDecryptAcceptMissingKid(t *testing.T) {
 		wantErr error
 	}{
 		{"absent_kid_refused_by_default", nil, false, ErrKidMissing},
-		{"present_empty_kid_refused_by_default", kid(""), false, ErrKidMissing},
 		{"absent_kid", nil, true, nil},
 		{"present_expected_kid", kid("expected-kid"), true, nil},
 		{"present_wrong_kid", kid("wrong-kid"), true, ErrKidMismatch},

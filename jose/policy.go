@@ -85,8 +85,7 @@ type Policy struct {
 	// absent member counts as missing: a written kid of any value, "" and null included,
 	// is still compared to DecryptKid and refused as JOSE_KID_UNKNOWN. That departs on
 	// purpose from go-jose, which reads a null kid as absent: go-bricks fails closed, so
-	// do not align it with go-jose. A kid-less token sealed to another key fails as
-	// JOSE_DECRYPT_FAILED, since there is no kid to report as unknown.
+	// do not align it with go-jose.
 	AcceptMissingKid bool
 }
 
@@ -117,9 +116,10 @@ func (p *Policy) Validate() error {
 	return p.validateDirection()
 }
 
-// validateMode rejects an unrecognized Mode before any mode-dependent check runs, and
-// keeps the inner-JWE header fields out of a JWE-of-JWS policy so the default posture stays
-// byte-identical to what it produced before bare mode existed.
+// validateMode rejects an unrecognized Mode before any mode-dependent check runs, keeps
+// the inner-JWE header fields out of a JWE-of-JWS policy so the default posture stays
+// byte-identical to what it produced before bare mode existed, and keeps each kid opt-in to
+// the modes that admit it.
 func (p *Policy) validateMode() error {
 	switch p.Mode {
 	case SealModeJWEofJWS:

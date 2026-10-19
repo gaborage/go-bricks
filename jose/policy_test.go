@@ -396,8 +396,7 @@ func (r refusingResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
 func throughDoor(t *testing.T, p *Policy) error {
 	t.Helper()
 	if p.Direction == DirectionInbound {
-		_, _, _, err := Open("", p, refusingResolver{t})
-		return err
+		return openErr("", p, refusingResolver{t})
 	}
 	_, err := Seal([]byte(`{}`), p, refusingResolver{t})
 	return err

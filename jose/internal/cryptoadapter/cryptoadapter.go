@@ -80,8 +80,6 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 	if hdr.Kid == "" && !opts.AcceptMissingKid {
 		return nil, hdr, ErrKidMissing
 	}
-	// Only an absent member skips the comparison; a present kid, "" or null included,
-	// must still match.
 	if kidPresent && opts.ExpectedKid != "" && hdr.Kid != opts.ExpectedKid {
 		return nil, hdr, ErrKidMismatch
 	}

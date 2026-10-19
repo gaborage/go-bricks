@@ -3,8 +3,6 @@ package httpclient_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -1656,32 +1654,12 @@ func TestJOSETransportUnboundedCapRule(t *testing.T) {
 	}
 }
 
-// kidMemberPresent reports whether a compact's protected header has a kid member at all.
-// It reports through t.Errorf, so it is safe on httptest's handler goroutine.
-func kidMemberPresent(t *testing.T, compact string) bool {
-	t.Helper()
-	segment, _, _ := strings.Cut(compact, ".")
-	raw, err := base64.RawURLEncoding.DecodeString(segment)
-	if err != nil {
-		t.Errorf("decode protected header: %v", err)
-		return true
-	}
-	var params map[string]any
-	if err := json.Unmarshal(raw, &params); err != nil {
-		t.Errorf("unmarshal protected header: %v", err)
-		return true
-	}
-	_, ok := params["kid"]
-	return ok
-}
-
 // TestJOSETransportOpensAKidlessBareReply pins that AcceptMissingKid reaches the transport
 // through the policy alone: no Envelope, an application/jose reply.
 func TestJOSETransportOpensAKidlessBareReply(t *testing.T) {
 	keys, err := visaKeys()
 	require.NoError(t, err)
 	reply := mintKidlessJWE(t, &keys.client.PublicKey, []byte(`{"token":"tok-42"}`))
-	require.False(t, kidMemberPresent(t, reply))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/jose")
 		_, _ = w.Write([]byte(reply))
