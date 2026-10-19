@@ -95,6 +95,12 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 type VerifyOptions struct {
 	ExpectedKid    string
 	AllowedSigAlgs []jose.SignatureAlgorithm
+	// AcceptMissingKid verifies a JWS whose header has no kid member at all. A present kid,
+	// "" and null included, is still compared to ExpectedKid, so the option requires a
+	// non-empty ExpectedKid: without one, any present kid would pass. The zero value
+	// refuses a missing kid as ErrKidMissing. jose/sealed and the nested open path never
+	// set it.
+	AcceptMissingKid bool
 }
 
 // Verify parses a compact JWS, validates the protected header, and verifies the signature
@@ -113,15 +119,15 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 		return nil, Header{}, ErrParseSigned
 	}
 
-	hdr, _, ok := parsedHeader(compact)
+	hdr, kidPresent, ok := parsedHeader(compact)
 	if !ok {
 		return nil, Header{}, ErrParseSigned
 	}
 
-	if hdr.Kid == "" {
+	if hdr.Kid == "" && !opts.AcceptMissingKid {
 		return nil, hdr, ErrKidMissing
 	}
-	if opts.ExpectedKid != "" && hdr.Kid != opts.ExpectedKid {
+	if kidPresent && opts.ExpectedKid != "" && hdr.Kid != opts.ExpectedKid {
 		return nil, hdr, ErrKidMismatch
 	}
 

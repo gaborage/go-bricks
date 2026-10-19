@@ -45,11 +45,12 @@ type Policy struct {
 	EncryptKid string // peer public key kid (jose: encrypt=...)
 
 	// Mode selects the wire shape. The zero value is SealModeJWEofJWS.
+	// SealModeJWSofJWEMinimal is open-only: Validate refuses an outbound policy in it.
 	Mode SealMode
 
 	// Algorithms — defaults applied by the parser if tag omits them.
 	// SigAlg is unused, and must stay unset, in SealModeBareJWE; every other mode signs and
-	// requires it.
+	// requires it. SealModeJWSofJWEMinimal admits RS512 only, and no other mode admits RS512.
 	//
 	// KeyAlg and Enc are read on BOTH sides in every mode: outbound they are what Seal
 	// writes; inbound they are what Open accepts, narrowing the mode's allowlist to
@@ -61,6 +62,7 @@ type Policy struct {
 	KeyAlg jose.KeyAlgorithm
 	Enc    jose.ContentEncryption
 	// Cty is not written by Seal in SealModeJWSofJWE: that shape's inner JWE carries no cty.
+	// Inbound in both JWS-of-JWE modes it keeps its bare-mode meaning on the inner JWE.
 	Cty string
 
 	// Typ is the JWE protected `typ` header written by Seal. SealModeBareJWE and
@@ -79,13 +81,15 @@ type Policy struct {
 	// only. jose never judges its freshness on the way in; that is the caller's policy.
 	IATMillis bool
 
-	// AcceptMissingKid makes Open accept a JWE whose header has no kid member at all, for
-	// a peer that names keys out of band. SealModeBareJWE INBOUND only; DecryptKid stays
-	// required, since it names the resolver key, not the wire header. Only a literally
-	// absent member counts as missing: a written kid is still compared to DecryptKid, and
-	// any other value, "" and null included, is JOSE_KID_UNKNOWN (a non-string kid stays
-	// JOSE_MALFORMED). That departs on purpose from go-jose, which reads a null kid as
-	// absent: go-bricks fails closed, so do not align it with go-jose.
+	// AcceptMissingKid makes Open accept a token whose header has no kid member at all, for
+	// a peer that names keys out of band. SealModeBareJWE and SealModeJWSofJWEMinimal
+	// INBOUND only; in the minimal mode it covers both the outer JWS and the inner JWE.
+	// DecryptKid and VerifyKid stay required, since they name resolver keys, not wire
+	// headers. Only a literally absent member counts as missing: a written kid is still
+	// compared to the expected kid, and any other value, "" and null included, is
+	// JOSE_KID_UNKNOWN (a non-string kid stays JOSE_MALFORMED, or JOSE_OUTER_NOT_JWS on the
+	// minimal mode's outer JWS). That departs on purpose from go-jose, which reads a null
+	// kid as absent: go-bricks fails closed, so do not align it with go-jose.
 	AcceptMissingKid bool
 
 	// OmitKid makes Seal write no kid: neither the protected-header member nor a recipient
@@ -139,6 +143,7 @@ func (p *Policy) validateMode() error {
 		if err := p.validateInnerJWEHeaders(); err != nil {
 			return err
 		}
+	case SealModeJWSofJWEMinimal:
 	default:
 		return errUnknownMode(p.Mode)
 	}
@@ -148,11 +153,11 @@ func (p *Policy) validateMode() error {
 // validateKidOptInModes keeps each kid opt-in to the modes that admit it, one if per
 // opt-in so a mode can admit one without another.
 func (p *Policy) validateKidOptInModes() error {
-	if p.AcceptMissingKid && p.Mode != SealModeBareJWE {
+	if p.AcceptMissingKid && p.Mode != SealModeBareJWE && p.Mode != SealModeJWSofJWEMinimal {
 		return &Error{
 			Sentinel: ErrPolicyMismatch,
 			Code:     codePolicyModeMismatch,
-			Message:  "accepting a missing kid requires bare-JWE mode",
+			Message:  "accepting a missing kid requires bare-JWE or minimal JWS-of-JWE mode",
 		}
 	}
 	if p.OmitKid && p.Mode != SealModeBareJWE {
@@ -176,7 +181,7 @@ func errUnknownMode(m SealMode) *Error {
 // validateAlgorithms checks SigAlg/KeyAlg/Enc against the allowlists, in that order.
 func (p *Policy) validateAlgorithms() error {
 	// Bare mode signs nothing: SigAlg must stay unset, which validateDirection enforces.
-	if p.Mode != SealModeBareJWE && !IsAllowedSigAlg(p.SigAlg) {
+	if p.Mode != SealModeBareJWE && !slices.Contains(sigAlgsForMode(p.Mode), p.SigAlg) {
 		return &Error{
 			Sentinel: ErrAlgorithmDisallowed,
 			Code:     codeAlgorithmDisallowed,
@@ -238,6 +243,13 @@ func (p *Policy) validateDirection() error {
 func (p *Policy) validateKids() error {
 	if p.Mode == SealModeBareJWE {
 		return p.validateBareDirection()
+	}
+	if p.Mode == SealModeJWSofJWEMinimal && p.Direction == DirectionOutbound {
+		return &Error{
+			Sentinel: ErrPolicyMismatch,
+			Code:     codePolicyDirectionMismatch,
+			Message:  "minimal JWS-of-JWE mode is open-only",
+		}
 	}
 	switch p.Direction {
 	case DirectionInbound:
@@ -311,6 +323,10 @@ const (
 	// (cty: JWE) over the same inner JWE bare mode builds — the Visa Token Service
 	// Issuer shape.
 	SealModeJWSofJWE
+	// SealModeJWSofJWEMinimal opens the SealModeJWSofJWE shape for a kid-less inbound peer:
+	// an RS512 outer JWS whose cty is absent or JWE, over the same inner JWE. Open-only;
+	// AcceptMissingKid relaxes the kid on both tokens.
+	SealModeJWSofJWEMinimal
 )
 
 func (m SealMode) String() string {
@@ -321,6 +337,8 @@ func (m SealMode) String() string {
 		return "bare-jwe"
 	case SealModeJWSofJWE:
 		return "jws-of-jwe"
+	case SealModeJWSofJWEMinimal:
+		return "jws-of-jwe-minimal"
 	default:
 		return "unknown"
 	}

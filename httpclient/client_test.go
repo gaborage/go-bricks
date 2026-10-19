@@ -3048,3 +3048,43 @@ func TestWithJOSECalledTwiceSealsOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"hello":"world"}`, string(plaintext))
 }
+
+// The minimal JWS-of-JWE mode reaches Build through *jose.Policy alone: inbound with an
+// explicit RS512, never with Build's RS256 default, and never outbound (the mode is open-only).
+func TestBuildReachesJWSofJWEMinimalInboundOnly(t *testing.T) {
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+	minimal := func(base *jose.Policy) *jose.Policy {
+		p := *base
+		p.Mode = jose.SealModeJWSofJWEMinimal
+		p.SigAlg = "RS512"
+		return &p
+	}
+	unsetSigAlg := minimal(f.ClientInbound)
+	unsetSigAlg.SigAlg = ""
+
+	cases := []struct {
+		name     string
+		cfg      JOSEConfig
+		wantCode string
+	}{
+		{name: "inbound_rs512_builds", cfg: JOSEConfig{Inbound: minimal(f.ClientInbound), Resolver: f.Resolver}},
+		{name: "inbound_sig_alg_unset", cfg: JOSEConfig{Inbound: unsetSigAlg, Resolver: f.Resolver}, wantCode: "JOSE_ALGORITHM_DISALLOWED"},
+		{name: "outbound_rs512", cfg: JOSEConfig{Outbound: minimal(f.ClientOutbound), Resolver: f.Resolver}, wantCode: "JOSE_POLICY_DIRECTION_MISMATCH"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewBuilder(log).
+				WithTransport(&stubRoundTripper{name: "base"}).
+				WithJOSE(tc.cfg).
+				Build()
+			if tc.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			var jerr *jose.Error
+			require.ErrorAs(t, err, &jerr)
+			assert.Equal(t, tc.wantCode, jerr.Code)
+		})
+	}
+}

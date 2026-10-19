@@ -158,3 +158,40 @@ func TestInboundAllowlistsFailClosedOnAnOffListDeclaration(t *testing.T) {
 		})
 	}
 }
+
+func TestSigAlgsForModeArms(t *testing.T) {
+	tests := []struct {
+		name string
+		mode SealMode
+		want []jose.SignatureAlgorithm
+	}{
+		{"jwe_of_jws", SealModeJWEofJWS, []jose.SignatureAlgorithm{jose.RS256, jose.PS256}},
+		{"jws_of_jwe", SealModeJWSofJWE, []jose.SignatureAlgorithm{jose.RS256, jose.PS256}},
+		{"jws_of_jwe_minimal", SealModeJWSofJWEMinimal, []jose.SignatureAlgorithm{jose.RS512}},
+		{"bare_jwe", SealModeBareJWE, nil},
+		{"unknown_mode", SealMode(99), nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sigAlgsForMode(tt.mode))
+		})
+	}
+}
+
+func TestGlobalSigAllowlistStillExcludesRS512(t *testing.T) {
+	assert.False(t, IsAllowedSigAlg(jose.RS512))
+	assert.Equal(t, []jose.SignatureAlgorithm{jose.RS256, jose.PS256}, AllowedSigAlgs())
+}
+
+func TestIsAllowedEncForJWSofJWEMinimal(t *testing.T) {
+	assert.True(t, IsAllowedEncFor(SealModeJWSofJWEMinimal, jose.A256GCM))
+	assert.False(t, IsAllowedEncFor(SealModeJWSofJWEMinimal, jose.A128GCM))
+	assert.False(t, IsAllowedEncFor(SealModeJWSofJWEMinimal, jose.A256CBC_HS512))
+	assert.False(t, IsAllowedEnc(jose.A256CBC_HS512))
+	assert.False(t, IsAllowedKeyAlg(jose.RSA_OAEP))
+
+	assert.Equal(t, []jose.ContentEncryption{jose.A256GCM}, AllowedContentEncsFor(SealModeJWSofJWEMinimal))
+	assert.Equal(t, []jose.ContentEncryption{jose.A256GCM}, AllowedContentEncsFor(SealModeJWEofJWS))
+	assert.Equal(t, []jose.ContentEncryption{jose.A256GCM}, AllowedContentEncsFor(SealModeJWSofJWE))
+	assert.Equal(t, []jose.ContentEncryption{jose.A128GCM, jose.A256GCM}, AllowedContentEncsFor(SealModeBareJWE))
+}

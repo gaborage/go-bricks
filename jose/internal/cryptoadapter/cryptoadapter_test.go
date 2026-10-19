@@ -383,3 +383,52 @@ func TestEncryptOmitKid(t *testing.T) {
 		})
 	}
 }
+
+// mintJWS signs RS512 with go-jose directly, so the kid member is exactly what extra writes:
+// nothing, "", null or another kid.
+func mintJWS(t *testing.T, key *rsa.PrivateKey, payload []byte, extra map[jose.HeaderKey]any) string {
+	t.Helper()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS512, Key: key},
+		&jose.SignerOptions{ExtraHeaders: extra})
+	require.NoError(t, err)
+	obj, err := signer.Sign(payload)
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	return compact
+}
+
+func TestVerifyAcceptMissingKid(t *testing.T) {
+	key := newKey(t)
+	kid := func(v any) map[jose.HeaderKey]any { return map[jose.HeaderKey]any{"kid": v} }
+	tests := []struct {
+		name    string
+		extra   map[jose.HeaderKey]any
+		accept  bool
+		wantErr error
+	}{
+		{"absent_kid_refused_by_default", nil, false, ErrKidMissing},
+		{"absent_kid", nil, true, nil},
+		{"present_expected_kid", kid("expected-kid"), true, nil},
+		{"present_wrong_kid", kid("wrong-kid"), true, ErrKidMismatch},
+		{"present_empty_kid", kid(""), true, ErrKidMismatch},
+		{"present_null_kid", kid(nil), true, ErrKidMismatch},
+	}
+	payload := []byte(`{"secret":"value"}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact := mintJWS(t, key, payload, tt.extra)
+			got, _, err := Verify(compact, &key.PublicKey, &VerifyOptions{
+				ExpectedKid:      "expected-kid",
+				AllowedSigAlgs:   []jose.SignatureAlgorithm{jose.RS512},
+				AcceptMissingKid: tt.accept,
+			})
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, payload, got)
+		})
+	}
+}

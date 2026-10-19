@@ -48,11 +48,29 @@ var allowedContentEncsBare = []jose.ContentEncryption{
 	jose.A256GCM,
 }
 
+// allowedSigAlgsMinimal is the signature allowlist of SealModeJWSofJWEMinimal, whose
+// kid-less inbound peers sign RS512. No other mode admits RS512.
+var allowedSigAlgsMinimal = []jose.SignatureAlgorithm{
+	jose.RS512,
+}
+
+// sigAlgsForMode returns the signature allowlist backing a SealMode; nil for bare mode,
+// which signs nothing, and for an unknown mode, so both fail closed.
+func sigAlgsForMode(mode SealMode) []jose.SignatureAlgorithm {
+	if mode == SealModeJWSofJWEMinimal {
+		return allowedSigAlgsMinimal
+	}
+	if mode == SealModeJWEofJWS || mode == SealModeJWSofJWE {
+		return allowedSigAlgs
+	}
+	return nil
+}
+
 // contentEncsForMode returns the allowlist backing a SealMode; nil for an unknown mode,
 // so an unrecognized mode fails closed at every seam that consults it.
 func contentEncsForMode(mode SealMode) []jose.ContentEncryption {
 	switch mode {
-	case SealModeJWEofJWS, SealModeJWSofJWE:
+	case SealModeJWEofJWS, SealModeJWSofJWE, SealModeJWSofJWEMinimal:
 		return allowedContentEncs
 	case SealModeBareJWE:
 		return allowedContentEncsBare

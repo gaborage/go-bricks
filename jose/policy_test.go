@@ -458,3 +458,87 @@ func TestPolicyValidateKidOptIns(t *testing.T) {
 		})
 	}
 }
+
+func TestSealModeJWSofJWEMinimalString(t *testing.T) {
+	modes := []SealMode{SealModeJWEofJWS, SealModeBareJWE, SealModeJWSofJWE, SealModeJWSofJWEMinimal}
+	assert.Equal(t, []SealMode{0, 1, 2, 3}, modes)
+	assert.Equal(t, "jws-of-jwe-minimal", SealModeJWSofJWEMinimal.String())
+	assert.Equal(t, "unknown", SealMode(99).String())
+}
+
+// jwsOfJWEMinimalInbound / jwsOfJWEMinimalOutbound are otherwise-valid minimal JWS-of-JWE
+// policies; the outbound one is refused only because the mode is open-only.
+func jwsOfJWEMinimalInbound() *Policy {
+	p := jwsOfJWEInbound()
+	p.Mode = SealModeJWSofJWEMinimal
+	p.SigAlg = jose.RS512
+	return p
+}
+
+func jwsOfJWEMinimalOutbound() *Policy {
+	p := jwsOfJWEOutbound()
+	p.Mode = SealModeJWSofJWEMinimal
+	p.SigAlg = jose.RS512
+	return p
+}
+
+func TestPolicyValidateJWSofJWEMinimalModeRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     func() *Policy
+		mutate   func(p *Policy)
+		wantCode string
+	}{
+		{"inbound_minimal_is_valid", jwsOfJWEMinimalInbound, func(*Policy) {}, ""},
+		{"inbound_accept_missing_kid_is_valid", jwsOfJWEMinimalInbound, func(p *Policy) { p.AcceptMissingKid = true }, ""},
+		{"inbound_rs256", jwsOfJWEMinimalInbound, func(p *Policy) { p.SigAlg = jose.RS256 }, codeAlgorithmDisallowed},
+		{"inbound_ps256", jwsOfJWEMinimalInbound, func(p *Policy) { p.SigAlg = jose.PS256 }, codeAlgorithmDisallowed},
+		{"inbound_sig_alg_unset", jwsOfJWEMinimalInbound, func(p *Policy) { p.SigAlg = "" }, codeAlgorithmDisallowed},
+		{"inbound_a128gcm", jwsOfJWEMinimalInbound, func(p *Policy) { p.Enc = jose.A128GCM }, codeAlgorithmDisallowed},
+		{"inbound_a256cbc_hs512", jwsOfJWEMinimalInbound, func(p *Policy) { p.Enc = jose.A256CBC_HS512 }, codeAlgorithmDisallowed},
+		{"inbound_without_decrypt_kid", jwsOfJWEMinimalInbound, func(p *Policy) { p.DecryptKid = "" }, codePolicyIncomplete},
+		{"inbound_without_verify_kid", jwsOfJWEMinimalInbound, func(p *Policy) { p.VerifyKid = "" }, codePolicyIncomplete},
+		{"inbound_with_sign_kid", jwsOfJWEMinimalInbound, func(p *Policy) { p.SignKid = "our-key" }, codePolicyDirectionMismatch},
+		{"inbound_with_encrypt_kid", jwsOfJWEMinimalInbound, func(p *Policy) { p.EncryptKid = "peer-key" }, codePolicyDirectionMismatch},
+		{"inbound_typ", jwsOfJWEMinimalInbound, func(p *Policy) { p.Typ = "JOSE" }, codePolicyDirectionMismatch},
+		{"inbound_protected_headers", jwsOfJWEMinimalInbound, func(p *Policy) {
+			p.ProtectedHeaders = map[string]any{"iss": "acme"}
+		}, codePolicyDirectionMismatch},
+		{"inbound_iat_millis", jwsOfJWEMinimalInbound, func(p *Policy) { p.IATMillis = true }, codePolicyDirectionMismatch},
+		{"inbound_omit_kid", jwsOfJWEMinimalInbound, func(p *Policy) { p.OmitKid = true }, codePolicyModeMismatch},
+		{"outbound_is_open_only", jwsOfJWEMinimalOutbound, func(*Policy) {}, codePolicyDirectionMismatch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := tt.base()
+			tt.mutate(p)
+			err := p.Validate()
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+			requireJOSEErrorCode(t, err, tt.wantCode)
+
+			var doorErr *Error
+			require.ErrorAs(t, throughDoor(t, p), &doorErr)
+			assert.Equal(t, tt.wantCode, doorErr.Code)
+		})
+	}
+}
+
+// Open has no path for the minimal mode at this link yet: a valid inbound policy in it is
+// refused at the mode dispatch, before any key is resolved.
+func TestOpenRefusesJWSofJWEMinimalWithoutResolvingKeys(t *testing.T) {
+	p := jwsOfJWEMinimalInbound()
+	p.AcceptMissingKid = true
+	require.NoError(t, p.Validate())
+	requireJOSEErrorCode(t, openErr("a.b.c", p, refusingResolver{t}), codePolicyModeUnknown)
+}
+
+func TestPolicyValidateRS512StaysOffTheGlobalSigningModes(t *testing.T) {
+	for _, base := range []func() *Policy{nestedInbound, nestedOutbound, jwsOfJWEInbound, jwsOfJWEOutbound} {
+		p := base()
+		p.SigAlg = jose.RS512
+		requireJOSEErrorCode(t, p.Validate(), codeAlgorithmDisallowed)
+	}
+}
