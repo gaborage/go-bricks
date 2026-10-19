@@ -2,12 +2,15 @@ package jose_test
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	bricksjose "github.com/gaborage/go-bricks/jose"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
@@ -298,7 +302,9 @@ func refuse(status int, code string) server.Result[envelopeReply] {
 const (
 	signatureHeader = "X-Example-Signature"
 	tenantA         = "tenant-a"
+	tenantNoVerify  = "tenant-no-verify"
 	receiptID       = "receipt-1"
+	receiptJSON     = `{"id":"` + receiptID + `"}`
 )
 
 type Order struct {
@@ -324,6 +330,16 @@ func (noTenantKeys) Authorize(context.Context, string) error {
 
 func (noTenantKeys) ForTenant(context.Context, string) (TenantKeySet, error) {
 	return TenantKeySet{}, errors.New("unknown tenant")
+}
+
+type fakeTenantKeys map[string]TenantKeySet
+
+func (f fakeTenantKeys) ForTenant(ctx context.Context, tenantID string) (TenantKeySet, error) {
+	keys, ok := f[tenantID]
+	if !ok {
+		return noTenantKeys{}.ForTenant(ctx, tenantID)
+	}
+	return keys, nil
 }
 
 type fakeOperations struct {
@@ -418,6 +434,185 @@ func TestDetachedSignatureEnvelopeRecipeServesRegisteredRoutes(t *testing.T) {
 			assert.Equal(t, map[string]string{"code": tt.wantCode}, reply)
 			assert.Empty(t, ops.submitted)
 			assert.Zero(t, ops.statusCalls)
+		})
+	}
+}
+
+// envelopeVector is one request as the peer sends it: the JWE for the body's data member,
+// the detached signature over that exact string, and the attached form of the same JWS.
+type envelopeVector struct {
+	jwe      string
+	detached string
+	attached string
+}
+
+type envelopeFixture struct {
+	keys          fakeTenantKeys
+	peerSignPriv  *rsa.PrivateKey
+	ourDecryptPub *rsa.PublicKey
+	peerSealPriv  *rsa.PrivateKey
+}
+
+// envelopeKeys are the peer's signing, our decryption and the peer's sealing pairs, shared by
+// every test here. Keys are read-only, so generating them per test would only cost time.
+var envelopeKeys = sync.OnceValue(func() [3]*rsa.PrivateKey {
+	var keys [3]*rsa.PrivateKey
+	for i := range keys {
+		priv, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			panic(err)
+		}
+		keys[i] = priv
+	}
+	return keys
+})
+
+func newEnvelopeFixture(t *testing.T) *envelopeFixture {
+	t.Helper()
+	keys := envelopeKeys()
+	peerSign, ourDecrypt, peerSeal := keys[0], keys[1], keys[2]
+	return &envelopeFixture{
+		keys: fakeTenantKeys{
+			tenantA:        {PeerVerify: &peerSign.PublicKey, OurDecrypt: ourDecrypt, PeerSeal: &peerSeal.PublicKey},
+			tenantNoVerify: {OurDecrypt: ourDecrypt, PeerSeal: &peerSeal.PublicKey},
+		},
+		peerSignPriv:  peerSign,
+		ourDecryptPub: &ourDecrypt.PublicKey,
+		peerSealPriv:  peerSeal,
+	}
+}
+
+func (f *envelopeFixture) newHandler(t *testing.T) (*envelopeHandler, *fakeOperations) {
+	t.Helper()
+	return newTestEnvelopeHandler(t, f.keys)
+}
+
+// mint plays the peer with go-jose directly: it encrypts order to our decrypt key and
+// signs the JWE compact string with RS512, writing no kid on either token.
+func (f *envelopeFixture) mint(t *testing.T, order string) envelopeVector {
+	t.Helper()
+	encrypter, err := jose.NewEncrypter(jose.A256GCM, jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: f.ourDecryptPub}, nil)
+	require.NoError(t, err)
+	encrypted, err := encrypter.Encrypt([]byte(order))
+	require.NoError(t, err)
+	jwe, err := encrypted.CompactSerialize()
+	require.NoError(t, err)
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS512, Key: f.peerSignPriv}, nil)
+	require.NoError(t, err)
+	signed, err := signer.Sign([]byte(jwe))
+	require.NoError(t, err)
+	detached, err := signed.DetachedCompactSerialize()
+	require.NoError(t, err)
+	attached, err := signed.CompactSerialize()
+	require.NoError(t, err)
+	return envelopeVector{jwe: jwe, detached: detached, attached: attached}
+}
+
+// openReply plays the peer opening the reply's data: a bare JWE sealed to its seal key that
+// must carry no kid, cty or typ header.
+func (f *envelopeFixture) openReply(t *testing.T, sealed string) []byte {
+	t.Helper()
+	header, err := base64.RawURLEncoding.DecodeString(strings.SplitN(sealed, ".", 2)[0])
+	require.NoError(t, err)
+	var members map[string]any
+	require.NoError(t, json.Unmarshal(header, &members))
+	assert.NotContains(t, members, "kid")
+	assert.NotContains(t, members, "cty")
+	assert.NotContains(t, members, "typ")
+
+	p := &bricksjose.Policy{
+		Direction:        bricksjose.DirectionInbound,
+		Mode:             bricksjose.SealModeBareJWE,
+		DecryptKid:       peerSealKid,
+		KeyAlg:           bricksjose.DefaultKeyAlg,
+		Enc:              bricksjose.DefaultEnc,
+		AcceptMissingKid: true,
+	}
+	plaintext, _ := jositest.OpenForTest(t, sealed, p, jositest.NewTestResolver(map[string]any{peerSealKid: f.peerSealPriv}))
+	return plaintext
+}
+
+func envelopeContext(t *testing.T, method, tenantID string, signatures ...string) server.HandlerContext {
+	t.Helper()
+	r := httptest.NewRequestWithContext(multitenant.SetTenant(t.Context(), tenantID), method, "/example/orders", http.NoBody)
+	for _, sig := range signatures {
+		r.Header.Add(signatureHeader, sig)
+	}
+	return server.NewHandlerContextForTest(httptest.NewRecorder(), r, nil)
+}
+
+func TestDetachedSignatureEnvelopeRecipe(t *testing.T) {
+	f := newEnvelopeFixture(t)
+	v := f.mint(t, `{"amount":42}`)
+	header := "JWS " + v.detached
+
+	t.Run("round_trip", func(t *testing.T) {
+		h, ops := f.newHandler(t)
+		res, apiErr := h.submit(envelopeRequest{Data: v.jwe}, envelopeContext(t, http.MethodPost, tenantA, header))
+		require.Nil(t, apiErr)
+		assert.Zero(t, res.Status)
+		assert.Empty(t, res.Data.Code)
+		assert.JSONEq(t, receiptJSON, string(f.openReply(t, res.Data.Data)))
+		assert.Equal(t, []Order{{Amount: 42}}, ops.submitted)
+	})
+
+	t.Run("bodyless_twin_seals_reply", func(t *testing.T) {
+		h, ops := f.newHandler(t)
+		res, apiErr := h.status(statusRequest{}, envelopeContext(t, http.MethodGet, tenantA, "JWS not-a-token"))
+		require.Nil(t, apiErr)
+		assert.Zero(t, res.Status)
+		assert.JSONEq(t, receiptJSON, string(f.openReply(t, res.Data.Data)))
+		assert.Equal(t, 1, ops.statusCalls)
+	})
+
+	t.Run("round_trip_through_registered_route", func(t *testing.T) {
+		h, ops := f.newHandler(t)
+		status, reply := serveRoute(t, h, "POST /example/orders", "application/json", `{"data":"`+v.jwe+`"}`, header)
+		assert.Equal(t, http.StatusOK, status)
+		require.Len(t, reply, 1, "the reply carries only its sealed data member")
+		assert.JSONEq(t, receiptJSON, string(f.openReply(t, reply["data"])))
+		assert.Equal(t, []Order{{Amount: 42}}, ops.submitted)
+	})
+
+	t.Run("bodyless_route_seals_reply", func(t *testing.T) {
+		h, ops := f.newHandler(t)
+		status, reply := serveRoute(t, h, "GET /example/orders/status", "", "")
+		assert.Equal(t, http.StatusOK, status)
+		assert.JSONEq(t, receiptJSON, string(f.openReply(t, reply["data"])))
+		assert.Equal(t, 1, ops.statusCalls)
+	})
+
+	// Any change to the signed string breaks the signature, which Open checks before it decrypts.
+	tampered := v.jwe + "A"
+	invalid := f.mint(t, `{"amount":0}`)
+	refusals := []struct {
+		name       string
+		data       string
+		signatures []string
+		tenantID   string
+		wantStatus int
+		wantCode   string
+	}{
+		{"missing_signature_header", v.jwe, nil, tenantA, http.StatusUnauthorized, codeSignatureHeaderInvalid},
+		{"duplicated_signature_header", v.jwe, []string{header, header}, tenantA, http.StatusUnauthorized, codeSignatureHeaderInvalid},
+		{"oversize_signature_header", v.jwe, []string{"JWS " + strings.Repeat("a", maxSignatureHeaderBytes)}, tenantA, http.StatusBadRequest, codeSignatureHeaderInvalid},
+		{"signature_header_without_scheme", v.jwe, []string{v.detached}, tenantA, http.StatusUnauthorized, codeSignatureHeaderInvalid},
+		{"empty_data", "", []string{header}, tenantA, http.StatusBadRequest, codeDataMissing},
+		{"tampered_jwe", tampered, []string{header}, tenantA, http.StatusUnauthorized, "SIGNATURE_INVALID"},
+		{"embedded_payload", v.jwe, []string{"JWS " + v.attached}, tenantA, http.StatusBadRequest, "MALFORMED"},
+		{"invalid_order", invalid.jwe, []string{"JWS " + invalid.detached}, tenantA, http.StatusBadRequest, codePayloadInvalid},
+		{"no_tenant", v.jwe, []string{header}, "", http.StatusInternalServerError, codeInternal},
+		{"tenant_without_verify_key", v.jwe, []string{header}, tenantNoVerify, http.StatusInternalServerError, "KEY_UNKNOWN"},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			h, ops := f.newHandler(t)
+			res, apiErr := h.submit(envelopeRequest{Data: tt.data}, envelopeContext(t, http.MethodPost, tt.tenantID, tt.signatures...))
+			require.Nil(t, apiErr)
+			assert.Equal(t, tt.wantStatus, res.Status)
+			assert.Equal(t, tt.wantCode, res.Data.Code)
+			assert.Empty(t, res.Data.Data, "an error reply stays plaintext")
+			assert.Empty(t, ops.submitted)
 		})
 	}
 }
