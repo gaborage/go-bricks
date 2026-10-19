@@ -68,9 +68,9 @@ this JWE work in their own code.
   open-only.
 - The change is additive: no `!`, no migrations atom.
 
-### 2. The minimal JWS-of-JWE seal mode (pending, #2142)
+### 2. The minimal JWS-of-JWE seal mode (#2142)
 
-To be implemented by #2142:
+Implemented by #2142:
 
 - `SealModeJWSofJWEMinimal`, whose `String()` follows the existing spelling convention:
   `"jws-of-jwe-minimal"`.
@@ -91,8 +91,8 @@ To be implemented by #2142:
 ### 3. Detachment is an envelope, not part of the mode
 
 `jose.Seal` / `jose.Open` keep their single-compact signatures; ADR-107 made them the only two
-doors, and they stay so. A pure exported helper added by #2142 (for example
-`AttachDetachedJWS(detached, jwe string) (string, error)`) rebuilds the attached compact by
+doors, and they stay so. A pure exported helper added by #2142,
+`AttachDetachedJWS(detached, jwe string) (string, error)`, rebuilds the attached compact by
 inserting `base64url(JWE compact)` into the detached token's empty payload segment, returning
 header + `.` + `base64url(jwe)` + `.` + signature. It does no crypto. Its rules:
 

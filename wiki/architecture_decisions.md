@@ -2530,7 +2530,7 @@ Only a literally absent member counts as missing; a written `""` or `null` is co
 refused as `JOSE_KID_UNKNOWN`, failing closed where go-jose reads `null` as absent, and
 `DecryptKid` / `EncryptKid` stay required. Either field outside bare mode is
 `JOSE_POLICY_MODE_MISMATCH`, and in the wrong direction `JOSE_POLICY_DIRECTION_MISMATCH`. The
-ADR also records what #2142 will implement (an open-only `RS512` minimal JWS-of-JWE mode, and
+ADR also records what #2142 implements (an open-only `RS512` minimal JWS-of-JWE mode, and
 detachment as an envelope a pure helper reattaches, so `Seal` / `Open` stay the only two doors),
 why the server path stays imperative (#2165's recipe), and the non-goals (`A256CBC-HS512`, SHA-1
 RSA-OAEP, PEM loading, a server-first-class door, replay judgment). Not breaking.
