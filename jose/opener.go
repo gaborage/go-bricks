@@ -9,8 +9,9 @@ import (
 
 // Open performs the inbound transformation p.Mode selects. The default decrypts the compact
 // JWE with our private key and verifies the inner JWS with the peer's public key;
-// SealModeBareJWE only decrypts; SealModeJWSofJWE verifies the outer JWS first, then
-// decrypts its JWE payload. Standard JWT claims are parsed out of the resulting payload.
+// SealModeBareJWE only decrypts; SealModeJWSofJWE and the open-only SealModeJWSofJWEMinimal
+// verify the outer JWS first, then decrypt its JWE payload. Standard JWT claims are parsed
+// out of the resulting payload.
 //
 // Returns the verified plaintext payload, the extracted Claims, and the JWE+JWS Headers
 // for diagnostic logging by the caller. On any failure, returns an *Error with the
@@ -48,7 +49,7 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	case SealModeJWEofJWS:
 	case SealModeBareJWE:
 		return openBare(compact, p, r)
-	case SealModeJWSofJWE:
+	case SealModeJWSofJWE, SealModeJWSofJWEMinimal:
 		return openJWSofJWE(compact, p, r)
 	default:
 		return nil, nil, OpenHeader{}, errUnknownMode(p.Mode)
