@@ -372,3 +372,25 @@ func TestBoundedSegmentsCharset(t *testing.T) {
 	_, _, err = boundedSegments("YWJjZ.payload.sig")
 	assert.ErrorIs(t, err, ErrNotCompact, "len%4==1 is not a producible unpadded base64url length")
 }
+
+func TestNewHeaderReportsCtyPresence(t *testing.T) {
+	tests := []struct {
+		name    string
+		params  map[string]any
+		cty     string
+		present bool
+	}{
+		{"absent", map[string]any{"alg": "RS512"}, "", false},
+		{"present_jwe", map[string]any{"cty": "JWE"}, "JWE", true},
+		{"present_empty", map[string]any{"cty": ""}, "", true},
+		{"present_null", map[string]any{"cty": nil}, "", true},
+		{"present_non_string", map[string]any{"cty": float64(42)}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hdr := newHeader(tt.params)
+			assert.Equal(t, tt.cty, hdr.Cty)
+			assert.Equal(t, tt.present, hdr.CtyPresent)
+		})
+	}
+}

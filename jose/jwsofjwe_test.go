@@ -479,12 +479,47 @@ func TestOpenJWSofJWEMinimalOuterCty(t *testing.T) {
 		{"outer_cty_absent", nil, ""},
 		{"outer_cty_jws", outerCty("JWS"), codeCtyRejected},
 		{"outer_cty_application_json", outerCty("application/json"), codeCtyRejected},
+		{"outer_cty_present_empty", outerCty(""), codeCtyRejected},
+		{"outer_cty_present_null", (&jose.SignerOptions{}).WithHeader(jose.HeaderContentType, nil), codeCtyRejected},
+		{"outer_cty_non_string", (&jose.SignerOptions{}).WithHeader(jose.HeaderContentType, 42), codeCtyRejected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f.requireOpen(t, f.vector(t, nil, tt.outer), f.inbound, tt.wantCode, 400)
 		})
 	}
+}
+
+// The present-cty rows above test a written member: each option set puts cty on the wire.
+func TestOpenJWSofJWEMinimalOuterCtyRowsWriteTheMember(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
+	for _, v := range []any{"", nil, 42} {
+		detached := mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, (&jose.SignerOptions{}).WithHeader(jose.HeaderContentType, v))
+		_, present := headerParams(t, detached)["cty"]
+		assert.True(t, present, "cty %v", v)
+	}
+}
+
+// SealModeJWSofJWE still requires an outer cty of exactly JWE: a present empty one is refused
+// as an absent one is.
+func TestOpenJWSofJWERefusesAPresentEmptyOuterCty(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	p := jwsOfJWEInbound()
+	p.SigAlg = jose.PS256
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, innerKid("our-key"))
+	detached := mintDetachedOuter(t, f.signPriv, jose.PS256, jwe, outerKid("peer-key").WithContentType(""))
+	requireJOSEErrorStatus(t, openErr(spliceDetached(t, detached, jwe), p, f.resolver), codeCtyRejected, 400)
+}
+
+// The outer cty presence rule leaves the inner JWE alone: a present empty inner cty still
+// passes bare mode's permissive rule.
+func TestOpenJWSofJWEMinimalInnerCtyRuleUnchanged(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, innerCty(""))
+	_, present := headerParams(t, jwe)["cty"]
+	require.True(t, present)
+	f.requireOpen(t, spliceDetached(t, mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, nil), jwe), f.inbound, "", 0)
 }
 
 func TestOpenJWSofJWEMinimalRefusals(t *testing.T) {

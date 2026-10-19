@@ -218,13 +218,15 @@ func parsedHeader(compact string) (hdr Header, kidPresent, ok bool) {
 // newHeader builds a Header from a decoded protected-header object. Owned params fill the
 // typed fields; everything else lands in Extra, nil when nothing remains.
 func newHeader(params map[string]any) Header {
+	_, ctyPresent := params[string(jose.HeaderContentType)]
 	return Header{
-		Kid:   stringParam(params, "kid"),
-		Alg:   stringParam(params, "alg"),
-		Enc:   stringParam(params, "enc"),
-		Cty:   stringParam(params, string(jose.HeaderContentType)),
-		Typ:   stringParam(params, string(jose.HeaderType)),
-		Extra: filterOwned(params),
+		Kid:        stringParam(params, "kid"),
+		Alg:        stringParam(params, "alg"),
+		Enc:        stringParam(params, "enc"),
+		Cty:        stringParam(params, string(jose.HeaderContentType)),
+		CtyPresent: ctyPresent,
+		Typ:        stringParam(params, string(jose.HeaderType)),
+		Extra:      filterOwned(params),
 	}
 }
 

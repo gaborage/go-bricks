@@ -89,7 +89,7 @@ func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, c
 	if err != nil {
 		return nil, nil, hdr, mapVerifyError(err, p, &jwsHdr)
 	}
-	if !outerCtyAccepted(p.Mode, jwsHdr.Cty) {
+	if !outerCtyAccepted(p.Mode, &jwsHdr) {
 		return nil, nil, hdr, &Error{
 			Sentinel: ErrCtyRejected,
 			Code:     codeCtyRejected,
@@ -106,12 +106,13 @@ func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, c
 }
 
 // outerCtyAccepted reports whether a verified outer JWS cty is acceptable: exactly JWE in
-// both JWS-of-JWE modes, or absent in SealModeJWSofJWEMinimal.
-func outerCtyAccepted(mode SealMode, cty string) bool {
-	if cty == ctyJWE {
+// both JWS-of-JWE modes, or, in SealModeJWSofJWEMinimal, no cty member at all. A present
+// "", null or non-string cty is refused.
+func outerCtyAccepted(mode SealMode, h *cryptoadapter.Header) bool {
+	if h.Cty == ctyJWE {
 		return true
 	}
-	return mode == SealModeJWSofJWEMinimal && cty == ""
+	return mode == SealModeJWSofJWEMinimal && !h.CtyPresent
 }
 
 func errOuterNotJWS(cause error) *Error {
