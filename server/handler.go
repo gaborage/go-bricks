@@ -1493,7 +1493,7 @@ func RegisterHandler[T any, R any](
 		rg.addEcho(method, path, wrappedHandler, RouteRegistrant{
 			HandlerName: descriptor.HandlerName,
 			Package:     descriptor.Package,
-		})
+		}, descriptor.SensitiveParams)
 	} else {
 		r.Add(method, path, func(c HandlerContext) error {
 			ec := c.echoContext()

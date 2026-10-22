@@ -1,12 +1,14 @@
 package server
 
 import (
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/jose"
@@ -230,4 +232,64 @@ func TestCloneDescriptorNilPoliciesStayNil(t *testing.T) {
 	got := cloneDescriptor(&RouteDescriptor{Method: "GET", Path: "/health"})
 	assert.Nil(t, got.InboundJOSE)
 	assert.Nil(t, got.OutboundJOSE)
+}
+
+func TestWithSensitiveParams(t *testing.T) {
+	var descriptor RouteDescriptor
+	WithSensitiveParams("pan")(&descriptor)
+	WithSensitiveParams("cvv", "account")(&descriptor)
+	assert.Equal(t, []string{"pan", "cvv", "account"}, descriptor.SensitiveParams)
+}
+
+func TestCloneDescriptorDetachesSensitiveParams(t *testing.T) {
+	src := RouteDescriptor{SensitiveParams: []string{"pan"}}
+	clone := cloneDescriptor(&src)
+	require.Equal(t, src.SensitiveParams, clone.SensitiveParams)
+
+	clone.SensitiveParams[0] = "mutated"
+	assert.Equal(t, "pan", src.SensitiveParams[0], "the clone must not share the backing array")
+	assert.Nil(t, cloneDescriptor(&RouteDescriptor{}).SensitiveParams, "nil stays nil")
+}
+
+func TestRouteConflictTrackerSensitiveParams(t *testing.T) {
+	tracker := newRouteConflictTracker()
+	assert.Nil(t, tracker.sensitive.Load(), "no sensitive route: the lookup has no table to read")
+	assert.Nil(t, tracker.sensitiveParams(http.MethodGet, "/cards/:pan"))
+
+	names := []string{"pan"}
+	tracker.recordSensitive(http.MethodGet, "/cards/:pan", names)
+	tracker.recordSensitive(http.MethodGet, "/users/:id", nil)
+	tracker.recordSensitive(http.MethodPost, "/accounts/:account", []string{"account"})
+
+	assert.Equal(t, []string{"pan"}, tracker.sensitiveParams(http.MethodGet, "/cards/:pan"))
+	assert.Equal(t, []string{"account"}, tracker.sensitiveParams(http.MethodPost, "/accounts/:account"))
+	assert.Nil(t, tracker.sensitiveParams(http.MethodDelete, "/cards/:pan"), "same path, other method must not inherit")
+	assert.Nil(t, tracker.sensitiveParams(http.MethodGet, "/users/:id"))
+	assert.Nil(t, tracker.sensitiveParams(http.MethodGet, "/unknown"))
+
+	names[0] = "mutated"
+	assert.Equal(t, []string{"pan"}, tracker.sensitiveParams(http.MethodGet, "/cards/:pan"),
+		"the table must not share the caller's backing array")
+
+	var nilTracker *routeConflictTracker
+	assert.NotPanics(t, func() { nilTracker.recordSensitive(http.MethodGet, "/x/:y", []string{"y"}) })
+}
+
+func TestRegisterHandlerRecordsSensitiveParams(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+
+	registry := NewHandlerRegistry(&config.Config{})
+	tracker := newRouteConflictTracker()
+	registrar := newTrackedRouteGroup(echo.New().Group("/api"), "/api", nil, tracker)
+	GET(registry, registrar, "/cards/:id", testHandler, WithSensitiveParams("id"))
+	// A refused duplicate never reaches the engine, so its declaration is not recorded.
+	POST(registry, registrar, "/cards/:id", testHandler)
+	POST(registry, registrar, "/cards/:id", testHandler, WithSensitiveParams("id"))
+
+	assert.Equal(t, []string{"id"}, tracker.sensitiveParams(http.MethodGet, "/api/cards/:id"))
+	assert.Nil(t, tracker.sensitiveParams(http.MethodPost, "/api/cards/:id"))
+	routes := DefaultRouteRegistry.Routes()
+	require.NotEmpty(t, routes)
+	assert.Equal(t, []string{"id"}, routes[0].SensitiveParams, "the descriptor still carries it for discovery")
 }

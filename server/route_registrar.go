@@ -33,12 +33,15 @@ func newTrackedRouteGroup(group *echo.Group, prefix string, cfg *config.Config, 
 
 // addEcho registers a pre-built echo.HandlerFunc directly, so the framework's
 // typed-handler hot path pays no per-request adapter cost (ADR-026). A duplicate
-// is not added; see routeConflictTracker.record.
-func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant) {
+// is not added; see routeConflictTracker.record. sensitive (WithSensitiveParams) is
+// recorded only for a route that reaches the engine.
+func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant, sensitive []string) {
 	relative := rg.relativePath(path)
-	if !rg.tracker.record(method, rg.fullPathFromRelative(relative), reg) {
+	fullPath := rg.fullPathFromRelative(relative)
+	if !rg.tracker.record(method, fullPath, reg) {
 		return
 	}
+	rg.tracker.recordSensitive(method, fullPath, sensitive)
 	rg.group.Add(method, relative, h)
 }
 
