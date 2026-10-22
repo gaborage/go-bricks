@@ -26,6 +26,15 @@ import (
 // like healthPath/readyPath, so the decision is made by the caller from observability.enabled).
 // healthPath and readyPath are used by the tenant middleware skipper to bypass probe endpoints.
 func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string) {
+	setupMiddlewares(e, log, cfg, observabilityEnabled, healthPath, readyPath, nil)
+}
+
+// setupMiddlewares is SetupMiddlewares plus the server's sensitive-param lookup, which the
+// span url.path override and the access log both mask through (ADR-150). newServer passes
+// its tracker's; the exported form has no routes of its own to consult and passes nil.
+func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool,
+	healthPath, readyPath string, sensitive sensitiveParamLookup,
+) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,
 	// only covers what is downstream of ITSELF, and the eight middlewares
@@ -60,7 +69,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	skipProbe := newProbeSkipper(healthPath, readyPath)
 
 	if observabilityEnabled {
-		useOTelMiddleware(e, cfg, skipProbe)
+		useOTelMiddleware(e, cfg, skipProbe, sensitive)
 	}
 
 	// Enrich the request context in a single Request.WithContext clone: trace ID +
@@ -82,7 +91,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	setupIdentityMiddlewares(e, log, cfg, skipProbe)
 
 	// Logger middleware with zerolog
-	e.Use(requestLoggerEcho(log, healthPath, readyPath))
+	e.Use(requestLoggerEcho(log, healthPath, readyPath, sensitive))
 
 	usePanicRecovery(e)
 
@@ -149,7 +158,7 @@ func otelServerNameError(name string) error {
 // CORS, IP pre-guard, tenant resolution, forwarded client cert, access log) would reach
 // the span by value. The sanitizer here re-panics such a panic as its type alone first
 // (ADR-081, ADR-132); a handler panic is already turned into an error by Recover.
-func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper) {
+func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper, sensitive sensitiveParamLookup) {
 	e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
 		ServerName:     cfg.App.Name,
 		TracerProvider: otel.GetTracerProvider(),
@@ -184,7 +193,7 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 
 			return attrs
 		},
-		SpanStartAttributes: overrideSpanURLPath,
+		SpanStartAttributes: overrideSpanURLPath(sensitive),
 	}))
 	e.Use(sanitizePanicValue())
 }
@@ -202,16 +211,21 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 // attribute only for a non-empty path, so finding no url.path here means there is nothing to
 // override.
 //
-// A named function, not a closure in SetupMiddlewares: the loop pushes that function past the
+// A path parameter the route declared with WithSensitiveParams is masked through sensitive
+// (ADR-150).
+//
+// A named factory, not a closure in SetupMiddlewares: the loop pushes that function past the
 // gocognit ceiling (make lint).
-func overrideSpanURLPath(c *echo.Context, _ *echootel.Values, attrs []attribute.KeyValue) []attribute.KeyValue {
-	for i := range attrs {
-		if attrs[i].Key == semconv.URLPathKey {
-			attrs[i].Value = attribute.StringValue(routerPath(c.Request()))
-			break
+func overrideSpanURLPath(sensitive sensitiveParamLookup) func(*echo.Context, *echootel.Values, []attribute.KeyValue) []attribute.KeyValue {
+	return func(c *echo.Context, _ *echootel.Values, attrs []attribute.KeyValue) []attribute.KeyValue {
+		for i := range attrs {
+			if attrs[i].Key == semconv.URLPathKey {
+				attrs[i].Value = attribute.StringValue(maskSensitivePathParams(c, routerPath(c.Request()), sensitive))
+				break
+			}
 		}
+		return attrs
 	}
-	return attrs
 }
 
 // setupProbeMiddlewares registers the probe listener's chain (ADR-120): the application
@@ -225,20 +239,22 @@ func overrideSpanURLPath(c *echo.Context, _ *echootel.Values, attrs []attribute.
 func setupProbeMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, healthPath, readyPath string) {
 	e.Use(outermostRecoverEcho(log, cfg))
 	e.Use(requestIDMiddlewareEcho())
-	e.Use(requestLoggerEcho(log, healthPath, readyPath))
+	e.Use(requestLoggerEcho(log, healthPath, readyPath, nil))
 	usePanicRecovery(e)
 	e.Use(secureHeadersEcho())
 	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
 }
 
 // requestLoggerEcho is the zerolog access logger, with its probe-path handling keyed on
-// the paths this engine serves the probes at.
-func requestLoggerEcho(log logger.Logger, healthPath, readyPath string) echo.MiddlewareFunc {
-	return loggerWithConfigEcho(log, LoggerConfig{
+// the paths this engine serves the probes at, masking url.path through sensitive (ADR-150).
+func requestLoggerEcho(log logger.Logger, healthPath, readyPath string, sensitive sensitiveParamLookup) echo.MiddlewareFunc {
+	rl := newRequestLogger(log, LoggerConfig{
 		HealthPath:           healthPath,
 		ReadyPath:            readyPath,
 		SlowRequestThreshold: slowRequestThreshold,
 	})
+	rl.sensitive = sensitive
+	return rl.Handle
 }
 
 // usePanicRecovery registers Echo's Recover, then sanitizePanicValue. Registered AFTER

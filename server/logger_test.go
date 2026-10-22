@@ -142,7 +142,7 @@ func TestLogActionSummarySkipsWhenLevelDisabled(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	dl := &disabledLogger{ev: &disabledEvent{}}
-	logActionSummary(c, dl, LoggerConfig{SlowRequestThreshold: time.Second}, 10*time.Millisecond, 200, nil)
+	logActionSummary(c, dl, LoggerConfig{SlowRequestThreshold: time.Second}, nil, 10*time.Millisecond, 200, nil)
 
 	assert.False(t, dl.ev.msgCalled, "action summary must not emit when the level is disabled")
 }
@@ -835,7 +835,7 @@ func TestExtractRequestMetadataWithResponse(t *testing.T) {
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-456")
 	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan01)
 
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	assert.Equal(t, "POST", metadata.Method)
 	assert.Equal(t, "/api/users/123", metadata.URLPath)
@@ -858,7 +858,7 @@ func TestExtractRequestMetadataFallbackToRequestHeader(t *testing.T) {
 
 	// Don't set request ID in response header - it should fall back to request header
 	// (In real scenarios, this happens after timeout when response might be invalid)
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	assert.Equal(t, "GET", metadata.Method)
 	assert.Equal(t, testHealthPath, metadata.URLPath)
@@ -875,7 +875,7 @@ func TestExtractRequestMetadataNoRequestID(t *testing.T) {
 
 	c := e.NewContext(req, rec)
 
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	assert.Equal(t, "GET", metadata.Method)
 	assert.Equal(t, "/test", metadata.URLPath)
@@ -896,7 +896,7 @@ func TestExtractRequestMetadataAllFields(t *testing.T) {
 	c.Response().Header().Set(echo.HeaderXRequestID, "all-fields-123")
 	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan01)
 
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	// Verify all 8 fields are set
 	assert.NotEmpty(t, metadata.Method, "Method should not be empty")
@@ -1384,7 +1384,7 @@ func TestExtractRequestMetadataEmptyResponseHeaders(t *testing.T) {
 
 	// Response exists but headers are NOT set (middleware ordering issue)
 	// The response headers are empty, so extraction should fall back to request headers
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	assert.Equal(t, "GET", metadata.Method)
 	assert.Equal(t, testAPITestPath, metadata.URLPath)
@@ -1406,7 +1406,7 @@ func TestExtractRequestMetadataPartialResponseHeaders(t *testing.T) {
 	// Only set traceparent in response, leave requestID empty
 	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan02)
 
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	assert.Equal(t, testReqFromRequest, metadata.RequestID, testFallbackMessage)
 	assert.Equal(t, testTraceSpan02, metadata.Traceparent, "Should use response header when present")
@@ -1427,7 +1427,7 @@ func TestExtractRequestMetadataResponseHeadersPriority(t *testing.T) {
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-from-response")
 	c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan02)
 
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	assert.Equal(t, "req-from-response", metadata.RequestID, "Should prefer response header when both are set")
 	assert.Equal(t, testTraceSpan02, metadata.Traceparent, "Should prefer response header when both are set")
@@ -1444,7 +1444,7 @@ func TestExtractRequestMetadataMissingBothRequestAndResponseHeaders(t *testing.T
 	c := e.NewContext(req, rec)
 	// Don't set any headers in response either
 
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, nil)
 
 	assert.Equal(t, "GET", metadata.Method)
 	assert.Equal(t, "/api/no-headers", metadata.URLPath)
@@ -1463,7 +1463,7 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 		req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 		c := e.NewContext(req, httptest.NewRecorder())
 
-		assert.Empty(t, extractRequestMetadata(c).Traceparent)
+		assert.Empty(t, extractRequestMetadata(c, nil).Traceparent)
 	})
 
 	t.Run("from_the_response_header", func(t *testing.T) {
@@ -1472,7 +1472,7 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 		c := e.NewContext(req, httptest.NewRecorder())
 		c.Response().Header().Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 
-		assert.Empty(t, extractRequestMetadata(c).Traceparent)
+		assert.Empty(t, extractRequestMetadata(c, nil).Traceparent)
 	})
 
 	t.Run("a_valid_response_header_still_wins_over_an_invalid_request_one", func(t *testing.T) {
@@ -1482,7 +1482,7 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 		c := e.NewContext(req, httptest.NewRecorder())
 		c.Response().Header().Set(gobrickstrace.HeaderTraceParent, testTraceSpan02)
 
-		assert.Equal(t, testTraceSpan02, extractRequestMetadata(c).Traceparent)
+		assert.Equal(t, testTraceSpan02, extractRequestMetadata(c, nil).Traceparent)
 	})
 }
 
@@ -1501,7 +1501,7 @@ func TestActionLogForgedPathStaysOnOneLine(t *testing.T) {
 				req.URL.Path = "/test\n[FORGED] level=info msg=owned"
 				req.Header.Set("User-Agent", "ua\nforged-agent")
 				c := e.NewContext(req, httptest.NewRecorder())
-				logActionSummary(c, logger.New("info", pretty), LoggerConfig{SlowRequestThreshold: time.Second}, 5*time.Millisecond, 200, nil)
+				logActionSummary(c, logger.New("info", pretty), LoggerConfig{SlowRequestThreshold: time.Second}, nil, 5*time.Millisecond, 200, nil)
 			})
 			lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 			require.Len(t, lines, 1, "one request must emit one line, got: %q", out)
@@ -1529,7 +1529,7 @@ func TestActionLogForgedRawPathStaysOnOneLine(t *testing.T) {
 				req.URL.RawPath = "/test%0a[FORGED] level=info msg=owned"
 				c := e.NewContext(req, httptest.NewRecorder())
 				require.Equal(t, req.URL.RawPath, routerPath(req), "precondition: RawPath is the value under test")
-				logActionSummary(c, logger.New("info", pretty), LoggerConfig{SlowRequestThreshold: time.Second}, 5*time.Millisecond, 200, nil)
+				logActionSummary(c, logger.New("info", pretty), LoggerConfig{SlowRequestThreshold: time.Second}, nil, 5*time.Millisecond, 200, nil)
 			})
 			lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 			require.Len(t, lines, 1, "one request must emit one line, got: %q", out)

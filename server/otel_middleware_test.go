@@ -762,7 +762,7 @@ func TestOTelMiddlewareNeverRecordsAPanicValue(t *testing.T) {
 		exporter := installTestTracerProvider(t)
 		e := echo.New()
 		useOTelMiddleware(e, &config.Config{App: config.AppConfig{Name: testServiceName}},
-			func(*echo.Context) bool { return false })
+			func(*echo.Context) bool { return false }, nil)
 		e.Use(func(echo.HandlerFunc) echo.HandlerFunc {
 			return func(*echo.Context) error { panic(secret) }
 		})
