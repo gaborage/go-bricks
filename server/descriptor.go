@@ -4,6 +4,7 @@ package server
 import (
 	"maps"
 	"reflect"
+	"slices"
 	"sync"
 
 	"github.com/gaborage/go-bricks/jose"
@@ -27,11 +28,13 @@ type RouteDescriptor struct {
 	ResponseType reflect.Type // Response type R from HandlerFunc[T, R]; nil for raw routes
 	Middleware   []string     // Applied middleware names
 	Tags         []string     // Optional grouping tags
-	Summary      string       // Optional summary from comments
-	Description  string       // Optional description from comments
-	RawResponse  bool         // If true, bypass APIResponse envelope (for Strangler Fig migration)
-	InboundJOSE  *jose.Policy // Resolved at registration time from request type's jose: tag; nil for raw routes
-	OutboundJOSE *jose.Policy // Resolved at registration time from response type's jose: tag; nil for raw routes
+	// SensitiveParams names path params whose concrete value must never reach url.path telemetry.
+	SensitiveParams []string
+	Summary         string       // Optional summary from comments
+	Description     string       // Optional description from comments
+	RawResponse     bool         // If true, bypass APIResponse envelope (for Strangler Fig migration)
+	InboundJOSE     *jose.Policy // Resolved at registration time from request type's jose: tag; nil for raw routes
+	OutboundJOSE    *jose.Policy // Resolved at registration time from response type's jose: tag; nil for raw routes
 }
 
 // ListenerProbes is RouteDescriptor.Listener for a route served on the probe listener
@@ -139,6 +142,16 @@ func WithTags(tags ...string) RouteOption {
 	}
 }
 
+// WithSensitiveParams declares the named path parameters (name only, no leading ":") as carrying
+// regulated data, and records them per server for the route that reaches the engine. Each name must
+// be a whole ":name" segment before any wildcard, or "*" on a wildcard route; anything else fails
+// registration (ADR-150).
+func WithSensitiveParams(names ...string) RouteOption {
+	return func(d *RouteDescriptor) {
+		d.SensitiveParams = append(d.SensitiveParams, names...)
+	}
+}
+
 // WithSummary sets a summary description for the route
 func WithSummary(summary string) RouteOption {
 	return func(d *RouteDescriptor) {
@@ -203,6 +216,7 @@ func cloneDescriptor(d *RouteDescriptor) RouteDescriptor {
 	if d.Tags != nil {
 		out.Tags = append([]string(nil), d.Tags...)
 	}
+	out.SensitiveParams = slices.Clone(d.SensitiveParams)
 	if d.Middleware != nil {
 		out.Middleware = append([]string(nil), d.Middleware...)
 	}

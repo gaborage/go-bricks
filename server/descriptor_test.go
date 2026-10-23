@@ -1,12 +1,14 @@
 package server
 
 import (
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/jose"
@@ -230,4 +232,223 @@ func TestCloneDescriptorNilPoliciesStayNil(t *testing.T) {
 	got := cloneDescriptor(&RouteDescriptor{Method: "GET", Path: "/health"})
 	assert.Nil(t, got.InboundJOSE)
 	assert.Nil(t, got.OutboundJOSE)
+}
+
+func TestWithSensitiveParams(t *testing.T) {
+	var descriptor RouteDescriptor
+	WithSensitiveParams("pan")(&descriptor)
+	WithSensitiveParams("cvv", "account")(&descriptor)
+	assert.Equal(t, []string{"pan", "cvv", "account"}, descriptor.SensitiveParams)
+}
+
+func TestCloneDescriptorDetachesSensitiveParams(t *testing.T) {
+	src := RouteDescriptor{SensitiveParams: []string{"pan"}}
+	clone := cloneDescriptor(&src)
+	require.Equal(t, src.SensitiveParams, clone.SensitiveParams)
+
+	clone.SensitiveParams[0] = "mutated"
+	assert.Equal(t, "pan", src.SensitiveParams[0], "the clone must not share the backing array")
+	assert.Nil(t, cloneDescriptor(&RouteDescriptor{}).SensitiveParams, "nil stays nil")
+}
+
+func TestRouteConflictTrackerSensitivePlan(t *testing.T) {
+	tracker := newRouteConflictTracker()
+	assert.Nil(t, tracker.sensitive.Load(), "no sensitive route: the lookup has no table to read")
+	_, ok := tracker.lookupSensitivePlan(http.MethodGet, "/cards/:pan")
+	assert.False(t, ok)
+
+	cards := sensitivePlan{segCount: 3, wildcardIdx: -1, maskIdx: []int{2}}
+	accounts := sensitivePlan{segCount: 3, wildcardIdx: -1, maskIdx: []int{2}}
+	files := sensitivePlan{segCount: 3, wildcardIdx: 2, maskTail: true}
+	tracker.recordSensitive(http.MethodGet, "/cards/:pan", cards)
+	tracker.recordSensitive(http.MethodGet, "/users/:id", sensitivePlan{})
+	tracker.recordSensitive(http.MethodPost, "/accounts/:account", accounts)
+	tracker.recordSensitive(http.MethodGet, "/files/*", files)
+
+	for _, tt := range []struct {
+		method, path string
+		want         sensitivePlan
+		wantOK       bool
+	}{
+		{method: http.MethodGet, path: "/cards/:pan", want: cards, wantOK: true},
+		{method: http.MethodPost, path: "/accounts/:account", want: accounts, wantOK: true},
+		{method: http.MethodGet, path: "/files/*", want: files, wantOK: true},
+		{method: http.MethodDelete, path: "/cards/:pan"}, // same path, other method must not inherit
+		{method: http.MethodGet, path: "/users/:id"},     // a plan that masks nothing is not recorded
+		{method: http.MethodGet, path: "/unknown"},
+	} {
+		got, ok := tracker.lookupSensitivePlan(tt.method, tt.path)
+		assert.Equal(t, tt.wantOK, ok, "%s %s", tt.method, tt.path)
+		assert.Equal(t, tt.want, got, "%s %s", tt.method, tt.path)
+	}
+
+	var nilTracker *routeConflictTracker
+	assert.NotPanics(t, func() { nilTracker.recordSensitive(http.MethodGet, "/x/:y", cards) })
+}
+
+func TestCompileSensitivePlan(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		params  []string
+		want    sensitivePlan
+		wantErr string // the offending param, quoted in the error
+	}{
+		{name: "no_names", path: "/cards/:pan", want: sensitivePlan{}},
+		{
+			name: "whole_segment_name", path: "/api/cards/:pan", params: []string{"pan"},
+			want: sensitivePlan{segCount: 4, wildcardIdx: -1, maskIdx: []int{3}},
+		},
+		{
+			name: "several_names_sorted_and_deduped", path: "/accounts/:account/cards/:pan", params: []string{"pan", "account", "pan"},
+			want: sensitivePlan{segCount: 5, wildcardIdx: -1, maskIdx: []int{2, 4}},
+		},
+		{
+			name: "repeated_name_masks_every_segment", path: "/cards/:id/transfers/:id", params: []string{"id"},
+			want: sensitivePlan{segCount: 5, wildcardIdx: -1, maskIdx: []int{2, 4}},
+		},
+		{
+			name: "repeated_name_declared_twice_is_deduped", path: "/cards/:id/transfers/:id", params: []string{"id", "id"},
+			want: sensitivePlan{segCount: 5, wildcardIdx: -1, maskIdx: []int{2, 4}},
+		},
+		{
+			name: "repeated_name_after_wildcard_is_not_counted", path: "/cards/:id/*", params: []string{"id"},
+			want: sensitivePlan{segCount: 4, wildcardIdx: 3, maskIdx: []int{2}},
+		},
+		{
+			name: "wildcard_only", path: "/files/*", params: []string{"*"},
+			want: sensitivePlan{segCount: 3, wildcardIdx: 2, maskTail: true},
+		},
+		{
+			name: "param_before_wildcard", path: "/v1/:pin/*", params: []string{"pin"},
+			want: sensitivePlan{segCount: 4, wildcardIdx: 3, maskIdx: []int{2}},
+		},
+		{
+			name: "param_and_wildcard", path: "/v1/:pin/*", params: []string{"pin", "*"},
+			want: sensitivePlan{segCount: 4, wildcardIdx: 3, maskIdx: []int{2}, maskTail: true},
+		},
+		{
+			name: "wildcard_inside_segment", path: "/img*", params: []string{"*"},
+			want: sensitivePlan{segCount: 2, wildcardIdx: 1, maskTail: true},
+		},
+		{name: "param_after_wildcard", path: "/files/*/:pan", params: []string{"pan"}, wantErr: `"pan"`},
+		{name: "embedded_after_literal", path: "/cards/pan-:pan", params: []string{"pan"}, wantErr: `"pan"`},
+		{name: "prefix_of_longer_segment", path: "/cards/:pan-x", params: []string{"pan"}, wantErr: `"pan"`},
+		{name: "escaped_colon_is_literal", path: `/cards/\:pan`, params: []string{"pan"}, wantErr: `"pan"`},
+		{name: "literal_segment_named_like_param", path: "/cards/pan", params: []string{"pan"}, wantErr: `"pan"`},
+		{name: "unknown_name", path: "/cards/:pan", params: []string{"pan", "cvv"}, wantErr: `"cvv"`},
+		{name: "empty_name", path: "/cards/:pan", params: []string{""}, wantErr: `""`},
+		{name: "wildcard_name_without_wildcard", path: "/cards/:pan", params: []string{"*"}, wantErr: `"*"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := compileSensitivePlan(tt.path, tt.params)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr, "the error names the param")
+			assert.Contains(t, err.Error(), tt.path, "the error names the route")
+			assert.Equal(t, sensitivePlan{}, got)
+		})
+	}
+}
+
+// newSensitiveTestRegistrar returns a typed-handler registry and a tracked "/api" registrar
+// recording into tracker, with DefaultRouteRegistry cleared around the test.
+func newSensitiveTestRegistrar(t *testing.T) (*HandlerRegistry, RouteRegistrar, *routeConflictTracker) {
+	t.Helper()
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+	tracker := newRouteConflictTracker()
+	return NewHandlerRegistry(&config.Config{}), newTrackedRouteGroup(echo.New().Group("/api"), "/api", nil, tracker), tracker
+}
+
+func TestRegisterHandlerSensitiveParams(t *testing.T) {
+	t.Run("valid_routes_are_recorded", func(t *testing.T) {
+		registry, registrar, tracker := newSensitiveTestRegistrar(t)
+		GET(registry, registrar, "/cards/:id", testHandler, WithSensitiveParams("id"))
+		GET(registry, registrar, "/v1/:pin/*", testHandler, WithSensitiveParams("pin", "*"))
+		// A refused duplicate never reaches the engine, so its declaration is not recorded.
+		POST(registry, registrar, "/cards/:id", testHandler)
+		POST(registry, registrar, "/cards/:id", testHandler, WithSensitiveParams("id"))
+
+		got, ok := tracker.lookupSensitivePlan(http.MethodGet, "/api/cards/:id")
+		require.True(t, ok)
+		assert.Equal(t, sensitivePlan{segCount: 4, wildcardIdx: -1, maskIdx: []int{3}}, got)
+		got, ok = tracker.lookupSensitivePlan(http.MethodGet, "/api/v1/:pin/*")
+		require.True(t, ok)
+		assert.Equal(t, sensitivePlan{segCount: 5, wildcardIdx: 4, maskIdx: []int{3}, maskTail: true}, got)
+		_, ok = tracker.lookupSensitivePlan(http.MethodPost, "/api/cards/:id")
+		assert.False(t, ok)
+
+		routes := DefaultRouteRegistry.Routes()
+		require.NotEmpty(t, routes)
+		assert.Equal(t, []string{"id"}, routes[0].SensitiveParams, "the descriptor still carries it for discovery")
+	})
+
+	for _, tt := range []struct{ name, path, param string }{
+		{name: "unknown_name", path: "/cards/:id", param: "pan"},
+		{name: "param_after_wildcard", path: "/files/*/:id", param: "id"},
+		{name: "wildcard_name_without_wildcard", path: "/cards/:id", param: "*"},
+	} {
+		t.Run("rejects_"+tt.name, func(t *testing.T) {
+			registry, registrar, tracker := newSensitiveTestRegistrar(t)
+			fullPath := "/api" + tt.path
+			_, err := compileSensitivePlan(fullPath, []string{tt.param})
+			require.Error(t, err)
+
+			assert.PanicsWithValue(t, "server: handler registration failed for GET "+fullPath+": "+err.Error(),
+				func() { GET(registry, registrar, tt.path, testHandler, WithSensitiveParams(tt.param)) })
+
+			assert.Nil(t, tracker.sensitive.Load(), "a rejected route records nothing")
+			assert.Empty(t, DefaultRouteRegistry.Routes(), "a rejected route is never published")
+			assert.True(t, tracker.record(http.MethodGet, fullPath, RouteRegistrant{}),
+				"a rejected route never reserved its path")
+		})
+	}
+}
+
+// wrappingRegistrar delegates to the framework's route group without being one, the shape of a
+// consumer decorator around RouteRegistrar: RegisterHandler can only reach it through Add.
+type wrappingRegistrar struct{ inner RouteRegistrar }
+
+func (w wrappingRegistrar) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
+	w.inner.Add(method, path, handler, middleware...)
+}
+
+func (w wrappingRegistrar) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
+	return wrappingRegistrar{inner: w.inner.Group(prefix, middleware...)}
+}
+func (w wrappingRegistrar) Use(middleware ...MiddlewareFunc) { w.inner.Use(middleware...) }
+func (w wrappingRegistrar) FullPath(p string) string         { return w.inner.FullPath(p) }
+
+func TestRegisterHandlerSensitiveParamsWrappedRegistrar(t *testing.T) {
+	t.Run("sensitive_declaration_panics_before_publishing", func(t *testing.T) {
+		registry, registrar, tracker := newSensitiveTestRegistrar(t)
+		wrapped := wrappingRegistrar{inner: registrar}
+
+		assert.PanicsWithValue(t,
+			"server: handler registration failed for GET /api/cards/:id: WithSensitiveParams requires the framework's route group registrar",
+			func() { GET(registry, wrapped, "/cards/:id", testHandler, WithSensitiveParams("id")) })
+
+		assert.Nil(t, tracker.sensitive.Load(), "a refused route records nothing")
+		assert.Empty(t, DefaultRouteRegistry.Routes(), "a refused route is never published")
+		assert.True(t, tracker.record(http.MethodGet, "/api/cards/:id", RouteRegistrant{}),
+			"a refused route never reserved its path")
+	})
+
+	t.Run("non_sensitive_route_uses_the_fallback", func(t *testing.T) {
+		registry, registrar, tracker := newSensitiveTestRegistrar(t)
+		wrapped := wrappingRegistrar{inner: registrar}
+
+		assert.NotPanics(t, func() { GET(registry, wrapped, "/cards/:id", testHandler) })
+
+		assert.Nil(t, tracker.sensitive.Load(), "nothing sensitive was declared")
+		assert.NotEmpty(t, DefaultRouteRegistry.ByPath("/api/cards/:id"), "the route is published")
+		assert.False(t, tracker.record(http.MethodGet, "/api/cards/:id", RouteRegistrant{}),
+			"the wrapped Add reached the route group and reserved the path")
+	})
 }

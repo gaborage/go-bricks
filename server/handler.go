@@ -1427,6 +1427,9 @@ func NewHandlerRegistry(cfg *config.Config, opts ...HandlerRegistryOption) *Hand
 	return hr
 }
 
+// handlerRegistrationFailedFor prefixes every RegisterHandler registration panic.
+const handlerRegistrationFailedFor = "server: handler registration failed for "
+
 // RegisterHandler registers a typed handler with the route registrar and captures metadata.
 // It panics when T, after removing one pointer level, is not a struct the validator accepts.
 func RegisterHandler[T any, R any](
@@ -1443,7 +1446,7 @@ func RegisterHandler[T any, R any](
 	fullPath := r.FullPath(path)
 
 	if _, ok := requestStructType(reqType); !ok {
-		panic("server: handler registration failed for " + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
+		panic(handlerRegistrationFailedFor + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
 	}
 
 	// Create descriptor with type information
@@ -1459,6 +1462,21 @@ func RegisterHandler[T any, R any](
 
 	for _, opt := range opts {
 		opt(&descriptor)
+	}
+
+	// Compile WithSensitiveParams once, before the route is published anywhere: a name the
+	// url.path masker could not cover fails startup (Fail Fast, ADR-150).
+	sensitive, err := compileSensitivePlan(fullPath, descriptor.SensitiveParams)
+	if err != nil {
+		panic(handlerRegistrationFailedFor + method + " " + fullPath + ": " + err.Error())
+	}
+	// Only the framework's route group records the plan the url.path masker reads; any other
+	// registrar would serve the route with its sensitive segments unmasked, so refuse it here,
+	// before the descriptor is published.
+	rg, isRouteGroup := r.(*routeGroup)
+	if sensitive.masks() && !isRouteGroup {
+		panic(handlerRegistrationFailedFor + method + " " + fullPath +
+			": WithSensitiveParams requires the framework's route group registrar")
 	}
 
 	// Scan request/response types for jose: tags and resolve every kid against the
@@ -1487,13 +1505,14 @@ func RegisterHandler[T any, R any](
 	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, hr.log, descriptor.RawResponse, joseCfg)
 	// Hot path: register the echo handler directly through routeGroup.addEcho so the typed
 	// handler path adds zero per-request adapter overhead (ADR-026). The fallback adapts for
-	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
-	// hatch and never executes on the framework's real registrar.
-	if rg, ok := r.(*routeGroup); ok {
-		rg.addEcho(method, path, wrappedHandler, RouteRegistrant{
+	// non-routeGroup registrars (test fakes, wrappers) that declare no sensitive params; it
+	// round-trips through the unexported escape hatch and never executes on the framework's
+	// real registrar.
+	if isRouteGroup {
+		rg.addEcho(method, path, fullPath, wrappedHandler, RouteRegistrant{
 			HandlerName: descriptor.HandlerName,
 			Package:     descriptor.Package,
-		})
+		}, sensitive)
 	} else {
 		r.Add(method, path, func(c HandlerContext) error {
 			ec := c.echoContext()

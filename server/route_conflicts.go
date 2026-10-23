@@ -3,8 +3,10 @@ package server
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gaborage/go-bricks/internal/pathutil"
 )
@@ -91,10 +93,22 @@ func duplicateRouteError(conflicts []RouteConflict) error {
 // routeConflictTracker records every route added through a Server's routeGroups
 // and accumulates conflicts. One instance per Server; a nil tracker disables
 // recording (bare newRouteGroup construction in tests).
+//
+// It also holds the server's WithSensitiveParams table (ADR-150), so the url.path masking
+// is per-server state that lives exactly as long as the routes it describes.
 type routeConflictTracker struct {
 	mu        sync.Mutex
 	seen      map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts []RouteConflict
+	// sensitive is copy-on-write: replaced whole under mu at registration, loaded without a
+	// lock per request. nil until the first sensitive route registers.
+	sensitive atomic.Pointer[map[routeKey]sensitivePlan]
+}
+
+// routeKey identifies a registered route by method and full path template, as c.Path()
+// reports it at request time.
+type routeKey struct {
+	method, path string
 }
 
 // seenRoute is the first registration of a route node, with its literal path.
@@ -153,6 +167,33 @@ func routeNodeKey(method, path string) string {
 		}
 	}
 	return b.String()
+}
+
+// recordSensitive stores the compiled sensitive-param plan of a route that reached the engine.
+// A nil tracker or a plan that masks nothing records nothing.
+func (t *routeConflictTracker) recordSensitive(method, fullPath string, plan sensitivePlan) {
+	if t == nil || !plan.masks() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	next := make(map[routeKey]sensitivePlan)
+	if cur := t.sensitive.Load(); cur != nil {
+		maps.Copy(next, *cur)
+	}
+	next[routeKey{method: method, path: fullPath}] = plan
+	t.sensitive.Store(&next)
+}
+
+// lookupSensitivePlan is the request-time lookup of a route's compiled plan, lock-free. It
+// returns at once when the server registered no sensitive route; the plan is read-only.
+func (t *routeConflictTracker) lookupSensitivePlan(method, path string) (sensitivePlan, bool) {
+	m := t.sensitive.Load()
+	if m == nil {
+		return sensitivePlan{}, false
+	}
+	plan, ok := (*m)[routeKey{method: method, path: path}]
+	return plan, ok
 }
 
 func (t *routeConflictTracker) snapshot() []RouteConflict {
