@@ -1,7 +1,6 @@
 package server
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/labstack/echo/v5"
@@ -9,56 +8,45 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
-// sensitiveParamLookup returns the WithSensitiveParams names of the route registered at
-// method + path template, or nil. The Server's is routeConflictTracker.sensitiveParams; a nil
-// lookup masks nothing.
-type sensitiveParamLookup func(method, path string) []string
+// sensitiveParamLookup returns the compiled WithSensitiveParams plan of the route registered at
+// method + path template. The Server's is routeConflictTracker.lookupSensitivePlan; a nil lookup
+// masks nothing.
+type sensitiveParamLookup func(method, path string) (sensitivePlan, bool)
 
-// maskSensitivePathParams returns rawPath with the value of every path parameter the matched
-// route marked via WithSensitiveParams replaced by the logger's mask value. A route without
-// sensitive params gets rawPath back unchanged, allocation-free.
-//
-// The value is masked by segment position against the route pattern, so a value that also occurs
-// in a literal segment is never masked in the wrong place, and a percent-encoded value is masked
-// whole. A wildcard route falls back to replacing the first literal occurrence of c.Param's value;
-// a value spelled differently in rawPath stays unmasked.
+// maskSensitivePathParams returns rawPath with every value the matched route declared via
+// WithSensitiveParams masked (see maskBySegment). A route without a plan gets rawPath back
+// unchanged, allocation-free; a rawPath whose shape does not fit the plan yields the route
+// template, so a mismatch never leaks a value.
 func maskSensitivePathParams(c *echo.Context, rawPath string, lookup sensitiveParamLookup) string {
 	if lookup == nil {
 		return rawPath
 	}
 	route := c.Path()
-	names := lookup(c.Request().Method, route)
-	if len(names) == 0 {
+	plan, ok := lookup(c.Request().Method, route)
+	if !ok {
 		return rawPath
 	}
-	if masked, ok := maskBySegment(route, rawPath, names); ok {
+	if masked, ok := maskBySegment(plan, rawPath); ok {
 		return masked
 	}
-	masked := rawPath
-	for _, name := range names {
-		if v := c.Param(name); v != "" {
-			masked = strings.Replace(masked, v, logger.DefaultMaskValue, 1)
-		}
-	}
-	return masked
+	return route
 }
 
-// maskBySegment masks every rawPath segment whose route-pattern counterpart is a sensitive
-// ":name". It reports false when the two do not have the same segment count or the route holds a
-// wildcard, since segment positions then say nothing about where a value sits.
-func maskBySegment(route, rawPath string, names []string) (string, bool) {
-	if strings.Contains(route, "*") {
+// maskBySegment applies plan to rawPath by segment position, never by searching for a value: each
+// plan.maskIdx segment becomes logger.DefaultMaskValue, and with plan.maskTail everything from the
+// wildcard index on collapses into one mask segment, hiding the tail's values and depth. It reports
+// false when the shapes do not line up: rawPath needs exactly plan.segCount segments on a
+// wildcard-free route, and at least plan.wildcardIdx on a wildcard route.
+func maskBySegment(plan sensitivePlan, rawPath string) (string, bool) {
+	segs := strings.Split(rawPath, "/")
+	if (plan.wildcardIdx == -1 && len(segs) != plan.segCount) || len(segs) < plan.wildcardIdx {
 		return "", false
 	}
-	routeSegs := strings.Split(route, "/")
-	pathSegs := strings.Split(rawPath, "/")
-	if len(routeSegs) != len(pathSegs) {
-		return "", false
+	for _, i := range plan.maskIdx {
+		segs[i] = logger.DefaultMaskValue
 	}
-	for i, seg := range routeSegs {
-		if name, ok := strings.CutPrefix(seg, ":"); ok && slices.Contains(names, name) {
-			pathSegs[i] = logger.DefaultMaskValue
-		}
+	if plan.maskTail && len(segs) > plan.wildcardIdx {
+		segs = append(segs[:plan.wildcardIdx], logger.DefaultMaskValue)
 	}
-	return strings.Join(pathSegs, "/"), true
+	return strings.Join(segs, "/"), true
 }

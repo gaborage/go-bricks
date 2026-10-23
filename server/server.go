@@ -284,7 +284,7 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 		s.setupErr = otelServerNameError(cfg.App.Name)
 	}
 	setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath,
-		s.conflicts.sensitiveParams)
+		s.conflicts.lookupSensitivePlan)
 
 	if s.probeAddr != "" {
 		s.probeEcho = newProbeEngine(e, cfg, log, healthRoute, readyRoute)

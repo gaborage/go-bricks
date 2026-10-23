@@ -26,21 +26,35 @@ const (
 )
 
 // sensitiveLookup is the lookup a Server whose only sensitive route is GET route would hand
-// the middleware: the same per-server table, filled the way addEcho fills it.
-func sensitiveLookup(route string, names ...string) sensitiveParamLookup {
+// the middleware: the same per-server table, compiled and filled the way RegisterHandler fills it.
+func sensitiveLookup(t *testing.T, route string, names ...string) sensitiveParamLookup {
+	t.Helper()
+	plan, err := compileSensitivePlan(route, names)
+	require.NoError(t, err)
 	tracker := newRouteConflictTracker()
-	tracker.recordSensitive(http.MethodGet, route, names)
-	return tracker.sensitiveParams
+	tracker.recordSensitive(http.MethodGet, route, plan)
+	return tracker.lookupSensitivePlan
 }
 
-// maskThroughRouter routes target through a real Echo router (so c.Path and c.Param are set the
-// way the middleware sees them) and returns what maskSensitivePathParams makes of it.
+// maskThroughRouter routes target through a real Echo router (so c.Path is set the way the
+// middleware sees it) and returns what maskSensitivePathParams makes of the request's path.
 func maskThroughRouter(t *testing.T, route, target string, lookup sensitiveParamLookup) string {
+	t.Helper()
+	return maskThroughRouterRaw(t, route, target, "", lookup)
+}
+
+// maskThroughRouterRaw is maskThroughRouter masking rawPath instead of the request's own path
+// when rawPath is non-empty, so a path that does not fit the matched route can be handed in.
+func maskThroughRouterRaw(t *testing.T, route, target, rawPath string, lookup sensitiveParamLookup) string {
 	t.Helper()
 	var got string
 	e := echo.New()
 	e.GET(route, func(c *echo.Context) error {
-		got = maskSensitivePathParams(c, routerPath(c.Request()), lookup)
+		raw := rawPath
+		if raw == "" {
+			raw = routerPath(c.Request())
+		}
+		got = maskSensitivePathParams(c, raw, lookup)
 		return c.NoContent(http.StatusOK)
 	})
 	rec := httptest.NewRecorder()
@@ -115,45 +129,70 @@ func TestMaskSensitivePathParams(t *testing.T) {
 			target: "/cards/41%2F11", want: "/cards/***",
 		},
 		{
-			// Wildcard routes fall back to a literal search of the decoded value; an encoded
-			// spelling is not found there and nothing breaks.
-			name: "wildcard_fallback_masks_a_literal_value", route: "/files/:pan/*", sensitive: []string{"pan"},
-			target: "/files/" + sensitiveTestPAN + "/a/b", want: "/files/***/a/b",
+			// The value "1" also prefixes the literal "v1": masking is by position, never by search.
+			name: "wildcard_route_masks_param_by_position", route: "/v1/:pin/*", sensitive: []string{"pin"},
+			target: "/v1/1/receipt", want: "/v1/***/receipt",
 		},
 		{
-			// Echo routes on the raw path and c.Param carries that raw spelling, so the
-			// fallback's literal search still finds an encoded value.
-			name: "wildcard_fallback_masks_an_encoded_value", route: "/files/:pan/*",
+			name: "wildcard_route_masks_an_encoded_value_whole", route: "/files/:pan/*",
 			sensitive: []string{"pan"},
 			target:    "/files/41%2F11/a", want: "/files/***/a",
 		},
 		{
-			name: "declared_name_that_is_not_a_route_param", route: "/cards/:pan", sensitive: []string{"cvv"},
-			target: "/cards/" + sensitiveTestPAN, want: "/cards/" + sensitiveTestPAN,
+			name: "sensitive_wildcard_masks_the_whole_tail", route: "/files/*", sensitive: []string{"*"},
+			target: "/files/" + sensitiveTestPAN + "/a/b", want: "/files/***",
+		},
+		{
+			name: "sensitive_param_and_wildcard_both_masked", route: "/v1/:pin/*", sensitive: []string{"pin", "*"},
+			target: "/v1/1/receipt/42", want: "/v1/***/***",
+		},
+		{
+			name: "sensitive_wildcard_with_empty_tail", route: "/files/*", sensitive: []string{"*"},
+			target: "/files/", want: "/files/***",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, maskThroughRouter(t, tt.route, tt.target, sensitiveLookup(tt.route, tt.sensitive...)))
+			assert.Equal(t, tt.want, maskThroughRouter(t, tt.route, tt.target, sensitiveLookup(t, tt.route, tt.sensitive...)))
 		})
 	}
 }
 
-// TestMaskSensitivePathParamsValueNotInPath covers the fallback when the value does not occur
-// literally in the path handed in: nothing is replaced and nothing breaks.
-func TestMaskSensitivePathParamsValueNotInPath(t *testing.T) {
-	lookup := sensitiveLookup("/cards/:pan", "pan")
+// TestMaskSensitivePathParamsShapeMismatchFailsClosed pins that a rawPath which does not fit the
+// matched route's plan yields the route template, never the raw path.
+func TestMaskSensitivePathParamsShapeMismatchFailsClosed(t *testing.T) {
+	got := maskThroughRouterRaw(t, "/cards/:pan", "/cards/1", "/cards/"+sensitiveTestPAN+"/x",
+		sensitiveLookup(t, "/cards/:pan", "pan"))
+	assert.Equal(t, "/cards/:pan", got)
+}
 
-	var got string
-	e := echo.New()
-	e.GET("/cards/:pan", func(c *echo.Context) error {
-		got = maskSensitivePathParams(c, "/unrelated", lookup)
-		return c.NoContent(http.StatusOK)
-	})
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/cards/"+sensitiveTestPAN, http.NoBody))
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "/unrelated", got)
+func TestMaskBySegment(t *testing.T) {
+	tests := []struct {
+		name   string
+		route  string
+		names  []string
+		path   string
+		want   string
+		wantOK bool
+	}{
+		{name: "fixed_route_match", route: "/a/:x", names: []string{"x"}, path: "/a/1", want: "/a/***", wantOK: true},
+		{name: "fixed_route_shorter_path", route: "/a/:x", names: []string{"x"}, path: "/a"},
+		{name: "fixed_route_longer_path", route: "/a/:x", names: []string{"x"}, path: "/a/1/2"},
+		{name: "wildcard_path_at_wildcard_index", route: "/a/:x/*", names: []string{"x", "*"}, path: "/a/1", want: "/a/***", wantOK: true},
+		{name: "wildcard_path_below_wildcard_index", route: "/a/:x/*", names: []string{"x"}, path: "/a"},
+		{name: "wildcard_not_sensitive_keeps_tail", route: "/a/:x/*", names: []string{"x"}, path: "/a/1/b/c", want: "/a/***/b/c", wantOK: true},
+		{name: "wildcard_tail_collapses", route: "/a/*", names: []string{"*"}, path: "/a/b/c", want: "/a/***", wantOK: true},
+		{name: "wildcard_inside_segment", route: "/img*", names: []string{"*"}, path: "/img/a", want: "/***", wantOK: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := compileSensitivePlan(tt.route, tt.names)
+			require.NoError(t, err)
+			got, ok := maskBySegment(plan, tt.path)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // TestMaskSensitivePathParamsAllocsStable pins the common case: a route without sensitive params
@@ -162,8 +201,8 @@ func TestMaskSensitivePathParamsAllocsStable(t *testing.T) {
 	if racedetect.Enabled {
 		t.Skip("testing.AllocsPerRun is unreliable under -race; alloc baseline enforced in the non-race matrix")
 	}
-	empty := newRouteConflictTracker().sensitiveParams // a server with no sensitive route
-	other := sensitiveLookup("/cards/:pan", "pan")     // a server whose sensitive route is elsewhere
+	empty := newRouteConflictTracker().lookupSensitivePlan // a server with no sensitive route
+	other := sensitiveLookup(t, "/cards/:pan", "pan")      // a server whose sensitive route is elsewhere
 
 	e := echo.New()
 	e.GET("/users/:id", func(c *echo.Context) error {
