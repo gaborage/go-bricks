@@ -12,7 +12,7 @@ import (
 type sensitivePlan struct {
 	segCount    int   // segments in the route template
 	wildcardIdx int   // index of the segment holding the wildcard, -1 if none
-	maskIdx     []int // ":name" segments to mask, all before wildcardIdx
+	maskIdx     []int // ":name" segments to mask, ascending, all before wildcardIdx
 	maskTail    bool  // "*" declared: everything from wildcardIdx on collapses into one mask
 }
 
@@ -38,16 +38,33 @@ func compileSensitivePlan(fullPath string, names []string) (sensitivePlan, error
 			plan.maskTail = true
 			continue
 		}
-		idx := slices.Index(params, name)
-		if name == "" || idx == -1 {
+		idxs := paramIndices(params, name)
+		if len(idxs) == 0 {
 			return sensitivePlan{}, fmt.Errorf(`sensitive param %q must be a whole ":%s" segment before any wildcard in %s`,
 				name, name, fullPath)
 		}
-		if !slices.Contains(plan.maskIdx, idx) {
-			plan.maskIdx = append(plan.maskIdx, idx)
+		plan.maskIdx = append(plan.maskIdx, idxs...)
+	}
+	// A name declared twice adds its indices twice; the masker wants each once, ascending.
+	slices.Sort(plan.maskIdx)
+	plan.maskIdx = slices.Compact(plan.maskIdx)
+	return plan, nil
+}
+
+// paramIndices returns the index of every segment in params named name, ascending. echo accepts
+// a repeated name (/cards/:id/transfers/:id), and every segment carrying it is masked. The empty
+// name matches nothing: params holds "" for every segment that is not a whole param.
+func paramIndices(params []string, name string) []int {
+	if name == "" {
+		return nil
+	}
+	var idxs []int
+	for idx, param := range params {
+		if param == name {
+			idxs = append(idxs, idx)
 		}
 	}
-	return plan, nil
+	return idxs
 }
 
 // routeParams returns the whole-segment param name of each segment before the wildcard ("" for any

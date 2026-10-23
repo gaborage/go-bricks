@@ -300,8 +300,20 @@ func TestCompileSensitivePlan(t *testing.T) {
 			want: sensitivePlan{segCount: 4, wildcardIdx: -1, maskIdx: []int{3}},
 		},
 		{
-			name: "several_names_in_declared_order", path: "/accounts/:account/cards/:pan", params: []string{"pan", "account", "pan"},
-			want: sensitivePlan{segCount: 5, wildcardIdx: -1, maskIdx: []int{4, 2}},
+			name: "several_names_sorted_and_deduped", path: "/accounts/:account/cards/:pan", params: []string{"pan", "account", "pan"},
+			want: sensitivePlan{segCount: 5, wildcardIdx: -1, maskIdx: []int{2, 4}},
+		},
+		{
+			name: "repeated_name_masks_every_segment", path: "/cards/:id/transfers/:id", params: []string{"id"},
+			want: sensitivePlan{segCount: 5, wildcardIdx: -1, maskIdx: []int{2, 4}},
+		},
+		{
+			name: "repeated_name_declared_twice_is_deduped", path: "/cards/:id/transfers/:id", params: []string{"id", "id"},
+			want: sensitivePlan{segCount: 5, wildcardIdx: -1, maskIdx: []int{2, 4}},
+		},
+		{
+			name: "repeated_name_after_wildcard_is_not_counted", path: "/cards/:id/*", params: []string{"id"},
+			want: sensitivePlan{segCount: 4, wildcardIdx: 3, maskIdx: []int{2}},
 		},
 		{
 			name: "wildcard_only", path: "/files/*", params: []string{"*"},
@@ -397,4 +409,46 @@ func TestRegisterHandlerSensitiveParams(t *testing.T) {
 				"a rejected route never reserved its path")
 		})
 	}
+}
+
+// wrappingRegistrar delegates to the framework's route group without being one, the shape of a
+// consumer decorator around RouteRegistrar: RegisterHandler can only reach it through Add.
+type wrappingRegistrar struct{ inner RouteRegistrar }
+
+func (w wrappingRegistrar) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
+	w.inner.Add(method, path, handler, middleware...)
+}
+
+func (w wrappingRegistrar) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
+	return wrappingRegistrar{inner: w.inner.Group(prefix, middleware...)}
+}
+func (w wrappingRegistrar) Use(middleware ...MiddlewareFunc) { w.inner.Use(middleware...) }
+func (w wrappingRegistrar) FullPath(p string) string         { return w.inner.FullPath(p) }
+
+func TestRegisterHandlerSensitiveParamsWrappedRegistrar(t *testing.T) {
+	t.Run("sensitive_declaration_panics_before_publishing", func(t *testing.T) {
+		registry, registrar, tracker := newSensitiveTestRegistrar(t)
+		wrapped := wrappingRegistrar{inner: registrar}
+
+		assert.PanicsWithValue(t,
+			"server: handler registration failed for GET /api/cards/:id: WithSensitiveParams requires the framework's route group registrar",
+			func() { GET(registry, wrapped, "/cards/:id", testHandler, WithSensitiveParams("id")) })
+
+		assert.Nil(t, tracker.sensitive.Load(), "a refused route records nothing")
+		assert.Empty(t, DefaultRouteRegistry.Routes(), "a refused route is never published")
+		assert.True(t, tracker.record(http.MethodGet, "/api/cards/:id", RouteRegistrant{}),
+			"a refused route never reserved its path")
+	})
+
+	t.Run("non_sensitive_route_uses_the_fallback", func(t *testing.T) {
+		registry, registrar, tracker := newSensitiveTestRegistrar(t)
+		wrapped := wrappingRegistrar{inner: registrar}
+
+		assert.NotPanics(t, func() { GET(registry, wrapped, "/cards/:id", testHandler) })
+
+		assert.Nil(t, tracker.sensitive.Load(), "nothing sensitive was declared")
+		assert.NotEmpty(t, DefaultRouteRegistry.ByPath("/api/cards/:id"), "the route is published")
+		assert.False(t, tracker.record(http.MethodGet, "/api/cards/:id", RouteRegistrant{}),
+			"the wrapped Add reached the route group and reserved the path")
+	})
 }
