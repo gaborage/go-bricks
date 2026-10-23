@@ -2517,6 +2517,24 @@ and an overlay is either delivered or refused, never silently dropped.
 
 ---
 
+### [ADR-150: A Route Masks Its Sensitive Path Parameters in url.path Telemetry](adr_150_sensitive_path_params_masked_in_url_telemetry.md)
+
+**Date:** 2026-10-22 | **Status:** Accepted | **Breaking:** None — additive `server.WithSensitiveParams` route option and `RouteDescriptor.SensitiveParams` field
+
+The incoming-request span's `url.path` and the access log's `url.path` field and message carry
+the raw request path, so a path parameter holding regulated data reached both verbatim; the log
+filter masks by field name and cannot single out one route's path. A route now declares
+`server.WithSensitiveParams("pan")`, and for a request it serves both sinks replace that
+parameter's segment with `***`, looked up lock-free from a per-server table keyed by method +
+path (not the global `DefaultRouteRegistry`, whose `Clear()` would switch masking off).
+`http.route` keeps the template. See [observability.md](observability.md) *Sensitive path
+parameters*.
+
+**Key Benefits:** a regulated path value stays out of traces and access logs without masking the
+path of every other route.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3326,7 +3344,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-149) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-150) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
