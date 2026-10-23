@@ -1427,6 +1427,9 @@ func NewHandlerRegistry(cfg *config.Config, opts ...HandlerRegistryOption) *Hand
 	return hr
 }
 
+// handlerRegistrationFailedFor prefixes every RegisterHandler registration panic.
+const handlerRegistrationFailedFor = "server: handler registration failed for "
+
 // RegisterHandler registers a typed handler with the route registrar and captures metadata.
 // It panics when T, after removing one pointer level, is not a struct the validator accepts.
 func RegisterHandler[T any, R any](
@@ -1443,7 +1446,7 @@ func RegisterHandler[T any, R any](
 	fullPath := r.FullPath(path)
 
 	if _, ok := requestStructType(reqType); !ok {
-		panic("server: handler registration failed for " + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
+		panic(handlerRegistrationFailedFor + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
 	}
 
 	// Create descriptor with type information
@@ -1465,14 +1468,14 @@ func RegisterHandler[T any, R any](
 	// url.path masker could not cover fails startup (Fail Fast, ADR-150).
 	sensitive, err := compileSensitivePlan(fullPath, descriptor.SensitiveParams)
 	if err != nil {
-		panic("server: handler registration failed for " + method + " " + fullPath + ": " + err.Error())
+		panic(handlerRegistrationFailedFor + method + " " + fullPath + ": " + err.Error())
 	}
 	// Only the framework's route group records the plan the url.path masker reads; any other
 	// registrar would serve the route with its sensitive segments unmasked, so refuse it here,
 	// before the descriptor is published.
 	rg, isRouteGroup := r.(*routeGroup)
 	if sensitive.masks() && !isRouteGroup {
-		panic("server: handler registration failed for " + method + " " + fullPath +
+		panic(handlerRegistrationFailedFor + method + " " + fullPath +
 			": WithSensitiveParams requires the framework's route group registrar")
 	}
 
