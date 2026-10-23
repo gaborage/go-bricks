@@ -115,6 +115,12 @@ func TestMaskSensitivePathParams(t *testing.T) {
 			target:    "/accounts/00123456789012/cards/" + sensitiveTestPAN, want: "/accounts/***/cards/***",
 		},
 		{
+			// echo accepts a repeated name; every segment carrying it is masked.
+			name: "repeated_param_masks_every_segment", route: "/cards/:id/transfers/:id",
+			sensitive: []string{"id"},
+			target:    "/cards/" + sensitiveTestPAN + "/transfers/" + sensitiveTestPAN, want: "/cards/***/transfers/***",
+		},
+		{
 			name: "only_the_declared_param_is_masked", route: "/users/:id/cards/:pan",
 			sensitive: []string{"pan"},
 			target:    "/users/42/cards/" + sensitiveTestPAN, want: "/users/42/cards/***",
