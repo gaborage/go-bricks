@@ -1461,6 +1461,13 @@ func RegisterHandler[T any, R any](
 		opt(&descriptor)
 	}
 
+	// Compile WithSensitiveParams once, before the route is published anywhere: a name the
+	// url.path masker could not cover fails startup (Fail Fast, ADR-150).
+	sensitive, err := compileSensitivePlan(fullPath, descriptor.SensitiveParams)
+	if err != nil {
+		panic("server: handler registration failed for " + method + " " + fullPath + ": " + err.Error())
+	}
+
 	// Scan request/response types for jose: tags and resolve every kid against the
 	// registry's resolver. Panics at startup on any failure (Fail Fast principle).
 	scanRouteJOSE(&descriptor, hr.joseResolver)
@@ -1490,10 +1497,10 @@ func RegisterHandler[T any, R any](
 	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
 	// hatch and never executes on the framework's real registrar.
 	if rg, ok := r.(*routeGroup); ok {
-		rg.addEcho(method, path, wrappedHandler, RouteRegistrant{
+		rg.addEcho(method, path, fullPath, wrappedHandler, RouteRegistrant{
 			HandlerName: descriptor.HandlerName,
 			Package:     descriptor.Package,
-		}, descriptor.SensitiveParams)
+		}, sensitive)
 	} else {
 		r.Add(method, path, func(c HandlerContext) error {
 			ec := c.echoContext()

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -103,7 +102,7 @@ type routeConflictTracker struct {
 	conflicts []RouteConflict
 	// sensitive is copy-on-write: replaced whole under mu at registration, loaded without a
 	// lock per request. nil until the first sensitive route registers.
-	sensitive atomic.Pointer[map[routeKey][]string]
+	sensitive atomic.Pointer[map[routeKey]sensitivePlan]
 }
 
 // routeKey identifies a registered route by method and full path template, as c.Path()
@@ -170,31 +169,31 @@ func routeNodeKey(method, path string) string {
 	return b.String()
 }
 
-// recordSensitive stores the sensitive path-param names of a route that reached the engine.
-// A nil tracker or no names records nothing.
-func (t *routeConflictTracker) recordSensitive(method, fullPath string, names []string) {
-	if t == nil || len(names) == 0 {
+// recordSensitive stores the compiled sensitive-param plan of a route that reached the engine.
+// A nil tracker or a plan that masks nothing records nothing.
+func (t *routeConflictTracker) recordSensitive(method, fullPath string, plan sensitivePlan) {
+	if t == nil || !plan.masks() {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	next := make(map[routeKey][]string)
+	next := make(map[routeKey]sensitivePlan)
 	if cur := t.sensitive.Load(); cur != nil {
 		maps.Copy(next, *cur)
 	}
-	next[routeKey{method: method, path: fullPath}] = slices.Clone(names)
+	next[routeKey{method: method, path: fullPath}] = plan
 	t.sensitive.Store(&next)
 }
 
-// sensitiveParams is the request-time lookup (a sensitiveParamLookup). It returns the
-// stored slice itself, which callers must treat as read-only, and returns at once when the
-// server registered no sensitive route.
-func (t *routeConflictTracker) sensitiveParams(method, path string) []string {
+// lookupSensitivePlan is the request-time lookup of a route's compiled plan, lock-free. It
+// returns at once when the server registered no sensitive route; the plan is read-only.
+func (t *routeConflictTracker) lookupSensitivePlan(method, path string) (sensitivePlan, bool) {
 	m := t.sensitive.Load()
 	if m == nil {
-		return nil
+		return sensitivePlan{}, false
 	}
-	return (*m)[routeKey{method: method, path: path}]
+	plan, ok := (*m)[routeKey{method: method, path: path}]
+	return plan, ok
 }
 
 func (t *routeConflictTracker) snapshot() []RouteConflict {

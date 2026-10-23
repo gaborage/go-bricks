@@ -142,10 +142,10 @@ func WithTags(tags ...string) RouteOption {
 	}
 }
 
-// WithSensitiveParams marks the named path parameters (name only, no leading ":") as carrying
-// regulated data: the OTEL span's url.path attribute and the access log mask their concrete value
-// wherever this route handles a request. http.route and the access log's route template are
-// unaffected — only the literal value is masked, never the route pattern.
+// WithSensitiveParams declares the named path parameters (name only, no leading ":") as carrying
+// regulated data, and records them per server for the route that reaches the engine. Each name must
+// be a whole ":name" segment before any wildcard, or "*" on a wildcard route; anything else fails
+// registration (ADR-150).
 func WithSensitiveParams(names ...string) RouteOption {
 	return func(d *RouteDescriptor) {
 		d.SensitiveParams = append(d.SensitiveParams, names...)
