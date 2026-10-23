@@ -64,8 +64,9 @@ type logEventParams struct {
 // requestLogger encapsulates logging middleware logic with configuration.
 // This struct-based approach reduces nesting and improves testability.
 type requestLogger struct {
-	logger logger.Logger
-	config LoggerConfig
+	logger    logger.Logger
+	config    LoggerConfig
+	sensitive sensitiveParamLookup // masks url.path (ADR-150); nil masks nothing
 }
 
 func newRequestLogger(log logger.Logger, cfg LoggerConfig) *requestLogger {
@@ -103,7 +104,7 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 		// Emit action log summary if no explicit WARN+ logs occurred
 		shouldLogActionSummary := !reqCtx.hadExplicitWarningOccurred()
 		if shouldLogActionSummary {
-			logActionSummary(c, rl.logger, rl.config, latency, status, err)
+			logActionSummary(c, rl.logger, rl.config, rl.sensitive, latency, status, err)
 		}
 
 		return err
@@ -180,6 +181,7 @@ func logActionSummary(
 	c *echo.Context,
 	log logger.Logger,
 	cfg LoggerConfig,
+	sensitive sensitiveParamLookup,
 	latency time.Duration,
 	status int,
 	err error,
@@ -198,7 +200,7 @@ func logActionSummary(
 	}
 
 	// Extract all data using helper functions (skipped when the event is disabled)
-	metadata := extractRequestMetadata(c)
+	metadata := extractRequestMetadata(c, sensitive)
 	metrics := extractOperationalMetrics(ctx)
 	tenantID := extractTenantID(ctx)
 
@@ -315,7 +317,8 @@ func formatStatusForMessage(status int) string {
 
 // extractRequestMetadata extracts HTTP request metadata from Echo context.
 // Handles nil response and empty headers safely by falling back to request headers.
-func extractRequestMetadata(c *echo.Context) requestMetadata {
+// url.path is masked through sensitive (ADR-150); nil masks nothing.
+func extractRequestMetadata(c *echo.Context, sensitive sensitiveParamLookup) requestMetadata {
 	var requestID, traceparent string
 
 	// SAFETY: Try response headers first (may be transformed by middleware),
@@ -343,8 +346,9 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 	return requestMetadata{
 		Method: c.Request().Method,
 		// url.path must name the path the ROUTER keyed on, so it and http.route below describe
-		// the same request (routerPath, probe_skip.go).
-		URLPath:     routerPath(c.Request()),
+		// the same request (routerPath, probe_skip.go). A WithSensitiveParams value is masked
+		// (ADR-150), which covers the url.path field and the message built from it.
+		URLPath:     maskSensitivePathParams(c, routerPath(c.Request()), sensitive),
 		Route:       c.Path(), // Echo route pattern (e.g., /api/users/:id)
 		RequestID:   requestID,
 		TraceID:     getTraceID(c),
