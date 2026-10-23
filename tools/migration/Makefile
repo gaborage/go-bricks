@@ -12,7 +12,7 @@ GOVULNCHECK_VERSION := v1.9.0
 # Keep in sync with the other module's Makefile.
 # pseudo-version until gosec > v2.29.0 is released
 # renovate: datasource=go depName=github.com/securego/gosec/v2
-GOSEC_VERSION := v2.29.1-0.20261009120814-7b1b5cebe007
+GOSEC_VERSION := v2.30.0
 # Installed, not `go run`, for the reason on the root Makefile's GOSEC_DIR (#1757).
 GOSEC_DIR := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)
 GOSEC_BIN := $(GOSEC_DIR)/gosec
