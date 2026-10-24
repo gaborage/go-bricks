@@ -68,6 +68,7 @@ func openBare(compact string, p *Policy, r KeyResolver) (plaintext []byte, claim
 		ExpectedKid:       p.DecryptKid,
 		AllowedKeyAlgs:    keyAlgs,
 		AllowedContentEnc: encs,
+		AcceptMissingKid:  p.AcceptMissingKid,
 	})
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {

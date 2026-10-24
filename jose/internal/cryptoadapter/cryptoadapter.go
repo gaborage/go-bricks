@@ -49,6 +49,11 @@ type DecryptOptions struct {
 	ExpectedKid       string
 	AllowedKeyAlgs    []jose.KeyAlgorithm
 	AllowedContentEnc []jose.ContentEncryption
+	// AcceptMissingKid opens a JWE whose header has no kid member at all. A present kid,
+	// "" and null included, is still compared to ExpectedKid, so the option requires a
+	// non-empty ExpectedKid: without one, any present kid would pass. The zero value
+	// refuses a missing kid as ErrKidMissing. jose/sealed never sets it.
+	AcceptMissingKid bool
 }
 
 // Decrypt parses a compact JWE, validates its protected header against the allowlists,
@@ -67,15 +72,15 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 		return nil, Header{}, ErrParseEncrypted
 	}
 
-	hdr, ok := parsedHeader(compact)
+	hdr, kidPresent, ok := parsedHeader(compact)
 	if !ok {
 		return nil, Header{}, ErrParseEncrypted
 	}
 
-	if hdr.Kid == "" {
+	if hdr.Kid == "" && !opts.AcceptMissingKid {
 		return nil, hdr, ErrKidMissing
 	}
-	if opts.ExpectedKid != "" && hdr.Kid != opts.ExpectedKid {
+	if kidPresent && opts.ExpectedKid != "" && hdr.Kid != opts.ExpectedKid {
 		return nil, hdr, ErrKidMismatch
 	}
 
@@ -108,7 +113,7 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 		return nil, Header{}, ErrParseSigned
 	}
 
-	hdr, ok := parsedHeader(compact)
+	hdr, _, ok := parsedHeader(compact)
 	if !ok {
 		return nil, Header{}, ErrParseSigned
 	}

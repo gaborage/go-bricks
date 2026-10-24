@@ -1653,3 +1653,33 @@ func TestJOSETransportUnboundedCapRule(t *testing.T) {
 		})
 	}
 }
+
+// TestJOSETransportOpensAKidlessBareReply pins that AcceptMissingKid reaches the transport
+// through the policy alone: no Envelope, an application/jose reply.
+func TestJOSETransportOpensAKidlessBareReply(t *testing.T) {
+	keys, err := visaKeys()
+	require.NoError(t, err)
+	reply := mintKidlessJWE(t, &keys.client.PublicKey, []byte(`{"token":"tok-42"}`))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/jose")
+		_, _ = w.Write([]byte(reply))
+	}))
+	defer server.Close()
+
+	client, err := httpclient.NewBuilder(logger.New("info", false)).
+		WithJOSE(httpclient.JOSEConfig{
+			Inbound: &jose.Policy{
+				Direction:        jose.DirectionInbound,
+				Mode:             jose.SealModeBareJWE,
+				DecryptKid:       "our-key",
+				AcceptMissingKid: true,
+			},
+			Resolver: jositest.NewTestResolver(map[string]any{"our-key": keys.client}),
+		}).Build()
+	require.NoError(t, err)
+
+	resp, err := client.Get(context.Background(), &httpclient.Request{URL: server.URL})
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.JSONEq(t, `{"token":"tok-42"}`, string(resp.Body))
+}

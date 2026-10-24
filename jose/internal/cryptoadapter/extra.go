@@ -202,14 +202,17 @@ func decodeProtected(segment string) (map[string]any, error) {
 // parsedHeader rebuilds the Header for a compact serialization go-jose has already
 // accepted. It decodes segment 0 itself rather than reading go-jose's ExtraHeaders, which
 // omits the params go-jose promotes to struct fields (jwk, nonce, x5c); this keeps Extra
-// identical to what PeekProtectedHeader returned for the same bytes.
-func parsedHeader(compact string) (Header, bool) {
+// identical to what PeekProtectedHeader returned for the same bytes. kidPresent reports
+// whether a kid member exists at all, which Header cannot say: an absent member, "" and
+// null all read as an empty Kid.
+func parsedHeader(compact string) (hdr Header, kidPresent, ok bool) {
 	segment, _, _ := strings.Cut(compact, ".")
 	params, err := decodeProtected(segment)
 	if err != nil {
-		return Header{}, false
+		return Header{}, false, false
 	}
-	return newHeader(params), true
+	_, kidPresent = params["kid"]
+	return newHeader(params), kidPresent, true
 }
 
 // newHeader builds a Header from a decoded protected-header object. Owned params fill the

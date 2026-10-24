@@ -1,6 +1,7 @@
 package jose
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -644,6 +645,94 @@ func TestOpenRefusesADisallowedDeclaredAlgorithm(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, plaintext)
 			assert.Nil(t, claims)
+		})
+	}
+}
+
+// ---- kid-less peers: AcceptMissingKid ----
+
+// mintBareJWE encrypts with go-jose directly and with no recipient key id, so the kid
+// member is exactly what extra writes: nothing, "", null or a non-string.
+func mintBareJWE(t *testing.T, pub *rsa.PublicKey, extra map[jose.HeaderKey]any, payload []byte) string {
+	t.Helper()
+	encrypter, err := jose.NewEncrypter(jose.A256GCM, jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: pub},
+		&jose.EncrypterOptions{ExtraHeaders: extra})
+	require.NoError(t, err)
+	obj, err := encrypter.Encrypt(payload)
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	return compact
+}
+
+func TestOpenBareJWEAcceptsMissingKid(t *testing.T) {
+	f := newBareFixture(t)
+	f.inbound.Enc = jose.A256GCM
+	f.inbound.AcceptMissingKid = true
+	_, ourPub := bareKeys()
+	payload := []byte(`{"amount":1250}`)
+	compact := mintBareJWE(t, ourPub, nil, payload)
+
+	plaintext, _, hdr, err := Open(compact, f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, payload, plaintext)
+	assert.Empty(t, hdr.JWE.Kid)
+	assert.Equal(t, Header{}, hdr.JWS)
+}
+
+// TestOpenBareJWEKidShapes walks every wire kid shape under both AcceptMissingKid settings:
+// only an absent member is ever excused, and a written one of any value is compared.
+func TestOpenBareJWEKidShapes(t *testing.T) {
+	_, otherPub := generateKeyPair(t)
+	kid := func(v any) map[jose.HeaderKey]any { return map[jose.HeaderKey]any{"kid": v} }
+	tests := []struct {
+		name       string
+		extra      map[jose.HeaderKey]any
+		accept     bool
+		pub        *rsa.PublicKey
+		policyEnc  jose.ContentEncryption
+		wantCode   string
+		wantStatus int
+		wantKid    string
+	}{
+		{name: "absent_kid_refused_by_default", wantCode: codeKidMissing, wantStatus: 401},
+		{name: "matching_kid", extra: kid("our-key"), accept: true},
+		{name: "wrong_kid", extra: kid("peer-key"), accept: true, wantCode: codeKidUnknown, wantStatus: 401, wantKid: "peer-key"},
+		{name: "wrong_kid_refused_by_default", extra: kid("peer-key"), wantCode: codeKidUnknown, wantStatus: 401, wantKid: "peer-key"},
+		{name: "present_empty_kid", extra: kid(""), accept: true, wantCode: codeKidUnknown, wantStatus: 401},
+		{name: "present_empty_kid_refused_by_default", extra: kid(""), wantCode: codeKidMissing, wantStatus: 401},
+		{name: "present_null_kid", extra: kid(nil), accept: true, wantCode: codeKidUnknown, wantStatus: 401},
+		{name: "present_null_kid_refused_by_default", extra: kid(nil), wantCode: codeKidMissing, wantStatus: 401},
+		{name: "non_string_kid", extra: kid(42), accept: true, wantCode: codeMalformed, wantStatus: 400},
+		{name: "non_string_kid_refused_by_default", extra: kid(42), wantCode: codeMalformed, wantStatus: 400},
+		{name: "absent_kid_sealed_to_another_key", accept: true, pub: otherPub, wantCode: codeDecryptFailed, wantStatus: 401},
+		{
+			name: "absent_kid_declaring_nested_cty", extra: map[jose.HeaderKey]any{jose.HeaderContentType: ctyNestedJWS},
+			accept: true, wantCode: codeCtyRejected, wantStatus: 400,
+		},
+		{name: "absent_kid_off_the_declared_enc", accept: true, policyEnc: jose.A128GCM, wantCode: codeMalformed, wantStatus: 400},
+	}
+	_, ourPub := bareKeys()
+	payload := []byte(`{"amount":1250}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newBareFixture(t)
+			f.inbound.Enc = cmp.Or(tt.policyEnc, jose.A256GCM)
+			f.inbound.AcceptMissingKid = tt.accept
+			compact := mintBareJWE(t, cmp.Or(tt.pub, ourPub), tt.extra, payload)
+
+			plaintext, _, hdr, err := Open(compact, f.inbound, f.resolver)
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				assert.Equal(t, payload, plaintext)
+				assert.Equal(t, "our-key", hdr.JWE.Kid)
+				return
+			}
+			var jerr *Error
+			require.ErrorAs(t, err, &jerr)
+			assert.Equal(t, tt.wantCode, jerr.Code)
+			assert.Equal(t, tt.wantStatus, jerr.Status)
+			assert.Equal(t, tt.wantKid, jerr.Kid)
 		})
 	}
 }

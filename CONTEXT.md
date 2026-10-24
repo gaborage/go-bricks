@@ -400,8 +400,8 @@ request announces which Visa Key-ID it was sealed for in a `keyId` header.
 Request and response wear the same wrapper. Sender authentication stays the
 transport's job, as for any bare seal.
 _Avoid_: MLE (Visa's name for the whole arrangement, not a framework term),
-encData body, Visa mode (an envelope over the bare seal mode, not a fourth
-mode)
+encData body, Visa mode (an envelope over the bare seal mode, not a mode of
+its own)
 
 **Visa Key-ID**:
 The identifier Visa issues per project for one credential set — Visa's
@@ -411,6 +411,22 @@ Visa peer's key is named by Visa, never by a logical kid or a keystore entry.
 Rotation means a second Key-ID goes live beside the first, then the old one is
 revoked.
 _Avoid_: kid (the wire field, not the identifier), key id (ambiguous), MLE key
+
+**Minimal JWS-of-JWE seal mode**:
+The JWS-of-JWE shape for an inbound peer that names keys out of band: an
+`RS512` outer signature, an outer `cty` that is absent or `JWE`, and no kid
+required on either JOSE object under the policy's opt-in. It signs the same
+bytes as the JWS-of-JWE mode, the compact JWE string, and it only opens.
+Pending: ADR-150 records it and #2142 implements it.
+_Avoid_: detached mode (detachment is the envelope, not the mode), kid-less
+mode (kid handling is a policy field), and any "over" spelling of the mode name
+
+**Detached-signature envelope**:
+The wire dress in which a request's JWE travels as a JSON member of the body
+and the outer JWS travels in a request header without its payload (RFC 7515
+Appendix F). Before open, the caller reattaches the payload. Sender
+authentication is the detached signature.
+_Avoid_: detached mode, detached JWS mode (an envelope, not a seal mode)
 
 **Subject**:
 The one field of an event declared sensitive: its value travels encrypted

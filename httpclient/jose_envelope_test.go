@@ -43,6 +43,20 @@ var visaKeys = sync.OnceValues(func() (keys *visaKeyPair, err error) {
 	return &visaKeyPair{visa: visaPriv, client: clientPriv}, nil
 })
 
+// mintKidlessJWE encrypts with go-jose directly and names no key, so the protected header
+// has no kid member at all.
+func mintKidlessJWE(t *testing.T, pub *rsa.PublicKey, payload []byte) string {
+	t.Helper()
+	encrypter, err := jose.NewEncrypter(jose.A256GCM,
+		jose.Recipient{Algorithm: jose.RSA_OAEP_256, Key: pub}, nil)
+	require.NoError(t, err)
+	obj, err := encrypter.Encrypt(payload)
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	return compact
+}
+
 // visaKeyPair holds Visa's key and the client's key.
 type visaKeyPair struct {
 	visa   *rsa.PrivateKey

@@ -2517,6 +2517,29 @@ and an overlay is either delivered or refused, never silently dropped.
 
 ---
 
+### [ADR-150: A Missing Kid Is a Policy Opt-In, and a Kid-less Inbound Peer Is Served Imperatively](adr_150_jose_missing_kid_policy_opt_in.md)
+
+**Date:** 2026-10-18 | **Status:** Accepted
+
+Peers that name keys out of band send no `kid` on either JOSE object and expect kid-less
+replies, but the crypto adapter refused a missing `kid` unconditionally and `Seal` always wrote
+one: strictness about the peer's profile, since a bare `Open` never picks its key from the wire.
+`jose.Policy` gains two bare-mode opt-ins: `AcceptMissingKid` (inbound) opens a JWE with no
+`kid` member at all, and `OmitKid` (outbound, pending in #2163's second link) writes neither the
+member nor a recipient key id. Only a literally absent member counts as missing; a written `""`
+or `null` is compared and refused as `JOSE_KID_UNKNOWN`, failing closed where go-jose reads
+`null` as absent, and `DecryptKid` / `EncryptKid` stay required. Either field outside bare mode
+is `JOSE_POLICY_MODE_MISMATCH`, and in the wrong direction `JOSE_POLICY_DIRECTION_MISMATCH`. The
+ADR also records what #2142 will implement (an open-only `RS512` minimal JWS-of-JWE mode, and
+detachment as an envelope a pure helper reattaches, so `Seal` / `Open` stay the only two doors),
+why the server path stays imperative (#2165's recipe), and the non-goals (`A256CBC-HS512`, SHA-1
+RSA-OAEP, PEM loading, a server-first-class door, replay judgment). Not breaking.
+
+**Key Benefits:** a kid-less peer is served through the existing doors and `WithJOSE` with no
+new surface, and every existing peer keeps the strict kid refusal.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3326,7 +3349,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-149) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-150) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
