@@ -282,6 +282,346 @@ if err != nil {
 
 **Reach**: `jose.Open` and `jose/testing`'s `OpenForTest`; `SealForTest` cannot reach it, because `Seal` refuses the mode. By construction it is also reachable as an `httpclient` `JOSEConfig.Inbound` policy through `Builder.WithJOSE`, inbound only, for an attached compact JWS(JWE) response body: the transport has no detached-signature envelope. `Build()` defaults an unset `SigAlg` to `RS256` and then fails with `JOSE_ALGORITHM_DISALLOWED`, so set `RS512` explicitly; an `Outbound` policy in this mode fails `Build()` with `JOSE_POLICY_DIRECTION_MISMATCH`. There is no `Seal`, no `jose:` struct-tag key and no tagged server route.
 
+## Serving a detached-signature envelope peer (imperative recipe)
+
+Some inbound peers send a [minimal JWS-of-JWE](#minimal-jws-of-jwe-mode-kid-less-inbound-peers) token in a detached-signature envelope: the JWE travels in the JSON body and its detached signature in a request header. [ADR-150](adr_150_jose_missing_kid_policy_opt_in.md) keeps the server side of such a peer in consumer code: no `jose:` tag, route option or middleware serves it. This recipe composes the existing doors on an untagged route. A typed handler registered with `server.WithRawResponse()` rebuilds the attached JWS with `jose.AttachDetachedJWS`, opens it with `jose.Open` under a `SealModeJWSofJWEMinimal` inbound policy with `AcceptMissingKid`, and seals the reply's `data` value with a `SealModeBareJWE` outbound policy with `OmitKid`.
+
+The tagged path cannot serve this peer, and the recipe does not try: its inbound gate requires `Content-Type: application/jose` (415 `JOSE_PLAINTEXT_REJECTED`), the tag grammar has no mode key, and a `jose:`-tagged route combined with `WithRawResponse` panics at registration.
+
+### Wire shape
+
+- **Request body:** `application/json` `{"data":"<compact JWE>"}`. The JWE is `RSA-OAEP-256` + `A256GCM` with no `kid`.
+- **Signature header:** a request header the consumer names (here `X-Example-Signature`) carries `JWS <detached compact JWS>`: three segments, the middle one empty, `alg` `RS512`, no `kid`.
+- **Signed bytes:** the detached payload is the exact JWE compact string from `data` (RFC 7515 Appendix F).
+- **Bodyless requests:** a request without a body carries no JWE, so there is nothing for a detached signature to sign. The recipe's bodyless route reads no signature header.
+- **Reply:** the consumer's own JSON envelope. When the reply has a top-level `data` value, that value is replaced by a compact JWE sealed to the tenant's response-seal key. Every other member stays plaintext, a reply without `data` is plaintext, and no reply carries a signature.
+- **Body cap:** on an untagged route the request body is bounded by `server.bodylimit` alone; the tagged path's 10 MiB JOSE read cap does not apply.
+
+> **Caveat: the signed bytes.** This recipe works only when the peer signs the JWE compact string itself. A peer that signs the raw request body, or a re-serialized body, fails every request with `JOSE_SIGNATURE_INVALID`, and the recipe does not apply to it.
+
+The tenant comes from the framework's tenant resolution: with `multitenant.enabled` and `multitenant.resolver.type: header`, the middleware reads the header `multitenant.resolver.header` names (default `X-Tenant-ID`), refuses an unresolvable request with 400 "Invalid tenant" before any handler runs, and the handler reads the result with `multitenant.TenantID`. Resolution is identification, not authorization: the tenant header is caller-written (see note a).
+
+### Example
+
+`jose.KeyResolver` takes no context, so the handler builds one per request from the resolved tenant's keys. `Order`, `Receipt` and the two interfaces stand in for the consumer's own types. A test-backed copy lives in `jose/example_test.go`; the two stay identical except for import aliases.
+
+```go
+import (
+    "context"
+    "crypto/rsa"
+    "encoding/json"
+    "errors"
+    "net/http"
+    "strings"
+
+    josev4 "github.com/go-jose/go-jose/v4"
+
+    "github.com/gaborage/go-bricks/config"
+    "github.com/gaborage/go-bricks/jose"
+    "github.com/gaborage/go-bricks/logger"
+    "github.com/gaborage/go-bricks/multitenant"
+    "github.com/gaborage/go-bricks/server"
+)
+
+// Resolver key names for one tenant's three keys. They name keys inside the
+// per-request resolver, not wire headers: the peer sends no kid. If it ever
+// sends one, it must equal the constant, or Open refuses it (JOSE_KID_UNKNOWN).
+const (
+    peerVerifyKid = "peer-verify" // peer public key: verifies the detached signature
+    ourDecryptKid = "our-decrypt" // our private key: opens the request JWE
+    peerSealKid   = "peer-seal"   // peer public key: seals the reply data
+
+    // maxSignatureHeaderBytes bounds the header value before any parse (DoS bound).
+    maxSignatureHeaderBytes = 8 << 10
+)
+
+// The consumer's own reply codes.
+const (
+    codeSignatureHeaderInvalid = "SIGNATURE_HEADER_INVALID"
+    codeDataMissing            = "DATA_MISSING"
+    codePayloadInvalid         = "PAYLOAD_INVALID"
+    codeInternal               = "INTERNAL"
+    codeRequestRejected        = "REQUEST_REJECTED"
+    codeTenantForbidden        = "TENANT_FORBIDDEN"
+)
+
+var (
+    errUnknownKey      = errors.New("unknown key name")
+    errTenantForbidden = errors.New("principal not authorized for tenant") // Authorize's refusal; fail answers 403
+)
+
+// consumerCodes maps jose codes into the consumer's own vocabulary; any other
+// code answers codeRequestRejected.
+var consumerCodes = map[string]string{
+    "JOSE_SIGNATURE_INVALID": "SIGNATURE_INVALID",
+    "JOSE_KID_UNKNOWN":       "KEY_UNKNOWN",
+    "JOSE_MALFORMED":         "MALFORMED",
+    "JOSE_OUTER_NOT_JWS":     "MALFORMED",
+}
+
+type envelopeConfig struct {
+    SignatureHeader string `config:"example.envelope.signatureheader" required:"true"` // e.g. X-Example-Signature
+}
+
+type envelopeRequest struct {
+    Data string `json:"data"`
+}
+
+// statusRequest is the bodyless twin's request: a struct (ADR-121) with no data field.
+type statusRequest struct{}
+
+// envelopeReply is the consumer's envelope. Only Data is ever sealed.
+type envelopeReply struct {
+    Code string `json:"code,omitempty"`
+    Data string `json:"data,omitempty"`
+}
+
+// TenantKeySet is one tenant's key material, parsed by the consumer (PEM included).
+type TenantKeySet struct {
+    PeerVerify *rsa.PublicKey
+    OurDecrypt *rsa.PrivateKey
+    PeerSeal   *rsa.PublicKey
+}
+
+// TenantKeys is the consumer's per-tenant source. Authorize reads the request's principal
+// from ctx (for example auth.PrincipalFromContext) and returns errTenantForbidden unless
+// that principal may act for tenantID, including when there is none. ForTenant runs on
+// every request, so it returns keys already parsed and cached.
+type TenantKeys interface {
+    Authorize(ctx context.Context, tenantID string) error
+    ForTenant(ctx context.Context, tenantID string) (TenantKeySet, error)
+}
+
+// Operations is the consumer's business logic; Order and Receipt are its own types.
+type Operations interface {
+    Submit(ctx context.Context, tenantID string, in Order) (Receipt, error)
+    Status(ctx context.Context, tenantID string) (Receipt, error)
+}
+
+// tenantKeyStore adapts one tenant's keys to jose.KeyStoreLike. A nil key answers
+// errUnknownKey: jose.KeyStoreResolver passes a nil key through unchanged.
+type tenantKeyStore TenantKeySet
+
+func (s tenantKeyStore) PrivateKey(name string) (*rsa.PrivateKey, error) {
+    if name == ourDecryptKid && s.OurDecrypt != nil {
+        return s.OurDecrypt, nil
+    }
+    return nil, errUnknownKey
+}
+
+func (s tenantKeyStore) PublicKey(name string) (*rsa.PublicKey, error) {
+    if name == peerVerifyKid && s.PeerVerify != nil {
+        return s.PeerVerify, nil
+    }
+    if name == peerSealKid && s.PeerSeal != nil {
+        return s.PeerSeal, nil
+    }
+    return nil, errUnknownKey
+}
+
+func inboundPolicy() *jose.Policy {
+    return &jose.Policy{
+        Direction:        jose.DirectionInbound,
+        Mode:             jose.SealModeJWSofJWEMinimal,
+        DecryptKid:       ourDecryptKid, // resolver key name, not a wire header
+        VerifyKid:        peerVerifyKid,
+        SigAlg:           josev4.RS512,
+        KeyAlg:           jose.DefaultKeyAlg,
+        Enc:              jose.DefaultEnc, // A256GCM; pins Open to exactly this
+        AcceptMissingKid: true,
+        // Cty left empty: the inner cty is not pinned.
+    }
+}
+
+func outboundPolicy() *jose.Policy {
+    return &jose.Policy{
+        Direction:  jose.DirectionOutbound,
+        Mode:       jose.SealModeBareJWE,
+        EncryptKid: peerSealKid,
+        KeyAlg:     jose.DefaultKeyAlg, // required: Validate refuses an empty KeyAlg
+        Enc:        jose.DefaultEnc,    // required: Validate refuses an empty Enc
+        OmitKid:    true,
+        // Cty and Typ empty: Seal writes no cty or typ header.
+    }
+}
+
+type envelopeHandler struct {
+    cfg    envelopeConfig
+    keys   TenantKeys
+    ops    Operations
+    log    logger.Logger
+    bearer []server.MiddlewareFunc // e.g. auth.Middleware(verifier); see note a
+}
+
+// newEnvelopeHandler is called from the module's Init with deps.Config and deps.Logger.
+func newEnvelopeHandler(
+    cfg *config.Config, keys TenantKeys, ops Operations, log logger.Logger, bearer ...server.MiddlewareFunc,
+) (*envelopeHandler, error) {
+    h := &envelopeHandler{keys: keys, ops: ops, log: log, bearer: bearer}
+    if err := cfg.InjectInto(&h.cfg); err != nil {
+        return nil, err
+    }
+    return h, nil
+}
+
+func (h *envelopeHandler) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+    g := r.Group("/example", h.bearer...)
+    server.POST(hr, g, "/orders", h.submit, server.WithRawResponse())
+    server.GET(hr, g, "/orders/status", h.status, server.WithRawResponse())
+}
+
+func (h *envelopeHandler) submit(req envelopeRequest, ctx server.HandlerContext) (server.Result[envelopeReply], server.IAPIError) {
+    // Header.Values, not RequestHeader: Header.Get cannot see a duplicated header.
+    values := ctx.Request().Header.Values(h.cfg.SignatureHeader)
+    if len(values) != 1 { // missing or duplicated
+        return refuse(http.StatusUnauthorized, codeSignatureHeaderInvalid), nil
+    }
+    if len(values[0]) > maxSignatureHeaderBytes {
+        return refuse(http.StatusBadRequest, codeSignatureHeaderInvalid), nil
+    }
+    detached, ok := strings.CutPrefix(values[0], "JWS ")
+    if !ok {
+        return refuse(http.StatusUnauthorized, codeSignatureHeaderInvalid), nil
+    }
+    // Refused here, not by a validate tag, so the consumer's envelope renders. This also
+    // catches a body the binder skipped because Content-Type was missing or not JSON.
+    if req.Data == "" {
+        return refuse(http.StatusBadRequest, codeDataMissing), nil
+    }
+
+    rctx := ctx.RequestContext()
+    tenantID, resolver, err := h.tenantResolver(rctx)
+    if err != nil {
+        return h.fail(err), nil
+    }
+    compact, err := jose.AttachDetachedJWS(detached, req.Data)
+    if err != nil {
+        return h.fail(err), nil
+    }
+    plaintext, _, _, err := jose.Open(compact, inboundPolicy(), resolver)
+    if err != nil {
+        return h.fail(err), nil
+    }
+    // Replay protection goes here, now that Open returned nil (note c).
+
+    // The opened plaintext is unvalidated input: the pipeline's validate tags ran
+    // on envelopeRequest only.
+    var in Order
+    if json.Unmarshal(plaintext, &in) != nil || in.Validate() != nil {
+        return refuse(http.StatusBadRequest, codePayloadInvalid), nil
+    }
+
+    out, err := h.ops.Submit(rctx, tenantID, in)
+    if err != nil {
+        return h.fail(err), nil
+    }
+    return h.sealReply(out, resolver), nil
+}
+
+// status is the bodyless twin: nothing was signed, so it calls neither
+// AttachDetachedJWS nor Open, but it still seals the reply data (note b).
+func (h *envelopeHandler) status(_ statusRequest, ctx server.HandlerContext) (server.Result[envelopeReply], server.IAPIError) {
+    rctx := ctx.RequestContext()
+    tenantID, resolver, err := h.tenantResolver(rctx)
+    if err != nil {
+        return h.fail(err), nil
+    }
+    out, err := h.ops.Status(rctx, tenantID)
+    if err != nil {
+        return h.fail(err), nil
+    }
+    return h.sealReply(out, resolver), nil
+}
+
+func (h *envelopeHandler) tenantResolver(ctx context.Context) (string, jose.KeyResolver, error) {
+    tenantID, err := multitenant.TenantID(ctx)
+    if err != nil {
+        return "", nil, err // ErrNoTenant: a wiring fault (multi-tenancy off, or a skipped route), so a 500
+    }
+    // The tenant header is caller-written: authorize before any tenant-scoped lookup (note a).
+    err = h.keys.Authorize(ctx, tenantID)
+    if err != nil {
+        return "", nil, err
+    }
+    keys, err := h.keys.ForTenant(ctx, tenantID)
+    if err != nil {
+        return "", nil, err
+    }
+    return tenantID, jose.NewKeyStoreResolver(tenantKeyStore(keys)), nil
+}
+
+// sealReply runs on success paths only, so every error reply stays plaintext.
+func (h *envelopeHandler) sealReply(out Receipt, resolver jose.KeyResolver) server.Result[envelopeReply] {
+    body, err := json.Marshal(out)
+    if err != nil {
+        return h.fail(err)
+    }
+    sealed, err := jose.Seal(body, outboundPolicy(), resolver)
+    if err != nil {
+        return h.fail(err)
+    }
+    return server.Result[envelopeReply]{Data: envelopeReply{Data: sealed}}
+}
+
+// fail maps any error to the consumer's envelope. Only jerr.Code is logged for a jose
+// refusal; Cause, Error() and plaintext never reach the wire.
+func (h *envelopeHandler) fail(err error) server.Result[envelopeReply] {
+    if errors.Is(err, errTenantForbidden) {
+        h.log.Warn().Msg("detached-signature envelope forbidden for the tenant")
+        return refuse(http.StatusForbidden, codeTenantForbidden)
+    }
+    var jerr *jose.Error
+    if !errors.As(err, &jerr) {
+        h.log.Error().Err(err).Msg("detached-signature envelope failed")
+        return refuse(http.StatusInternalServerError, codeInternal)
+    }
+    h.log.Warn().Str("jose_code", jerr.Code).Msg("detached-signature envelope refused")
+    status := jerr.Status
+    if status == 0 { // Validate refusals and KeyStoreResolver lookup errors carry no status
+        status = http.StatusInternalServerError
+    }
+    code, ok := consumerCodes[jerr.Code]
+    if !ok {
+        code = codeRequestRejected
+    }
+    return refuse(status, code)
+}
+
+func refuse(status int, code string) server.Result[envelopeReply] {
+    return server.Result[envelopeReply]{Data: envelopeReply{Code: code}, Status: status}
+}
+```
+
+### Notes
+
+**a. Sender authentication.** On a body-carrying request, the detached `RS512` signature proves the sender holds the verify key the resolver chose for the header-named tenant. It covers the JWE compact string only, not the method, path, query, the caller-written tenant header or any other body member, so a signed body replayed to another route of the same tenant also verifies. The tie to the tenant holds only while each tenant has its own verify key: if two tenants share one verify key, a body signed for one verifies under the other tenant's header. A bodyless request carries no JWE, so nothing is signed over it; the bearer credential and the transport are its only sender authentication. `auth.Middleware(v)` on the route group is the framework's bearer door, and it is identification, not authorization. Because the tenant header is caller-written, `tenantResolver` calls the consumer's `TenantKeys.Authorize` before any tenant-scoped key lookup or operation, on both routes. `Authorize` reads the principal from the request context and refuses one that may not act for the tenant, and also refuses when no principal is present, so a route group registered without a bearer door answers 403 instead of serving any tenant.
+
+**b. Reply sealing departs from the tagged path's rule.** The tagged path's invariant is that a response is sealed only when the inbound request verified (see the security invariant above). This recipe seals the reply `data` on every method, bodyless ones included, where nothing was verified. Sealing to the tenant's key gives confidentiality toward that key's holder; it does not authenticate the requester. The minimal mode is open-only, so the reply is a bare seal and carries no signature.
+
+**c. Replay.** The `jose` package does not judge replay. A sound dedup key is a digest (for example SHA-256) of the JWE compact string from `data`, computed only after `jose.Open` returned nil. Before the detached signature has verified, two different strings can decode to the same bytes: go-jose's non-strict base64url decode lets a segment's spare trailing bits vary without changing the decoded bytes. Record the key through `jose.ReplayRecorder.GetOrSet` (`cache.Cache`, from `deps.Cache(ctx)`, satisfies it) under a tenant-namespaced key, with a window at least the consumer's acceptance horizon. Keep one ledger per tenant, shared across every route of the profile, not one per route, because the signature does not cover the route (note a). `jose.CheckJTIReplay` and `jose.CheckJTIReplayInNamespace` apply only when the opened plaintext carries a `jti` claim (they read the `*Claims` `Open` returns); the JWE-string digest works whether or not it does. A canonical-base64url pre-check is tracked in [#2164](https://github.com/gaborage/go-bricks/issues/2164).
+
+**d. Telemetry.** On this path the framework records no `jose.*` span or metric: only the tagged path records `jose.decode_request`, `jose.encode_response`, `jose.failures.total` and `jose.operation.duration`, and the `jose` package itself imports no OpenTelemetry. The consumer instruments its own work (for example through `deps.Tracer` or `deps.MeterProvider`) and never records `Cause` or plaintext. `jose.IsInboundVerified` and `jose.ClaimsFromContext` stay unset on this path.
+
+**e. Keys.** The consumer loads the three keys per tenant. The keystore module reads DER or PKCS#12 key material, not PEM, and is not used here: the consumer parses its own per-tenant keys (PEM included) and hands `*rsa` keys to its resolver. The request-decrypt key must not also back a bare-JWE inbound route, the minimal mode's [key-separation rule](#minimal-jws-of-jwe-mode-kid-less-inbound-peers): the inner JWE lifted out of a signed body would decrypt on the bare route, where nothing authenticates the sender.
+
+**f. Algorithms.** `A256CBC-HS512` and SHA-1 `RSA-OAEP` are not supported in any mode (an ADR-150 non-goal); a peer that uses them fails `Open` at the parser allowlist. The minimal mode accepts only an `RS512` outer signature, from its own table; `IsAllowedSigAlg(RS512)` stays false, because the global table is unchanged.
+
+**g. Refusals.**
+
+| Input | Refused by | Code | Status |
+| --- | --- | --- | --- |
+| Signature header missing, duplicated, over the bound, or without the `JWS ` scheme | consumer handler | consumer's own | consumer's choice |
+| Empty `data`, including a body the binder skipped (no JSON `Content-Type`) | consumer handler | consumer's own | consumer's choice |
+| A principal not authorized for the resolved tenant, or no principal | consumer's `TenantKeys.Authorize` | consumer's own (`TENANT_FORBIDDEN` here) | consumer's choice (403 here) |
+| Detached token with an embedded payload, a non-compact value, or a header segment over 16 KiB | `jose.AttachDetachedJWS` | `JOSE_MALFORMED` | 400 |
+| Header segment that is not a JSON object, or an outer `kid` that is not a string | `jose.Open` | `JOSE_OUTER_NOT_JWS` | 400 |
+| Outer `alg` other than `RS512` (checked before any key lookup) | `jose.Open` | `JOSE_ALGORITHM_DISALLOWED` | 400 |
+| A `kid` present on the outer JWS or the inner JWE (`""` and `null` included) that is not the resolver key name | `jose.Open` | `JOSE_KID_UNKNOWN` | 401 |
+| Tampered JWE string | `jose.Open` | `JOSE_SIGNATURE_INVALID` | 401 |
+| Outer `cty` present and not `JWE` (`""`, `null` and a non-string value included), or inner `cty: JWS` | `jose.Open` | `JOSE_CTY_REJECTED` | 400 |
+| Unsupported `alg` or `enc` on the inner JWE | `jose.Open` | `JOSE_MALFORMED` | 400 |
+| A key the tenant's store does not hold (the example's store also answers so for a nil key) | `jose.KeyStoreResolver` | `JOSE_KID_UNKNOWN` | 0 (the recipe answers 500) |
+
 ## Sealing test payloads with curl (seal-payload CLI)
 
 > This section is about HTTP request bodies. Field-level sealing of AMQP **events** (the

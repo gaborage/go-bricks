@@ -4492,6 +4492,12 @@ Deep dive: [wiki/jose.md](wiki/jose.md#jws-of-jwe-mode-visa-token-service-issuer
 
 Deep dive: [wiki/jose.md](wiki/jose.md#minimal-jws-of-jwe-mode-kid-less-inbound-peers).
 
+### Detached-Signature Envelope Peer (imperative recipe)
+
+A peer that sends `{"data":"<compact JWE>"}` with a detached `RS512` JWS in a request header is served by consumer code, not by a `jose:` tag (ADR-150). A typed handler on an untagged `server.WithRawResponse()` route refuses a missing or duplicated signature header, authorizes the request's principal for the caller-written tenant, rebuilds the attached token with `jose.AttachDetachedJWS`, and opens it with `jose.Open` under a `SealModeJWSofJWEMinimal` inbound policy with `AcceptMissingKid`, through a resolver built per request from the tenant's keys; it seals the reply's `data` with a `SealModeBareJWE` outbound policy with `OmitKid`. The signature covers the JWE string only, the framework records no `jose.*` telemetry on this path, and replay is the consumer's call: digest the JWE string after `Open` returns nil.
+
+Deep dive: [wiki/jose.md](wiki/jose.md#serving-a-detached-signature-envelope-peer-imperative-recipe).
+
 ### Tag Grammar (full)
 
 ```go
