@@ -249,7 +249,7 @@ Some inbound peers sign the JWS-of-JWE shape their own way: an `RS512` outer sig
 
 **`kid` on both tokens.** `AcceptMissingKid: true` covers the outer JWS and the inner JWE alike. A `kid` member that is absent passes; one that is present must still equal `VerifyKid` (outer) or `DecryptKid` (inner), so a wrong `kid`, `"kid": ""` and `"kid": null` are each `JOSE_KID_UNKNOWN`. With the flag off, an absent member, `""` and `null` are all `JOSE_KID_MISSING`. `VerifyKid` and `DecryptKid` stay required: they name resolver keys, not wire headers. The outer `kid` is checked before the signature, and the inner JWE is reached only after the outer verifies, so with the flag off a kid-less request reads `JOSE_KID_MISSING` for every refusal behind the outer `kid` check; only the segment count, the `alg` pin and go-jose's outer parse fire ahead of it.
 
-**Detached signatures.** These peers usually send the JWE as a JSON member of the body and the outer JWS in a request header without its payload (RFC 7515 Appendix F): the detached-signature envelope. `Open` takes only the attached compact, so the caller rebuilds it first by putting `base64url(JWE compact string)` into the empty middle segment. Finding the header, stripping its scheme and refusing a missing or duplicated one stay consumer code.
+**Detached signatures.** These peers usually send the JWE as a JSON member of the body and the outer JWS in a request header without its payload (RFC 7515 Appendix F): the detached-signature envelope. `Open` takes only the attached compact, so rebuild it first with `jose.AttachDetachedJWS(detached, jwe)`, which returns `header.base64url(jwe).signature`. The helper does no crypto and touches no key: `Open` verifies the result. It trims surrounding whitespace from `detached` and applies the compact checks every door applies (the 16 KiB protected-header bound, base64url only), then requires exactly three segments with an empty middle and a non-empty header and signature. An embedded payload, a 5-segment JWE, a JSON serialization, a leftover `JWS ` scheme prefix and an empty `jwe` are each a 400 `JOSE_MALFORMED`; `Cause` is set only when the shared compact checks refused. `jwe` is encoded verbatim, never trimmed or parsed, because its exact bytes are what was signed; `Open` applies every inner-JWE check after the signature verifies. HTTP framing stays consumer code: finding the header, stripping its scheme, refusing a missing or duplicated one, and capping the whole header value.
 
 > **Signed input.** The mode rests on one fact: the detached signature's payload is the exact JWE compact string. That was confirmed against a published profile sample only, not against live traffic. A peer that signs the raw or re-serialized body instead cannot be opened by this mode.
 
@@ -267,7 +267,11 @@ inbound := &jose.Policy{
     AcceptMissingKid: true,               // the peer writes no kid on either token
 }
 
-// attached is the compact JWS(JWE), its detached signature already rebuilt.
+// detached is the signature header's value, scheme stripped; jwe is the body's JWE member.
+attached, err := jose.AttachDetachedJWS(detached, jwe)
+if err != nil {
+    return err
+}
 plaintext, claims, hdr, err := jose.Open(attached, inbound, resolver)
 if err != nil {
     return err

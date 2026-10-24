@@ -3,7 +3,6 @@ package jose
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"encoding/base64"
 	"strings"
 	"sync"
 	"testing"
@@ -362,17 +361,13 @@ func mintDetachedOuter(t *testing.T, key *rsa.PrivateKey, alg jose.SignatureAlgo
 	return detached
 }
 
-// spliceDetached rebuilds the attached compact JWS Open takes from a detached one and the JWE
-// compact string it signed: header.base64url(jwe).signature (RFC 7515 Appendix F). Every
-// splicing test goes through it.
+// spliceDetached rebuilds the attached compact JWS Open takes through AttachDetachedJWS, so
+// every splicing test runs the helper a consumer calls.
 func spliceDetached(t *testing.T, detached, jwe string) string {
 	t.Helper()
-	header, rest, ok := strings.Cut(detached, ".")
-	require.True(t, ok)
-	payload, signature, ok := strings.Cut(rest, ".")
-	require.True(t, ok)
-	require.Empty(t, payload)
-	return header + "." + base64.RawURLEncoding.EncodeToString([]byte(jwe)) + "." + signature
+	attached, err := AttachDetachedJWS(detached, jwe)
+	require.NoError(t, err)
+	return attached
 }
 
 // vector mints the default vector, varied only by the given header options, and splices it.

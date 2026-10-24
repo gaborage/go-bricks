@@ -139,6 +139,13 @@ func PeekProtectedHeader(compact string) (Header, error) {
 	return newHeader(params), nil
 }
 
+// CompactSegments returns the segments boundedSegments admits, judging nothing else; the error
+// is ErrNotCompact or ErrHeaderTooLarge.
+func CompactSegments(compact string) ([]string, error) {
+	_, segments, err := boundedSegments(compact)
+	return segments, err
+}
+
 // boundedSegments prepares a compact for parsing and refuses it on three grounds, in
 // increasing cost: a part count that is not 3 or 5, an encoded segment 0 past
 // maxPeekHeaderBytes, and any segment that is not base64url. Every door that parses a
