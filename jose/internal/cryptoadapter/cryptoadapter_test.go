@@ -306,8 +306,10 @@ func mintJWE(t *testing.T, pub *rsa.PublicKey, payload []byte, extra map[jose.He
 	return compact
 }
 
-func TestDecryptAcceptMissingKid(t *testing.T) {
-	key := newKey(t)
+// runKidOptInCases runs the AcceptMissingKid matrix Decrypt and Verify share. open mints a
+// token whose header carries exactly extra and opens it expecting "expected-kid".
+func runKidOptInCases(t *testing.T, open func(t *testing.T, payload []byte, extra map[jose.HeaderKey]any, accept bool) ([]byte, error)) {
+	t.Helper()
 	kid := func(v any) map[jose.HeaderKey]any { return map[jose.HeaderKey]any{"kid": v} }
 	tests := []struct {
 		name    string
@@ -325,13 +327,7 @@ func TestDecryptAcceptMissingKid(t *testing.T) {
 	payload := []byte(`{"secret":"value"}`)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compact := mintJWE(t, &key.PublicKey, payload, tt.extra)
-			got, _, err := Decrypt(compact, key, &DecryptOptions{
-				ExpectedKid:       "expected-kid",
-				AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
-				AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
-				AcceptMissingKid:  tt.accept,
-			})
+			got, err := open(t, payload, tt.extra, tt.accept)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -340,6 +336,19 @@ func TestDecryptAcceptMissingKid(t *testing.T) {
 			assert.Equal(t, payload, got)
 		})
 	}
+}
+
+func TestDecryptAcceptMissingKid(t *testing.T) {
+	key := newKey(t)
+	runKidOptInCases(t, func(t *testing.T, payload []byte, extra map[jose.HeaderKey]any, accept bool) ([]byte, error) {
+		got, _, err := Decrypt(mintJWE(t, &key.PublicKey, payload, extra), key, &DecryptOptions{
+			ExpectedKid:       "expected-kid",
+			AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
+			AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
+			AcceptMissingKid:  accept,
+		})
+		return got, err
+	})
 }
 
 func TestEncryptOmitKid(t *testing.T) {
@@ -382,4 +391,30 @@ func TestEncryptOmitKid(t *testing.T) {
 			assert.Equal(t, payload, got)
 		})
 	}
+}
+
+// mintJWS signs RS512 with go-jose directly, so the kid member is exactly what extra writes:
+// nothing, "", null or another kid.
+func mintJWS(t *testing.T, key *rsa.PrivateKey, payload []byte, extra map[jose.HeaderKey]any) string {
+	t.Helper()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS512, Key: key},
+		&jose.SignerOptions{ExtraHeaders: extra})
+	require.NoError(t, err)
+	obj, err := signer.Sign(payload)
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	return compact
+}
+
+func TestVerifyAcceptMissingKid(t *testing.T) {
+	key := newKey(t)
+	runKidOptInCases(t, func(t *testing.T, payload []byte, extra map[jose.HeaderKey]any, accept bool) ([]byte, error) {
+		got, _, err := Verify(mintJWS(t, key, payload, extra), &key.PublicKey, &VerifyOptions{
+			ExpectedKid:      "expected-kid",
+			AllowedSigAlgs:   []jose.SignatureAlgorithm{jose.RS512},
+			AcceptMissingKid: accept,
+		})
+		return got, err
+	})
 }
