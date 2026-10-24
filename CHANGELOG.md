@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.73.0](https://github.com/gaborage/go-bricks/compare/v0.72.0...v0.73.0) (2026-10-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **messaging:** give each App its own seal runtime ([#2157](https://github.com/gaborage/go-bricks/issues/2157))
+* **migration:** run a type-less tenant with the runner's vendor ([#2153](https://github.com/gaborage/go-bricks/issues/2153))
+
+### Added
+
+* **jose:** add the minimal JWS-of-JWE mode's policy rules ([#2170](https://github.com/gaborage/go-bricks/issues/2170)) ([bd5fd82](https://github.com/gaborage/go-bricks/commit/bd5fd826fa23de49ad74764b63ef541a3eaeb8a0))
+* **jose:** let a bare inbound policy accept a missing kid ([#2168](https://github.com/gaborage/go-bricks/issues/2168)) ([5e4e1d3](https://github.com/gaborage/go-bricks/commit/5e4e1d342e477be0c689bb342946a893c1ac307a))
+* **jose:** let a bare outbound policy omit the kid ([#2169](https://github.com/gaborage/go-bricks/issues/2169)) ([fd1a56f](https://github.com/gaborage/go-bricks/commit/fd1a56fd2896cd7b6eaef2d4c51b4928a72bbc09))
+* **jose:** open the minimal JWS-of-JWE mode ([#2171](https://github.com/gaborage/go-bricks/issues/2171)) ([ac54c1d](https://github.com/gaborage/go-bricks/commit/ac54c1d65fb7be8a0b824fafca0fcdaeaaf00931))
+* **jose:** reattach a detached JWS for the minimal mode ([#2172](https://github.com/gaborage/go-bricks/issues/2172)) ([66d4bcf](https://github.com/gaborage/go-bricks/commit/66d4bcffddeb52c7a2aa2f31e00a689694a01593))
+
+
+### Fixed
+
+* **deps:** bump Go toolchain to 1.27.3 ([#2187](https://github.com/gaborage/go-bricks/issues/2187)) ([db15fca](https://github.com/gaborage/go-bricks/commit/db15fca1a0e6da1b207fc545461908fa0b786294))
+* **deps:** update module github.com/knadh/koanf/v2 to v2.4.1 ([#2141](https://github.com/gaborage/go-bricks/issues/2141)) ([9d99ef6](https://github.com/gaborage/go-bricks/commit/9d99ef6ed604597734253f0c9cc87b3d22ab7d56))
+* **logger:** stop Err panicking on a typed-nil pointer error ([#2152](https://github.com/gaborage/go-bricks/issues/2152)) ([9fb6203](https://github.com/gaborage/go-bricks/commit/9fb6203f614e502f31945a8faf0ddd1766be757b))
+* **messaging:** bind AMQP close notifications instead of dropping them ([#2135](https://github.com/gaborage/go-bricks/issues/2135)) ([678166d](https://github.com/gaborage/go-bricks/commit/678166d4e3e8c81756cd78825a974c92dbe6bf14))
+* **messaging:** bind seal instruments into each sealer and opener ([#2156](https://github.com/gaborage/go-bricks/issues/2156)) ([3cf2f97](https://github.com/gaborage/go-bricks/commit/3cf2f970dbcffc79519f4ff65207f452015f09ee))
+* **messaging:** bind the AMQP meter before reading lifecycle counters ([#2148](https://github.com/gaborage/go-bricks/issues/2148)) ([5f6f520](https://github.com/gaborage/go-bricks/commit/5f6f520413537d3fddc2d66abd26bd55701b3e97))
+* **messaging:** give each App its own seal runtime ([#2157](https://github.com/gaborage/go-bricks/issues/2157)) ([babe12d](https://github.com/gaborage/go-bricks/commit/babe12d6160ef9a69aaa57e9216de7b8cfc87e98))
+* **messaging:** pace the redial after an AMQP connection close ([#2154](https://github.com/gaborage/go-bricks/issues/2154)) ([4a9bbb0](https://github.com/gaborage/go-bricks/commit/4a9bbb0b23254d8e51dc9d19c044d5cc07c3d269))
+* **migration:** run a type-less tenant with the runner's vendor ([#2153](https://github.com/gaborage/go-bricks/issues/2153)) ([4f6f8c0](https://github.com/gaborage/go-bricks/commit/4f6f8c03f803ebb77d45842969497b7abcc8f635))
+* **server:** default server.timeout.idle to 75s, above the ALB's 60s ([#2149](https://github.com/gaborage/go-bricks/issues/2149)) ([c1113c7](https://github.com/gaborage/go-bricks/commit/c1113c7f7d47b9e531c7cd0a938ee4bc4d8e6fcd))
+* **streams:** adopt stream client v1.9.0 and own reconnect backoff ([#2140](https://github.com/gaborage/go-bricks/issues/2140)) ([8a99a20](https://github.com/gaborage/go-bricks/commit/8a99a206d52a5e36ab1861e8cedda22abb30c8cb))
+
+
+### Changed
+
+* **streams:** defer stream re-creation and drop the reattach seam ([#2150](https://github.com/gaborage/go-bricks/issues/2150)) ([a82e882](https://github.com/gaborage/go-bricks/commit/a82e882031327262c8694460d650028b58f4c0f9))
+
 ## [0.72.0](https://github.com/gaborage/go-bricks/compare/v0.71.1...v0.72.0) (2026-10-15)
 
 
