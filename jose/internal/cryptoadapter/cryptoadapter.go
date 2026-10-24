@@ -36,7 +36,10 @@ type Header struct {
 	Alg string
 	Enc string
 	Cty string
-	Typ string
+	// CtyPresent reports whether the header has a cty member at all. Cty reads "" for an
+	// absent member and for a present "", null or non-string one alike.
+	CtyPresent bool
+	Typ        string
 	// Extra holds every protected-header param the adapter does not own (alg, enc, kid,
 	// cty, typ are excluded). Values keep go-jose's decoded shapes: numbers are float64,
 	// arrays are []any — use the typed accessors. From PeekProtectedHeader the contents are

@@ -11,7 +11,8 @@ import (
 )
 
 // This file holds the SealModeJWSofJWE half of Seal/Open: encrypt first, then sign the
-// compact JWE as the payload of an outer JWS whose protected header the mode fixes.
+// compact JWE as the payload of an outer JWS whose protected header the mode fixes. The
+// open-only SealModeJWSofJWEMinimal shares its open path.
 
 const (
 	ctyJWE  = "JWE"
@@ -45,10 +46,11 @@ func sealJWSofJWE(payload []byte, p *Policy, r KeyResolver) (string, error) {
 	return jwsCompact, nil
 }
 
-// openJWSofJWE verifies the outer JWS against exactly Policy.SigAlg, requires cty JWE, then
-// hands the payload to the bare opener. A body that is not a compact JWS — a JWE-outer
-// object included — is refused, never opened under another mode. The outer iat is seconds,
-// so it is never reported through Header.IATMillis; neither iat is judged.
+// openJWSofJWE verifies the outer JWS against exactly Policy.SigAlg, requires cty JWE (or,
+// in SealModeJWSofJWEMinimal, no cty), then hands the payload to the bare opener. A body
+// that is not a compact JWS — a JWE-outer object included — is refused, never opened under
+// another mode. The outer iat is seconds, so it is never reported through
+// Header.IATMillis; neither iat is judged.
 func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *Claims, hdr OpenHeader, err error) {
 	if strings.Count(compact, ".") != 2 {
 		return nil, nil, OpenHeader{}, errOuterNotJWS(nil)
@@ -71,10 +73,14 @@ func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, c
 	if err != nil {
 		return nil, nil, OpenHeader{}, err
 	}
-	jweCompact, jwsHdr, err := cryptoadapter.Verify(compact, verKey, &cryptoadapter.VerifyOptions{
+	verifyOpts := &cryptoadapter.VerifyOptions{
 		ExpectedKid:    p.VerifyKid,
 		AllowedSigAlgs: []jose.SignatureAlgorithm{p.SigAlg},
-	})
+	}
+	if p.Mode == SealModeJWSofJWEMinimal {
+		verifyOpts.AcceptMissingKid = p.AcceptMissingKid
+	}
+	jweCompact, jwsHdr, err := cryptoadapter.Verify(compact, verKey, verifyOpts)
 	hdr.JWS = cryptoHeaderToOpen(&jwsHdr)
 	hdr.JWS.IATMillis = 0
 	if errors.Is(err, cryptoadapter.ErrParseSigned) {
@@ -83,7 +89,7 @@ func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, c
 	if err != nil {
 		return nil, nil, hdr, mapVerifyError(err, p, &jwsHdr)
 	}
-	if jwsHdr.Cty != ctyJWE {
+	if !outerCtyAccepted(p.Mode, &jwsHdr) {
 		return nil, nil, hdr, &Error{
 			Sentinel: ErrCtyRejected,
 			Code:     codeCtyRejected,
@@ -97,6 +103,16 @@ func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, c
 	plaintext, claims, innerHdr, err := openBare(string(jweCompact), p, r)
 	hdr.JWE = innerHdr.JWE
 	return plaintext, claims, hdr, err
+}
+
+// outerCtyAccepted reports whether a verified outer JWS cty is acceptable: exactly JWE in
+// both JWS-of-JWE modes, or, in SealModeJWSofJWEMinimal, no cty member at all. A present
+// "", null or non-string cty is refused.
+func outerCtyAccepted(mode SealMode, h *cryptoadapter.Header) bool {
+	if h.Cty == ctyJWE {
+		return true
+	}
+	return mode == SealModeJWSofJWEMinimal && !h.CtyPresent
 }
 
 func errOuterNotJWS(cause error) *Error {

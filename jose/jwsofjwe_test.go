@@ -3,6 +3,7 @@ package jose
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"strings"
 	"sync"
 	"testing"
@@ -291,4 +292,278 @@ func TestOpenJWSofJWENeverJudgesIAT(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"a":1}`, string(plaintext))
 	assert.Equal(t, int64(1), hdr.JWE.IATMillis)
+}
+
+// ---- SealModeJWSofJWEMinimal: kid-less inbound peers ----
+
+var minimalPayload = []byte(`{"pan":"card-fixture-0000"}`)
+
+// jwsOfJWEMinimalFixture keeps the two roles on different pairs: signingKeys verifies the
+// outer JWS ("peer-key") and bareKeys decrypts the inner JWE ("our-key"). Its inbound policy
+// is the default posture, AcceptMissingKid on.
+type jwsOfJWEMinimalFixture struct {
+	signPriv *rsa.PrivateKey
+	encPub   *rsa.PublicKey
+	resolver *fixtureResolver
+	inbound  *Policy
+}
+
+func newJWSofJWEMinimalFixture(t *testing.T) *jwsOfJWEMinimalFixture {
+	t.Helper()
+	encPriv, encPub := bareKeys()
+	signPriv, signPub := signingKeys()
+	inbound := jwsOfJWEMinimalInbound()
+	inbound.AcceptMissingKid = true
+	return &jwsOfJWEMinimalFixture{
+		signPriv: signPriv,
+		encPub:   encPub,
+		resolver: &fixtureResolver{
+			priv: map[string]*rsa.PrivateKey{"our-key": encPriv},
+			pub:  map[string]*rsa.PublicKey{"peer-key": signPub},
+		},
+		inbound: inbound,
+	}
+}
+
+// withAcceptMissingKid returns a copy of the fixture's inbound policy under the given setting.
+func (f *jwsOfJWEMinimalFixture) withAcceptMissingKid(accept bool) *Policy {
+	p := *f.inbound
+	p.AcceptMissingKid = accept
+	return &p
+}
+
+// mintMinimalInner encrypts with go-jose directly, never Seal. Nil opts and no recipient key
+// id give exactly {"alg":"RSA-OAEP-256","enc":"A256GCM"}.
+func mintMinimalInner(t *testing.T, pub *rsa.PublicKey, keyAlg jose.KeyAlgorithm, enc jose.ContentEncryption, opts *jose.EncrypterOptions) string {
+	t.Helper()
+	encrypter, err := jose.NewEncrypter(enc, jose.Recipient{Algorithm: keyAlg, Key: pub}, opts)
+	require.NoError(t, err)
+	obj, err := encrypter.Encrypt(minimalPayload)
+	require.NoError(t, err)
+	compact, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	return compact
+}
+
+// mintDetachedOuter signs jwe with go-jose directly and returns the detached form
+// (header..signature) the profile sends. It also checks that spliceDetached rebuilds
+// go-jose's own attached form, byte for byte.
+func mintDetachedOuter(t *testing.T, key *rsa.PrivateKey, alg jose.SignatureAlgorithm, jwe string, opts *jose.SignerOptions) string {
+	t.Helper()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: alg, Key: key}, opts)
+	require.NoError(t, err)
+	obj, err := signer.Sign([]byte(jwe))
+	require.NoError(t, err)
+	detached, err := obj.DetachedCompactSerialize()
+	require.NoError(t, err)
+	attached, err := obj.CompactSerialize()
+	require.NoError(t, err)
+	require.Equal(t, attached, spliceDetached(t, detached, jwe))
+	return detached
+}
+
+// spliceDetached rebuilds the attached compact JWS Open takes from a detached one and the JWE
+// compact string it signed: header.base64url(jwe).signature (RFC 7515 Appendix F). Every
+// splicing test goes through it.
+func spliceDetached(t *testing.T, detached, jwe string) string {
+	t.Helper()
+	header, rest, ok := strings.Cut(detached, ".")
+	require.True(t, ok)
+	payload, signature, ok := strings.Cut(rest, ".")
+	require.True(t, ok)
+	require.Empty(t, payload)
+	return header + "." + base64.RawURLEncoding.EncodeToString([]byte(jwe)) + "." + signature
+}
+
+// vector mints the default vector, varied only by the given header options, and splices it.
+func (f *jwsOfJWEMinimalFixture) vector(t *testing.T, inner *jose.EncrypterOptions, outer *jose.SignerOptions) string {
+	t.Helper()
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, inner)
+	return spliceDetached(t, mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, outer), jwe)
+}
+
+func outerKid(v any) *jose.SignerOptions    { return (&jose.SignerOptions{}).WithHeader("kid", v) }
+func innerKid(v any) *jose.EncrypterOptions { return (&jose.EncrypterOptions{}).WithHeader("kid", v) }
+
+func outerCty(cty string) *jose.SignerOptions {
+	return (&jose.SignerOptions{}).WithContentType(jose.ContentType(cty))
+}
+
+func innerCty(cty string) *jose.EncrypterOptions {
+	return (&jose.EncrypterOptions{}).WithContentType(jose.ContentType(cty))
+}
+
+// requireJOSEErrorStatus asserts both the code and the HTTP status of a refusal.
+func requireJOSEErrorStatus(t *testing.T, err error, wantCode string, wantStatus int) {
+	t.Helper()
+	var jerr *Error
+	require.ErrorAs(t, err, &jerr)
+	assert.Equal(t, wantCode, jerr.Code)
+	assert.Equal(t, wantStatus, jerr.Status)
+}
+
+// requireOpen opens body under p and asserts the payload, or the refusal when wantCode is set.
+func (f *jwsOfJWEMinimalFixture) requireOpen(t *testing.T, body string, p *Policy, wantCode string, wantStatus int) {
+	t.Helper()
+	plaintext, _, _, err := Open(body, p, f.resolver)
+	if wantCode == "" {
+		require.NoError(t, err)
+		assert.Equal(t, minimalPayload, plaintext)
+		return
+	}
+	assert.Nil(t, plaintext)
+	requireJOSEErrorStatus(t, err, wantCode, wantStatus)
+}
+
+func TestOpenJWSofJWEMinimalOpensKidlessDetachedVector(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
+	detached := mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, nil)
+	_, outerHasKid := headerParams(t, detached)["kid"]
+	_, innerHasKid := headerParams(t, jwe)["kid"]
+	require.False(t, outerHasKid)
+	require.False(t, innerHasKid)
+
+	plaintext, _, hdr, err := Open(spliceDetached(t, detached, jwe), f.inbound, f.resolver)
+	require.NoError(t, err)
+	assert.Equal(t, minimalPayload, plaintext)
+	assert.Equal(t, "RS512", hdr.JWS.Alg)
+	assert.Empty(t, hdr.JWS.Kid)
+	assert.Zero(t, hdr.JWS.IATMillis)
+	assert.Empty(t, hdr.JWE.Kid)
+	assert.Equal(t, "A256GCM", hdr.JWE.Enc)
+}
+
+func TestOpenJWSofJWEMinimalKidRules(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	tests := []struct {
+		name       string
+		inner      *jose.EncrypterOptions
+		outer      *jose.SignerOptions
+		accept     bool
+		wantCode   string
+		wantStatus int
+	}{
+		{"outer_matching_inner_absent_flag_on", nil, outerKid("peer-key"), true, "", 0},
+		{"inner_matching_outer_absent_flag_on", innerKid("our-key"), nil, true, "", 0},
+		{"both_matching_flag_on", innerKid("our-key"), outerKid("peer-key"), true, "", 0},
+		{"both_absent_flag_off", nil, nil, false, codeKidMissing, 401},
+		{"outer_matching_inner_absent_flag_off", nil, outerKid("peer-key"), false, codeKidMissing, 401},
+		{"inner_matching_outer_absent_flag_off", innerKid("our-key"), nil, false, codeKidMissing, 401},
+		{"outer_wrong_flag_on", nil, outerKid("rogue-key"), true, codeKidUnknown, 401},
+		{"inner_wrong_flag_on", innerKid("rogue-key"), nil, true, codeKidUnknown, 401},
+		{"outer_present_empty_flag_on", nil, outerKid(""), true, codeKidUnknown, 401},
+		{"outer_present_null_flag_on", nil, outerKid(nil), true, codeKidUnknown, 401},
+		{"outer_present_empty_flag_off", nil, outerKid(""), false, codeKidMissing, 401},
+		{"outer_present_null_flag_off", nil, outerKid(nil), false, codeKidMissing, 401},
+		{"inner_present_empty_flag_on", innerKid(""), nil, true, codeKidUnknown, 401},
+		{"inner_present_null_flag_on", innerKid(nil), nil, true, codeKidUnknown, 401},
+		{"outer_non_string_kid_flag_on", nil, outerKid(42), true, codeOuterNotJWS, 400},
+		{"outer_non_string_kid_flag_off", nil, outerKid(42), false, codeOuterNotJWS, 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.requireOpen(t, f.vector(t, tt.inner, tt.outer), f.withAcceptMissingKid(tt.accept), tt.wantCode, tt.wantStatus)
+		})
+	}
+}
+
+func TestOpenJWSofJWEMinimalOuterCty(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	tests := []struct {
+		name     string
+		outer    *jose.SignerOptions
+		wantCode string
+	}{
+		{"outer_cty_jwe", outerCty("JWE"), ""},
+		{"outer_cty_absent", nil, ""},
+		{"outer_cty_jws", outerCty("JWS"), codeCtyRejected},
+		{"outer_cty_application_json", outerCty("application/json"), codeCtyRejected},
+		{"outer_cty_present_empty", outerCty(""), codeCtyRejected},
+		{"outer_cty_present_null", (&jose.SignerOptions{}).WithHeader(jose.HeaderContentType, nil), codeCtyRejected},
+		{"outer_cty_non_string", (&jose.SignerOptions{}).WithHeader(jose.HeaderContentType, 42), codeCtyRejected},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.requireOpen(t, f.vector(t, nil, tt.outer), f.inbound, tt.wantCode, 400)
+		})
+	}
+}
+
+// The present-cty rows above test a written member: each option set puts cty on the wire.
+func TestOpenJWSofJWEMinimalOuterCtyRowsWriteTheMember(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
+	for _, v := range []any{"", nil, 42} {
+		detached := mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, (&jose.SignerOptions{}).WithHeader(jose.HeaderContentType, v))
+		_, present := headerParams(t, detached)["cty"]
+		assert.True(t, present, "cty %v", v)
+	}
+}
+
+// SealModeJWSofJWE still requires an outer cty of exactly JWE: a present empty one is refused
+// as an absent one is.
+func TestOpenJWSofJWERefusesAPresentEmptyOuterCty(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	p := jwsOfJWEInbound()
+	p.SigAlg = jose.PS256
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, innerKid("our-key"))
+	detached := mintDetachedOuter(t, f.signPriv, jose.PS256, jwe, outerKid("peer-key").WithContentType(""))
+	requireJOSEErrorStatus(t, openErr(spliceDetached(t, detached, jwe), p, f.resolver), codeCtyRejected, 400)
+}
+
+// The outer cty presence rule leaves the inner JWE alone: a present empty inner cty still
+// passes bare mode's permissive rule.
+func TestOpenJWSofJWEMinimalInnerCtyRuleUnchanged(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, innerCty(""))
+	_, present := headerParams(t, jwe)["cty"]
+	require.True(t, present)
+	f.requireOpen(t, spliceDetached(t, mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, nil), jwe), f.inbound, "", 0)
+}
+
+func TestOpenJWSofJWEMinimalRefusals(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
+	detached := mintDetachedOuter(t, f.signPriv, jose.RS512, jwe, nil)
+	tamperedJWE := tamperSegment(t, jwe, jweCiphertextSegment)
+	signedInner := func(keyAlg jose.KeyAlgorithm, enc jose.ContentEncryption, opts *jose.EncrypterOptions) string {
+		inner := mintMinimalInner(t, f.encPub, keyAlg, enc, opts)
+		return spliceDetached(t, mintDetachedOuter(t, f.signPriv, jose.RS512, inner, nil), inner)
+	}
+
+	tests := []struct {
+		name       string
+		body       string
+		accept     bool
+		wantCode   string
+		wantStatus int
+	}{
+		{"tampered_jwe_string", spliceDetached(t, detached, tamperedJWE), true, codeSignatureInvalid, 401},
+		{"unspliced_detached", detached, true, codeSignatureInvalid, 401},
+		{"five_segment_body_flag_on", jwe, true, codeOuterNotJWS, 400},
+		{"five_segment_body_flag_off", jwe, false, codeOuterNotJWS, 400},
+		{"inner_a256cbc_hs512", signedInner(jose.RSA_OAEP_256, jose.A256CBC_HS512, nil), true, codeMalformed, 400},
+		{"inner_a128gcm", signedInner(jose.RSA_OAEP_256, jose.A128GCM, nil), true, codeMalformed, 400},
+		{"inner_cty_jws", f.vector(t, innerCty("JWS"), nil), true, codeCtyRejected, 400},
+		{"inner_rsa_oaep_sha1", signedInner(jose.RSA_OAEP, jose.A256GCM, nil), true, codeMalformed, 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f.requireOpen(t, tt.body, f.withAcceptMissingKid(tt.accept), tt.wantCode, tt.wantStatus)
+		})
+	}
+}
+
+// The outer alg pin runs before any key lookup, so refusingResolver fails the test if a key
+// is ever resolved.
+func TestOpenJWSofJWEMinimalAlgPinResolvesNoKey(t *testing.T) {
+	f := newJWSofJWEMinimalFixture(t)
+	jwe := mintMinimalInner(t, f.encPub, jose.RSA_OAEP_256, jose.A256GCM, nil)
+	for _, alg := range []jose.SignatureAlgorithm{jose.PS256, jose.RS256} {
+		body := spliceDetached(t, mintDetachedOuter(t, f.signPriv, alg, jwe, nil), jwe)
+		for _, accept := range []bool{true, false} {
+			requireJOSEErrorStatus(t, openErr(body, f.withAcceptMissingKid(accept), refusingResolver{t}), codeAlgorithmDisallowed, 400)
+		}
+	}
 }

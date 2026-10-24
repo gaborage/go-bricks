@@ -515,15 +515,6 @@ func TestPolicyValidateJWSofJWEMinimalModeRules(t *testing.T) {
 	runPolicyCodeCases(t, tests)
 }
 
-// Open has no path for the minimal mode at this link yet: a valid inbound policy in it is
-// refused at the mode dispatch, before any key is resolved.
-func TestOpenRefusesJWSofJWEMinimalWithoutResolvingKeys(t *testing.T) {
-	p := jwsOfJWEMinimalInbound()
-	p.AcceptMissingKid = true
-	require.NoError(t, p.Validate())
-	requireJOSEErrorCode(t, openErr("a.b.c", p, refusingResolver{t}), codePolicyModeUnknown)
-}
-
 func TestPolicyValidateRS512StaysOffTheGlobalSigningModes(t *testing.T) {
 	for _, base := range []func() *Policy{nestedInbound, nestedOutbound, jwsOfJWEInbound, jwsOfJWEOutbound} {
 		p := base()

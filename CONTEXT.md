@@ -377,9 +377,10 @@ it goes out — applying whatever the policy's seal mode says that form is. The
 default is both operations: the sealed-event shape encrypts the subject and
 signs the whole result; the JWE-of-JWS body shape signs the payload as a compact
 JWS and encrypts that. The JWS-of-JWE shape runs the same two operations in the
-other order, signing the compact JWE so the signature is the outer layer. The
-bare-JWE shape is encryption alone, for a peer already authenticated out of
-band.
+other order, signing the compact JWE so the signature is the outer layer; its
+minimal variant only opens, taking that shape as a kid-less inbound peer signs
+it. The bare-JWE shape is encryption alone, for a peer already authenticated
+out of band.
 Opening reverses whichever shape was sealed; a sealed-shaped body that fails any
 open step is poison, never plaintext.
 _Avoid_: protect, wrap; and "encrypt" as a synonym for sealing — encryption is
@@ -387,9 +388,10 @@ one operation the mode may select, not the name of the act
 
 **Seal mode**:
 Which protected shape a policy seals and opens: the signed-then-encrypted
-default, the encrypted-then-signed one whose signature is the outer layer, or
-the bare one whose sender is authenticated by the transport instead. It is a
-field on the policy, not a second door: the same seal and open calls read it.
+default, the encrypted-then-signed one whose signature is the outer layer, its
+minimal variant that only opens, or the bare one whose sender is authenticated
+by the transport instead. It is a field on the policy, not a second door: the
+same seal and open calls read it.
 _Avoid_: bare encryption, raw JWE, MLE (Visa's name for their instance of the
 bare shape, not a framework term)
 
@@ -415,9 +417,9 @@ _Avoid_: kid (the wire field, not the identifier), key id (ambiguous), MLE key
 **Minimal JWS-of-JWE seal mode**:
 The JWS-of-JWE shape for an inbound peer that names keys out of band: an
 `RS512` outer signature, an outer `cty` that is absent or `JWE`, and no kid
-required on either JOSE object under the policy's opt-in. It signs the same
-bytes as the JWS-of-JWE mode, the compact JWE string, and it only opens.
-Pending: ADR-150 records it and #2142 implements it.
+required on either JOSE object under the policy's opt-in. Its signature covers
+the same bytes as the JWS-of-JWE mode's, the compact JWE string, and it only
+opens.
 _Avoid_: detached mode (detachment is the envelope, not the mode), kid-less
 mode (kid handling is a policy field), and any "over" spelling of the mode name
 
