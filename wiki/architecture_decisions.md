@@ -2525,11 +2525,11 @@ Peers that name keys out of band send no `kid` on either JOSE object and expect 
 replies, but the crypto adapter refused a missing `kid` unconditionally and `Seal` always wrote
 one: strictness about the peer's profile, since a bare `Open` never picks its key from the wire.
 `jose.Policy` gains two bare-mode opt-ins: `AcceptMissingKid` (inbound) opens a JWE with no
-`kid` member at all, and `OmitKid` (outbound, pending in #2163's second link) writes neither the
-member nor a recipient key id. Only a literally absent member counts as missing; a written `""`
-or `null` is compared and refused as `JOSE_KID_UNKNOWN`, failing closed where go-jose reads
-`null` as absent, and `DecryptKid` / `EncryptKid` stay required. Either field outside bare mode
-is `JOSE_POLICY_MODE_MISMATCH`, and in the wrong direction `JOSE_POLICY_DIRECTION_MISMATCH`. The
+`kid` member at all, and `OmitKid` (outbound) writes neither the member nor a recipient key id.
+Only a literally absent member counts as missing; a written `""` or `null` is compared and
+refused as `JOSE_KID_UNKNOWN`, failing closed where go-jose reads `null` as absent, and
+`DecryptKid` / `EncryptKid` stay required. Either field outside bare mode is
+`JOSE_POLICY_MODE_MISMATCH`, and in the wrong direction `JOSE_POLICY_DIRECTION_MISMATCH`. The
 ADR also records what #2142 will implement (an open-only `RS512` minimal JWS-of-JWE mode, and
 detachment as an envelope a pure helper reattaches, so `Seal` / `Open` stay the only two doors),
 why the server path stays imperative (#2165's recipe), and the non-goals (`A256CBC-HS512`, SHA-1

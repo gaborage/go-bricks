@@ -39,8 +39,8 @@ this JWE work in their own code.
   check runs unchanged: the compact-only refusal and the 16 KiB header-segment bound, go-jose's
   parse narrowed to the declared `KeyAlg` / `Enc`, the unconditional `cty: JWS` refusal and the
   permissive `cty` rule.
-- **`OmitKid bool`, outbound only (pending: the second link of #2163).** A bare `Seal` will
-  write no `kid`: no protected-header member and no go-jose `Recipient.KeyID`. The key is still resolved with `PublicKey(EncryptKid)`.
+- **`OmitKid bool`, outbound only.** A bare `Seal` writes no `kid`: no protected-header member
+  and no go-jose `Recipient.KeyID`. The key is still resolved with `PublicKey(EncryptKid)`.
   `Cty`, `Typ`, `IATMillis` and `ProtectedHeaders` are written exactly as without the flag, and
   the `ProtectedHeaders` collision guard still refuses a hand-written `kid`.
 - **Both zero values keep today's behavior byte for byte.** No kid field becomes optional:

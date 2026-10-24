@@ -404,6 +404,7 @@ func throughDoor(t *testing.T, p *Policy) error {
 
 func TestPolicyValidateKidOptIns(t *testing.T) {
 	acceptMissingKid := func(p *Policy) { p.AcceptMissingKid = true }
+	omitKid := func(p *Policy) { p.OmitKid = true }
 	tests := []struct {
 		name     string
 		base     func() *Policy
@@ -414,16 +415,30 @@ func TestPolicyValidateKidOptIns(t *testing.T) {
 		{"jwe_of_jws_outbound_accept_missing_kid", nestedOutbound, acceptMissingKid, codePolicyModeMismatch},
 		{"jws_of_jwe_inbound_accept_missing_kid", jwsOfJWEInbound, acceptMissingKid, codePolicyModeMismatch},
 		{"jws_of_jwe_outbound_accept_missing_kid", jwsOfJWEOutbound, acceptMissingKid, codePolicyModeMismatch},
+		{"jwe_of_jws_inbound_omit_kid", nestedInbound, omitKid, codePolicyModeMismatch},
+		{"jwe_of_jws_outbound_omit_kid", nestedOutbound, omitKid, codePolicyModeMismatch},
+		{"jws_of_jwe_inbound_omit_kid", jwsOfJWEInbound, omitKid, codePolicyModeMismatch},
+		{"jws_of_jwe_outbound_omit_kid", jwsOfJWEOutbound, omitKid, codePolicyModeMismatch},
 		{"bare_outbound_accept_missing_kid", bareOutbound, acceptMissingKid, codePolicyDirectionMismatch},
+		{"bare_inbound_omit_kid", bareInbound, omitKid, codePolicyDirectionMismatch},
 		{"unknown_mode_inbound_accept_missing_kid", bareInbound, func(p *Policy) {
 			p.Mode = SealMode(99)
 			p.AcceptMissingKid = true
+		}, codePolicyModeUnknown},
+		{"unknown_mode_outbound_omit_kid", bareOutbound, func(p *Policy) {
+			p.Mode = SealMode(99)
+			p.OmitKid = true
 		}, codePolicyModeUnknown},
 		{"bare_inbound_accept_missing_kid_without_decrypt_kid", bareInbound, func(p *Policy) {
 			p.AcceptMissingKid = true
 			p.DecryptKid = ""
 		}, codePolicyIncomplete},
+		{"bare_outbound_omit_kid_without_encrypt_kid", bareOutbound, func(p *Policy) {
+			p.OmitKid = true
+			p.EncryptKid = ""
+		}, codePolicyIncomplete},
 		{"bare_inbound_accept_missing_kid_is_valid", bareInbound, acceptMissingKid, ""},
+		{"bare_outbound_omit_kid_is_valid", bareOutbound, omitKid, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

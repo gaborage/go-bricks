@@ -341,3 +341,45 @@ func TestDecryptAcceptMissingKid(t *testing.T) {
 		})
 	}
 }
+
+func TestEncryptOmitKid(t *testing.T) {
+	key := newKey(t)
+	tests := []struct {
+		name    string
+		omit    bool
+		wantKid string
+	}{
+		{"writes_kid_by_default", false, "test-key"},
+		{"omits_kid", true, ""},
+	}
+	payload := []byte(`{"secret":"value"}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compact, err := Encrypt(payload, &key.PublicKey, &EncryptOptions{
+				Kid:     "test-key",
+				KeyAlg:  jose.RSA_OAEP_256,
+				Enc:     jose.A256GCM,
+				OmitKid: tt.omit,
+			})
+			require.NoError(t, err)
+
+			hdr, present, ok := parsedHeader(compact)
+			require.True(t, ok)
+			assert.Equal(t, !tt.omit, present)
+			assert.Equal(t, tt.wantKid, hdr.Kid)
+			obj, err := jose.ParseEncrypted(compact,
+				[]jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantKid, obj.Header.KeyID)
+
+			got, _, err := Decrypt(compact, key, &DecryptOptions{
+				ExpectedKid:       "test-key",
+				AllowedKeyAlgs:    []jose.KeyAlgorithm{jose.RSA_OAEP_256},
+				AllowedContentEnc: []jose.ContentEncryption{jose.A256GCM},
+				AcceptMissingKid:  true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, payload, got)
+		})
+	}
+}
