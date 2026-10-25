@@ -25,7 +25,7 @@ GOLANGCI_LINT_VERSION := v2.15.0
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION := v0.5.1
 # renovate: datasource=npm depName=markdownlint-cli2
-MARKDOWNLINT_VERSION := 0.23.3
+MARKDOWNLINT_VERSION := 0.24.0
 GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 # Hosted runners are 4-vCPU/16GB; 2 workers bounds peak memory (each worker keeps its
 # own copy of the module tree).
