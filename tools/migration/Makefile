@@ -10,7 +10,6 @@ VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --d
 # renovate: datasource=go depName=golang.org/x/vuln
 GOVULNCHECK_VERSION := v1.9.0
 # Keep in sync with the other module's Makefile.
-# pseudo-version until gosec > v2.29.0 is released
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.30.0
 # Installed, not `go run`, for the reason on the root Makefile's GOSEC_DIR (#1757).
