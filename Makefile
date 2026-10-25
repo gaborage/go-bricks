@@ -14,7 +14,7 @@ GOVULNCHECK_VERSION := v1.9.0
 # Keep in sync with the other module's Makefile.
 # pseudo-version until gosec > v2.29.0 is released
 # renovate: datasource=go depName=github.com/securego/gosec/v2
-GOSEC_VERSION := v2.29.1-0.20261009120814-7b1b5cebe007
+GOSEC_VERSION := v2.30.0
 # gosec is INSTALLED, not `go run`, and the path carries the version so a pin
 # bump cannot be served a stale binary. Why not `go run`: wiki/linting.md.
 GOSEC_DIR := $(CURDIR)/.tools/gosec-$(GOSEC_VERSION)
