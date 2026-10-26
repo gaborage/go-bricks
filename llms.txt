@@ -3190,7 +3190,7 @@ messaging:
   tenancy: per-tenant                      # or: shared — one control-plane broker, tenant carried
                                            # as the x-tenant-id stamp (see wiki/messaging.md)
   broker:
-    # The vhost is the URL path: amqp://host:port/<vhost>, each / in the name as %2F (an empty path is "/").
+    # The vhost is the URL path: amqps://host:port/<vhost>, each / in the name as %2F (an empty path is "/").
     url: amqp://guest:guest@localhost:5672/
   # Exchange, routing key and default headers are set per publisher, in the messaging.PublisherOptions a module declares it with.
   reconnect:

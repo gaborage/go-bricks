@@ -36,7 +36,7 @@ published message, and neither exists. Fixes #2193.
    `*ConfigError` (`config_invalid`), and the errors are joined in key order, so a verbatim
    template copy is fixed in one pass. `Field` is the key. `Action` says to remove it, names its
    environment variable, and says where the setting goes. For the vhost that is the URL path,
-   `amqp://host:port/<vhost>`, with each `/` in the name encoded as `%2F`. For the other three it
+   `amqps://host:port/<vhost>`, with each `/` in the name encoded as `%2F`. For the other three it
    is `Exchange`, `RoutingKey` or `Headers` in `messaging.PublisherOptions`. The check reads
    presence only, so no configured value can reach the message: not the broker URL and not its
    credentials (#2192).

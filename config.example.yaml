@@ -245,7 +245,7 @@ log:
 # If not using messaging, you can omit this entire section or leave broker.url empty
 messaging:
   broker:
-    # The vhost is the URL path: amqp://host:port/<vhost>, each / in the name as %2F (an empty path is "/").
+    # The vhost is the URL path: amqps://host:port/<vhost>, each / in the name as %2F (an empty path is "/").
     url: amqp://localhost:5672/
   # Exchange, routing key and default headers are set per publisher, in the messaging.PublisherOptions a module declares it with.
   # consumers:

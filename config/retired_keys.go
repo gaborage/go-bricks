@@ -15,7 +15,7 @@ type retiredKey struct {
 var retiredKeys = []retiredKey{
 	{
 		key:     "messaging.broker.virtualhost",
-		instead: "put the vhost in the broker URL path, amqp://host:port/<vhost>, with each / in the name encoded as %2F",
+		instead: "put the vhost in the broker URL path, amqps://host:port/<vhost>, with each / in the name encoded as %2F",
 	},
 	{key: "messaging.headers", instead: "set messaging.PublisherOptions.Headers where the module declares the publisher"},
 	{key: "messaging.routing.exchange", instead: "set messaging.PublisherOptions.Exchange where the module declares the publisher"},

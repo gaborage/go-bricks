@@ -23,7 +23,7 @@ const (
 // null — fails startup naming the key and where the setting belongs.
 func TestLoadRefusesRetiredMessagingKeys(t *testing.T) {
 	wantAction := map[string][]string{
-		retiredVirtualHost:     {retiredVirtualHostEnv, "amqp://host:port/<vhost>, with each / in the name encoded as %2F"},
+		retiredVirtualHost:     {retiredVirtualHostEnv, "amqps://host:port/<vhost>, with each / in the name encoded as %2F"},
 		retiredRoutingExchange: {"MESSAGING_ROUTING_EXCHANGE", "messaging.PublisherOptions.Exchange"},
 		retiredRoutingKey:      {"MESSAGING_ROUTING_KEY", "messaging.PublisherOptions.RoutingKey"},
 		retiredHeaders:         {"MESSAGING_HEADERS", "messaging.PublisherOptions.Headers"},
@@ -73,7 +73,7 @@ func TestLoadRefusesRetiredMessagingKeys(t *testing.T) {
 // refusal never echoes the configured URL or its credentials (#2192).
 func TestLoadReportsEveryRetiredKeyWithoutTheBrokerURL(t *testing.T) {
 	const secret = "s3cr3t-pa55"
-	yaml := "messaging:\n  broker:\n    url: amqp://svc-user:" + secret + "@broker.internal:5672/vh\n" +
+	yaml := "messaging:\n  broker:\n    url: amqps://svc-user:" + secret + "@broker.internal:5671/vh\n" +
 		"    virtualhost: orders\n  routing:\n    exchange: events\n    key: default\n  headers:\n    x-app-name: svc\n"
 
 	_, err := loadDeliveredEmptyFixture(t, retiredKeysHeader+yaml, nil)

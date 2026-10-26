@@ -13656,19 +13656,19 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gate: match = a detect hit. no-match = no hit.
 - before: v0.72.0 decoded all four keys into `MessagingConfig`, and no framework code read them.
   The AMQP client dialed `messaging.broker.url` verbatim, so the vhost was the URL path, or `/` for
-  an empty path: `amqp://host:5672/` beside `virtualhost: orders` connected to `/`. The exchange,
+  an empty path: `amqps://host:5671/` beside `virtualhost: orders` connected to `/`. The exchange,
   routing key and headers configured nothing, and the `llms.txt` promises of a default exchange and
   of headers on every published message were false.
 - after: startup fails with one `config_invalid` error per delivered key, in key order, such as
   `config_invalid: messaging.broker.virtualhost is retired and was never read; remove
   messaging.broker.virtualhost (MESSAGING_BROKER_VIRTUALHOST) and put the vhost in the broker URL
-  path, amqp://host:port/<vhost>, with each / in the name encoded as %2F`. The other three point at
+  path, amqps://host:port/<vhost>, with each / in the name encoded as %2F`. The other three point at
   `messaging.PublisherOptions.Exchange`, `.RoutingKey` and `.Headers`. The error never contains
   the broker URL or its credentials. `BrokerConfig.VirtualHost`, `MessagingConfig.Routing`,
   `MessagingConfig.Headers` and `RoutingConfig` no longer exist.
 - apply: delete each key from every config and env file. Where `virtualhost` held a vhost other
   than `/`, move it into the broker URL path first, percent-encoded: `orders` becomes
-  `amqp://host:5672/orders`, and `/orders` becomes `amqp://host:5672/%2Forders`. That CHANGES the
+  `amqps://host:5671/orders`, and `/orders` becomes `amqps://host:5671/%2Forders`. That CHANGES the
   vhost the service connects to, since it used the URL's vhost before, so first confirm the vhost
   exists and the user holds permissions on it. Set the exchange, routing key and default headers per
   publisher in the `messaging.PublisherOptions` passed to `DeclareTypedPublisher` or `DeclarePublisher`
