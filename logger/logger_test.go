@@ -523,6 +523,13 @@ type codeError int
 
 func (c codeError) Error() string { return fmt.Sprintf("code %d", int(c)) }
 
+// objectError is both an error and a LogObjectMarshaler; zerolog's error arm
+// renders it as an object.
+type objectError struct{}
+
+func (objectError) Error() string                         { return "object error" }
+func (objectError) MarshalZerologObject(e *zerolog.Event) { e.Str("code", "x") }
+
 func TestLoggerWithFieldsRendersErrorValues(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -535,6 +542,9 @@ func TestLoggerWithFieldsRendersErrorValues(t *testing.T) {
 		{"typed_nil_maps_to_error", errTypedNil, func(error) any { return errors.New("mapped nil") }, "mapped nil"},
 		{"typed_nil_maps_to_string", errTypedNil, marshalByType, "marshaled *amqp091.Error"},
 		{"typed_nil_maps_to_nil", errTypedNil, func(error) any { return nil }, nil},
+		{"typed_nil_maps_to_object_error", errTypedNil, func(error) any { return objectError{} }, map[string]any{"code": "x"}},
+		{"typed_nil_maps_to_bytes", errTypedNil, func(error) any { return []byte("raw") }, "cmF3"},
+		{"typed_nil_maps_to_unencodable", errTypedNil, func(error) any { return make(chan int) }, "marshaling error: json: unsupported type: chan int"},
 		{"non_nil_error", codeError(7), nil, "code 7"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -554,6 +564,16 @@ func TestLoggerWithFieldsRendersErrorValues(t *testing.T) {
 			assert.Equal(t, 1, calls, "ErrorMarshalFunc should run once per value")
 		})
 	}
+}
+
+// zerolog writes a marshaled string with its string encoder, which leaves
+// U+2028 raw where encoding/json escapes it.
+func TestLoggerWithFieldsTypedNilErrorWritesMarshaledStringAsString(t *testing.T) {
+	swapErrorMarshalFunc(t, func(error) any { return "a b" })
+	base, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	base.WithFields(map[string]any{"k": errTypedNil}).Error().Msg("m")
+
+	assert.Contains(t, buf.String(), "\"k\":\"a b\"")
 }
 
 func TestLoggerWithFieldsTypedNilErrorKeepsCallerMapAndMask(t *testing.T) {

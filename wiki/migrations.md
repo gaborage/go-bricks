@@ -13751,8 +13751,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   malformed line, and the OTel log bridge dropped the record without any signal.
 - after: the value renders `"k":null` under zerolog's default `ErrorMarshalFunc`, which is what
   `Interface` writes for it, and every line from the derived logger parses. A custom
-  `ErrorMarshalFunc` is called once for the typed nil and keeps its output: `null` for a nil
-  result, the message for a non-nil error, the string for a string.
+  `ErrorMarshalFunc` is called once for the typed nil, and its result renders as zerolog's error
+  arm renders it: `null` for nil, an object for a `LogObjectMarshaler`, the message for a non-nil
+  error, the string for a string, and the JSON encoding of anything else.
 - apply: nothing to change.
 - verify: `log.WithFields(map[string]any{"k": error((*amqp091.Error)(nil))}).Error().Msg("m")`
   writes `"k":null`, and the line parses as JSON.

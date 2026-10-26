@@ -2,6 +2,8 @@ package logger
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -162,18 +164,33 @@ func marshalNilErrors(fields map[string]any) {
 }
 
 // marshalNilError calls ErrorMarshalFunc once and hands Fields a value it
-// renders as zerolog would, so Fields never calls it again.
+// renders as zerolog's error arm would, so Fields never calls it again.
 func marshalNilError(err error) any {
 	marshaled := zerolog.ErrorMarshalFunc(err)
-	e, ok := marshaled.(error)
-	if !ok {
-		return marshaled
-	}
-	if isNilPointer(e) {
+	if marshaled == nil {
 		return nil
 	}
-	return e.Error()
+	if object, ok := marshaled.(zerolog.LogObjectMarshaler); ok {
+		return objectOnly{object}
+	}
+	if e, ok := marshaled.(error); ok {
+		if isNilPointer(e) {
+			return nil
+		}
+		return e.Error()
+	}
+	if s, ok := marshaled.(string); ok {
+		return s
+	}
+	encoded, encodeErr := zerolog.InterfaceMarshalFunc(marshaled)
+	if encodeErr != nil {
+		return fmt.Sprintf("marshaling error: %v", encodeErr)
+	}
+	return json.RawMessage(encoded)
 }
+
+// objectOnly hides an Error method, so Fields renders the value as an object.
+type objectOnly struct{ zerolog.LogObjectMarshaler }
 
 // OTelProvider is a minimal interface for accessing OpenTelemetry logger provider
 // and configuration. This interface allows the logger package to integrate with
