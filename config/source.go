@@ -243,6 +243,7 @@ func (c *Config) deliveredAtOrUnder(key string) bool {
 	if c == nil || c.src == nil {
 		return false
 	}
+	key = strings.ToLower(key)
 	for path := range c.src.delivered {
 		folded := strings.ToLower(path)
 		if (folded == key || keyname.IsDottedPrefix(key, folded)) && c.delivered(path) {
