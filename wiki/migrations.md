@@ -13648,7 +13648,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - Any verbatim copy of v0.72.0's `config.example.yaml`, `.env.example` or the `llms.txt` broker
     block matches. That includes a variable a template rendered EMPTY
     (`MESSAGING_BROKER_VIRTUALHOST=`) and a YAML null (`virtualhost:`), both of which are refused.
-  - Go: `git grep -nE 'VirtualHost|RoutingConfig|Messaging[.](Routing|Headers)' -- '*.go'`.
+  - Go: `git grep -nE 'VirtualHost|RoutingConfig|MessagingConfig[[:space:]]*[{.]|Messaging[.](Routing|Headers)' -- '*.go'`.
+    It lists every `MessagingConfig` literal, so check each one for a `Routing` or `Headers` field.
 - scope: `config.Load`, and every construction path that runs `config.Validate`
   (`app.NewWithConfig`, `Builder.WithConfig`). **Unchanged**: a config that names none of the keys;
   the AMQP dial, which reads `messaging.broker.url` verbatim as before; `PublisherOptions`; and
