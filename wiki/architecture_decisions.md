@@ -2559,6 +2559,27 @@ surface.
 
 ---
 
+### [ADR-153: Retired Messaging Keys Fail Startup Instead of Being Ignored](adr_153_retired_messaging_keys_refused.md)
+
+**Date:** 2026-10-25 | **Status:** Accepted
+
+No framework code ever read `messaging.broker.virtualhost`, `messaging.routing.exchange`,
+`messaging.routing.key` or `messaging.headers`. The AMQP client dials `messaging.broker.url`
+verbatim, so a path-less URL beside `virtualhost: orders` connected to `/`, while the shipped
+templates advertised all four keys. The fields are removed (`BrokerConfig.VirtualHost`,
+`MessagingConfig.Routing` with `RoutingConfig`, `MessagingConfig.Headers`). A presence check on the
+ADR-104 record, run beside the delivered-empty rejections, fails startup on any delivery of one,
+an empty value, a YAML null and any key under `messaging.headers` included. Each refusal names the
+key and where the setting belongs: the URL path for the vhost, with each `/` encoded as `%2F`, and
+`messaging.PublisherOptions` for the rest. It never echoes the broker URL. `LoadFromMap` stays
+silent because it skips `Validate`. This departs from ADR-024's silent fallback for old keys, as
+ADR-091 and ADR-144 did. Breaking.
+
+**Key Benefits:** a vhost written where nothing reads it fails at startup instead of connecting to
+`/`, and the templates stop advertising settings that do not exist.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3368,7 +3389,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-152) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-153) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

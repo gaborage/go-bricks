@@ -235,3 +235,20 @@ func (c *Config) delivered(key string) bool {
 	}
 	return c.src.delivered[key] && c.src.k.Exists(key)
 }
+
+// deliveredAtOrUnder reports whether key or any path below it was delivered, matching paths
+// case-insensitively as mapstructure matches fields. Unlike delivered it accepts a section
+// path, since a YAML null written there records that path itself.
+func (c *Config) deliveredAtOrUnder(key string) bool {
+	if c == nil || c.src == nil {
+		return false
+	}
+	key = strings.ToLower(key)
+	for path := range c.src.delivered {
+		folded := strings.ToLower(path)
+		if (folded == key || keyname.IsDottedPrefix(key, folded)) && c.delivered(path) {
+			return true
+		}
+	}
+	return false
+}

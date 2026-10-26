@@ -551,8 +551,6 @@ type OutputConfig struct {
 // messaging.broker.url is unset (see config/messaging_section.go: normalizeMessaging).
 type MessagingConfig struct {
 	Broker    BrokerConfig             `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
-	Routing   RoutingConfig            `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`
-	Headers   map[string]string        `koanf:"headers" json:"headers" yaml:"headers" toml:"headers" mapstructure:"headers"`
 	Reconnect ReconnectConfig          `koanf:"reconnect" json:"reconnect" yaml:"reconnect" toml:"reconnect" mapstructure:"reconnect"`
 	Publisher PublisherPoolConfig      `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
 	Streams   StreamsConfig            `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
@@ -743,14 +741,7 @@ type PublisherPoolConfig struct {
 
 // BrokerConfig holds message broker connection settings.
 type BrokerConfig struct {
-	URL         string `koanf:"url" json:"url" yaml:"url" toml:"url" mapstructure:"url"`
-	VirtualHost string `koanf:"virtualhost" json:"virtualhost" yaml:"virtualhost" toml:"virtualhost" mapstructure:"virtualhost"`
-}
-
-// RoutingConfig holds message routing settings.
-type RoutingConfig struct {
-	Exchange string `koanf:"exchange" json:"exchange" yaml:"exchange" toml:"exchange" mapstructure:"exchange"`
-	Key      string `koanf:"key" json:"key" yaml:"key" toml:"key" mapstructure:"key"`
+	URL string `koanf:"url" json:"url" yaml:"url" toml:"url" mapstructure:"url"`
 }
 
 // MultitenantConfig holds multi-tenant specific settings.
