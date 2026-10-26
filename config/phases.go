@@ -43,6 +43,12 @@ func normalize(cfg *Config) error {
 		return err
 	}
 
+	// A retired key is refused on presence alone, before the messaging normalizer, which
+	// cannot see the koanf tree (ADR-153).
+	if err := validateNoRetiredKeys(cfg); err != nil {
+		return err
+	}
+
 	if err := normalizeApp(&cfg.App); err != nil {
 		return fmt.Errorf("app config: %w", err)
 	}

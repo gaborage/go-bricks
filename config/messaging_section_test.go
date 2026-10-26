@@ -335,11 +335,10 @@ func TestIsMessagingConfigured(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "broker_url_with_virtualhost",
+			name: "broker_url_with_vhost_path",
 			config: MessagingConfig{
 				Broker: BrokerConfig{
-					URL:         testAMQPHost,
-					VirtualHost: "/test",
+					URL: "amqp://localhost:5672/%2Ftest",
 				},
 			},
 			expected: true,

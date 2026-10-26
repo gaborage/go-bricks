@@ -3190,14 +3190,7 @@ messaging:
   tenancy: per-tenant                      # or: shared — one control-plane broker, tenant carried
                                            # as the x-tenant-id stamp (see wiki/messaging.md)
   broker:
-    url: amqp://guest:guest@localhost:5672/
-    virtualhost: /
-  routing:
-    exchange: my-service.events            # Default exchange (used when app code omits it)
-    key: my-service.notifications          # Default routing key
-  headers:
-    x-app-name: my-service                 # Headers added to every published message
-    x-environment: development
+    url: amqp://guest:guest@localhost:5672/  # vhost = URL path: amqp://host:port/<vhost>, each / as %2F (empty path = "/")
   reconnect:
     delay: 5s                             # Backoff base: redial after a stable connection waits U[0, delay); also the stability window
     maxdelay: 60s                         # Cap of both ladders: dial failures and connections that close within delay (must be >= delay)
