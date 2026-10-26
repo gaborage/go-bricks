@@ -158,7 +158,7 @@ error_reason              -
 
 **The rule:**
 
-- Keep `server.timeout.idle` (default 75s) ABOVE the upstream (backend) idle timeout of any L7 proxy in front of the service:
+- Keep `server.timeout.idle` (default 75s; a zero takes the default and a negative fails startup, [ADR-154](adr_154_server_idle_timeout_zero_takes_default.md)) ABOVE the upstream (backend) idle timeout of any L7 proxy in front of the service:
   - AWS ALB: 60s by default, configurable from 1 to 4000s. Raising the ALB idle means raising this key too.
   - ingress-nginx: `upstream-keepalive-timeout` defaults to 60s.
   - GCP external Application Load Balancer: the backend keepalive is fixed at 600s, so this key must be above 600s.

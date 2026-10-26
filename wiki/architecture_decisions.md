@@ -2580,6 +2580,24 @@ ADR-091 and ADR-144 did. Breaking.
 
 ---
 
+### [ADR-154: A Zero Server Idle Timeout Takes the Default, and a Negative Fails](adr_154_server_idle_timeout_zero_takes_default.md)
+
+**Date:** 2026-10-25 | **Status:** Accepted | **Breaking:** a zero `server.timeout.idle`, explicit or left unset in a hand-built config, takes the 75s default instead of running at `server.timeout.read`, and a negative fails startup instead of disabling the idle timeout
+
+Config validation never read the idle key, so net/http decided its edge values on both listeners:
+a zero ran at `ReadTimeout` and a negative disabled the idle timeout, with no error or log line.
+`normalizeServer` now applies ADR-075's duration rule through `applyNonNegativeDefault` on every
+config door (`config.Load`, `config.Validate`, `app.NewWithConfig`, `Builder.WithConfig`): a zero
+becomes `DefaultServerIdleTimeout`, a negative fails with `server.timeout.idle: must be
+non-negative`. The key moves to `derivedDefaultKeys`, so the koanf default is rendered from that
+fill. Read, write, middleware and shutdown stay fail-on-zero; the `server` package does not change.
+See [migrations.md](migrations.md) `[C73.8]`.
+
+**Key Benefits:** one constant decides the idle default on every door, and a value net/http
+would reinterpret is filled or refused at startup.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3389,7 +3407,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-153) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-154) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

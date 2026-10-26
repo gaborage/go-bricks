@@ -7,16 +7,20 @@ import (
 	"strings"
 )
 
-// normalizeServer fills the server defaults this package owns. Only the body
-// limit today: an unset (zero) server.bodylimit becomes DefaultBodyLimitBytes
-// here, so the config seam decides that default rather than the wire-up in
-// server.SetupMiddlewares.
+// normalizeServer fills the server defaults this package owns: an unset (zero)
+// server.bodylimit becomes DefaultBodyLimitBytes, so the config seam decides that
+// default rather than the wire-up in server.SetupMiddlewares, and a zero
+// server.timeout.idle becomes DefaultServerIdleTimeout, so a hand-built config
+// never reaches net/http's fallback to the read timeout (ADR-154).
 //
 // The zero/negative rule comes from applyNonNegativeDefault rather than a fourth
 // hand-written copy of it: a negative is an operator error and must surface as
 // one, never be laundered into the default.
 func normalizeServer(cfg *ServerConfig) error {
-	return applyNonNegativeDefault(&cfg.BodyLimit, DefaultBodyLimitBytes, "server.bodylimit")
+	if err := applyNonNegativeDefault(&cfg.BodyLimit, DefaultBodyLimitBytes, "server.bodylimit"); err != nil {
+		return err
+	}
+	return applyNonNegativeDefault(&cfg.Timeout.Idle, DefaultServerIdleTimeout, "server.timeout.idle")
 }
 
 // checkServer rejects a server section the server could not start from.
@@ -50,6 +54,12 @@ func checkServer(cfg *ServerConfig) error {
 
 	if cfg.Timeout.Shutdown <= 0 {
 		return NewValidationError("server.timeout.shutdown", errMustBePositive)
+	}
+
+	// Unreachable on the Validate path: normalizeServer has already filled a zero
+	// and refused a negative. Kept for callers that reach checkServer directly.
+	if cfg.Timeout.Idle < 0 {
+		return NewValidationError("server.timeout.idle", errMustBeNonNegative)
 	}
 
 	if cfg.Gzip.MinLength < 0 {

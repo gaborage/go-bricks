@@ -1817,6 +1817,30 @@ func TestNewWithConfigErrors(t *testing.T) {
 	})
 }
 
+// TestNewWithConfigFillsTheIdleTimeoutOnHandBuiltConfig pins ADR-154 on the hand-built door:
+// a config that never sets server.timeout.idle gets the koanf path's 75s, not the read
+// timeout net/http substitutes for a zero.
+func TestNewWithConfigFillsTheIdleTimeoutOnHandBuiltConfig(t *testing.T) {
+	cfg := &config.Config{
+		App:    config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Server: config.ServerConfig{Port: 8080, Timeout: defaultTestConfig().Server.Timeout},
+		Log:    config.LogConfig{Level: "info"},
+	}
+
+	a, _, err := NewWithConfig(cfg, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if a.messagingManager != nil {
+			a.messagingManager.StopCleanup()
+		}
+		if a.dbManager != nil {
+			a.dbManager.StopCleanup()
+		}
+	})
+
+	assert.Equal(t, 75*time.Second, a.cfg.Server.Timeout.Idle)
+}
+
 func TestOSSignalHandler(t *testing.T) {
 	t.Run("Notify method", func(t *testing.T) {
 		handler := &OSSignalHandler{}
