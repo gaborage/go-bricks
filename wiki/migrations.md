@@ -13736,8 +13736,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C73.9] `WithFields` writes a top-level typed-nil pointer error as `null` · silent-behavior · when: always
 
-- detect: nothing to grep — a typed nil reaches `WithFields` at runtime, and an ordinary path
-  delivers one: `NotifyClose` hands a nil `*amqp091.Error` to its channel on a graceful close.
+- detect: nothing to grep — a value is a typed nil only at runtime: a nil pointer of a type that
+  implements `error`, put in the map as it is, such as a nil `*amqp091.Error` a service received
+  from its own `NotifyClose` channel. The framework's own close logging never reaches
+  `WithFields`: `closeReason` turns that value into a nil `error`, logged with `Err`.
 - gate: always. The population is every service that passes an `error`, or a value of a pointer
   type implementing `error`, to `WithFields`.
 - scope: a top-level `WithFields` value that is a typed-nil pointer error (a nil pointer inside a
