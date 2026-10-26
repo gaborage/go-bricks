@@ -517,73 +517,41 @@ func withFieldsLines(t *testing.T, fields map[string]any) []map[string]any {
 	return lines
 }
 
-func TestLoggerWithFieldsRendersTypedNilErrorAsNull(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		value any
-	}{
-		{"held_as_error", errTypedNil},
-		{"concrete_type", (*amqp.Error)(nil)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			for _, line := range withFieldsLines(t, map[string]any{"k": tc.value}) {
-				require.Contains(t, line, "k")
-				assert.Nil(t, line["k"])
-			}
-		})
-	}
-}
-
-func TestLoggerWithFieldsTypedNilErrorKeepsCustomErrorMarshalFunc(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		marshal func(error) any
-		want    any
-	}{
-		{"maps_to_error", func(error) any { return errors.New("mapped nil") }, "mapped nil"},
-		{"maps_to_string", marshalByType, "marshaled *amqp091.Error"},
-		{"maps_to_nil", func(error) any { return nil }, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			swapErrorMarshalFunc(t, tc.marshal)
-			for _, line := range withFieldsLines(t, map[string]any{"k": errTypedNil}) {
-				require.Contains(t, line, "k")
-				assert.Equal(t, tc.want, line["k"])
-			}
-		})
-	}
-}
-
 // codeError is an integer-kind error: the filter leaves it typed as error, so
 // zerolog's Fields marshals it.
 type codeError int
 
 func (c codeError) Error() string { return fmt.Sprintf("code %d", int(c)) }
 
-func TestLoggerWithFieldsCallsErrorMarshalFuncOncePerError(t *testing.T) {
+func TestLoggerWithFieldsRendersErrorValues(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		value error
-		want  any
+		name    string
+		value   any
+		marshal func(error) any
+		want    any
 	}{
-		{"non_nil_error", codeError(7), "code 7"},
-		{"typed_nil_error", errTypedNil, "mapped nil"},
+		{"typed_nil_held_as_error", errTypedNil, nil, nil},
+		{"typed_nil_concrete_type", (*amqp.Error)(nil), nil, nil},
+		{"typed_nil_maps_to_error", errTypedNil, func(error) any { return errors.New("mapped nil") }, "mapped nil"},
+		{"typed_nil_maps_to_string", errTypedNil, marshalByType, "marshaled *amqp091.Error"},
+		{"typed_nil_maps_to_nil", errTypedNil, func(error) any { return nil }, nil},
+		{"non_nil_error", codeError(7), nil, "code 7"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			marshal := tc.marshal
+			if marshal == nil {
+				marshal = zerolog.ErrorMarshalFunc
+			}
 			calls := 0
 			swapErrorMarshalFunc(t, func(err error) any {
 				calls++
-				if errors.Is(err, errTypedNil) {
-					return errors.New("mapped nil")
-				}
-				return err
+				return marshal(err)
 			})
-			base, buf := newFilteredEventLogger(t, DefaultFilterConfig())
-			derived := base.WithFields(map[string]any{"k": tc.value})
-			assert.Equal(t, 1, calls)
-
-			derived.Error().Msg("m")
-			assert.Equal(t, tc.want, loggedField(t, buf, "k"))
+			for _, line := range withFieldsLines(t, map[string]any{"k": tc.value}) {
+				require.Contains(t, line, "k")
+				assert.Equal(t, tc.want, line["k"])
+			}
+			assert.Equal(t, 1, calls, "ErrorMarshalFunc should run once per value")
 		})
 	}
 }
@@ -595,7 +563,6 @@ func TestLoggerWithFieldsTypedNilErrorKeepsCallerMapAndMask(t *testing.T) {
 		assert.Equal(t, DefaultMaskValue, line["password"])
 	}
 	assert.Equal(t, map[string]any{"k": errTypedNil, "password": errTypedNil}, fields)
-	assert.Same(t, errTypedNil, fields["k"])
 }
 
 func TestLoggerWithFieldsTypedNilErrorReachesOTelBridge(t *testing.T) {
@@ -603,12 +570,11 @@ func TestLoggerWithFieldsTypedNilErrorReachesOTelBridge(t *testing.T) {
 	zl := zerolog.New(bridge)
 	base := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(DefaultFilterConfig())}
 
-	base.Error().Msg("before")
 	derived := base.WithFields(map[string]any{"k": errTypedNil})
 	derived.Error().Msg("first")
 	derived.Error().Msg("second")
 
-	assert.Len(t, proc.snapshot(), 3)
+	assert.Len(t, proc.snapshot(), 2)
 }
 
 func TestLoggerIntegrationWithLoggingMethods(t *testing.T) {

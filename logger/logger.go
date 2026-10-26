@@ -165,13 +165,14 @@ func marshalNilErrors(fields map[string]any) {
 // renders as zerolog would, so Fields never calls it again.
 func marshalNilError(err error) any {
 	marshaled := zerolog.ErrorMarshalFunc(err)
-	if e, ok := marshaled.(error); ok {
-		if isNilPointer(e) {
-			return nil
-		}
-		return e.Error()
+	e, ok := marshaled.(error)
+	if !ok {
+		return marshaled
 	}
-	return marshaled
+	if isNilPointer(e) {
+		return nil
+	}
+	return e.Error()
 }
 
 // OTelProvider is a minimal interface for accessing OpenTelemetry logger provider
