@@ -13637,10 +13637,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 ### [C73.7] the four messaging keys nothing ever read fail startup instead of being ignored · breaking · when: match
 
 - detect: the four keys in every form koanf reads, in every file a deployment loads.
-  - YAML: `git grep -niE '(^|[[:space:]{,.])(virtualhost[[:space:]]*:|routing[[:space:]]*[.:]|headers[[:space:]]*[.:])' -- '*.yaml' '*.yml'`,
+  - YAML: `git grep -niE "(^|[[:space:]{,.])[\"']?(virtualhost[\"']?[[:space:]]*:|routing[\"']?[[:space:]]*[.:]|headers[\"']?[[:space:]]*[.:])" -- '*.yaml' '*.yml'`,
     keeping only hits whose key path is `messaging.broker.virtualhost`, `messaging.routing.exchange`,
     `messaging.routing.key` or `messaging.headers` (or any key under it), whether nested, flat-dotted,
-    a flow mapping (`{virtualhost: orders}`) or mixed, in any letter case. A `headers:` block under `observability` does not count.
+    a flow mapping (`{virtualhost: orders}`), quoted (`"virtualhost": orders`) or mixed, in any letter
+    case. A `headers:` block under `observability` does not count.
   - Env: `git grep -niE 'MESSAGING_(BROKER_VIRTUALHOST|ROUTING_EXCHANGE|ROUTING_KEY|HEADERS)'`, plus
     `grep -rniE 'MESSAGING_(BROKER_VIRTUALHOST|ROUTING_|HEADERS)' k8s/ deploy/ .env* 2>/dev/null` for
     env files and manifests outside the tracked files.
