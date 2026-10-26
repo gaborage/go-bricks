@@ -291,12 +291,33 @@ DNS aliases (a CNAME, or an IP against a name), an Oracle port of 0 against
 `public`), and two separate `MigrateAll` calls, which rely on Flyway's own lock,
 are missed. A type-less tenant runs typed with the runner's vendor
 ([ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md)) and is keyed as
-a typed tenant is; on Oracle the key is the target only where the conf's
-`flyway.url` interpolates `${env.ORACLE_*}`, so a fixed URL can put tenants
-keyed apart on one target unrefused. In the shared-migrator
+a typed tenant is. An Oracle target is conf-owned, and the key reads only
+`database.*`: tenants keyed apart still migrate one target, unrefused, when the
+conf fixes `flyway.url` or `flyway.user` or interpolates only some `ORACLE_*`
+variables, when an inherited `FLYWAY_URL` or `FLYWAY_USER` overrides the conf,
+or when the conf or the environment sets `flyway.schemas` or
+`flyway.defaultSchema`. Tenants that share a key always share the target, so the
+Oracle key can only miss a collision, never invent one. In the shared-migrator
 empty-schema case the first tenant is a false green too, and only
 [`WithSharedMigrator`](#schema-targeting-postgresql) catches it. A tenant that
 claims a target and then fails its own run still holds the claim.
+
+For the Oracle key to name Flyway's target, the conf every tenant's run reads
+must take the whole target from the exported variables, as this
+`flyway/flyway-oracle.conf` does:
+
+```properties
+flyway.url=jdbc:oracle:thin:@//${env.ORACLE_HOST}:${env.ORACLE_PORT}/${env.ORACLE_PDB}
+flyway.user=${env.ORACLE_USER}
+flyway.password=${env.ORACLE_PASSWORD}
+```
+
+It sets neither `flyway.schemas` nor `flyway.defaultSchema`, so each run
+migrates the connecting user's schema, the one the key names. Flyway reads
+environment variables over configuration files, so a `FLYWAY_URL`,
+`FLYWAY_USER`, `FLYWAY_SCHEMAS` or `FLYWAY_DEFAULT_SCHEMA` in the runner's
+environment overrides this file for every tenant's run: unset them where the
+fleet runs.
 
 The refusal is per tenant and classified like any failure under
 [ADR-115](adr_115_fleet_migration_run_verdict.md): the refused tenant was
