@@ -3,12 +3,16 @@ package logger
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -492,6 +496,119 @@ func TestLoggerWithFieldsNilFilter(t *testing.T) {
 	// Should work without panicking
 	assert.NotNil(t, result)
 	assert.Implements(t, (*Logger)(nil), result)
+}
+
+// withFieldsLines logs two lines through a WithFields-derived logger under the
+// default filter and decodes each one.
+func withFieldsLines(t *testing.T, fields map[string]any) []map[string]any {
+	t.Helper()
+	base, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	derived := base.WithFields(fields)
+	derived.Error().Msg("first")
+	derived.Error().Msg("second")
+
+	var lines []map[string]any
+	for raw := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		var line map[string]any
+		require.NoError(t, json.Unmarshal(raw, &line), "every line from the derived logger should be valid JSON: %s", raw)
+		lines = append(lines, line)
+	}
+	require.Len(t, lines, 2)
+	return lines
+}
+
+func TestLoggerWithFieldsRendersTypedNilErrorAsNull(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{"held_as_error", errTypedNil},
+		{"concrete_type", (*amqp.Error)(nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, line := range withFieldsLines(t, map[string]any{"k": tc.value}) {
+				require.Contains(t, line, "k")
+				assert.Nil(t, line["k"])
+			}
+		})
+	}
+}
+
+func TestLoggerWithFieldsTypedNilErrorKeepsCustomErrorMarshalFunc(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		marshal func(error) any
+		want    any
+	}{
+		{"maps_to_error", func(error) any { return errors.New("mapped nil") }, "mapped nil"},
+		{"maps_to_string", marshalByType, "marshaled *amqp091.Error"},
+		{"maps_to_nil", func(error) any { return nil }, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			swapErrorMarshalFunc(t, tc.marshal)
+			for _, line := range withFieldsLines(t, map[string]any{"k": errTypedNil}) {
+				require.Contains(t, line, "k")
+				assert.Equal(t, tc.want, line["k"])
+			}
+		})
+	}
+}
+
+// codeError is an integer-kind error: the filter leaves it typed as error, so
+// zerolog's Fields marshals it.
+type codeError int
+
+func (c codeError) Error() string { return fmt.Sprintf("code %d", int(c)) }
+
+func TestLoggerWithFieldsCallsErrorMarshalFuncOncePerError(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value error
+		want  any
+	}{
+		{"non_nil_error", codeError(7), "code 7"},
+		{"typed_nil_error", errTypedNil, "mapped nil"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			swapErrorMarshalFunc(t, func(err error) any {
+				calls++
+				if errors.Is(err, errTypedNil) {
+					return errors.New("mapped nil")
+				}
+				return err
+			})
+			base, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			derived := base.WithFields(map[string]any{"k": tc.value})
+			assert.Equal(t, 1, calls)
+
+			derived.Error().Msg("m")
+			assert.Equal(t, tc.want, loggedField(t, buf, "k"))
+		})
+	}
+}
+
+func TestLoggerWithFieldsTypedNilErrorKeepsCallerMapAndMask(t *testing.T) {
+	fields := map[string]any{"k": errTypedNil, "password": errTypedNil}
+	for _, line := range withFieldsLines(t, fields) {
+		assert.Nil(t, line["k"])
+		assert.Equal(t, DefaultMaskValue, line["password"])
+	}
+	assert.Equal(t, map[string]any{"k": errTypedNil, "password": errTypedNil}, fields)
+	assert.Same(t, errTypedNil, fields["k"])
+}
+
+func TestLoggerWithFieldsTypedNilErrorReachesOTelBridge(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+	zl := zerolog.New(bridge)
+	base := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(DefaultFilterConfig())}
+
+	base.Error().Msg("before")
+	derived := base.WithFields(map[string]any{"k": errTypedNil})
+	derived.Error().Msg("first")
+	derived.Error().Msg("second")
+
+	assert.Len(t, proc.snapshot(), 3)
 }
 
 func TestLoggerIntegrationWithLoggingMethods(t *testing.T) {

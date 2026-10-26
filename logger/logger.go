@@ -143,9 +143,35 @@ func (l *ZeroLogger) WithFields(fields map[string]any) Logger {
 	// Filter sensitive data from fields before adding them
 	if l.filter != nil {
 		fields = l.filter.FilterFields(fields)
+		marshalNilErrors(fields)
 	}
 	log := l.zlog.With().Fields(fields).Logger()
 	return &ZeroLogger{zlog: &log, filter: l.filter, pretty: l.pretty, severityHook: l.severityHook}
+}
+
+// marshalNilErrors replaces each typed-nil pointer error with what zerolog's
+// Fields would write for it. Fields writes the key and then no value when
+// ErrorMarshalFunc returns a nil pointer, which leaves every later line invalid
+// JSON; drop this once a zerolog bump carries rs/zerolog#802.
+func marshalNilErrors(fields map[string]any) {
+	for key, value := range fields {
+		if err, ok := value.(error); ok && isNilPointer(err) {
+			fields[key] = marshalNilError(err)
+		}
+	}
+}
+
+// marshalNilError calls ErrorMarshalFunc once and hands Fields a value it
+// renders as zerolog would, so Fields never calls it again.
+func marshalNilError(err error) any {
+	marshaled := zerolog.ErrorMarshalFunc(err)
+	if e, ok := marshaled.(error); ok {
+		if isNilPointer(e) {
+			return nil
+		}
+		return e.Error()
+	}
+	return marshaled
 }
 
 // OTelProvider is a minimal interface for accessing OpenTelemetry logger provider
