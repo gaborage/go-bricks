@@ -2,6 +2,8 @@ package logger
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -143,10 +145,52 @@ func (l *ZeroLogger) WithFields(fields map[string]any) Logger {
 	// Filter sensitive data from fields before adding them
 	if l.filter != nil {
 		fields = l.filter.FilterFields(fields)
+		marshalNilErrors(fields)
 	}
 	log := l.zlog.With().Fields(fields).Logger()
 	return &ZeroLogger{zlog: &log, filter: l.filter, pretty: l.pretty, severityHook: l.severityHook}
 }
+
+// marshalNilErrors replaces each typed-nil pointer error with what zerolog's
+// Fields would write for it. Fields writes the key and then no value when
+// ErrorMarshalFunc returns a nil pointer, which leaves every later line invalid
+// JSON; drop this once a zerolog bump carries rs/zerolog#802.
+func marshalNilErrors(fields map[string]any) {
+	for key, value := range fields {
+		if err, ok := value.(error); ok && isNilPointer(err) {
+			fields[key] = marshalNilError(err)
+		}
+	}
+}
+
+// marshalNilError calls ErrorMarshalFunc once and hands Fields a value it
+// renders as zerolog's error arm would, so Fields never calls it again.
+func marshalNilError(err error) any {
+	marshaled := zerolog.ErrorMarshalFunc(err)
+	if marshaled == nil {
+		return nil
+	}
+	if object, ok := marshaled.(zerolog.LogObjectMarshaler); ok {
+		return objectOnly{object}
+	}
+	if e, ok := marshaled.(error); ok {
+		if isNilPointer(e) {
+			return nil
+		}
+		return e.Error()
+	}
+	if s, ok := marshaled.(string); ok {
+		return s
+	}
+	encoded, encodeErr := zerolog.InterfaceMarshalFunc(marshaled)
+	if encodeErr != nil {
+		return fmt.Sprintf("marshaling error: %v", encodeErr)
+	}
+	return json.RawMessage(encoded)
+}
+
+// objectOnly hides an Error method, so Fields renders the value as an object.
+type objectOnly struct{ zerolog.LogObjectMarshaler }
 
 // OTelProvider is a minimal interface for accessing OpenTelemetry logger provider
 // and configuration. This interface allows the logger package to integrate with

@@ -3,12 +3,16 @@ package logger
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -492,6 +496,105 @@ func TestLoggerWithFieldsNilFilter(t *testing.T) {
 	// Should work without panicking
 	assert.NotNil(t, result)
 	assert.Implements(t, (*Logger)(nil), result)
+}
+
+// withFieldsLines logs two lines through a WithFields-derived logger under the
+// default filter and decodes each one.
+func withFieldsLines(t *testing.T, fields map[string]any) []map[string]any {
+	t.Helper()
+	base, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	derived := base.WithFields(fields)
+	derived.Error().Msg("first")
+	derived.Error().Msg("second")
+
+	var lines []map[string]any
+	for raw := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		var line map[string]any
+		require.NoError(t, json.Unmarshal(raw, &line), "every line from the derived logger should be valid JSON: %s", raw)
+		lines = append(lines, line)
+	}
+	require.Len(t, lines, 2)
+	return lines
+}
+
+// codeError is an integer-kind error: the filter leaves it typed as error, so
+// zerolog's Fields marshals it.
+type codeError int
+
+func (c codeError) Error() string { return fmt.Sprintf("code %d", int(c)) }
+
+// objectError is both an error and a LogObjectMarshaler; zerolog's error arm
+// renders it as an object.
+type objectError struct{}
+
+func (objectError) Error() string                         { return "object error" }
+func (objectError) MarshalZerologObject(e *zerolog.Event) { e.Str("code", "x") }
+
+func TestLoggerWithFieldsRendersErrorValues(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   any
+		marshal func(error) any
+		want    any
+	}{
+		{"typed_nil_held_as_error", errTypedNil, nil, nil},
+		{"typed_nil_concrete_type", (*amqp.Error)(nil), nil, nil},
+		{"typed_nil_maps_to_error", errTypedNil, func(error) any { return errors.New("mapped nil") }, "mapped nil"},
+		{"typed_nil_maps_to_string", errTypedNil, marshalByType, "marshaled *amqp091.Error"},
+		{"typed_nil_maps_to_nil", errTypedNil, func(error) any { return nil }, nil},
+		{"typed_nil_maps_to_object_error", errTypedNil, func(error) any { return objectError{} }, map[string]any{"code": "x"}},
+		{"typed_nil_maps_to_bytes", errTypedNil, func(error) any { return []byte("raw") }, "cmF3"},
+		{"typed_nil_maps_to_unencodable", errTypedNil, func(error) any { return make(chan int) }, "marshaling error: json: unsupported type: chan int"},
+		{"non_nil_error", codeError(7), nil, "code 7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			marshal := tc.marshal
+			if marshal == nil {
+				marshal = zerolog.ErrorMarshalFunc
+			}
+			calls := 0
+			swapErrorMarshalFunc(t, func(err error) any {
+				calls++
+				return marshal(err)
+			})
+			for _, line := range withFieldsLines(t, map[string]any{"k": tc.value}) {
+				require.Contains(t, line, "k")
+				assert.Equal(t, tc.want, line["k"])
+			}
+			assert.Equal(t, 1, calls, "ErrorMarshalFunc should run once per value")
+		})
+	}
+}
+
+// zerolog writes a marshaled string with its string encoder, which leaves
+// U+2028 raw where encoding/json escapes it.
+func TestLoggerWithFieldsTypedNilErrorWritesMarshaledStringAsString(t *testing.T) {
+	swapErrorMarshalFunc(t, func(error) any { return "a b" })
+	base, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	base.WithFields(map[string]any{"k": errTypedNil}).Error().Msg("m")
+
+	assert.Contains(t, buf.String(), "\"k\":\"a b\"")
+}
+
+func TestLoggerWithFieldsTypedNilErrorKeepsCallerMapAndMask(t *testing.T) {
+	fields := map[string]any{"k": errTypedNil, "password": errTypedNil}
+	for _, line := range withFieldsLines(t, fields) {
+		assert.Nil(t, line["k"])
+		assert.Equal(t, DefaultMaskValue, line["password"])
+	}
+	assert.Equal(t, map[string]any{"k": errTypedNil, "password": errTypedNil}, fields)
+}
+
+func TestLoggerWithFieldsTypedNilErrorReachesOTelBridge(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+	zl := zerolog.New(bridge)
+	base := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(DefaultFilterConfig())}
+
+	derived := base.WithFields(map[string]any{"k": errTypedNil})
+	derived.Error().Msg("first")
+	derived.Error().Msg("second")
+
+	assert.Len(t, proc.snapshot(), 2)
 }
 
 func TestLoggerIntegrationWithLoggingMethods(t *testing.T) {
