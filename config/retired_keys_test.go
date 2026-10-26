@@ -24,9 +24,9 @@ const (
 func TestLoadRefusesRetiredMessagingKeys(t *testing.T) {
 	wantAction := map[string][]string{
 		retiredVirtualHost:     {retiredVirtualHostEnv, "amqp://host:port/<vhost>, with each / in the name encoded as %2F"},
-		retiredRoutingExchange: {"MESSAGING_ROUTING_EXCHANGE", "messaging.PublisherDeclaration.Exchange"},
-		retiredRoutingKey:      {"MESSAGING_ROUTING_KEY", "messaging.PublisherDeclaration.RoutingKey"},
-		retiredHeaders:         {"MESSAGING_HEADERS", "messaging.PublisherDeclaration.Headers"},
+		retiredRoutingExchange: {"MESSAGING_ROUTING_EXCHANGE", "messaging.PublisherOptions.Exchange"},
+		retiredRoutingKey:      {"MESSAGING_ROUTING_KEY", "messaging.PublisherOptions.RoutingKey"},
+		retiredHeaders:         {"MESSAGING_HEADERS", "messaging.PublisherOptions.Headers"},
 	}
 	tests := []struct {
 		name  string

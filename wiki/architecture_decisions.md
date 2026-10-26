@@ -2571,7 +2571,7 @@ templates advertised all four keys. The fields are removed (`BrokerConfig.Virtua
 ADR-104 record, run beside the delivered-empty rejections, fails startup on any delivery of one,
 an empty value, a YAML null and any key under `messaging.headers` included. Each refusal names the
 key and where the setting belongs: the URL path for the vhost, with each `/` encoded as `%2F`, and
-`messaging.PublisherDeclaration` for the rest. It never echoes the broker URL. `LoadFromMap` stays
+`messaging.PublisherOptions` for the rest. It never echoes the broker URL. `LoadFromMap` stays
 silent because it skips `Validate`. This departs from ADR-024's silent fallback for old keys, as
 ADR-091 and ADR-144 did. Breaking.
 

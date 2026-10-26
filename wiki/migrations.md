@@ -13650,7 +13650,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - Go: `git grep -nE 'VirtualHost|RoutingConfig|Messaging[.](Routing|Headers)' -- '*.go'`.
 - scope: `config.Load`, and every construction path that runs `config.Validate`
   (`app.NewWithConfig`, `Builder.WithConfig`). **Unchanged**: a config that names none of the keys;
-  the AMQP dial, which reads `messaging.broker.url` verbatim as before; `PublisherDeclaration`; and
+  the AMQP dial, which reads `messaging.broker.url` verbatim as before; `PublisherOptions`; and
   `config.LoadFromMap`, which skips `Validate` by design, so `go-bricks-migrate --source-config`
   still decodes a file carrying the keys without comment.
 - gate: match = a detect hit. no-match = no hit.
@@ -13663,7 +13663,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `config_invalid: messaging.broker.virtualhost is retired and was never read; remove
   messaging.broker.virtualhost (MESSAGING_BROKER_VIRTUALHOST) and put the vhost in the broker URL
   path, amqp://host:port/<vhost>, with each / in the name encoded as %2F`. The other three point at
-  `messaging.PublisherDeclaration.Exchange`, `.RoutingKey` and `.Headers`. The error never contains
+  `messaging.PublisherOptions.Exchange`, `.RoutingKey` and `.Headers`. The error never contains
   the broker URL or its credentials. `BrokerConfig.VirtualHost`, `MessagingConfig.Routing`,
   `MessagingConfig.Headers` and `RoutingConfig` no longer exist.
 - apply: delete each key from every config and env file. Where `virtualhost` held a vhost other
@@ -13671,7 +13671,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `amqp://host:5672/orders`, and `/orders` becomes `amqp://host:5672/%2Forders`. That CHANGES the
   vhost the service connects to, since it used the URL's vhost before, so first confirm the vhost
   exists and the user holds permissions on it. Set the exchange, routing key and default headers per
-  publisher on `messaging.PublisherDeclaration` (`Exchange`, `RoutingKey`, `Headers`). In Go, delete
+  publisher in the `messaging.PublisherOptions` passed to `DeclareTypedPublisher` or `DeclarePublisher`
+  (`Exchange`, `RoutingKey`, `Headers`). In Go, delete
   every read or write of the removed fields.
 - verify: `config.Load()` succeeds, and `amqp.ParseURI` of `messaging.broker.url` reports the vhost
   you intend.

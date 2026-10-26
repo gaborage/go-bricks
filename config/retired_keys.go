@@ -17,9 +17,9 @@ var retiredKeys = []retiredKey{
 		key:     "messaging.broker.virtualhost",
 		instead: "put the vhost in the broker URL path, amqp://host:port/<vhost>, with each / in the name encoded as %2F",
 	},
-	{key: "messaging.headers", instead: "set messaging.PublisherDeclaration.Headers"},
-	{key: "messaging.routing.exchange", instead: "set messaging.PublisherDeclaration.Exchange"},
-	{key: "messaging.routing.key", instead: "set messaging.PublisherDeclaration.RoutingKey"},
+	{key: "messaging.headers", instead: "set messaging.PublisherOptions.Headers where the module declares the publisher"},
+	{key: "messaging.routing.exchange", instead: "set messaging.PublisherOptions.Exchange where the module declares the publisher"},
+	{key: "messaging.routing.key", instead: "set messaging.PublisherOptions.RoutingKey where the module declares the publisher"},
 }
 
 // validateNoRetiredKeys fails startup when an operator layer delivered a retired key, with

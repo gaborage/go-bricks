@@ -11,8 +11,8 @@
 (`messaging.routing.exchange`, `messaging.routing.key`), and `Headers` (`messaging.headers`).
 The AMQP client dials `messaging.broker.url` verbatim, so the vhost is the URL path, or `/` when
 the path is empty. A path-less URL beside `virtualhost: orders` therefore connected to `/`, and
-nothing reported it. Exchange, routing key and headers are set per publisher, on
-`messaging.PublisherDeclaration`. Even so, `config.example.yaml`, `.env.example` and `llms.txt`
+nothing reported it. Exchange, routing key and headers are set per publisher, in the
+`messaging.PublisherOptions` a module passes to `DeclareTypedPublisher` or `DeclarePublisher`. Even so, `config.example.yaml`, `.env.example` and `llms.txt`
 advertised all four keys. `llms.txt` also promised a default exchange and headers added to every
 published message, and neither exists. Fixes #2193.
 
@@ -34,7 +34,7 @@ published message, and neither exists. Fixes #2193.
    template copy is fixed in one pass. `Field` is the key. `Action` says to remove it, names its
    environment variable, and says where the setting goes. For the vhost that is the URL path,
    `amqp://host:port/<vhost>`, with each `/` in the name encoded as `%2F`. For the other three it
-   is `Exchange`, `RoutingKey` or `Headers` on `messaging.PublisherDeclaration`. The check reads
+   is `Exchange`, `RoutingKey` or `Headers` in `messaging.PublisherOptions`. The check reads
    presence only, so no configured value can reach the message: not the broker URL and not its
    credentials (#2192).
 4. **`LoadFromMap` stays silent.** It skips `Validate` by design, so

@@ -247,7 +247,7 @@ messaging:
   broker:
     # The vhost is the URL path: amqp://host:port/<vhost>, each / in the name as %2F (an empty path is "/").
     url: amqp://localhost:5672/
-  # Exchange, routing key and default headers are set per publisher on messaging.PublisherDeclaration.
+  # Exchange, routing key and default headers are set per publisher, in the messaging.PublisherOptions a module declares it with.
   # consumers:
   #   critical: true                 # OPT-IN. Unset (the default) = the messaging probe reads the publisher
                                      # only and is never critical. Set true and /ready answers 503 once a
