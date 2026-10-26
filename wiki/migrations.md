@@ -13604,17 +13604,16 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
      partitions still queued for retry stay detached until restart. Partitions that are attached
      keep delivering. On v0.72.0 a queued retry could reattach them and flip the handle back to
      open.
-  3. **TLS.** `rabbitmq-stream+tls://` URIs now connect. v1.8.3 sent no ClientHello and failed
-     startup after the 10s RPC timeout. v1.9.0 sets ServerName to the dialed host: the URI host,
-     the advertised leader or replica host, or `messaging.streams.addressresolver.host`. It
-     verifies against the process trust store, meaning the system roots; on Linux those honor
-     `SSL_CERT_FILE`/`SSL_CERT_DIR` or the image's CA bundle. go-bricks exposes no CA or
-     ServerName seam, so a certificate that does not chain to that store or name the dialed host
-     fails startup with an x509 error. Triage verified this with a local probe only, not against a
-     production broker: v1.8.3 sent no ClientHello and timed out after 10s, while v1.9.0 sent a
-     ClientHello and failed x509 in about 20ms.
+  3. **TLS.** `rabbitmq-stream+tls://` URIs now connect. v1.9.0 sets ServerName to the dialed
+     host: the URI host, the advertised leader or replica host, or
+     `messaging.streams.addressresolver.host`. It verifies against the process trust store,
+     meaning the system roots; on Linux those honor `SSL_CERT_FILE`/`SSL_CERT_DIR` or the image's
+     CA bundle. go-bricks exposes no CA or ServerName seam, so a certificate that does not chain to
+     that store or name the dialed host fails startup with an x509 error. Triage verified this with
+     a local probe only, not against a production broker: v1.8.3 sent no ClientHello and timed out
+     after 10s, while v1.9.0 sent a ClientHello and failed x509 in about 20ms.
 
-  **Supersedes**, for a service crossing both E69 and E73, two parts of `[C69.6]`, which stays as
+  **Supersedes**, for a service crossing both E69 and E73, three parts of `[C69.6]`, which stays as
   released: its scope sentence that a super-stream partition lost while another is queued for
   retry "can pass straight back to reconnecting and open, and go unreported" now holds only for a
   super-stream publisher, and its verify step's "3–11s each" is 3–8s each, while its "a single
