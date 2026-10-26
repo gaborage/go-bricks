@@ -787,7 +787,7 @@ func (m *Manager) stopLocked(flushCtx context.Context) (supervisorDone <-chan st
 
 	for _, rc := range m.consumers {
 		m.flushUnlessLostLocked(flushCtx, rc)
-		if err := rc.handle.Close(); err != nil {
+		if err := rc.handle.Close(); err != nil && !lostHandleClosedCleanly(rc.lost, err) {
 			m.log.Warn().Err(err).
 				Str(logFieldStream, rc.stream).
 				Str(logFieldConsumer, rc.name).
@@ -806,7 +806,7 @@ func (m *Manager) stopLocked(flushCtx context.Context) (supervisorDone <-chan st
 // the producers first would fail those publishes for no reason.
 func (m *Manager) stopPublishersLocked() {
 	for _, p := range m.publishers {
-		if err := p.closeBound(); err != nil {
+		if err := p.closeBound(); err != nil && !lostHandleClosedCleanly(m.lostPublishers[p], err) {
 			m.log.Warn().Err(err).
 				Str(logFieldStream, p.stream).
 				Msg("Failed to close stream publisher")
@@ -814,6 +814,18 @@ func (m *Manager) stopPublishersLocked() {
 	}
 	m.publishers = nil
 	m.lostPublishers = nil
+}
+
+// lostHandleClosedCleanly reports whether a close error only restates a loss the
+// supervisor already reported at ERROR: the client answers the close of a handle it
+// closed itself with stream.AlreadyClosed. The mark is the supervisor's, the stop's
+// own final pass included, so a handle that settles closed after that pass still
+// WARNs. A lost super-stream publisher can return the sentinel from a partial close:
+// client v1.9.0's SuperStreamProducer.Close (pkg/stream/super_stream_producer.go:407-417)
+// stops at the first partition producer's error, so one that closed but is not yet
+// dropped from activeProducers leaves the later partitions unclosed.
+func lostHandleClosedCleanly(lost bool, err error) bool {
+	return lost && errors.Is(err, stream.AlreadyClosed)
 }
 
 // flushUnlessLostLocked flushes a consumer the supervisor did not find lost. A

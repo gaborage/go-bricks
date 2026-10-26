@@ -13613,6 +13613,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
      a local probe only, not against a production broker: v1.8.3 sent no ClientHello and timed out
      after 10s, while v1.9.0 sent a ClientHello and failed x509 in about 20ms.
 
+  Separately (#2151), an orderly stop no longer logs `Failed to close stream consumer` or
+  `Failed to close stream publisher` with `Already Closed` for a handle the supervisor already
+  reported lost, while that ERROR and the flush-skip WARN stay.
+
   **Supersedes**, for a service crossing both E69 and E73, three parts of `[C69.6]`, which stays as
   released: its scope sentence that a super-stream partition lost while another is queued for
   retry "can pass straight back to reconnecting and open, and go unreported" now holds only for a

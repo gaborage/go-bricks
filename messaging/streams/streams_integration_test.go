@@ -925,10 +925,6 @@ const lostStreamWait = 90 * time.Second
 func startLostStreamManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) (*Manager, *recordingLogger) {
 	t.Helper()
 
-	log := &recordingLogger{}
-	managerOpts := *opts
-	managerOpts.Logger = log
-
 	decls := NewDeclarations()
 	decls.DeclareStream(names.stream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
 	decls.DeclareConsumer(&ConsumerOptions{
@@ -938,7 +934,18 @@ func startLostStreamManager(t *testing.T, opts *ManagerOptions, names itNames, h
 		Handler: handler,
 	})
 	decls.DeclarePublisher(&PublisherOptions{Stream: names.stream})
+	return startSupervisedManager(t, opts, decls)
+}
+
+// startSupervisedManager starts decls with a supervisor that polls fast and a
+// logger the test reads back.
+func startSupervisedManager(t *testing.T, opts *ManagerOptions, decls *Declarations) (*Manager, *recordingLogger) {
+	t.Helper()
 	require.NoError(t, decls.Validate())
+
+	log := &recordingLogger{}
+	managerOpts := *opts
+	managerOpts.Logger = log
 
 	m := NewManager(managerOpts)
 	m.superviseEvery = 100 * time.Millisecond
@@ -960,9 +967,20 @@ func deleteStream(t *testing.T, opts *ManagerOptions, streamName string) {
 	require.NoError(t, env.DeleteStream(streamName))
 }
 
+// deleteSuperStream drops a whole super stream, every partition included, out
+// from under a running manager.
+func deleteSuperStream(t *testing.T, opts *ManagerOptions, superStream string) {
+	t.Helper()
+
+	env := testEnvironment(t, opts)
+	defer func() { require.NoError(t, env.Close()) }()
+	require.NoError(t, env.DeleteSuperStream(superStream))
+}
+
 // TestStreamsSupervisorReportsADeletedStreamIntegration pins the report: a stream
 // deleted on a live broker is reported at ERROR and leaves the streams component
-// unhealthy.
+// unhealthy, and the stop reports no close failure for the handles the client
+// already closed (#2151).
 func TestStreamsSupervisorReportsADeletedStreamIntegration(t *testing.T) {
 	opts := streamsTestEnv(t)
 	names := newITNames(t, opts)
@@ -975,5 +993,56 @@ func TestStreamsSupervisorReportsADeletedStreamIntegration(t *testing.T) {
 	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgConsumerLost) },
 		lostStreamWait, itPollInterval, "the lost consumer is reported at ERROR")
 	assert.Equal(t, names.stream, log.fieldAt("error", msgConsumerLost, logFieldStream))
+	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgPublisherLost) },
+		lostStreamWait, itPollInterval, "the lost publisher is reported at ERROR")
+	assert.Equal(t, names.stream, log.fieldAt("error", msgPublisherLost, logFieldStream))
 	assert.False(t, m.Ready(), "the streams component stays unhealthy")
+
+	m.StopConsumers()
+
+	assertNoCloseFailure(t, log)
+}
+
+// TestStreamsStopIsSilentOnADeletedSuperStreamIntegration guards the partitioned
+// lane of the same report: the client's own super-stream closes already swallow
+// AlreadyClosed, and this keeps it that way.
+func TestStreamsStopIsSilentOnADeletedSuperStreamIntegration(t *testing.T) {
+	opts := streamsTestEnv(t)
+	names := newITNames(t, opts)
+	received := &recorder{failAt: -1}
+
+	decls := NewDeclarations()
+	decls.DeclareSuperStream(names.superStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+		SuperStream: names.superStream,
+		Name:        names.superGroup,
+		Start:       OffsetFirst(),
+		Handler:     received.handle,
+	})
+	decls.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: names.superStream})
+	m, log := startSupervisedManager(t, opts, decls)
+	require.True(t, m.Ready())
+
+	deleteSuperStream(t, opts, names.superStream)
+
+	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgConsumerLost) },
+		lostStreamWait, itPollInterval, "the lost super-stream consumer is reported at ERROR")
+	assert.Equal(t, names.superStream, log.fieldAt("error", msgConsumerLost, logFieldStream))
+	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgPublisherLost) },
+		lostStreamWait, itPollInterval, "the lost super-stream publisher is reported at ERROR")
+	assert.Equal(t, names.superStream, log.fieldAt("error", msgPublisherLost, logFieldStream))
+
+	m.StopConsumers()
+
+	assert.Equal(t, []string{names.superStream}, log.warnStreams(msgLostFlushSkipped),
+		"the lost consumer's flush is skipped")
+	assertNoCloseFailure(t, log)
+}
+
+// assertNoCloseFailure checks the stop reported neither handle's close as failed.
+func assertNoCloseFailure(t *testing.T, log *recordingLogger) {
+	t.Helper()
+	warns := log.warnMessages()
+	assert.NotContains(t, warns, msgCloseConsumerFailed, "a lost consumer's close is not a failure")
+	assert.NotContains(t, warns, msgClosePublisherFailed, "a lost publisher's close is not a failure")
 }
