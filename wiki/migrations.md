@@ -13710,10 +13710,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `server.NewWithOptions` without `config.Validate`; every signature and config key.
 - gate: match = a detect hit. no-match = every idle you set is positive and no hand-built
   config leaves it zero.
-- before: config validation never read the idle key. An explicit zero reached
-  `http.Server.IdleTimeout` as 0, and net/http ran `ReadTimeout` (15s by default) in its place; a
-  hand-built config that left idle zero ran at `ReadTimeout` too; a negative disabled the idle
-  timeout entirely. None of them logged or failed.
+- before: config validation never read the idle key, so C59.12's zero-timeout gate never covered
+  idle. An explicit zero reached `http.Server.IdleTimeout` as 0, and net/http ran `ReadTimeout`
+  (15s by default) in its place; a hand-built config that left idle zero ran at `ReadTimeout` too;
+  a negative disabled the idle timeout entirely. None of them logged or failed.
 - after: a zero, unset or explicit, becomes `DefaultServerIdleTimeout` (75s) on both listeners,
   whichever door built the config. A negative fails `config.Load` and `config.Validate`, and so
   app construction, with a `*config.ConfigError` whose `Field` is `server.timeout.idle` and whose
