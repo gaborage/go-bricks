@@ -2543,7 +2543,7 @@ new surface, and every existing peer keeps the strict kid refusal.
 
 ### [ADR-152: An Over-Limit Request Body Answers 413 `BODY_TOO_LARGE` at Any Length](adr_152_body_too_large_one_code.md)
 
-**Date:** 2026-10-25 | **Status:** Accepted | **Breaking:** a 413 carries `BODY_TOO_LARGE` instead of `INTERNAL_ERROR`, and an oversize chunked body to a typed route answers 413 instead of 400
+**Date:** 2026-10-25 | **Status:** Accepted | **Breaking:** a 413 carries `BODY_TOO_LARGE` instead of `INTERNAL_ERROR`, and an oversize chunked body to a typed `application/json` route answers 413 instead of 400
 
 An over-limit body answered 413 `INTERNAL_ERROR` when its `Content-Length` was known
 (`statusToErrorCode` had no 413 arm) and 400 `BAD_REQUEST` when it was not (every bind failure

@@ -60,8 +60,8 @@ No exported symbol is added. The framework raises this error, and handlers never
 ## Consequences
 
 - **Breaking on the wire.** A client, test or alert that matched `INTERNAL_ERROR` on a 413,
-  or a 400 on an oversize chunked upload to a typed route, now sees 413 `BODY_TOO_LARGE`.
-  No signature or configuration key moves.
+  or a 400 on an oversize chunked upload to a typed `application/json` route, now sees 413
+  `BODY_TOO_LARGE`. No signature or configuration key moves.
 - Two splits remain, both by length. A JOSE route answers `BODY_TOO_LARGE` in the standard
   envelope to a known-length overflow and `JOSE_BODY_TOO_LARGE` in the minimal envelope to an
   unknown-length one. A raw-response route answers a known-length overflow in the standard
