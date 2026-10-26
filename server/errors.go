@@ -1,11 +1,14 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"runtime"
 	"sync/atomic"
+
+	"github.com/labstack/echo/v5"
 )
 
 // stackFrameDepth caps the number of stack frames captured per error.
@@ -307,6 +310,19 @@ func NewBusinessLogicError(code, message string) *BusinessLogicError {
 	return &BusinessLogicError{
 		BaseAPIError: NewBaseAPIError(code, message, http.StatusUnprocessableEntity),
 	}
+}
+
+// isRequestTooLarge reports whether err is a request-body size-cap overflow rather than a
+// genuine read or decode failure. Two caps can fire: the JOSE read cap (*http.MaxBytesError)
+// and the server.bodylimit middleware, whose reader errors mid-stream on an unknown-length
+// body. The status arm classifies any 413-coded echo error, so a replacement middleware is
+// read the same way; the sentinel arm sees the overflow even when echo wraps it in a 400
+// HTTPError, as v5.4.0's bind path did.
+func isRequestTooLarge(err error) bool {
+	var tooLarge *http.MaxBytesError
+	return errors.As(err, &tooLarge) ||
+		echo.StatusCode(err) == http.StatusRequestEntityTooLarge ||
+		errors.Is(err, echo.ErrStatusRequestEntityTooLarge)
 }
 
 // Compile-time interface assertions

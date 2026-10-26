@@ -513,6 +513,7 @@ func TestStatusToErrorCode(t *testing.T) {
 		{http.StatusForbidden, "FORBIDDEN"},
 		{http.StatusNotFound, "NOT_FOUND"},
 		{http.StatusConflict, "CONFLICT"},
+		{http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE"},
 		{http.StatusTooManyRequests, "TOO_MANY_REQUESTS"},
 		{http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE"},
 		{http.StatusInternalServerError, "INTERNAL_ERROR"},
@@ -524,6 +525,30 @@ func TestStatusToErrorCode(t *testing.T) {
 		t.Run(fmt.Sprintf("status_%d", tt.status), func(t *testing.T) {
 			code := statusToErrorCode(tt.status)
 			assert.Equal(t, tt.expectedCode, code)
+		})
+	}
+}
+
+func TestIsRequestTooLarge(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "max_bytes_error", err: fmt.Errorf("read: %w", &http.MaxBytesError{Limit: 1}), want: true},
+		{name: "echo_sentinel", err: echo.ErrStatusRequestEntityTooLarge, want: true},
+		{name: "sentinel_behind_bind_error", err: newJSONBindError(echo.ErrStatusRequestEntityTooLarge, false), want: true},
+		// echo v5.4.0's bind shape: the overflow wrapped in a 400 HTTPError, whose status hides it.
+		{name: "sentinel_wrapped_in_400_http_error", err: echo.ErrBadRequest.Wrap(echo.ErrStatusRequestEntityTooLarge), want: true},
+		{name: "status_coded_413_http_error", err: echo.NewHTTPError(http.StatusRequestEntityTooLarge, "too big"), want: true},
+		{name: "plain_400", err: echo.ErrBadRequest, want: false},
+		{name: "unrelated_error", err: errors.New("boom"), want: false},
+		{name: "nil_error", err: nil, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isRequestTooLarge(tt.err))
 		})
 	}
 }

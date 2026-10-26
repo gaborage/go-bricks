@@ -662,6 +662,48 @@ func TestJOSEInboundPreTrustFailures(t *testing.T) {
 	}
 }
 
+// TestJOSEBodyLimitOverflowSplitsByLength pins the split wiki/jose.md documents, through the
+// real echo chain: server.bodylimit rejects a known-length overflow before the JOSE path runs,
+// in the standard envelope, while an unknown-length overflow reaches the JOSE read and gets
+// the minimal pre-trust envelope.
+func TestJOSEBodyLimitOverflowSplitsByLength(t *testing.T) {
+	f := newJOSEFixture(t)
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e, h := newJOSETestServerWithConfig(t, f, cfg, func(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+		t.Error("handler must not be invoked on an over-limit body")
+		return joseTokenResp{}, nil
+	})
+	e.HTTPErrorHandler = func(c *echo.Context, err error) { customErrorHandler(c, err, cfg, &testLogger{}) }
+	e.Use(middleware.BodyLimit(1024))
+	e.POST("/tokens", h)
+
+	post := func(body io.Reader) (rec *httptest.ResponseRecorder, envelope map[string]any) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", body)
+		req.Header.Set(echo.HeaderContentType, jose.ContentType)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+		return rec, envelope
+	}
+	oversize := bytes.Repeat([]byte("a"), 4096)
+
+	t.Run("known_length_standard_envelope", func(t *testing.T) {
+		rec, envelope := post(bytes.NewReader(oversize))
+
+		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+		errBody, ok := envelope["error"].(map[string]any)
+		require.True(t, ok, "a known-length overflow carries the standard envelope")
+		assert.Equal(t, "BODY_TOO_LARGE", errBody["code"])
+	})
+
+	t.Run("unknown_length_minimal_envelope", func(t *testing.T) {
+		rec, envelope := post(io.NopCloser(bytes.NewReader(oversize))) // NopCloser ⇒ ContentLength -1
+
+		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+		assert.Equal(t, "JOSE_BODY_TOO_LARGE", envelope["code"])
+	})
+}
+
 const (
 	joseFailureCounter = "jose.failures.total"
 	joseRouteAttr      = "http.route"

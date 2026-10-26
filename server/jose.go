@@ -355,17 +355,6 @@ func joseDecodeRequestInner(c *echo.Context, p *jose.Policy, r jose.KeyResolver)
 	return nil
 }
 
-// isRequestTooLarge distinguishes a size-cap read failure from a genuine transport error.
-// Two caps can fire: maxJOSERequestBytes above (*http.MaxBytesError) and a body-limit
-// middleware, whose reader errors mid-stream once server.bodylimit is passed on an
-// unknown-length body. Both mean 413, not a bad request. The second arm matches on the
-// status echo reports rather than on echo's ErrStatusRequestEntityTooLarge sentinel, so a
-// replacement middleware returning any 413-coded echo error is classified the same way.
-func isRequestTooLarge(err error) bool {
-	var tooLarge *http.MaxBytesError
-	return errors.As(err, &tooLarge) || echo.StatusCode(err) == http.StatusRequestEntityTooLarge
-}
-
 // joseHandleResponseWithObs wraps joseHandleResponse with an OTEL span and records
 // failures via obs. The wrapped form is the only call site exercised at runtime —
 // joseHandleResponse remains a separate package-private method (without the trailing

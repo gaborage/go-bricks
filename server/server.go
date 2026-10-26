@@ -960,6 +960,8 @@ func statusToErrorCode(status int) string {
 		return errCodeMethodNotAllowed
 	case http.StatusConflict:
 		return errCodeConflict
+	case http.StatusRequestEntityTooLarge:
+		return errCodeBodyTooLarge
 	case http.StatusTooManyRequests:
 		return errCodeTooManyRequests
 	case http.StatusServiceUnavailable:
