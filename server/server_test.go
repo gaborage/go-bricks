@@ -874,14 +874,14 @@ func TestStatusToErrorCodeMappings(t *testing.T) {
 	}
 }
 
-type bodyLimitReq struct {
-	Data string `json:"data"`
-}
-
 // TestServerBodyLimitOverflowAnswersBodyTooLarge drives the real middleware chain and error
 // handler: an over-limit body answers 413 BODY_TOO_LARGE whether or not its length is known,
 // on a typed route and on a raw Handler route alike.
 func TestServerBodyLimitOverflowAnswersBodyTooLarge(t *testing.T) {
+	type bodyLimitReq struct {
+		Data string `json:"data"`
+	}
+
 	cfg := newTestConfig("", "", "")
 	cfg.Server.BodyLimit = 1024
 	srv := New(cfg, &testLogger{})
@@ -897,48 +897,51 @@ func TestServerBodyLimitOverflowAnswersBodyTooLarge(t *testing.T) {
 		return c.JSON(http.StatusOK, v)
 	})
 
-	oversize := `{"data":"` + strings.Repeat("x", 4096) + `"}`
-	known := func(s string) io.Reader { return strings.NewReader(s) }
+	post := func(path string, body io.Reader) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, body)
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		srv.echo.ServeHTTP(rec, req)
+		return rec
+	}
 	unknown := func(s string) io.Reader { return io.NopCloser(strings.NewReader(s)) } // NopCloser ⇒ ContentLength -1
 
+	type answer struct {
+		status  int
+		code    string
+		message string
+	}
+	tooLarge := answer{status: http.StatusRequestEntityTooLarge, code: "BODY_TOO_LARGE", message: "Request Entity Too Large"}
+	oversize := `{"data":"` + strings.Repeat("x", 4096) + `"}`
+
 	tests := []struct {
-		name        string
-		path        string
-		body        io.Reader
-		wantStatus  int
-		wantCode    string
-		wantMessage string
+		name string
+		path string
+		body io.Reader
+		want answer
 	}{
-		{name: "typed_known_length", path: "/typed", body: known(oversize), wantStatus: http.StatusRequestEntityTooLarge, wantCode: "BODY_TOO_LARGE", wantMessage: "Request Entity Too Large"},
-		{name: "typed_unknown_length", path: "/typed", body: unknown(oversize), wantStatus: http.StatusRequestEntityTooLarge, wantCode: "BODY_TOO_LARGE", wantMessage: "Request Entity Too Large"},
-		{name: "raw_known_length", path: "/raw", body: known(oversize), wantStatus: http.StatusRequestEntityTooLarge, wantCode: "BODY_TOO_LARGE", wantMessage: "Request Entity Too Large"},
-		{name: "raw_unknown_length", path: "/raw", body: unknown(oversize), wantStatus: http.StatusRequestEntityTooLarge, wantCode: "BODY_TOO_LARGE", wantMessage: "Request Entity Too Large"},
-		{name: "typed_malformed_under_limit", path: "/typed", body: unknown(`{"data":`), wantStatus: http.StatusBadRequest, wantCode: "BAD_REQUEST", wantMessage: "Invalid request data"},
+		{name: "typed_known_length", path: "/typed", body: strings.NewReader(oversize), want: tooLarge},
+		{name: "typed_unknown_length", path: "/typed", body: unknown(oversize), want: tooLarge},
+		{name: "raw_known_length", path: "/raw", body: strings.NewReader(oversize), want: tooLarge},
+		{name: "raw_unknown_length", path: "/raw", body: unknown(oversize), want: tooLarge},
+		{name: "typed_malformed_under_limit", path: "/typed", body: unknown(`{"data":`), want: answer{status: http.StatusBadRequest, code: "BAD_REQUEST", message: "Invalid request data"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, tt.path, tt.body)
-			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-			rec := httptest.NewRecorder()
-			srv.echo.ServeHTTP(rec, req)
+			rec := post(tt.path, tt.body)
 
-			assert.Equal(t, tt.wantStatus, rec.Code)
+			assert.Equal(t, tt.want.status, rec.Code)
 			var resp APIResponse
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 			require.NotNil(t, resp.Error)
-			assert.Equal(t, tt.wantCode, resp.Error.Code)
-			assert.Equal(t, tt.wantMessage, resp.Error.Message)
+			assert.Equal(t, tt.want.code, resp.Error.Code)
+			assert.Equal(t, tt.want.message, resp.Error.Message)
 		})
 	}
 
 	t.Run("typed_under_limit_unknown_length", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/typed", unknown(`{"data":"ok"}`))
-		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-		rec := httptest.NewRecorder()
-		srv.echo.ServeHTTP(rec, req)
-
-		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, http.StatusOK, post("/typed", unknown(`{"data":"ok"}`)).Code)
 	})
 }
 

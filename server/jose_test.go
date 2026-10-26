@@ -662,11 +662,11 @@ func TestJOSEInboundPreTrustFailures(t *testing.T) {
 	}
 }
 
-// TestJOSEBodyLimitOverflowSplitsByLength pins the split wiki/jose.md documents, through the
-// real echo chain: server.bodylimit rejects a known-length overflow before the JOSE path runs,
-// in the standard envelope, while an unknown-length overflow reaches the JOSE read and gets
-// the minimal pre-trust envelope.
-func TestJOSEBodyLimitOverflowSplitsByLength(t *testing.T) {
+// TestJOSEBodyLimitKnownLengthOverflowUsesStandardEnvelope pins the other half of the split
+// wiki/jose.md documents (the unknown-length half is body_limit_middleware_overflow above):
+// server.bodylimit rejects a known-length overflow before the JOSE path runs, so it reaches
+// customErrorHandler and carries the standard envelope.
+func TestJOSEBodyLimitKnownLengthOverflowUsesStandardEnvelope(t *testing.T) {
 	f := newJOSEFixture(t)
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	e, h := newJOSETestServerWithConfig(t, f, cfg, func(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
@@ -677,31 +677,16 @@ func TestJOSEBodyLimitOverflowSplitsByLength(t *testing.T) {
 	e.Use(middleware.BodyLimit(1024))
 	e.POST("/tokens", h)
 
-	post := func(body io.Reader) (rec *httptest.ResponseRecorder, envelope map[string]any) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", body)
-		req.Header.Set(echo.HeaderContentType, jose.ContentType)
-		rec = httptest.NewRecorder()
-		e.ServeHTTP(rec, req)
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
-		return rec, envelope
-	}
-	oversize := bytes.Repeat([]byte("a"), 4096)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader(bytes.Repeat([]byte("a"), 4096)))
+	req.Header.Set(echo.HeaderContentType, jose.ContentType)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
 
-	t.Run("known_length_standard_envelope", func(t *testing.T) {
-		rec, envelope := post(bytes.NewReader(oversize))
-
-		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
-		errBody, ok := envelope["error"].(map[string]any)
-		require.True(t, ok, "a known-length overflow carries the standard envelope")
-		assert.Equal(t, "BODY_TOO_LARGE", errBody["code"])
-	})
-
-	t.Run("unknown_length_minimal_envelope", func(t *testing.T) {
-		rec, envelope := post(io.NopCloser(bytes.NewReader(oversize))) // NopCloser ⇒ ContentLength -1
-
-		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
-		assert.Equal(t, "JOSE_BODY_TOO_LARGE", envelope["code"])
-	})
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error, "a known-length overflow carries the standard envelope")
+	assert.Equal(t, "BODY_TOO_LARGE", resp.Error.Code)
 }
 
 const (
