@@ -183,6 +183,20 @@ func TestRouteNodeKey(t *testing.T) {
 		{name: "param_vs_static", a: "/users/:id", b: "/users/me"},
 		{name: "escaped_colon_vs_param", a: `/a\:b`, b: "/a:c"},
 		{name: "wildcard_vs_param", a: "/f/*", b: "/f/:id"},
+		{name: "inline_verb_vs_param", a: `/x/:id\:cancel`, b: "/x/:id"},
+		{name: "inline_verbs_differ", a: `/x/:id\:cancel`, b: `/x/:id\:approve`},
+		{name: "inline_verb_param_name_differs", a: `/x/:id\:cancel`, b: `/x/:uid\:cancel`, sameNode: true},
+		{name: "inline_verb_empty_param_name", a: `/x/:\:c`, b: `/x/:id\:c`, sameNode: true},
+		{name: "inline_verb_one_char_param_name", a: `/x/:a\:cancel`, b: "/x/:a"},
+		{name: "escaped_colon_before_param_colon", a: `/x/:a\:b:c`, b: "/x/:z", sameNode: true},
+		{name: "escaped_colon_then_param_colon", a: `/x/:a\::c`, b: "/x/:z", sameNode: true},
+		{name: "escaped_colon_before_star", a: `/x/:a\:c*`, b: "/x/:z", sameNode: true},
+		{name: "colon_in_param_name_before_escaped_colon", a: `/x/:a:b\:c`, b: "/x/:z", sameNode: true},
+		{name: "star_in_param_name_before_escaped_colon", a: `/x/:a*\:c`, b: "/x/:z", sameNode: true},
+		{name: "backslash_in_param_name", a: `/x/:a\bc`, b: "/x/:z", sameNode: true},
+		{name: "trailing_backslash_in_param_name", a: `/x/:a\`, b: "/x/:z", sameNode: true},
+		{name: "inline_verb_holding_escaped_colon", a: `/x/:id\:a\:b`, b: "/x/:id"},
+		{name: "inline_verb_before_next_segment", a: `/x/:id\:c/:y`, b: "/x/:z/:y"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -197,9 +211,8 @@ func TestRouteNodeKey(t *testing.T) {
 }
 
 // TestRouteNodeKeyAgreesWithEchoRouter checks routeNodeKey against the echo router itself, so an
-// echo bump that changes node identity fails here: both templates go on a fresh engine
-// (overwrite on, as echo.New sets it), and a request for the first reaching the second handler
-// means echo kept one node.
+// echo bump that changes node identity fails here: a request for the first template reaching
+// the second handler means echo kept one node.
 func TestRouteNodeKeyAgreesWithEchoRouter(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -214,25 +227,66 @@ func TestRouteNodeKeyAgreesWithEchoRouter(t *testing.T) {
 		{name: "star_inside_param_name", first: "/x/:a*/y", second: "/x/:b/y", request: "/x/q/y"},
 		{name: "missing_leading_slash", first: "users", second: "/users", request: "/users"},
 		{name: "empty_is_root", first: "", second: "/", request: "/"},
-		// Only this order: echo v5.3.1 panics routing /a:b when the escaped template registers first.
 		{name: "param_vs_escaped_colon", first: "/a:c", second: `/a\:b`, request: "/aq"},
+		{name: "escaped_colon_vs_param", first: `/a\:b`, second: "/a:c", request: "/a:b"},
+		{name: "param_vs_inline_verb", first: "/x/:id", second: `/x/:id\:cancel`, request: "/x/42"},
+		{name: "inline_verb_vs_param", first: `/x/:id\:cancel`, second: "/x/:id", request: "/x/42:cancel"},
+		{name: "inline_verbs_differ", first: `/x/:id\:cancel`, second: `/x/:id\:approve`, request: "/x/42:cancel"},
+		{name: "inline_verb_param_name_differs", first: `/x/:id\:cancel`, second: `/x/:uid\:cancel`, request: "/x/42:cancel"},
+		{name: "inline_verb_one_char_param_name", first: "/x/:a", second: `/x/:a\:cancel`, request: "/x/q"},
+		{name: "escaped_colon_then_param_colon", first: "/x/:z", second: `/x/:a\::c`, request: "/x/q"},
+		{name: "escaped_colon_before_star", first: "/x/:z", second: `/x/:a\:c*`, request: "/x/q"},
+		{name: "colon_in_param_name_before_escaped_colon", first: "/x/:z", second: `/x/:a:b\:c`, request: "/x/q"},
+		{name: "star_in_param_name_before_escaped_colon", first: "/x/:z", second: `/x/:a*\:c`, request: "/x/q"},
+		{name: "backslash_in_param_name", first: "/x/:z", second: `/x/:a\bc`, request: "/x/q"},
+		{name: "trailing_backslash_in_param_name", first: "/x/:z", second: `/x/:a\`, request: "/x/q"},
+		{name: "inline_verb_holding_escaped_colon", first: `/x/:id\:a\:b`, second: "/x/:id", request: "/x/42:a:b"},
+		{name: "inline_verb_before_next_segment", first: `/x/:id\:c/:y`, second: "/x/:z/:y", request: "/x/42:c/7"},
 		{name: "param_vs_static", first: "/users/:id", second: "/users/me", request: "/users/42"},
 		{name: "param_vs_deeper_path", first: "/users/:id", second: "/users/:id/x", request: "/users/42"},
 		{name: "wildcard_vs_param", first: "/f/*", second: "/f/:id", request: "/f/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
-			e.GET(tt.first, func(c *echo.Context) error { return c.String(http.StatusOK, "first") })
-			e.GET(tt.second, func(c *echo.Context) error { return c.String(http.StatusOK, "second") })
-
-			rec := serveEngine(e, http.MethodGet, tt.request)
-			require.Equal(t, http.StatusOK, rec.Code, "the request must reach one of the two handlers")
-			echoSameNode := rec.Body.String() == "second"
+			echoSameNode := echoReachesLast(t, tt.first, tt.second, tt.request)
 			keySameNode := routeNodeKey(http.MethodGet, tt.first) == routeNodeKey(http.MethodGet, tt.second)
 			assert.Equal(t, echoSameNode, keySameNode, "routeNodeKey disagrees with echo's router")
 		})
 	}
+}
+
+// TestRouteNodeKeyAgreesWithEchoSweep compares routeNodeKey with echo's router over every pair of
+// one- and two-token templates. Echo shares a node when, in both registration orders, a request
+// built from the template registered first reaches the handler registered last.
+func TestRouteNodeKeyAgreesWithEchoSweep(t *testing.T) {
+	tokens := []string{":id", ":", `\:`, `\:cancel`, "a", "/", "*"}
+	templates := make([]string, 0, len(tokens)*(len(tokens)+1))
+	for _, a := range tokens {
+		templates = append(templates, "/"+a)
+		for _, b := range tokens {
+			templates = append(templates, "/"+a+b)
+		}
+	}
+	reverse := func(p string) string { return echo.RouteInfo{Path: p}.Reverse("v1", "v2") }
+	for i, a := range templates {
+		for _, b := range templates[i+1:] {
+			echoSameNode := echoReachesLast(t, a, b, reverse(a)) && echoReachesLast(t, b, a, reverse(b))
+			keySameNode := routeNodeKey(http.MethodGet, a) == routeNodeKey(http.MethodGet, b)
+			assert.Equal(t, echoSameNode, keySameNode, "routeNodeKey disagrees with echo's router on %q and %q", a, b)
+		}
+	}
+}
+
+// echoReachesLast registers first then second on a fresh engine (overwrite on, as echo.New sets
+// it) and reports whether request reaches second's handler.
+func echoReachesLast(t *testing.T, first, second, request string) bool {
+	t.Helper()
+	e := echo.New()
+	e.GET(first, func(c *echo.Context) error { return c.String(http.StatusOK, "first") })
+	e.GET(second, func(c *echo.Context) error { return c.String(http.StatusOK, "second") })
+	rec := serveEngine(e, http.MethodGet, request)
+	require.Equal(t, http.StatusOK, rec.Code, "%s must reach a handler with %q then %q registered", request, first, second)
+	return rec.Body.String() == "second"
 }
 
 // TestRouteConflictParamNameDiffers pins the case echo's router treats as one route while the
@@ -268,13 +322,51 @@ func TestRouteConflictParamNameDiffers(t *testing.T) {
 func TestRouteConflictDistinctNodesCoexist(t *testing.T) {
 	srv := newTestServer("", "", "")
 	mg := srv.ModuleGroup()
-	for _, p := range []string{"/users/:id", "/users/:id/x", "/users/me"} {
+	// The escaped template registers before the param one on purpose.
+	for _, p := range []string{"/users/:id", "/users/:id/x", "/users/me", `/a\:b`, "/a:c"} {
 		body := p
 		mg.Add(http.MethodGet, p, func(c HandlerContext) error { return c.String(http.StatusOK, body) })
 	}
 	assert.Empty(t, srv.RouteConflicts())
-	for req, want := range map[string]string{"/users/42": "/users/:id", "/users/42/x": "/users/:id/x", "/users/me": "/users/me"} {
+	for req, want := range map[string]string{
+		"/users/42": "/users/:id", "/users/42/x": "/users/:id/x", "/users/me": "/users/me", "/aq": "/a:c", "/a:b": `/a\:b`,
+	} {
 		assert.Equal(t, want, serveEngine(srv.echo, http.MethodGet, req).Body.String(), req)
+	}
+}
+
+// TestRouteConflictInlineVerbBesideParam pins echo v5.4.1's inline verb: /:id\:cancel is its own
+// node beside /:id, so the pair boots and a request ending in :cancel reaches the verb handler.
+func TestRouteConflictInlineVerbBesideParam(t *testing.T) {
+	srv := newTestServer("", "", "")
+	mg := srv.ModuleGroup()
+	mg.Add(http.MethodGet, "/v1/orders/:id", func(c HandlerContext) error {
+		return c.String(http.StatusOK, "get:"+c.Param("id"))
+	})
+	mg.Add(http.MethodGet, `/v1/orders/:id\:cancel`, func(c HandlerContext) error {
+		return c.String(http.StatusOK, "cancel:"+c.Param("id"))
+	})
+	require.Empty(t, srv.RouteConflicts())
+
+	errCh := startServer(srv)
+	t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+	waitForServerReady(t, srv)
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "inline_verb", path: "/v1/orders/42:cancel", want: "cancel:42"},
+		{name: "param", path: "/v1/orders/42", want: "get:42"},
+		{name: "percent_encoded_colon_is_param_value", path: "/v1/orders/42%3Acancel", want: "get:42%3Acancel"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := doRequest(t.Context(), noKeepAliveClient(), http.MethodGet, "http://"+srv.BoundAddr().String()+tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusOK, resp.code)
+			assert.Equal(t, tt.want, resp.body)
+		})
 	}
 }
 

@@ -4,6 +4,17 @@
 **Date:** 2026-09-27
 **Issue:** #1818
 
+> **Amended (2026-10-25, #2195):** echo v5.4.1 reads a `\:` directly after a parameter name as
+> the start of an inline verb when the name holds no `:` or `*` and the rest of the segment holds
+> no `*` and no unescaped `:`: `/x/:id\:cancel` is the parameter `id` followed by the static
+> `:cancel`, matches only `<value>:cancel`, and sits on its own node beside `/x/:id`.
+> `routeNodeKey` follows that registration-time rule (echo's `walkRoutePath` and `isInlineVerb`,
+> not the request-time `inlineVerbSplit`): the name ends at that `\:` and the key keeps
+> `\:<verb>`, so the pair boots instead of failing `Start` with a false `*DuplicateRouteError`.
+> Every other `\:` keys as the Decision below says. `TestRouteNodeKeyAgreesWithEchoSweep` checks
+> the key against echo's router over every pair of one- and two-token templates. Migration is
+> [migrations.md](migrations.md) `[C73.10]`.
+
 ## Context
 
 Echo v5's router refuses a second registration of one method + path only when
