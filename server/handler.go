@@ -537,6 +537,12 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 
 	// Bind request data from multiple sources (JSON, query, params, headers).
 	if bindErr := rp.binder.bindRequestPlanned(c, requestPtr, rp.plan, rp.fieldPathIsSchema); bindErr != nil {
+		// An unknown-length body crossing server.bodylimit fails here, mid-read: answer the
+		// 413 a known-length one gets from customErrorHandler, not a bad request.
+		if isRequestTooLarge(bindErr) {
+			const status = http.StatusRequestEntityTooLarge
+			return empty, NewBaseAPIError(statusToErrorCode(status), http.StatusText(status), status)
+		}
 		// SECURITY: bindErr renders request input; only the summary may be echoed.
 		return empty, NewBadRequestError("Invalid request data").WithDetails("error", bindSummary(bindErr))
 	}

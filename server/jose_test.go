@@ -662,6 +662,33 @@ func TestJOSEInboundPreTrustFailures(t *testing.T) {
 	}
 }
 
+// TestJOSEBodyLimitKnownLengthOverflowUsesStandardEnvelope pins the other half of the split
+// wiki/jose.md documents (the unknown-length half is body_limit_middleware_overflow above):
+// server.bodylimit rejects a known-length overflow before the JOSE path runs, so it reaches
+// customErrorHandler and carries the standard envelope.
+func TestJOSEBodyLimitKnownLengthOverflowUsesStandardEnvelope(t *testing.T) {
+	f := newJOSEFixture(t)
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e, h := newJOSETestServerWithConfig(t, f, cfg, func(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+		t.Error("handler must not be invoked on an over-limit body")
+		return joseTokenResp{}, nil
+	})
+	e.HTTPErrorHandler = func(c *echo.Context, err error) { customErrorHandler(c, err, cfg, &testLogger{}) }
+	e.Use(middleware.BodyLimit(1024))
+	e.POST("/tokens", h)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader(bytes.Repeat([]byte("a"), 4096)))
+	req.Header.Set(echo.HeaderContentType, jose.ContentType)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error, "a known-length overflow carries the standard envelope")
+	assert.Equal(t, "BODY_TOO_LARGE", resp.Error.Code)
+}
+
 const (
 	joseFailureCounter = "jose.failures.total"
 	joseRouteAttr      = "http.route"

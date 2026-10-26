@@ -2541,6 +2541,24 @@ new surface, and every existing peer keeps the strict kid refusal.
 
 ---
 
+### [ADR-152: An Over-Limit Request Body Answers 413 `BODY_TOO_LARGE` at Any Length](adr_152_body_too_large_one_code.md)
+
+**Date:** 2026-10-25 | **Status:** Accepted | **Breaking:** a 413 carries `BODY_TOO_LARGE` instead of `INTERNAL_ERROR`, and an oversize chunked body to a typed `application/json` route answers 413 instead of 400
+
+An over-limit body answered 413 `INTERNAL_ERROR` when its `Content-Length` was known
+(`statusToErrorCode` had no 413 arm) and 400 `BAD_REQUEST` when it was not (every bind failure
+mapped to 400). Every over-limit rejection outside the JOSE pre-trust read now answers 413
+`BODY_TOO_LARGE`, "Request Entity Too Large", with no details in production. `isRequestTooLarge` moves to
+`server/errors.go` as the one predicate the JOSE read and the bind path share, and also matches
+echo's 413 sentinel wrapped in a 400 `HTTPError`. An unknown-length JOSE overflow keeps
+`JOSE_BODY_TOO_LARGE`; raw-response routes keep a length-dependent envelope shape (#2177). See
+[migrations.md](migrations.md) `[C73.6]`.
+
+**Key Benefits:** one code for one condition, whatever the client sent, with no new exported
+surface.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3350,7 +3368,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-150) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-152) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

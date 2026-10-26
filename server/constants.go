@@ -13,6 +13,7 @@ const (
 	errCodeForbidden          = "FORBIDDEN"
 	errCodeNotFound           = "NOT_FOUND"
 	errCodeConflict           = "CONFLICT"
+	errCodeBodyTooLarge       = "BODY_TOO_LARGE"
 	errCodeTooManyRequests    = "TOO_MANY_REQUESTS"
 	errCodeServiceUnavailable = "SERVICE_UNAVAILABLE"
 	errCodeMethodNotAllowed   = "METHOD_NOT_ALLOWED"
