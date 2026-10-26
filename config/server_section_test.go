@@ -298,6 +298,20 @@ func TestValidateServerFailures(t *testing.T) {
 			expectedError: "server.bodylimit",
 		},
 		{
+			name: "negative_idle",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Idle:       -1 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
+			},
+			expectedError: "server.timeout.idle",
+		},
+		{
 			name: "tls_enabled_missing_key",
 			cfg: ServerConfig{
 				Port:    8080,
