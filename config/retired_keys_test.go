@@ -104,3 +104,15 @@ func TestLoadFromMapLeavesRetiredKeysToValidate(t *testing.T) {
 	require.ErrorAs(t, Validate(cfg), &cfgErr)
 	assert.Equal(t, retiredVirtualHost, cfgErr.Field)
 }
+
+// TestLoadRetiredKeyEvictedByAnOverlayIsNotRefused pins that delivery means the final tree
+// (ADR-104): a base layer's retired key that an overlay's null evicted leaves nothing to
+// refuse.
+func TestLoadRetiredKeyEvictedByAnOverlayIsNotRefused(t *testing.T) {
+	_, err := loadConfigFixture(t, map[string]string{
+		testConfigFileYAML: retiredKeysHeader + "messaging:\n  broker:\n    virtualhost: orders\n",
+		"config.prod.yaml": "messaging:\n  broker:\n",
+	}, map[string]string{"APP_ENV": "prod"})
+
+	require.NoError(t, err)
+}

@@ -109,6 +109,16 @@ const presenceIdentityDatabaseYAML = "app:\n  name: a\n  version: v1\nserver:\n 
 	"database:\n  type: postgresql\n  host: db.internal\n  port: 5432\n" +
 	"  database: appdb\n  username: app\n  password: s3cretpw\n"
 
+// TestPresenceAtOrUnderFoldsTheKey pins that deliveredAtOrUnder folds the key it is asked
+// about as well as the delivered paths, as mapstructure matches both sides.
+func TestPresenceAtOrUnderFoldsTheKey(t *testing.T) {
+	cfg, err := LoadFromMap(map[string]any{"messaging.headers.x-app": "svc"})
+	require.NoError(t, err)
+
+	assert.True(t, cfg.deliveredAtOrUnder("Messaging.Headers"))
+	assert.False(t, cfg.deliveredAtOrUnder("Messaging.Broker"))
+}
+
 // TestPresenceEvictedWhenOverlayNullsTheSection pins the eviction half of Presence
 // (ADR-104): recording is append-only, but delivery is only meaningful for a key the FINAL
 // tree still holds. An overlay that writes a bare `database:` replaces the merged section
