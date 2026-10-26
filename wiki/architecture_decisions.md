@@ -2548,7 +2548,7 @@ new surface, and every existing peer keeps the strict kid refusal.
 An over-limit body answered 413 `INTERNAL_ERROR` when its `Content-Length` was known
 (`statusToErrorCode` had no 413 arm) and 400 `BAD_REQUEST` when it was not (every bind failure
 mapped to 400). Every over-limit rejection outside the JOSE pre-trust read now answers 413
-`BODY_TOO_LARGE`, "Request Entity Too Large", with no details. `isRequestTooLarge` moves to
+`BODY_TOO_LARGE`, "Request Entity Too Large", with no details in production. `isRequestTooLarge` moves to
 `server/errors.go` as the one predicate the JOSE read and the bind path share, and also matches
 echo's 413 sentinel wrapped in a 400 `HTTPError`. An unknown-length JOSE overflow keeps
 `JOSE_BODY_TOO_LARGE`; raw-response routes keep a length-dependent envelope shape (#2177). See

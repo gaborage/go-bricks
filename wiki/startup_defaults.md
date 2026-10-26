@@ -40,7 +40,7 @@ app:
 
 ## Server Request Body Limit
 
-`server.bodylimit` (int64 bytes; env `SERVER_BODYLIMIT`) caps the accepted HTTP request body size, rejecting an over-cap request with `413 Request Entity Too Large` and error code `BODY_TOO_LARGE` (no details). A request with a known `Content-Length` above the cap is rejected up front, before the handler runs; a chunked / unknown-length body is bounded by a limited reader instead, so the 413 surfaces when the read crosses the cap while the handler consumes the body. Both answer the same code on typed routes and on raw `server.Handler` routes that return their read error; JOSE routes answer an unknown-length overflow with `JOSE_BODY_TOO_LARGE` instead ([jose.md](jose.md)), and raw-response routes answer it in their flat shape (ADR-152):
+`server.bodylimit` (int64 bytes; env `SERVER_BODYLIMIT`) caps the accepted HTTP request body size, rejecting an over-cap request with `413 Request Entity Too Large` and error code `BODY_TOO_LARGE` (no details in production). A request with a known `Content-Length` above the cap is rejected up front, before the handler runs; a chunked / unknown-length body is bounded by a limited reader instead, so the 413 surfaces when the read crosses the cap while the handler consumes the body. Both answer the same code on typed routes and on raw `server.Handler` routes that return their read error; JOSE routes answer an unknown-length overflow with `JOSE_BODY_TOO_LARGE` instead ([jose.md](jose.md)), and raw-response routes answer it in their flat shape (ADR-152):
 
 | Setting | Default | Purpose |
 | --- | --- | --- |

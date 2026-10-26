@@ -26,7 +26,7 @@ No test or ADR pinned any of these answers.
 ## Decision
 
 **Every over-limit rejection outside the JOSE pre-trust read answers 413, code
-`BODY_TOO_LARGE`, message "Request Entity Too Large", with no details.**
+`BODY_TOO_LARGE`, message "Request Entity Too Large", with no details in production.**
 
 - `statusToErrorCode` gains a 413 arm. Every error reaching `customErrorHandler` with a 413
   status now carries `BODY_TOO_LARGE`: the known-length rejection on every route, a raw
