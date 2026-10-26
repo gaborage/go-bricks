@@ -1665,6 +1665,7 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 		"scheduler.timeout.shutdown":  "30s",
 		"scheduler.timeout.slowjob":   "25s",
 		"server.bodylimit":            int64(10485760),
+		"server.timeout.idle":         "1m15s",
 		"source.type":                 SourceTypeStatic,
 	}
 
@@ -1700,6 +1701,7 @@ func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
 	assert.Equal(t, 30*time.Second, cfg.Scheduler.Timeout.Shutdown)
 	assert.Equal(t, 25*time.Second, cfg.Scheduler.Timeout.SlowJob)
 	assert.Equal(t, int64(10*1024*1024), cfg.Server.BodyLimit)
+	assert.Equal(t, 75*time.Second, cfg.Server.Timeout.Idle)
 }
 
 // TestDerivedDefaultKeysAreDisjointFromKoanfOnly enforces one mechanism PER KEY: a key

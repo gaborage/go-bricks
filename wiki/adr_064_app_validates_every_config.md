@@ -25,6 +25,11 @@ hidden "already validated" state is introduced.
 
 ## Consequences
 
+> **Amended (2026-10-25, #2144):** "zero server timeouts" below holds for the
+> four keys `server.timeout.{read,write,middleware,shutdown}`. A zero
+> `server.timeout.idle` takes the 75s default and a negative one fails
+> ([ADR-154](adr_154_server_idle_timeout_zero_takes_default.md)).
+
 - **Breaking:** a hand-built config that `config.Validate` rejects — missing
   `app.name`/`app.version`, zero server timeouts, an invalid vendor — now
   fails at construction instead of booting on whatever the mirrors papered

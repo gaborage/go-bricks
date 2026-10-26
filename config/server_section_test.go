@@ -298,6 +298,20 @@ func TestValidateServerFailures(t *testing.T) {
 			expectedError: "server.bodylimit",
 		},
 		{
+			name: "negative_idle",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Idle:       -1 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
+			},
+			expectedError: "server.timeout.idle",
+		},
+		{
 			name: "tls_enabled_missing_key",
 			cfg: ServerConfig{
 				Port:    8080,
@@ -496,6 +510,54 @@ func TestNormalizeServerBodyLimit(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, DefaultBodyLimitBytes, cfg.Server.BodyLimit)
 	})
+}
+
+// TestNormalizeServerIdleTimeout pins server.timeout.idle on every configuration door
+// (ADR-154): a zero takes DefaultServerIdleTimeout whether it was unset or explicit, a
+// negative fails naming the key instead of disabling the idle timeout, and a positive
+// value survives.
+func TestNormalizeServerIdleTimeout(t *testing.T) {
+	handBuilt := func(idle time.Duration) func(*testing.T) (*Config, error) {
+		return func(*testing.T) (*Config, error) {
+			cfg := createValidFullConfig()
+			cfg.Server.Timeout.Idle = idle
+			return cfg, Validate(cfg)
+		}
+	}
+	loaded := func(files, env map[string]string) func(*testing.T) (*Config, error) {
+		return func(t *testing.T) (*Config, error) { return loadConfigFixture(t, files, env) }
+	}
+
+	tests := []struct {
+		name    string
+		load    func(*testing.T) (*Config, error)
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "hand_built_zero_fills_default", load: handBuilt(0), want: DefaultServerIdleTimeout},
+		{name: "hand_built_negative_is_rejected", load: handBuilt(-5 * time.Second), wantErr: true},
+		{name: "hand_built_explicit_value_survives", load: handBuilt(30 * time.Second), want: 30 * time.Second},
+		{name: "env_zero_fills_default", load: loaded(nil, map[string]string{"SERVER_TIMEOUT_IDLE": "0s"}), want: DefaultServerIdleTimeout},
+		{name: "env_negative_fails_load", load: loaded(nil, map[string]string{"SERVER_TIMEOUT_IDLE": "-1s"}), wantErr: true},
+		{name: "nested_yaml_negative_fails_load", load: loaded(map[string]string{testConfigFileYAML: "server:\n  timeout:\n    idle: -1s\n"}, nil), wantErr: true},
+		{name: "absent_key_fills_default", load: loaded(nil, nil), want: DefaultServerIdleTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := tt.load(t)
+
+			if tt.wantErr {
+				var cfgErr *ConfigError
+				require.ErrorAs(t, err, &cfgErr)
+				assert.Equal(t, "server.timeout.idle", cfgErr.Field)
+				assert.Equal(t, errMustBeNonNegative, cfgErr.Message)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.Server.Timeout.Idle)
+		})
+	}
 }
 
 // probeServerConfig returns a ServerConfig that satisfies every other checkServer

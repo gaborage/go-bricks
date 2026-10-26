@@ -427,8 +427,9 @@ func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
 // derivedDefaultKeys is the allowlist of koanf keys whose default VALUE is rendered by the
 // normalize phase instead of being written again below. One mechanism per key, deliberately
 // not one mechanism for all of them (design doc decision 17): keys that must FAIL on zero —
-// app.name, server.port, server.timeout.*, log.level — stay hand-written in koanfOnlyDefaults,
-// because deriving them would silently turn a required key into a defaulted one.
+// app.name, server.port, server.timeout.{read,write,middleware,shutdown}, log.level — stay
+// hand-written in koanfOnlyDefaults, because deriving them would silently turn a required key
+// into a defaulted one.
 //
 // Full derivation is barred beyond that: see derivationDeniedPrefixes for the key spaces
 // that must never be derived and why.
@@ -454,6 +455,7 @@ var derivedDefaultKeys = []string{
 	"scheduler.timeout.shutdown",
 	"scheduler.timeout.slowjob",
 	"server.bodylimit",
+	"server.timeout.idle",
 	"source.type",
 }
 
@@ -651,13 +653,12 @@ func koanfOnlyDefaults() map[string]any {
 		"app.rate.ippreguard.enabled":   true,
 		"app.rate.ippreguard.threshold": 2000,
 
-		// Server defaults. The bodylimit key is DERIVED — see derivedDefaultKeys — so
-		// only the keys normalize does not own are written here.
+		// Server defaults. The bodylimit and timeout.idle keys are DERIVED — see
+		// derivedDefaultKeys — so only the keys normalize does not own are written here.
 		"server.host":               "0.0.0.0",
 		fieldServerPort:             8080,
 		"server.timeout.read":       DefaultServerReadTimeout.String(),
 		"server.timeout.write":      DefaultServerWriteTimeout.String(),
-		"server.timeout.idle":       DefaultServerIdleTimeout.String(),
 		"server.timeout.middleware": "5s",
 		"server.timeout.shutdown":   DefaultServerShutdownTimeout.String(),
 		"server.path.base":          "",
