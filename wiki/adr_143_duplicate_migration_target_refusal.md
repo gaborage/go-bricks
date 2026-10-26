@@ -58,13 +58,23 @@ Flyway's own lock.
   in one database with distinct migrator roles and an empty schema migrate
   different schemas and keep passing.
 - **Oracle:** `(host, port, PDB, effective username)`. Oracle's schema is the
-  connecting user.
+  connecting user. This arm is an exception to the conf-owned boundary below:
+  [ADR-085](adr_085_framework_owned_flyway_url.md) leaves every Oracle target
+  conf-owned (no framework-built `-url`, no schema flags), so Flyway sees the
+  tenant only through the `ORACLE_*` variables the run exports to the shared
+  `-configFiles` conf. It stays keyed because every keyed field is one of those
+  exported variables, read by one conf for every tenant of the run: tenants that
+  share a key share whatever target the conf resolves, so the key can only err
+  toward admission, and it still catches the collisions where the conf
+  interpolates `${env.ORACLE_*}`. The key sees only `database.*`, never a target
+  part the conf or an inherited `FLYWAY_*` variable sets (see Blind spots).
 - **Not keyed, runs as today:** a PostgreSQL `connectionstring`, a block with no
   host or database, and a vendor that resolves to neither (a type-less tenant
   under a runner with an empty `Database.Type`). This is the conf-owned boundary
   [ADR-085](adr_085_framework_owned_flyway_url.md) and
-  `ErrIncompleteMigrationTarget` already draw. With `MigratorIdentity` set, the
-  last of these is refused instead with `ErrMigratorIdentityUndeliverable`
+  `ErrIncompleteMigrationTarget` already draw, less the Oracle exception above.
+  With `MigratorIdentity` set, the last of these is refused instead with
+  `ErrMigratorIdentityUndeliverable`
   ([ADR-149](adr_149_typeless_tenant_runs_with_runner_vendor.md)).
 
 The key reuses the run path's own vendor resolution (`dbVendor`) and
@@ -107,6 +117,16 @@ names this.
 - an Oracle port of 0 against 1521;
 - Oracle's case-insensitive unquoted user and service names (`app` against
   `APP`), compared byte-exact;
+- an Oracle tenant whose target the conf or the environment sets: the key reads
+  only `database.*`, so tenants keyed apart are admitted onto one target when
+  the conf fixes `flyway.url`, or interpolates only some of
+  `${env.ORACLE_HOST}`, `${env.ORACLE_PORT}` and `${env.ORACLE_PDB}`; when it
+  fixes `flyway.user`; when a parent `FLYWAY_URL` or `FLYWAY_USER`, inherited by
+  every run, overrides the conf, even a fully interpolated one; or when the conf
+  or the environment sets `flyway.schemas` or `flyway.defaultSchema`
+  (`FLYWAY_SCHEMAS`, `FLYWAY_DEFAULT_SCHEMA`), which then picks the schema that
+  holds the history table (`defaultSchema`, else the first of `schemas`) in place
+  of the connecting user's;
 - distinct PostgreSQL roles with no role-level `search_path`: all resolve to
   `public` through `$user, public`, but are keyed apart by username;
 - a type-less tenant under a typed runner, until
@@ -114,8 +134,7 @@ names this.
   builder switched on the tenant's own `type`, so none of its connection variables
   were delivered and its key could differ from Flyway's target. The tenant now
   runs typed with the runner's vendor and is keyed as a typed tenant is (on
-  Oracle, the key is the target only where the conf's `flyway.url`
-  interpolates `${env.ORACLE_*}`);
+  Oracle, the conf-set target bullet above applies);
 - two separate `MigrateAll` calls, which rely on Flyway's own lock;
 - in the shared-migrator empty-schema case, the first tenant's own false green.
 
@@ -135,9 +154,11 @@ interceptor).
 - **Resolving DNS.** Rejected: a network lookup in a pre-flight, with answers
   that differ by resolver and over time, for a check that must be
   deterministic.
-- **Keying conf-owned targets, or treating an empty schema as `public`.**
-  Rejected: the framework never reads `flyway.conf` or the role's `search_path`,
-  so any such key would be a guess.
+- **Keying PostgreSQL conf-owned targets, or treating an empty schema as
+  `public`.** Rejected: the framework never reads `flyway.conf` or the role's
+  `search_path`, so any such key would be a guess. The Oracle arm is not such a
+  guess: it is built only from the variables the run exports, so it can miss a
+  shared target but never invent one.
 - **Inferring the check from `MigratorIdentity` or `WithSharedMigrator()`.**
   Rejected: an explicit-schema collision needs neither.
 

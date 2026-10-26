@@ -200,11 +200,14 @@ type MigratorIdentity struct {
 // case-insensitive unquoted user and service names (app against APP), distinct PostgreSQL roles
 // with no role-level search_path (all land in public), and two separate MigrateAll calls, which
 // rely on Flyway's own lock. A type-less tenant runs typed with the runner's vendor (ADR-149) and
-// is keyed as a typed tenant is; an Oracle conf whose flyway.url does not interpolate the ORACLE_*
-// variables can still put tenants keyed apart on one target. With MigratorIdentity set, a
-// tenant whose vendor resolves to neither is refused with ErrMigratorIdentityUndeliverable
-// instead of running unkeyed. A tenant that claims a target and then fails its own run still
-// holds the claim.
+// is keyed as a typed tenant is. An Oracle target is conf-owned: the key reads only database.*,
+// so tenants keyed apart still share one target when the conf fixes flyway.url or flyway.user or
+// interpolates only some ORACLE_* variables, when an inherited FLYWAY_URL or FLYWAY_USER overrides
+// the conf, or when the conf or the environment sets flyway.schemas or flyway.defaultSchema;
+// tenants that share a key always share the target, so the miss only admits. With
+// MigratorIdentity set, a tenant whose vendor resolves to neither is refused with
+// ErrMigratorIdentityUndeliverable instead of running unkeyed. A tenant that claims a target and
+// then fails its own run still holds the claim.
 var ErrDuplicateMigrationTarget = errors.New("migration: tenant resolves to a migration target another tenant of this run claimed")
 
 // ErrMigratorIdentityUndeliverable is a tenant's TenantResult.Err when MigrateAllOptions.MigratorIdentity
