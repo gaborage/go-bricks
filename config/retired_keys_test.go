@@ -83,14 +83,27 @@ func TestLoadReportsEveryRetiredKeyWithoutTheBrokerURL(t *testing.T) {
 		[]string{retiredVirtualHost, retiredHeaders, retiredRoutingExchange, retiredRoutingKey})
 }
 
-// TestLoadWithoutRetiredKeysUnchanged pins the other half: a config that names none of the
-// keys, its vhost in the URL path, loads as it did.
+// TestLoadWithoutRetiredKeysUnchanged pins the other half: a config that delivers none of the
+// keys loads as it did. An empty headers map delivers no key and configures nothing, so it is
+// accepted, as ADR-078 accepts an empty sequence (ADR-153).
 func TestLoadWithoutRetiredKeysUnchanged(t *testing.T) {
 	const url = testAMQPHost + "orders"
-	cfg, err := loadDeliveredEmptyFixture(t, retiredKeysHeader+"messaging:\n  broker:\n    url: "+url+"\n", nil)
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "vhost_in_url_path", yaml: "messaging:\n  broker:\n    url: " + url + "\n"},
+		{name: "empty_headers_map_configures_nothing", yaml: "messaging:\n  broker:\n    url: " + url + "\n  headers: {}\n"},
+	}
 
-	require.NoError(t, err)
-	assert.Equal(t, url, cfg.Messaging.Broker.URL)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadDeliveredEmptyFixture(t, retiredKeysHeader+tt.yaml, nil)
+
+			require.NoError(t, err)
+			assert.Equal(t, url, cfg.Messaging.Broker.URL)
+		})
+	}
 }
 
 // TestLoadFromMapLeavesRetiredKeysToValidate pins where the refusal lives: LoadFromMap skips

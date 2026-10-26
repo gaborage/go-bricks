@@ -13641,8 +13641,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     keeping only hits whose key path is `messaging.broker.virtualhost`, `messaging.routing.exchange`,
     `messaging.routing.key` or `messaging.headers` (or any key under it), whether nested, flat-dotted
     or mixed, in any letter case. A `headers:` block under `observability` does not count.
-  - Env: `git grep -nE 'MESSAGING_(BROKER_VIRTUALHOST|ROUTING_EXCHANGE|ROUTING_KEY|HEADERS)'`, plus
-    `grep -rnE 'MESSAGING_(BROKER_VIRTUALHOST|ROUTING_|HEADERS)' k8s/ deploy/ .env* 2>/dev/null` for
+  - Env: `git grep -niE 'MESSAGING_(BROKER_VIRTUALHOST|ROUTING_EXCHANGE|ROUTING_KEY|HEADERS)'`, plus
+    `grep -rniE 'MESSAGING_(BROKER_VIRTUALHOST|ROUTING_|HEADERS)' k8s/ deploy/ .env* 2>/dev/null` for
     env files and manifests outside the tracked files.
   - Any verbatim copy of v0.72.0's `config.example.yaml`, `.env.example` or the `llms.txt` broker
     block matches. That includes a variable a template rendered EMPTY

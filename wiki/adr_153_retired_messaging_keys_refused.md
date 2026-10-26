@@ -26,9 +26,12 @@ published message, and neither exists. Fixes #2193.
    before any shaping. It reads the ADR-104 presence record. A key counts when YAML, an overlay or
    the environment delivered it, whatever the value: an empty string and a YAML null are template
    copies too. `messaging.headers` is a map, so any key delivered under it counts, and so does a
-   null written at `messaging.headers` itself, because that records the section path. Paths are
-   matched case-insensitively, as mapstructure matched the fields. The messaging normalizer could
-   not make this check: it sees the decoded struct, not the tree.
+   null written at `messaging.headers` itself, because that records the section path. An empty map
+   (`headers: {}`) delivers no key and is accepted, as ADR-078 accepts an empty sequence: it
+   configures nothing, and the shipped template always carried keys under `headers:`, so a verbatim
+   copy is still refused. Paths are matched case-insensitively, as mapstructure matched the
+   fields. The messaging normalizer could not make this check: it sees the decoded struct, not the
+   tree.
 3. **The error names the key and the fix, never a value.** Each delivered key gets one
    `*ConfigError` (`config_invalid`), and the errors are joined in key order, so a verbatim
    template copy is fixed in one pass. `Field` is the key. `Action` says to remove it, names its

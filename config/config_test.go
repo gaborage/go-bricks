@@ -1166,9 +1166,10 @@ func clearEnvironmentVariables() {
 		os.Unsetenv(envVar)
 	}
 
-	// Remove any custom configuration vars introduced during tests
+	// Remove any custom configuration vars introduced during tests, and every retired
+	// messaging.headers variable (ADR-153): the bare one and any key under it.
 	for _, envEntry := range os.Environ() {
-		if !strings.HasPrefix(envEntry, "CUSTOM_") {
+		if !strings.HasPrefix(envEntry, "CUSTOM_") && !strings.HasPrefix(envEntry, "MESSAGING_HEADERS") {
 			continue
 		}
 		if idx := strings.IndexRune(envEntry, '='); idx > 0 {
