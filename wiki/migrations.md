@@ -13347,7 +13347,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: gaborage/go-bricks#2128 · `database/internal/builder/postgres.go` (`buildPostgreSQLUpsert`,
   `escapeQuestionMarks`)
 
-## E73 · v0.72.0 → v0.73.0 — the server's keep-alive idle timeout defaults to 75s, above an ALB's 60s + `LogEvent.Err` drops a typed-nil pointer error instead of rendering it + a type-less migration tenant runs with the runner's vendor, and `MigrateAll` refuses a migrator identity it cannot deliver + each App binds its own seal runtime + every redial after an AMQP connection close is paced + a stream reattach waits at most 8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects
+## E73 · v0.72.0 → v0.73.0 — the server's keep-alive idle timeout defaults to 75s, above an ALB's 60s + `LogEvent.Err` drops a typed-nil pointer error instead of rendering it + a type-less migration tenant runs with the runner's vendor, and `MigrateAll` refuses a migrator identity it cannot deliver + each App binds its own seal runtime + every redial after an AMQP connection close is paced + each stream reattach wait is 3–8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects
 
 - gist: a tenant whose database section sets no `type` got the runner's vendor for its URL, schema
   args, conf and duplicate-target key, but no `DB_*`/`ORACLE_*` variable, so Flyway connected with
@@ -13586,7 +13586,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `server/constants.go` (`DefaultIdleTimeout`) ·
   [troubleshooting.md](troubleshooting.md#alb-httpcode_elb_502_count-with-zero-target-5xx)
 
-### [C73.11] a stream reattach waits at most 8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects · silent-behavior · when: match
+### [C73.11] each stream reattach wait is 3–8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects · silent-behavior · when: match
 
 - detect: `git grep -n 'go-bricks/messaging/streams"' -- '*.go'` — only a service that imports the
   native streams lane runs the stream client.
