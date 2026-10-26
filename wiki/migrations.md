@@ -13617,7 +13617,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   **Supersedes**, for a service crossing both E69 and E73, two parts of `[C69.6]`, which stays as
   released: its scope sentence that a super-stream partition lost while another is queued for
   retry "can pass straight back to reconnecting and open, and go unreported" now holds only for a
-  super-stream publisher, and its verify step's "3–11s each" is 3–8s each. **Unchanged**: the
+  super-stream publisher, and its verify step's "3–11s each" is 3–8s each, while its "a single
+  lost partition can go unreported" likewise holds only for a publisher. **Unchanged**: the
   supervisor's 5s pass, its one ERROR per lost consumer or publisher, the unhealthy non-critical
   `streams` component and the skipped shutdown offset flush (C69.6); a super-stream publisher's
   retries; plaintext `rabbitmq-stream://` URIs.
@@ -13633,13 +13634,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   trust store and names the dialed host, and fails startup with an x509 error otherwise.
 - apply: nothing fails to compile. Re-time alerts, runbooks and test timeouts that expect a lost
   stream within C69.6's 3–11s: counting the 5s pass, a plain stream's consumer is now reported
-  within 13s and its producer within 21s. Before switching `messaging.streams.uri` to
+  within about 13s and its producer within about 21s. The supervisor skips a pass while another
+  manager operation holds its lock, so keep a margin. Before switching `messaging.streams.uri` to
   `rabbitmq-stream+tls://`, confirm the broker's certificate chains to the process trust store
   and names every host the service dials, the address resolver's host included.
 - verify: delete a declared plain stream on a test broker under a running service: the consumer's
-  ERROR follows within 3–13s and the producer's within 6–21s. Against a broker whose certificate
-  does not chain to the trust store, a `rabbitmq-stream+tls://` URI fails startup with an x509
-  error instead of the 10s timeout.
+  ERROR follows in about 3–13s and the producer's in about 6–21s, one 5s pass later if the
+  manager was busy. Against a broker whose certificate does not chain to the trust store, a
+  `rabbitmq-stream+tls://` URI fails startup with an x509 error instead of the 10s timeout.
 - ref: gaborage/go-bricks#2140 · [ADR-123](adr_123_streams_lost_topology_supervisor.md) ·
   `messaging/streams/environment.go` (`reconnectBackOff`) · `messaging/streams/supervisor.go`
   (`superviseInterval`) · [streams.md](streams.md#a-lost-stream)
