@@ -154,15 +154,13 @@ func routeNodeKey(method, path string) string {
 	return b.String()
 }
 
-// paramNameEnd returns where the parameter name starting at path[start] ends, as echo's
-// walkRoutePath reads it: at the segment's '/' or the path's end, or at a "\:" that opens an
-// inline verb (/:id\:cancel), which needs a name holding no ':' or '*' and a static rest of
-// segment (isInlineVerb). The key then keeps "\:<verb>", since echo matches only <value>:<verb>.
+// paramNameEnd returns where echo's walkRoutePath ends the parameter name at path[start]: the
+// segment end, or a "\:" opening an inline verb (/:id\:cancel) after a name holding no ':' or '*'.
 func paramNameEnd(path string, start int) int {
 	plainName := true
 	i := start
 	for ; i < len(path) && path[i] != '/'; i++ {
-		if path[i] == '\\' && plainName && strings.HasPrefix(path[i+1:], ":") && isInlineVerb(path[i+2:]) {
+		if path[i] == '\\' && plainName && i+1 < len(path) && path[i+1] == ':' && isInlineVerb(path[i+2:]) {
 			return i
 		}
 		if path[i] == ':' || path[i] == '*' {
