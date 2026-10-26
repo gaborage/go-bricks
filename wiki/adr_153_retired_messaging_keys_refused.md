@@ -79,5 +79,5 @@ is the same case: config an operator wrote that the framework would otherwise dr
 
 - `config/retired_keys.go`: `validateNoRetiredKeys`, `retiredKeys`
 - `config/phases.go`: `normalize`
-- `config/source.go`: `Config.delivered` (the ADR-104 presence door)
+- `config/source.go`: `Config.deliveredAtOrUnder`, beside `Config.delivered` (the ADR-104 presence door)
 - See [migrations.md](migrations.md) `[C73.7]`.
