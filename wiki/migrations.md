@@ -13714,9 +13714,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   idle. An explicit zero reached `http.Server.IdleTimeout` as 0, and net/http ran `ReadTimeout`
   (15s by default) in its place; a hand-built config that left idle zero ran at `ReadTimeout` too;
   a negative disabled the idle timeout entirely. None of them logged or failed.
-- after: a zero, unset or explicit, becomes `DefaultServerIdleTimeout` (75s) on both listeners,
-  whichever door built the config. A negative fails `config.Load` and `config.Validate`, and so
-  app construction, with a `*config.ConfigError` whose `Field` is `server.timeout.idle` and whose
+- after: an unset value or an explicit zero becomes `DefaultServerIdleTimeout` (75s) on both
+  listeners, whichever door built the config, and a positive value is unchanged. A negative fails
+  `config.Load` and `config.Validate`, and so app construction, with a `*config.ConfigError` whose `Field` is `server.timeout.idle` and whose
   `Message` is `must be non-negative`.
 - apply: replace a negative with an explicit positive value; to approximate "no idle timeout",
   set a large one. For an explicit zero, or a hand-built literal that leaves idle zero, accept

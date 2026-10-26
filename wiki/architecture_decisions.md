@@ -2593,8 +2593,9 @@ non-negative`. The key moves to `derivedDefaultKeys`, so the koanf default is re
 fill. Read, write, middleware and shutdown stay fail-on-zero; the `server` package does not change.
 See [migrations.md](migrations.md) `[C73.8]`.
 
-**Key Benefits:** one constant decides the idle default on every door, and a value net/http
-would reinterpret is filled or refused at startup.
+**Key Benefits:** one constant decides the idle default on every config door listed above, and a
+value net/http would reinterpret is filled or refused at startup. A config handed to `server.New`
+or `server.NewWithOptions` without `config.Validate` is outside this rule.
 
 ---
 
