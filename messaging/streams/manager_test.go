@@ -1623,6 +1623,101 @@ func TestManagerStopIsSilentOnACleanPublisherClose(t *testing.T) {
 	assert.Empty(t, log.warnMessages(), "a clean publisher close reports nothing to the operator")
 }
 
+// consumerAndPublisherOnFake starts a supervised manager with a consumer and a
+// publisher on one plain stream, the pair a deleted stream closes together.
+func consumerAndPublisherOnFake(t *testing.T) (*Manager, *recordingLogger, *fakeHandle, *fakeProducer) {
+	t.Helper()
+	m, log := supervisedManager()
+	fake := newFakeEnvironment()
+	decls := oneConsumerDecls()
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	startOnFake(t, m, fake, decls)
+	consumer, producer := fake.consumer(testStream), fake.producer(testStream)
+	require.NotNil(t, consumer)
+	require.NotNil(t, producer)
+	return m, log, consumer.events, producer
+}
+
+// TestManagerStopIsSilentOnALostHandleAlreadyClosed is #2151: the client closed
+// both handles when their stream went, so the stop's own close is answered with
+// stream.AlreadyClosed, and the supervisor's ERROR is already the one report.
+func TestManagerStopIsSilentOnALostHandleAlreadyClosed(t *testing.T) {
+	m, log, consumer, producer := consumerAndPublisherOnFake(t)
+	consumer.setStatus(ha.StatusClosed)
+	producer.setStatus(ha.StatusClosed)
+	m.superviseOnce(context.Background())
+	require.ElementsMatch(t, []string{msgConsumerLost, msgPublisherLost}, log.messagesAt("error"),
+		"the premise: the supervisor marked both handles lost")
+	consumer.closeErr = stream.AlreadyClosed
+	producer.closeErr = stream.AlreadyClosed
+
+	m.StopConsumers()
+
+	assert.Equal(t, []string{msgLostFlushSkipped}, log.warnMessages(),
+		"the flush skip is the only WARN: a lost handle that was already closed closed cleanly")
+	assert.Contains(t, consumer.recorded(), "close", "a lost consumer is still closed")
+	assert.True(t, producer.isClosed(), "a lost publisher is still closed")
+}
+
+// TestManagerStopIsSilentOnAHandleItsFinalPassFindsLost covers the handles no
+// earlier pass saw closed: the stop's own final pass marks them lost before it
+// closes them, so their AlreadyClosed is as clean as one an earlier pass found.
+func TestManagerStopIsSilentOnAHandleItsFinalPassFindsLost(t *testing.T) {
+	m, log, consumer, producer := consumerAndPublisherOnFake(t)
+	consumer.setStatus(ha.StatusClosed)
+	producer.setStatus(ha.StatusClosed)
+	consumer.closeErr = stream.AlreadyClosed
+	producer.closeErr = stream.AlreadyClosed
+
+	m.StopConsumers()
+
+	assert.ElementsMatch(t, []string{msgConsumerLost, msgPublisherLost}, log.messagesAt("error"),
+		"the stop's final pass reported both losses")
+	assert.Equal(t, []string{msgLostFlushSkipped}, log.warnMessages())
+}
+
+// TestManagerStopStillReportsAFailedCloseOfALostHandle keeps the guard narrow: a
+// lost handle whose close fails for any reason other than AlreadyClosed is still
+// reported, with that error attached.
+func TestManagerStopStillReportsAFailedCloseOfALostHandle(t *testing.T) {
+	m, log, consumer, producer := consumerAndPublisherOnFake(t)
+	consumer.setStatus(ha.StatusClosed)
+	producer.setStatus(ha.StatusClosed)
+	m.superviseOnce(context.Background())
+	consumer.closeErr = errors.New("consumer close failed")
+	producer.closeErr = errors.New("producer close failed")
+
+	m.StopConsumers()
+
+	assert.Equal(t, []string{msgLostFlushSkipped, msgCloseConsumerFailed, msgClosePublisherFailed}, log.warnMessages())
+	consumerErr, ok := log.warnError(msgCloseConsumerFailed)
+	require.True(t, ok)
+	assert.Equal(t, "consumer close failed", consumerErr)
+	publisherErr, ok := log.warnError(msgClosePublisherFailed)
+	require.True(t, ok)
+	assert.Equal(t, "producer close failed", publisherErr)
+}
+
+// TestManagerStopReportsAnAlreadyClosedHandleThatWasNotLost pins the other
+// operand: AlreadyClosed from a handle no supervisor pass found lost is not a
+// loss already reported, so the stop still says so.
+func TestManagerStopReportsAnAlreadyClosedHandleThatWasNotLost(t *testing.T) {
+	m, log, consumer, producer := consumerAndPublisherOnFake(t)
+	consumer.closeErr = stream.AlreadyClosed
+	producer.closeErr = stream.AlreadyClosed
+
+	m.StopConsumers()
+
+	assert.Empty(t, log.messagesAt("error"), "the premise: neither handle was lost")
+	assert.Equal(t, []string{msgCloseConsumerFailed, msgClosePublisherFailed}, log.warnMessages())
+	consumerErr, ok := log.warnError(msgCloseConsumerFailed)
+	require.True(t, ok)
+	assert.Equal(t, stream.AlreadyClosed.Error(), consumerErr)
+	publisherErr, ok := log.warnError(msgClosePublisherFailed)
+	require.True(t, ok)
+	assert.Equal(t, stream.AlreadyClosed.Error(), publisherErr)
+}
+
 // TestManagerReadyRequiresEveryPublisher extends readiness to the publish side: a
 // producer that is reconnecting cannot publish, so the probe must say so.
 func TestManagerReadyRequiresEveryPublisher(t *testing.T) {
