@@ -128,11 +128,12 @@ func (t *routeConflictTracker) record(method, fullPath string, reg RouteRegistra
 }
 
 // routeNodeKey identifies the echo router node method+path lands on, mirroring
-// DefaultRouter.Add (echo v5): a missing leading slash is added; an unescaped ':' starts a
-// parameter anywhere in the path and its name runs to the next '/', so the name is dropped;
-// an escaped "\:" is a literal colon and is kept verbatim; the first '*' outside a parameter
-// name is the wildcard and ends the path, so anything after it is dropped. Two templates
-// with the same key are one route to echo, which would overwrite the first handler.
+// DefaultRouter.Add (echo v5.4.1): a missing leading slash is added; an unescaped ':' starts a
+// parameter anywhere in the path and its name runs to the next '/', so the name is dropped,
+// unless an inline verb ends it first (paramNameEnd); an escaped "\:" is a literal colon and
+// is kept verbatim; the first '*' outside a parameter name is the wildcard and ends the path,
+// so anything after it is dropped. Two templates with the same key are one route to echo,
+// which would overwrite the first handler.
 func routeNodeKey(method, path string) string {
 	path = pathutil.EnsureLeadingSlash(path)
 	var b strings.Builder
@@ -142,9 +143,7 @@ func routeNodeKey(method, path string) string {
 		switch c := path[i]; {
 		case c == ':' && path[i-1] != '\\': // EnsureLeadingSlash made path[0] '/', so i >= 1 here
 			b.WriteByte(':')
-			for i+1 < len(path) && path[i+1] != '/' {
-				i++
-			}
+			i = paramNameEnd(path, i+1) - 1
 		case c == '*':
 			b.WriteByte('*')
 			return b.String()
@@ -153,6 +152,35 @@ func routeNodeKey(method, path string) string {
 		}
 	}
 	return b.String()
+}
+
+// paramNameEnd returns where the parameter name starting at path[start] ends, as echo's
+// walkRoutePath reads it: at the segment's '/' or the path's end, or at a "\:" that opens an
+// inline verb (/:id\:cancel), which needs a name holding no ':' or '*' and a static rest of
+// segment (isInlineVerb). The key then keeps "\:<verb>", since echo matches only <value>:<verb>.
+func paramNameEnd(path string, start int) int {
+	plainName := true
+	i := start
+	for ; i < len(path) && path[i] != '/'; i++ {
+		if path[i] == '\\' && plainName && strings.HasPrefix(path[i+1:], ":") && isInlineVerb(path[i+2:]) {
+			return i
+		}
+		if path[i] == ':' || path[i] == '*' {
+			plainName = false
+		}
+	}
+	return i
+}
+
+// isInlineVerb reports whether rest, the route text after an escaped colon, stays static to
+// the end of its segment: no '*' and no unescaped ':'.
+func isInlineVerb(rest string) bool {
+	for i := 0; i < len(rest) && rest[i] != '/'; i++ {
+		if rest[i] == '*' || rest[i] == ':' && (i == 0 || rest[i-1] != '\\') {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *routeConflictTracker) snapshot() []RouteConflict {
