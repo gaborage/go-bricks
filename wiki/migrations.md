@@ -13637,7 +13637,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 ### [C73.7] the four messaging keys nothing ever read fail startup instead of being ignored · breaking · when: match
 
 - detect: the four keys in every form koanf reads, in every file a deployment loads.
-  - YAML: `git grep -niE '(^[[:space:]]*|\.)(virtualhost|routing|headers)[[:space:]]*:' -- '*.yaml' '*.yml'`,
+  - YAML: `git grep -niE '(^[[:space:]]*|\.)(virtualhost[[:space:]]*:|routing[[:space:]]*[.:]|headers[[:space:]]*[.:])' -- '*.yaml' '*.yml'`,
     keeping only hits whose key path is `messaging.broker.virtualhost`, `messaging.routing.exchange`,
     `messaging.routing.key` or `messaging.headers` (or any key under it), whether nested, flat-dotted
     or mixed, in any letter case. A `headers:` block under `observability` does not count.
