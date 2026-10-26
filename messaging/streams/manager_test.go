@@ -1638,15 +1638,6 @@ func consumerAndPublisherOnFake(t *testing.T) (*Manager, *recordingLogger, *fake
 	return m, log, consumer.events, producer
 }
 
-// assertCloseWarnings counts each close-failure WARN separately, so a fix applied
-// to only one of the two shutdown loops fails here.
-func assertCloseWarnings(t *testing.T, log *recordingLogger, consumerWarns, publisherWarns int) {
-	t.Helper()
-	warns := log.warnMessages()
-	assert.Equal(t, consumerWarns, countOf(warns, msgCloseConsumerFailed), "consumer close-failure WARNs")
-	assert.Equal(t, publisherWarns, countOf(warns, msgClosePublisherFailed), "publisher close-failure WARNs")
-}
-
 // TestManagerStopIsSilentOnALostHandleAlreadyClosed is #2151: the client closed
 // both handles when their stream went, so the stop's own close is answered with
 // stream.AlreadyClosed, and the supervisor's ERROR is already the one report.
@@ -1664,7 +1655,6 @@ func TestManagerStopIsSilentOnALostHandleAlreadyClosed(t *testing.T) {
 
 	assert.Equal(t, []string{msgLostFlushSkipped}, log.warnMessages(),
 		"the flush skip is the only WARN: a lost handle that was already closed closed cleanly")
-	assertCloseWarnings(t, log, 0, 0)
 	assert.Contains(t, consumer.recorded(), "close", "a lost consumer is still closed")
 	assert.True(t, producer.isClosed(), "a lost publisher is still closed")
 }
@@ -1684,7 +1674,6 @@ func TestManagerStopIsSilentOnAHandleItsFinalPassFindsLost(t *testing.T) {
 	assert.ElementsMatch(t, []string{msgConsumerLost, msgPublisherLost}, log.messagesAt("error"),
 		"the stop's final pass reported both losses")
 	assert.Equal(t, []string{msgLostFlushSkipped}, log.warnMessages())
-	assertCloseWarnings(t, log, 0, 0)
 }
 
 // TestManagerStopStillReportsAFailedCloseOfALostHandle keeps the guard narrow: a
@@ -1701,7 +1690,6 @@ func TestManagerStopStillReportsAFailedCloseOfALostHandle(t *testing.T) {
 	m.StopConsumers()
 
 	assert.Equal(t, []string{msgLostFlushSkipped, msgCloseConsumerFailed, msgClosePublisherFailed}, log.warnMessages())
-	assertCloseWarnings(t, log, 1, 1)
 	consumerErr, ok := log.warnError(msgCloseConsumerFailed)
 	require.True(t, ok)
 	assert.Equal(t, "consumer close failed", consumerErr)
@@ -1722,7 +1710,6 @@ func TestManagerStopReportsAnAlreadyClosedHandleThatWasNotLost(t *testing.T) {
 
 	assert.Empty(t, log.messagesAt("error"), "the premise: neither handle was lost")
 	assert.Equal(t, []string{msgCloseConsumerFailed, msgClosePublisherFailed}, log.warnMessages())
-	assertCloseWarnings(t, log, 1, 1)
 	consumerErr, ok := log.warnError(msgCloseConsumerFailed)
 	require.True(t, ok)
 	assert.Equal(t, stream.AlreadyClosed.Error(), consumerErr)

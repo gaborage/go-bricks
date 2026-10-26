@@ -285,10 +285,9 @@ func publishAcrossPartitions(t *testing.T, opts *ManagerOptions, names itNames, 
 	return perPartition
 }
 
-// startSuperStreamManager starts one super-stream consumer group member.
-func startSuperStreamManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) *Manager {
-	t.Helper()
-
+// superStreamGroupDecls declares the test super stream and one consumer group
+// member on it.
+func superStreamGroupDecls(names itNames, handler Handler) *Declarations {
 	decls := NewDeclarations()
 	decls.DeclareSuperStream(names.superStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
 	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
@@ -297,6 +296,14 @@ func startSuperStreamManager(t *testing.T, opts *ManagerOptions, names itNames, 
 		Start:       OffsetFirst(),
 		Handler:     handler,
 	})
+	return decls
+}
+
+// startSuperStreamManager starts one super-stream consumer group member.
+func startSuperStreamManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) *Manager {
+	t.Helper()
+
+	decls := superStreamGroupDecls(names, handler)
 
 	m := NewManager(*opts)
 	require.NoError(t, m.Start(context.Background(), decls))
@@ -856,14 +863,7 @@ func TestStreamsSuperStreamPublisherPartitionsIntegration(t *testing.T) {
 
 	received := &recorder{failAt: -1}
 
-	decls := NewDeclarations()
-	decls.DeclareSuperStream(names.superStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
-	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
-		SuperStream: names.superStream,
-		Name:        names.superGroup,
-		Start:       OffsetFirst(),
-		Handler:     received.handle,
-	})
+	decls := superStreamGroupDecls(names, received.handle)
 	publisher := decls.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: names.superStream})
 	require.NoError(t, decls.Validate())
 
@@ -920,8 +920,7 @@ func TestStreamsPublisherRejectedAfterStopIntegration(t *testing.T) {
 // and a producer waits twice.
 const lostStreamWait = 90 * time.Second
 
-// startLostStreamManager starts a consumer and a publisher on one stream, with a
-// supervisor that polls fast and a logger the test reads back.
+// startLostStreamManager starts a consumer and a publisher on one stream.
 func startLostStreamManager(t *testing.T, opts *ManagerOptions, names itNames, handler Handler) (*Manager, *recordingLogger) {
 	t.Helper()
 
@@ -977,6 +976,14 @@ func deleteSuperStream(t *testing.T, opts *ManagerOptions, superStream string) {
 	require.NoError(t, env.DeleteSuperStream(superStream))
 }
 
+// awaitLostReport waits for msg at ERROR and checks it names streamName.
+func awaitLostReport(t *testing.T, log *recordingLogger, msg, streamName string) {
+	t.Helper()
+	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msg) },
+		lostStreamWait, itPollInterval, "%s is reported at ERROR", msg)
+	assert.Equal(t, streamName, log.fieldAt("error", msg, logFieldStream))
+}
+
 // TestStreamsSupervisorReportsADeletedStreamIntegration pins the report: a stream
 // deleted on a live broker is reported at ERROR and leaves the streams component
 // unhealthy, and the stop reports no close failure for the handles the client
@@ -990,12 +997,8 @@ func TestStreamsSupervisorReportsADeletedStreamIntegration(t *testing.T) {
 
 	deleteStream(t, opts, names.stream)
 
-	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgConsumerLost) },
-		lostStreamWait, itPollInterval, "the lost consumer is reported at ERROR")
-	assert.Equal(t, names.stream, log.fieldAt("error", msgConsumerLost, logFieldStream))
-	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgPublisherLost) },
-		lostStreamWait, itPollInterval, "the lost publisher is reported at ERROR")
-	assert.Equal(t, names.stream, log.fieldAt("error", msgPublisherLost, logFieldStream))
+	awaitLostReport(t, log, msgConsumerLost, names.stream)
+	awaitLostReport(t, log, msgPublisherLost, names.stream)
 	assert.False(t, m.Ready(), "the streams component stays unhealthy")
 
 	m.StopConsumers()
@@ -1004,33 +1007,22 @@ func TestStreamsSupervisorReportsADeletedStreamIntegration(t *testing.T) {
 }
 
 // TestStreamsStopIsSilentOnADeletedSuperStreamIntegration guards the partitioned
-// lane of the same report: the client's own super-stream closes already swallow
-// AlreadyClosed, and this keeps it that way.
+// lane of the same report: the client's super-stream consumer close swallows
+// AlreadyClosed itself, and the manager's predicate covers the publisher's.
 func TestStreamsStopIsSilentOnADeletedSuperStreamIntegration(t *testing.T) {
 	opts := streamsTestEnv(t)
 	names := newITNames(t, opts)
 	received := &recorder{failAt: -1}
 
-	decls := NewDeclarations()
-	decls.DeclareSuperStream(names.superStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
-	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
-		SuperStream: names.superStream,
-		Name:        names.superGroup,
-		Start:       OffsetFirst(),
-		Handler:     received.handle,
-	})
+	decls := superStreamGroupDecls(names, received.handle)
 	decls.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: names.superStream})
 	m, log := startSupervisedManager(t, opts, decls)
 	require.True(t, m.Ready())
 
 	deleteSuperStream(t, opts, names.superStream)
 
-	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgConsumerLost) },
-		lostStreamWait, itPollInterval, "the lost super-stream consumer is reported at ERROR")
-	assert.Equal(t, names.superStream, log.fieldAt("error", msgConsumerLost, logFieldStream))
-	require.Eventually(t, func() bool { return slices.Contains(log.messagesAt("error"), msgPublisherLost) },
-		lostStreamWait, itPollInterval, "the lost super-stream publisher is reported at ERROR")
-	assert.Equal(t, names.superStream, log.fieldAt("error", msgPublisherLost, logFieldStream))
+	awaitLostReport(t, log, msgConsumerLost, names.superStream)
+	awaitLostReport(t, log, msgPublisherLost, names.superStream)
 
 	m.StopConsumers()
 

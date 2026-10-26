@@ -821,9 +821,9 @@ func (m *Manager) stopPublishersLocked() {
 // closed itself with stream.AlreadyClosed. The mark is the supervisor's, the stop's
 // own final pass included, so a handle that settles closed after that pass still
 // WARNs. A lost super-stream publisher can return the sentinel from a partial close:
-// client v1.9.0's SuperStreamProducer.Close (pkg/stream/super_stream_producer.go:407-417)
-// stops at the first partition producer's error, so one that closed but is not yet
-// dropped from activeProducers leaves the later partitions unclosed.
+// the client's SuperStreamProducer.Close stops at the first partition producer's
+// error, and a partition it closed that has not yet left activeProducers leaves the
+// later ones open until the environment closes.
 func lostHandleClosedCleanly(lost bool, err error) bool {
 	return lost && errors.Is(err, stream.AlreadyClosed)
 }
