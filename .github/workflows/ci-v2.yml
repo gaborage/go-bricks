@@ -1817,14 +1817,14 @@ jobs:
       - name: Scan
         id: scan
         continue-on-error: true
-        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9  # v8.3.0
+        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304  # v8.4.0
         env: &sonar-env
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - name: Scan (retry)
         id: scan_retry
         if: steps.scan.outcome == 'failure'
-        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9  # v8.3.0
+        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304  # v8.4.0
         env: *sonar-env
 
       # As with the downloads: without this, a renamed id leaves a failed scan green.
