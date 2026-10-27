@@ -254,7 +254,8 @@ mechanic that verifies one, not the thing)
 **Control-plane key**:
 The `""` key: the deployment's own resources — the root `database:` and
 `messaging:` blocks, or whatever a custom resource source returns for `""`.
-Never a tenant; no tenant resolver can produce it.
+Never a tenant: the tenant seat turns away an empty resolution, so no request
+carries it as its tenant.
 _Avoid_: root key, empty key, default tenant, shared key
 
 **Tenant resolver**:
@@ -265,9 +266,10 @@ _Avoid_: tenant middleware, tenant extractor, tenant provider, resolver (bare:
 the auth package's key resolver is a different thing)
 
 **Tenant seat**:
-The single point every request passes where the tenant resolver runs and a
-request without a valid tenant is turned away, before any module code sees it.
-Health and readiness probes skip it.
+Under multitenant, the single point every application request passes where the
+tenant resolver runs and a request without a valid tenant is turned away,
+before any module code sees it. Health and readiness probes skip it; without
+multitenant there is no seat.
 _Avoid_: tenant middleware (names the mechanism, not the role), tenant check,
 tenant gate
 
