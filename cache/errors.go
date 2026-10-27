@@ -111,7 +111,8 @@ type OperationError struct {
 func (e *OperationError) Error() string {
 	msg := fmt.Sprintf("cache operation error: %s failed for %s", e.Op, keyForError(e.Key))
 	if e.Err != nil {
-		msg += ": " + e.Err.Error()
+		// %v, not Err.Error(): fmt recovers a panicking Error method on a typed-nil cause.
+		msg += fmt.Sprintf(": %v", e.Err)
 	}
 	return msg
 }

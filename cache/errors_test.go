@@ -268,3 +268,18 @@ func TestOperationErrorRendersKeyByLengthOnly(t *testing.T) {
 		})
 	}
 }
+
+// panickingNilCauseError is an error whose Error method dereferences its receiver, so a
+// typed-nil value of it panics when asked for its text.
+type panickingNilCauseError struct{ msg string }
+
+func (c *panickingNilCauseError) Error() string { return c.msg }
+
+func TestOperationErrorTypedNilCauseDoesNotPanic(t *testing.T) {
+	var cause *panickingNilCauseError // typed nil: the error interface is non-nil, Error() panics
+	opErr := NewOperationError("get", "k", cause)
+
+	assert.NotPanics(t, func() {
+		assert.Equal(t, "cache operation error: get failed for key (len=1): <nil>", opErr.Error())
+	})
+}
