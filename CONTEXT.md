@@ -254,8 +254,28 @@ mechanic that verifies one, not the thing)
 **Control-plane key**:
 The `""` key: the deployment's own resources — the root `database:` and
 `messaging:` blocks, or whatever a custom resource source returns for `""`.
-Never a tenant; no resolver can produce it.
+Never a tenant; no tenant resolver can produce it.
 _Avoid_: root key, empty key, default tenant, shared key
+
+**Tenant resolver**:
+The strategy that reads a tenant identity from an incoming request: a header,
+a path segment, a subdomain, or an ordered chain of those. What it produces is
+identification, not authorization, since every source is written by the caller.
+_Avoid_: tenant middleware, tenant extractor, tenant provider, resolver (bare:
+the auth package's key resolver is a different thing)
+
+**Tenant seat**:
+The single point every request passes where the tenant resolver runs and a
+request without a valid tenant is turned away, before any module code sees it.
+Health and readiness probes skip it.
+_Avoid_: tenant middleware (names the mechanism, not the role), tenant check,
+tenant gate
+
+**Route family**:
+Routes registered together under one path prefix that share one policy: who
+authenticates them, where their tenant comes from, what their error bodies look
+like. A module may register several.
+_Avoid_: route group (the router mechanism that carries one), API, module
 
 **Tenancy**:
 Which key a resource kind is resolved and replayed under when multitenant is
