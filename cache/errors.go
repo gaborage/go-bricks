@@ -103,16 +103,24 @@ func NewConnectionError(op, address string, err error) *ConnectionError {
 // These errors occur during cache operations (Get, Set, Delete, etc.).
 type OperationError struct {
 	Op  string // Operation that failed (e.g., "get", "set", "cas")
-	Key string // Cache key involved in the operation
+	Key string // Cache key involved in the operation; Error() renders only its length
 	Err error  // Underlying error
 }
 
 // Error implements the error interface.
 func (e *OperationError) Error() string {
+	msg := fmt.Sprintf("cache operation error: %s failed for %s", e.Op, keyForError(e.Key))
 	if e.Err != nil {
-		return fmt.Sprintf("cache operation error: %s failed for key %q: %v", e.Op, e.Key, e.Err)
+		msg += ": " + e.Err.Error()
 	}
-	return fmt.Sprintf("cache operation error: %s failed for key %q", e.Op, e.Key)
+	return msg
+}
+
+// keyForError renders a cache key for framework-built error text by its byte length
+// only. A key is caller-composed and can embed an identifier (a PAN, an email), so the
+// text never carries it; programmatic access stays on OperationError.Key.
+func keyForError(key string) string {
+	return fmt.Sprintf("key (len=%d)", len(key))
 }
 
 // Unwrap returns the underlying error for errors.Is/As support.

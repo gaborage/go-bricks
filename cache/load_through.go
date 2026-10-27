@@ -237,8 +237,8 @@ func lead[T any](ctx context.Context, c Cache, key string, ttl time.Duration, lo
 	return v, nil
 }
 
-// runLoader converts a loader panic into an error that names only the panic value's type
-// (ADR-081). completed, not the recovered value, separates a normal return from a panic:
+// runLoader converts a loader panic into an error naming only the panic value's type (ADR-081) and the key's length (keyForError).
+// completed, not the recovered value, separates a normal return from a panic:
 // under GODEBUG=panicnil=1 a panic(nil) recovers as nil.
 func runLoader[T any](ctx context.Context, key string, load Loader[T]) (v T, err error) {
 	completed := false
@@ -248,7 +248,7 @@ func runLoader[T any](ctx context.Context, key string, load Loader[T]) (v T, err
 		}
 		r := recover()
 		var zero T
-		v, err = zero, fmt.Errorf("cache: load-through loader panicked for key %q (type: %T)", key, r)
+		v, err = zero, fmt.Errorf("cache: load-through loader panicked for %s (type: %T)", keyForError(key), r)
 	}()
 	v, err = load(ctx)
 	completed = true
