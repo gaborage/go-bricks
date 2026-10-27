@@ -261,7 +261,8 @@ _Avoid_: root key, empty key, default tenant, shared key
 **Tenant resolver**:
 The strategy that reads a tenant identity from an incoming request: a header,
 a path segment, a subdomain, or an ordered chain of those. What it produces is
-identification, not authorization, since every source is written by the caller.
+identification, not authorization; the header, path and subdomain sources all
+carry a value the caller wrote.
 _Avoid_: tenant middleware, tenant extractor, tenant provider, resolver (bare:
 the auth package's key resolver is a different thing)
 
