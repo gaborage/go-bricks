@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -339,6 +340,20 @@ func (l *guardLogger) entryCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.entries)
+}
+
+// warnCount reports how many WARN entries whose message contains msgContains the double
+// recorded, under the lock; an empty msgContains counts every WARN.
+func (l *guardLogger) warnCount(msgContains string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, e := range l.logs {
+		if e.level == "warn" && strings.Contains(e.msg, msgContains) {
+			n++
+		}
+	}
+	return n
 }
 
 func (e *guardLogEvent) Msg(msg string) {
