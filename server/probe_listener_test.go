@@ -358,8 +358,8 @@ func TestServerApplicationEngineReservesProbePaths(t *testing.T) {
 	}
 }
 
-// TestServerReservedProbePathStillConflicts pins that the reservation stays in the conflict
-// tracker with the probe listener enabled: a module claiming <base>/health still fails.
+// TestServerReservedProbePathStillConflicts pins that the reservation is still admitted with
+// the probe listener enabled: a module claiming <base>/health still fails.
 func TestServerReservedProbePathStillConflicts(t *testing.T) {
 	srv := newProbeTestServer(newProbeTestConfig(probeTestBase), &testLogger{})
 	srv.ModuleGroup().Add(http.MethodGet, healthRoute, func(c HandlerContext) error { return c.String(http.StatusOK, "") })

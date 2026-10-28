@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 
 	koanfmaps "github.com/knadh/koanf/maps"
@@ -219,36 +220,70 @@ func (c *Config) koanfTree() *koanf.Koanf {
 	return c.src.k
 }
 
-// delivered reports whether key was recorded by one of the operator's configuration layers
-// AND is still present in the final merged tree (ADR-104). Recording is append-only, so the
-// second half is what evicts a key a later layer replaced or nulled at an ancestor path —
-// exactly as koanf's own Exists did before presence was recorded. It is presence only: a
-// delivered key may still hold an empty value, and each door composes delivery with its own
-// emptiness rule.
-//
-// Doors query LEAF keys — "database.host", never "database". A YAML null written AT a
-// section path is itself a leaf and records that path, so a section path must not be used as
-// a door key: it would read as delivered for the very shape that empties the section.
-func (c *Config) delivered(key string) bool {
-	if c == nil || c.src == nil {
-		return false
-	}
-	return c.src.delivered[key] && c.src.k.Exists(key)
+// keyDelivery is one spelling under which an operator layer delivered a key: the path the
+// presence record holds, and the raw value the merged tree keeps there.
+type keyDelivery struct {
+	path string
+	raw  any
 }
 
-// deliveredAtOrUnder reports whether key or any path below it was delivered, matching paths
-// case-insensitively as mapstructure matches fields. Unlike delivered it accepts a section
-// path, since a YAML null written there records that path itself.
-func (c *Config) deliveredAtOrUnder(key string) bool {
+// deliveries is the key lookup every presence door asks (ADR-156). It returns each path one
+// of the operator's configuration layers recorded that matches key (pathMatches) — with
+// under set, a path below key too — AND that the final merged tree still holds (ADR-104),
+// with the raw value at that path, sorted by path. Recording is append-only, so the tree
+// half is what evicts a key a later layer replaced or nulled at an ancestor path. A caller
+// reads emptiness from each match's raw value, never from a lookup of key's own spelling.
+// Preloaded defaults are never recorded, and a sourceless Config has no deliveries at all.
+//
+// Without under, doors query LEAF keys — "database.host", never "database". A YAML null
+// written AT a section path is itself a leaf and records that path, so a section path must
+// not be used as a door key: it would read as delivered for the very shape that empties the
+// section.
+func (c *Config) deliveries(key string, under bool) []keyDelivery {
 	if c == nil || c.src == nil {
-		return false
+		return nil
 	}
-	key = strings.ToLower(key)
+	want := strings.Split(key, koanfDelim)
+	var found []keyDelivery
 	for path := range c.src.delivered {
-		folded := strings.ToLower(path)
-		if (folded == key || keyname.IsDottedPrefix(key, folded)) && c.delivered(path) {
-			return true
+		if pathMatches(want, strings.Split(path, koanfDelim), under) && c.src.k.Exists(path) {
+			found = append(found, keyDelivery{path: path, raw: c.src.k.Get(path)})
 		}
 	}
-	return false
+	slices.SortFunc(found, func(a, b keyDelivery) int { return strings.Compare(a.path, b.path) })
+	return found
+}
+
+// pathMatches reports whether path names key — or, with under set, a node below it —
+// comparing segment by segment with strings.EqualFold, the rule mapstructure applies to a
+// field name and the one visitSubtree and the keystore tree walk apply. EqualFold matches
+// Unicode simple folds (U+017F for s), which strings.ToLower misses.
+func pathMatches(key, path []string, under bool) bool {
+	if len(path) < len(key) || (len(path) > len(key) && !under) {
+		return false
+	}
+	for i, segment := range key {
+		if !strings.EqualFold(segment, path[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// anyDeliveredEmpty reports whether any delivery holds a value deliveredEmptyValue rejects.
+func anyDeliveredEmpty(found []keyDelivery) bool {
+	return slices.ContainsFunc(found, func(d keyDelivery) bool { return deliveredEmptyValue(d.raw) })
+}
+
+// delivered reports whether the leaf key was delivered under any spelling (deliveries). It
+// is presence only: a delivered key may still hold an empty value.
+func (c *Config) delivered(key string) bool {
+	return len(c.deliveries(key, false)) > 0
+}
+
+// deliveredAtOrUnder reports whether key or any path below it was delivered under any
+// spelling. Unlike delivered it accepts a section path, since a YAML null written there
+// records that path itself.
+func (c *Config) deliveredAtOrUnder(key string) bool {
+	return len(c.deliveries(key, true)) > 0
 }
