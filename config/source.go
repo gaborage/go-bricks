@@ -175,7 +175,7 @@ func visitSubtree(node any, path []string, visit func(node any)) {
 		return
 	}
 	for key, value := range section {
-		if strings.EqualFold(key, path[0]) {
+		if sameSegment(key, path[0]) {
 			visitSubtree(value, path[1:], visit)
 		}
 	}

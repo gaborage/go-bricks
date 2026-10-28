@@ -67,8 +67,7 @@ func TestLoadFromMapRefusesMisspelledSections(t *testing.T) {
 // TestLoadRefusesACapitalizedSectionBeforeItsSequence pins that the root rule runs at decode,
 // before the per-layer sequence check (ADR-144) would judge the same section.
 func TestLoadRefusesACapitalizedSectionBeforeItsSequence(t *testing.T) {
-	_, err := loadConfigFixture(t,
-		map[string]string{testConfigFileYAML: "Keystore:\n  Keys:\n    - tokens:\n        our:\n          public: {value: sentinel}\n"},
+	_, err := loadKeystoreYAML(t, "Keystore:\n  Keys:\n    - tokens:\n        our:\n          public: {value: sentinel}\n", "",
 		map[string]string{"KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE": "sentinel"})
 
 	requireSpellingError(t, err, "keystore", "is spelled Keystore;",

@@ -42,7 +42,7 @@ func TestLoadRefusesRetiredMessagingKeys(t *testing.T) {
 		{name: "yaml_virtualhost_camel_case", yaml: "messaging:\n  broker:\n    virtualHost: orders\n", field: retiredVirtualHost},
 		// U+017F for s: mapstructure's EqualFold matches it, so the lookup must too.
 		{name: "yaml_virtualhost_long_s", yaml: "messaging:\n  broker:\n    virtualhoſt: orders\n", field: retiredVirtualHost},
-		{name: "yaml_headers_long_s_section", yaml: "messaging:\n  headerſ:\n    x-app-name: svc\n", field: retiredHeaders},
+		{name: "yaml_headers_long_s", yaml: "messaging:\n  headerſ:\n    x-app-name: svc\n", field: retiredHeaders},
 		{name: "yaml_routing_exchange", yaml: "messaging:\n  routing:\n    exchange: events\n", field: retiredRoutingExchange},
 		{name: "env_routing_exchange", env: map[string]string{"MESSAGING_ROUTING_EXCHANGE": "events"}, field: retiredRoutingExchange},
 		{name: "yaml_routing_exchange_null", yaml: "messaging:\n  routing:\n    exchange: ~\n", field: retiredRoutingExchange},

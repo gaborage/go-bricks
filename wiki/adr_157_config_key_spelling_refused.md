@@ -45,9 +45,10 @@ lowercases them. Fixes #2219.
    sequences. Rule 2 ships in a follow-up PR under #2219 (atom `[C73.19]`); the first PR ships
    rule 1 alone.
 3. **Both rules run at decode, so every load path refuses.** `configSource.decode` runs
-   `validateKeySpelling` (`config/key_spelling.go`) before it unmarshals, so `config.Load`,
+   `checkKeySpelling` (`config/key_spelling.go`) before it unmarshals, so `config.Load`,
    `config.LoadFromMap`, and the `go-bricks-migrate` CLI, whose `--source-config` decodes through
-   `LoadFromMap`, all refuse the tree. Unlike ADR-153's retired keys, `LoadFromMap` is not silent
+   `LoadFromMap` (from the CLI's first release that pins this framework version), all refuse the
+   tree. Unlike ADR-153's retired keys, `LoadFromMap` is not silent
    here: the refusal is about how decode reads the tree, not a `Validate` rule.
 4. **The error names spellings, never a value.** Each is a `*config.ConfigError` of category
    `invalid`. Rule 1 reports one error per section, every wrong spelling sorted:
@@ -94,7 +95,7 @@ protocol identifier the framework does not own.
 
 ## References
 
-- `config/key_spelling.go`: `validateKeySpelling`, `misspelledSections`, `sectionNamed`
+- `config/key_spelling.go`: `checkKeySpelling`, `misspelledSections`, `sectionNamed`
 - `config/config.go`: `configSource.decode`, `configSections`
 - `config/source.go`: `sameSegment`, the package's one case fold for keys
 - `app/bootstrap.go`: the observability bootstrap's `Exists` lookup
