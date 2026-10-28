@@ -316,6 +316,133 @@ func TestLoadRejectsDeliveredEmptyProbeHost(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsDeliveredEmptyKeyUnderAnySpelling pins ADR-156: mapstructure decodes a
+// key whose segments differ only by case (or by a Unicode fold such as U+017F for s), so
+// the delivered-empty check finds it under that spelling and reads the value at that path.
+func TestLoadRejectsDeliveredEmptyKeyUnderAnySpelling(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+	const debug = "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n"
+
+	tests := []struct {
+		name  string
+		yaml  string
+		field string
+	}{
+		{name: "probe_host_camel_case_empty", yaml: header + "  probes:\n    port: 9090\n    Host: \"\"\n", field: fieldServerProbesHost},
+		{name: "probe_host_camel_case_null", yaml: header + "  probes:\n    port: 9090\n    Host:\n", field: fieldServerProbesHost},
+		{name: "probe_section_camel_case_empty", yaml: header + "  Probes:\n    port: 9090\n    host: \"\"\n", field: fieldServerProbesHost},
+		{name: "probe_section_long_s_empty", yaml: header + "  probeſ:\n    port: 9090\n    host: \"\"\n", field: fieldServerProbesHost},
+		{name: "allowedips_camel_case_empty", yaml: header + debug + "  allowedIPs: \"\"\n", field: fieldDebugAllowedIPs},
+		{name: "allowedips_camel_case_null", yaml: header + debug + "  allowedIPs:\n", field: fieldDebugAllowedIPs},
+		{name: "allowedips_long_s_empty", yaml: header + debug + "  allowedipſ: \"\"\n", field: fieldDebugAllowedIPs},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.field, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, "delivered empty")
+		})
+	}
+}
+
+// TestLoadKeepsAValueDeliveredUnderAnySpelling is the counterweight: a value read from the
+// matched path, not from the lowercase key, so a real mixed-case value is never mistaken for
+// an empty one, and the empty list stays the deliberate clear.
+func TestLoadKeepsAValueDeliveredUnderAnySpelling(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "probe_host_camel_case_value", yaml: header + "  probes:\n    port: 9090\n    Host: 127.0.0.2\n"},
+		{name: "probe_section_camel_case_value", yaml: header + "  Probes:\n    port: 9090\n    host: 127.0.0.2\n"},
+		{name: "allowedips_camel_case_empty_list", yaml: header + "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedIPs: []\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
+
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+		})
+	}
+}
+
+// TestLoadRejectsAnEmptySpellingBesideAValue pins that two spellings of one key are refused
+// when either is empty, wherever each came from, and whatever order a map yields them in:
+// every case is loaded repeatedly.
+func TestLoadRejectsAnEmptySpellingBesideAValue(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+	const debug = "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n"
+
+	tests := []struct {
+		name  string
+		files map[string]string
+		env   map[string]string
+		field string
+	}{
+		{
+			name:  "probe_host_empty_beside_lowercase_value",
+			files: map[string]string{testConfigFileYAML: header + "  probes:\n    port: 9090\n    host: 127.0.0.2\n    Host: \"\"\n"},
+			field: fieldServerProbesHost,
+		},
+		{
+			name:  "probe_host_lowercase_empty_beside_value",
+			files: map[string]string{testConfigFileYAML: header + "  probes:\n    port: 9090\n    host: \"\"\n    Host: 127.0.0.2\n"},
+			field: fieldServerProbesHost,
+		},
+		{
+			name: "probe_host_overlay_empty_over_base_value",
+			files: map[string]string{
+				testConfigFileYAML: header + "  probes:\n    port: 9090\n    host: 127.0.0.2\n",
+				"config.prod.yaml": "server:\n  probes:\n    Host: \"\"\n",
+			},
+			env:   map[string]string{"APP_ENV": "prod"},
+			field: fieldServerProbesHost,
+		},
+		{
+			name:  "allowedips_empty_beside_lowercase_list",
+			files: map[string]string{testConfigFileYAML: header + debug + "  allowedips: [\"10.0.0.0/8\"]\n  allowedIPs: \"\"\n"},
+			field: fieldDebugAllowedIPs,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for range 50 {
+				_, err := loadConfigFixture(t, tt.files, tt.env)
+
+				var cfgErr *ConfigError
+				require.ErrorAs(t, err, &cfgErr)
+				require.Equal(t, tt.field, cfgErr.Field)
+			}
+		})
+	}
+}
+
+// TestLoadOverlayNullEvictsAMixedCaseDelivery pins ADR-104's eviction under ADR-156's
+// lookup: a mixed-case empty key the base layer delivered and the overlay nulled at its
+// section is not in the final tree, so no check reads it.
+func TestLoadOverlayNullEvictsAMixedCaseDelivery(t *testing.T) {
+	const base = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
+		"debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedIPs: \"\"\n"
+
+	cfg, err := loadConfigFixture(t, map[string]string{
+		testConfigFileYAML: base,
+		"config.prod.yaml": "debug:\n",
+	}, map[string]string{"APP_ENV": "prod"})
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.False(t, cfg.delivered(fieldDebugAllowedIPs), "the overlay's null evicted the base layer's delivery")
+}
+
 // TestLoadProbeHostDeliberateShapesUnchanged is the counterweight: an absent key takes
 // server.host, and a real value is kept.
 func TestLoadProbeHostDeliberateShapesUnchanged(t *testing.T) {
