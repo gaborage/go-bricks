@@ -13999,7 +13999,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   Oracle too, `qb.Select("*").From("t").Where(qb.Filter().JSONContains("c", qb.MustExpr("x"))).ToSQL()`
   returns an error matching `dbtypes.ErrExpressionInFilter`.
 - ref: `database/internal/builder/helpers.go` (`judgeList`, `judgeElements`, `judgePayload`,
-  `nilListPointer`) · [database.md](database.md) (operand contract)
+  `nilList`) · [database.md](database.md) (operand contract)
 
 ---
 
