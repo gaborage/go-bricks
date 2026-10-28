@@ -108,6 +108,13 @@ func TestLoadRefusesCaseTwins(t *testing.T) {
 			keep:  "log.level (LOG_LEVEL)",
 		},
 		{
+			name:  "map_beside_its_default_map",
+			yaml:  "log:\n  Output:\n    format: json\n",
+			field: "log.output",
+			paths: "log.Output, log.output (framework default)",
+			keep:  "log.output (LOG_OUTPUT)",
+		},
+		{
 			name:  "allowedips_list_beside_its_default",
 			yaml:  "debug:\n  allowedIPs: [\"10.0.0.0/8\"]\n",
 			field: fieldDebugAllowedIPs,
