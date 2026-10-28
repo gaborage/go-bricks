@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/gaborage/go-bricks/internal/keyname"
 )
@@ -152,8 +153,14 @@ func (s *configSource) fromDefaults(path string) bool {
 }
 
 // lowercaseKey is the documented spelling of a folded key, for messages only: upper then
-// lower case maps every simple fold onto one letter, so U+017F reads as s. What folds
-// together is sameSegment's to decide, never this.
+// lower case maps every simple fold onto one letter, so U+017F reads as s; a rune that
+// round trip moves out of its fold, U+0130 or U+0131, keeps its spelling.
 func lowercaseKey(key string) string {
-	return strings.ToLower(strings.ToUpper(key))
+	return strings.Map(func(r rune) rune {
+		lower := unicode.ToLower(unicode.ToUpper(r))
+		if sameSegment(string(r), string(lower)) {
+			return lower
+		}
+		return r
+	}, key)
 }

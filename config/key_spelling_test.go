@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"unicode"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,6 +158,20 @@ func TestLoadRefusesCaseTwins(t *testing.T) {
 			keep:  "debug.allowedips (DEBUG_ALLOWEDIPS)",
 		},
 		{
+			name:  "dotted_capital_i_keeps_its_fold_group",
+			yaml:  "orders:\n  Fİeld: sentinel-a\n  fİeld: sentinel-b\n",
+			field: "orders.fİeld",
+			paths: "orders.Fİeld, orders.fİeld",
+			keep:  "orders.fİeld",
+		},
+		{
+			name:  "dotless_i_keeps_its_fold_group",
+			yaml:  "orders:\n  Kıd: sentinel-a\n  kıd: sentinel-b\n",
+			field: "orders.kıd",
+			paths: "orders.Kıd, orders.kıd",
+			keep:  "orders.kıd",
+		},
+		{
 			name:  "header_map_twins",
 			yaml:  "observability:\n  trace:\n    headers:\n      Authorization: sentinel-a\n      authorization: sentinel-b\n",
 			field: "observability.trace.headers.authorization",
@@ -262,6 +277,16 @@ func TestLoadRefusesCaseTwinsAcrossLayersEveryRun(t *testing.T) {
 				_, err = Load()
 			}
 		})
+	}
+}
+
+// TestLowercaseKeyStaysInItsFoldGroup pins that the suggested spelling folds to the key it
+// came from for every rune, so a twin error never names a key outside its group.
+func TestLowercaseKeyStaysInItsFoldGroup(t *testing.T) {
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if key := string(r); !sameSegment(lowercaseKey(key), key) {
+			t.Errorf("lowercaseKey(%U) = %q, which does not fold to %q", r, lowercaseKey(key), key)
+		}
 	}
 }
 
