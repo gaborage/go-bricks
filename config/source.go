@@ -276,11 +276,6 @@ func sameSegment(a, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
-// anyDeliveredEmpty reports whether any delivery holds a value deliveredEmptyValue rejects.
-func anyDeliveredEmpty(found []keyDelivery) bool {
-	return slices.ContainsFunc(found, func(d keyDelivery) bool { return deliveredEmptyValue(d.raw) })
-}
-
 // delivered reports whether the leaf key was delivered under any spelling (deliveries). It
 // is presence only: a delivered key may still hold an empty value.
 func (c *Config) delivered(key string) bool {

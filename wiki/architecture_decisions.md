@@ -2608,8 +2608,8 @@ mapstructure decodes a key whose segments differ only by case, falling back to
 ADR-104 presence record for the lowercase spelling only, and ADR-153's retired-key check folded
 with `strings.ToLower`. One key lookup, `Config.deliveries`, now matches every recorded path
 segment by segment with `EqualFold` and returns each match with its raw value. Emptiness is read
-at the matched path, any empty spelling refuses the key, and a configured database section is
-refused when an identity key arrives in two spellings with one empty. A named database section
+at the matched path; two spellings of one key are refused at decode as ADR-157 twins. A named
+database section
 reports ADR-051's message instead of "incomplete". See [migrations.md](migrations.md) `[C73.13]`.
 
 **Key Benefits:** the checks see what decode sees, so a template that renders `Host: ""` fails at
