@@ -354,14 +354,14 @@ func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
 	for _, p := range probes {
 		reg := RouteRegistrant{HandlerName: p.name, Package: serverPackagePath}
 		for _, method := range probeMethods {
-			route := admittedRoute{Method: method, Path: p.path, Registrant: reg}
+			route := admittedRoute{Method: method, Path: p.path}
 			var add func()
 			if s.probeEcho == nil {
 				route.Descriptor = modellessDescriptor(method, p.path, reg)
 				add = func() { s.echo.Add(method, p.path, p.handler) }
 			} else {
 				route.Descriptor = probeListenerDescriptor(method, p.route, reg)
-				add = func() { // first wins on both engines
+				add = func() {
 					s.echo.Add(method, p.path, reservedProbeRoute)
 					s.probeEcho.Add(method, p.route, p.probeHandler)
 				}

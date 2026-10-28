@@ -32,14 +32,13 @@ func newAdmittingRouteGroup(group *echo.Group, prefix string, cfg *config.Config
 }
 
 // addEcho registers a pre-built echo.HandlerFunc directly, so the framework's
-// typed-handler hot path pays no per-request adapter cost (ADR-026). The descriptor is
-// written only if the route is admitted; see routeAdmission.admit.
+// typed-handler hot path pays no per-request adapter cost (ADR-026). See
+// routeAdmission.admit.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descriptor *RouteDescriptor) {
 	relative := rg.relativePath(path)
 	rg.admission.admit(admittedRoute{
 		Method:     method,
 		Path:       rg.fullPathFromRelative(relative),
-		Registrant: RouteRegistrant{HandlerName: descriptor.HandlerName, Package: descriptor.Package},
 		Descriptor: descriptor,
 	}, func() { rg.group.Add(method, relative, h) })
 }
@@ -53,8 +52,7 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descripto
 // through routeGroup.addEcho, which never traverses Add, so no route is described twice.
 // Only the fields derivable at this seam are populated (method, full path, handler ID/name,
 // caller package); type- and JOSE-related fields stay zero-valued because raw handlers carry
-// no request/response models. A duplicate is neither described nor added; see
-// routeAdmission.admit.
+// no request/response models. See routeAdmission.admit.
 func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
 	relative := rg.relativePath(path)
 	fullPath := rg.fullPathFromRelative(relative)
@@ -63,7 +61,6 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 	rg.admission.admit(admittedRoute{
 		Method:     method,
 		Path:       fullPath,
-		Registrant: reg,
 		Descriptor: modellessDescriptor(method, fullPath, reg),
 	}, func() { rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...) })
 }

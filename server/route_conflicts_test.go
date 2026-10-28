@@ -14,17 +14,19 @@ import (
 )
 
 func TestRouteAdmissionRecordsDuplicate(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
 	first := RouteRegistrant{HandlerName: "handlerA", Package: "pkg/a"}
 	dup := RouteRegistrant{HandlerName: "handlerB", Package: "pkg/b"}
 	route := func(method string, reg RouteRegistrant) admittedRoute {
-		return admittedRoute{Method: method, Path: "/users", Registrant: reg}
+		return admittedRoute{Method: method, Path: "/users", Descriptor: modellessDescriptor(method, "/users", reg)}
 	}
 	added := 0
 	add := func() { added++ }
 
 	a := newRouteAdmission()
-	assert.True(t, a.admit(route(http.MethodGet, first), add), "a new route is admitted")
-	assert.False(t, a.admit(route(http.MethodGet, dup), add), "a duplicate is refused")
+	a.admit(route(http.MethodGet, first), add)
+	a.admit(route(http.MethodGet, dup), add)
 	assert.Equal(t, 1, added, "only the admitted route is added")
 
 	conflicts := a.snapshot()
@@ -44,10 +46,10 @@ func TestRouteAdmissionRecordsDuplicate(t *testing.T) {
 	var nilAdmission *routeAdmission
 	added = 0
 	assert.NotPanics(t, func() {
-		assert.True(t, nilAdmission.admit(route(http.MethodGet, first), add), "an untracked group registers everything")
-		assert.True(t, nilAdmission.admit(route(http.MethodGet, dup), add))
+		nilAdmission.admit(route(http.MethodGet, first), add)
+		nilAdmission.admit(route(http.MethodGet, dup), add)
 	})
-	assert.Equal(t, 2, added)
+	assert.Equal(t, 2, added, "an untracked group registers everything")
 	assert.Nil(t, nilAdmission.snapshot())
 }
 
@@ -68,7 +70,7 @@ func TestServerRouteConflictsAcrossGroups(t *testing.T) {
 	assert.Equal(t, "/shared", conflicts[0].Path)
 
 	// Nested Group() registration colliding with a flat registration of the identical
-	// full path proves tracker propagation through Group().
+	// full path proves admission propagation through Group().
 	sub := moduleGroup.Group("/sub")
 	sub.Add(http.MethodGet, "/leaf", noop)
 	moduleGroup.Add(http.MethodGet, "/sub/leaf", noop)
@@ -175,7 +177,7 @@ func TestDuplicateRouteError(t *testing.T) {
 	}
 }
 
-// TestRouteNodeKey pins the tracker key to echo v5's node identity (DefaultRouter.Add).
+// TestRouteNodeKey pins the admission key to echo v5's node identity (DefaultRouter.Add).
 func TestRouteNodeKey(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -480,10 +482,7 @@ func TestServerStartRefusesRouteConflict(t *testing.T) {
 // listener is enabled and server.path.health equals server.path.ready: health registers first,
 // so it keeps the path on the probe engine, and Start refuses on the recorded conflict.
 func TestServerProbeListenerHealthEqualsReady(t *testing.T) {
-	cfg := newProbeTestConfig("")
-	cfg.Server.Path.Health = "/probe"
-	cfg.Server.Path.Ready = "/probe"
-	srv := newProbeTestServer(cfg, &testLogger{})
+	srv := newProbeTestServer(sharedProbePath(newProbeTestConfig("")), &testLogger{})
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	rec := serveEngine(srv.probeEcho, http.MethodGet, "/probe")
@@ -496,26 +495,27 @@ func TestServerProbeListenerHealthEqualsReady(t *testing.T) {
 	require.ErrorIs(t, err, ErrDuplicateRoute)
 }
 
+// sharedProbePath points health and ready at one path, so readiness is the refused duplicate.
+func sharedProbePath(cfg *config.Config) *config.Config {
+	cfg.Server.Path.Health = "/probe"
+	cfg.Server.Path.Ready = "/probe"
+	return cfg
+}
+
 // TestRouteAdmissionRefusedDuplicateIsNotDescribed pins that every route door describes only the
 // route admission keeps: a refused duplicate writes no route-registry descriptor.
 func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {
 	noop := func(c HandlerContext) error { return c.String(http.StatusOK, "") }
 	typed := func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil }
-	sharedProbePath := func(cfg *config.Config) *config.Config {
-		cfg.Server.Path.Health = "/probe"
-		cfg.Server.Path.Ready = "/probe"
-		return cfg
-	}
 	tests := []struct {
 		name      string
-		newServer func() *Server
+		newServer func() *Server // nil builds the default test server
 		register  func(srv *Server)
 		path      string
 		methods   []string
 	}{
 		{
-			name:      "typed_get_twice",
-			newServer: func() *Server { return newTestServer("", "", "") },
+			name: "typed_get_twice",
 			register: func(srv *Server) {
 				hr := NewHandlerRegistry(srv.cfg)
 				GET(hr, srv.ModuleGroup(), "/admitted", typed)
@@ -525,8 +525,7 @@ func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {
 			methods: []string{http.MethodGet},
 		},
 		{
-			name:      "raw_add_twice",
-			newServer: func() *Server { return newTestServer("", "", "") },
+			name: "raw_add_twice",
 			register: func(srv *Server) {
 				srv.ModuleGroup().Add(http.MethodGet, "/admitted", noop)
 				srv.ModuleGroup().Add(http.MethodGet, "/admitted", noop)
@@ -535,11 +534,10 @@ func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {
 			methods: []string{http.MethodGet},
 		},
 		{
-			name:      "module_route_on_probe_path",
-			newServer: func() *Server { return newTestServer("", "", "") },
-			register:  func(srv *Server) { srv.ModuleGroup().Add(http.MethodGet, healthRoute, noop) },
-			path:      healthRoute,
-			methods:   []string{http.MethodGet},
+			name:     "module_route_on_probe_path",
+			register: func(srv *Server) { srv.ModuleGroup().Add(http.MethodGet, healthRoute, noop) },
+			path:     healthRoute,
+			methods:  []string{http.MethodGet},
 		},
 		{
 			name:      "shared_health_ready_path_port0",
@@ -556,8 +554,13 @@ func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mark := DefaultRouteRegistry.Count()
-			srv := tt.newServer()
+			DefaultRouteRegistry.Clear()
+			t.Cleanup(DefaultRouteRegistry.Clear)
+			newServer := tt.newServer
+			if newServer == nil {
+				newServer = func() *Server { return newTestServer("", "", "") }
+			}
+			srv := newServer()
 			t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 			if tt.register != nil {
 				tt.register(srv)
@@ -565,22 +568,16 @@ func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {
 
 			conflicts := srv.RouteConflicts()
 			require.Len(t, conflicts, len(tt.methods), "one refused route per method")
-			produced := DefaultRouteRegistry.Routes()[mark:]
-			for _, c := range conflicts {
-				assert.Equal(t, []string{c.First.HandlerName}, describedHandlers(produced, c.Method, tt.path),
-					"%s %s: only the admitted route is described", c.Method, tt.path)
+			routes := DefaultRouteRegistry.ByPath(tt.path)
+			described := map[string][]string{}
+			for i := range routes {
+				described[routes[i].Method] = append(described[routes[i].Method], routes[i].HandlerName)
+			}
+			for i, method := range tt.methods {
+				require.Equal(t, method, conflicts[i].Method)
+				assert.Equal(t, []string{conflicts[i].First.HandlerName}, described[method],
+					"%s %s: only the admitted route is described", method, tt.path)
 			}
 		})
 	}
-}
-
-// describedHandlers returns the handler name of every descriptor in routes at method+path.
-func describedHandlers(routes []RouteDescriptor, method, path string) []string {
-	var names []string
-	for i := range routes {
-		if routes[i].Method == method && routes[i].Path == path {
-			names = append(names, routes[i].HandlerName)
-		}
-	}
-	return names
 }

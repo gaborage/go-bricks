@@ -10535,7 +10535,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   nil.
 - ref: gaborage/go-bricks#1818 · [ADR-124](adr_124_server_level_duplicate_route_refusal.md) ·
   `server/route_conflicts.go` (`ErrDuplicateRoute`, `DuplicateRouteError`, `routeNodeKey`,
-  `routeConflictTracker.record`) · `server/route_registrar.go` (`addEcho`, `Add`) ·
+  `routeAdmission.admit`) · `server/route_registrar.go` (`addEcho`, `Add`) ·
   `server/server.go` (`Start`, `registerProbeRoutes`) ·
   [startup_defaults.md](startup_defaults.md#duplicate-route-detection)
 

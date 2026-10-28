@@ -46,7 +46,7 @@ func newProbeSkipper(healthPath, readyPath string) probeSkipper {
 //
 // The template identifies the probe HANDLER only because a module cannot end up owning a probe
 // path: echo's Add would silently overwrite the handler while keeping the template, and the
-// server itself refuses that duplicate — the tracker keeps the first registration (the probes
+// server itself refuses that duplicate — admission keeps the first registration (the probes
 // register in New, before any module can) and Start refuses to serve with a conflict recorded.
 // The method check covers the one case where the template outlives the match, a top-level 405
 // (echo keeps the best-match template there).

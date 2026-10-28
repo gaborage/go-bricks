@@ -89,19 +89,17 @@ func duplicateRouteError(conflicts []RouteConflict) error {
 }
 
 // admittedRoute is one registration offered to routeAdmission. Path is the full template on the
-// application listener, the spelling the conflict key is built from; Descriptor, when non-nil,
-// is written to DefaultRouteRegistry only if the route is admitted.
+// application listener, the spelling the conflict key is built from; it can differ from
+// Descriptor.Path (a probe-listener route).
 type admittedRoute struct {
 	Method     string
 	Path       string
-	Registrant RouteRegistrant
 	Descriptor *RouteDescriptor
 }
 
 // routeAdmission is the one admission step every go-bricks route door on a Server goes
-// through: key the route on its echo node, refuse a duplicate (the first registration wins),
-// describe the admitted route, then add it to the engine. One instance per Server; a nil
-// admission admits everything (bare newRouteGroup construction in tests).
+// through; see admit. One instance per Server; a nil admission admits everything (bare
+// newRouteGroup construction in tests).
 type routeAdmission struct {
 	mu        sync.Mutex
 	seen      map[string]seenRoute // key: routeNodeKey(method, fullPath)
@@ -118,18 +116,15 @@ func newRouteAdmission() *routeAdmission {
 	return &routeAdmission{seen: make(map[string]seenRoute)}
 }
 
-// admit reports whether r was admitted. An admitted route is described, then added through
-// add. A duplicate is recorded as a conflict and neither described nor added, so the first
-// handler keeps the route.
-func (a *routeAdmission) admit(r admittedRoute, add func()) bool {
+// admit keys r on its echo node and refuses a duplicate, recording it as a conflict, so the
+// first registration keeps the route. An admitted route is described in DefaultRouteRegistry,
+// then added through add.
+func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	if !a.claim(r) {
-		return false
+		return
 	}
-	if r.Descriptor != nil {
-		DefaultRouteRegistry.Register(r.Descriptor)
-	}
+	DefaultRouteRegistry.Register(r.Descriptor)
 	add()
-	return true
 }
 
 // claim reports whether r names a new route node, recording a conflict when it does not.
@@ -137,16 +132,17 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 	if a == nil {
 		return true
 	}
+	reg := RouteRegistrant{HandlerName: r.Descriptor.HandlerName, Package: r.Descriptor.Package}
 	key := routeNodeKey(r.Method, r.Path)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if first, dup := a.seen[key]; dup {
 		a.conflicts = append(a.conflicts, RouteConflict{
-			Method: r.Method, Path: r.Path, FirstPath: first.path, First: first.reg, Duplicate: r.Registrant,
+			Method: r.Method, Path: r.Path, FirstPath: first.path, First: first.reg, Duplicate: reg,
 		})
 		return false
 	}
-	a.seen[key] = seenRoute{reg: r.Registrant, path: r.Path}
+	a.seen[key] = seenRoute{reg: reg, path: r.Path}
 	return true
 }
 
