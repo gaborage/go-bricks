@@ -49,8 +49,11 @@ UPDATE's SET targets still use it.
   compiling. Code that still compiles renders the same SQL as before.
 - The replacement returns a `types.Filter`, not a map. A `types.Filter` is a `squirrel.Sqlizer`,
   so it goes wherever the map went. Code that indexed or merged the map composes filters with
-  `f.And` instead. A bad column no longer comes back as a second return value. It fails the
-  enclosing statement's `ToSQL()`.
+  `f.And` instead. A key assigned twice must be resolved first (the last value won in the map),
+  because `f.And` keeps both conditions. A pointer or `driver.Valuer` operand is resolved when the
+  filter is created rather than when the statement renders, so a reused filter must be rebuilt
+  after its operand changes. A bad column no longer comes back as a second return value. It fails
+  the enclosing statement's `ToSQL()`.
 - The replacement judges the operand. A `RawExpression` is refused with `ErrExpressionInFilter`
   (move it to a `jf` door, or to `f.Raw` with its `// SECURITY:` annotation). A list at
   `Eq`/`NotEq` renders `IN`/`NOT IN` with each element judged. A nil or list operand at

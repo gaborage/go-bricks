@@ -14092,8 +14092,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `LtOrEq` becomes `Lte` and `GtOrEq` becomes `Gte`. The result is a `types.Filter`, not a map.
   Pass it to `Where`, or wherever the map went, since a `types.Filter` is a `squirrel.Sqlizer`. Code
   that indexed or merged the map (`cond[col]`, adding keys to one `squirrel.Eq`) composes filters
-  with `f.And(…)` instead. A bad column is no longer a second return value: it fails the
-  enclosing statement's `ToSQL()`, so drop the `err` check at the call and handle the build error.
+  with `f.And(…)` instead. Resolve a key assigned twice first, keeping the last value as the map
+  did, since `f.And` keeps both conditions. A bad column is no longer a second return value: it
+  fails the enclosing statement's `ToSQL()`, so drop the `err` check at the call and handle the
+  build error. A pointer or `driver.Valuer` operand is resolved when the filter is created, not
+  when the statement renders as squirrel did, so rebuild a reused filter after changing what the
+  pointer or a stateful Valuer holds.
   The operand is now judged: move a `RawExpression` to a `jf` door, or to `f.Raw` with its
   `// SECURITY:` annotation, since `f` refuses it with `dbtypes.ErrExpressionInFilter`. A list at
   `Eq`/`NotEq` still renders `IN`/`NOT IN`, with each element judged. A nil or list operand at
