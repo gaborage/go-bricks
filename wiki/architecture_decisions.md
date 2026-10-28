@@ -2621,6 +2621,24 @@ group-level gates cover every unmatched sub-path.
 
 ---
 
+### [ADR-156: Delivered-Empty Checks Find a Key Under Every Spelling Decode Accepts](adr_156_delivered_empty_checks_match_every_spelling.md)
+
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a mixed-case empty or null `server.probes.host`, `debug.allowedips` or database identity key, or two spellings of one with one empty, fails startup where it booted
+
+mapstructure decodes a key whose segments differ only by case, falling back to
+`strings.EqualFold`, but the delivered-empty checks of ADR-051, ADR-078 and ADR-120 asked the
+ADR-104 presence record for the lowercase spelling only, and ADR-153's retired-key check folded
+with `strings.ToLower`. One key lookup, `Config.deliveries`, now matches every recorded path
+segment by segment with `EqualFold` and returns each match with its raw value. Emptiness is read
+at the matched path, any empty spelling refuses the key, and a configured database section is
+refused when an identity key arrives in two spellings with one empty. A named database section
+reports ADR-051's message instead of "incomplete". See [migrations.md](migrations.md) `[C73.13]`.
+
+**Key Benefits:** the checks see what decode sees, so a template that renders `Host: ""` fails at
+startup instead of widening a bind or emptying an allowlist.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3430,7 +3448,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-155) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-156) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
