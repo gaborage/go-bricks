@@ -2631,8 +2631,8 @@ follow-up PR under #2219 (`[C73.19]`). Refuse, not normalize: lowercasing at loa
 ADR-090's check and change keystore kids and header names. Environment variables and a lone
 mixed-case key below the root are unaffected. See [migrations.md](migrations.md) `[C73.14]`.
 
-**Key Benefits:** a config is read one way by decode and by every exact-name lookup, and a section
-or override the framework would have ignored fails at startup instead.
+**Key Benefits:** a framework section is read under one spelling by decode and by every exact-name
+lookup, and a misspelled section the framework would have ignored fails at startup instead.
 
 ---
 
