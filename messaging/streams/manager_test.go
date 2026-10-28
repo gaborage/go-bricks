@@ -1349,7 +1349,7 @@ func TestManagerStartMasksARebuiltBrokerURI(t *testing.T) {
 				assert.NotContains(t, err.Error(), secret)
 			}
 			assert.Contains(t, err.Error(), tt.want)
-			assert.Contains(t, err.Error(), "user", "the username identifies the failing endpoint")
+			assert.Contains(t, err.Error(), "//user:", "the username identifies the failing endpoint")
 			var urlErr *url.Error
 			require.ErrorAs(t, err, &urlErr)
 		})
