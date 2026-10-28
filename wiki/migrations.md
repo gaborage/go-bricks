@@ -13997,6 +13997,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   ```bash
   # YAML: every key holding an upper-case letter, at any depth, inside sequences too
   git grep -nE "^[[:space:]]*(- )?[\"']?[^\"'#:[:space:]]*[A-Z][^\"'#:[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml'
+  # YAML flow maps: the same keys written inline, server: {Port: 9999}
+  git grep -nE "[{,][[:space:]]*[\"']?[^\"'#:,{}[:space:]]*[A-Z][^\"'#:,{}[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml'
   # Go: maps handed to config.LoadFromMap; read each one's keys
   git grep -n 'LoadFromMap' -- '*.go'
   ```
