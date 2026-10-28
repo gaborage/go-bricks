@@ -67,29 +67,6 @@ func newFilterFactory(qb *QueryBuilder) *FilterFactory {
 
 // ========== Comparison Operators ==========
 
-// equality renders the shared prologue of Eq and NotEq: the operand is resolved
-// ONCE by resolveOperand — nil pointer first, then driver.Valuer, then
-// dereference — and it is the RESOLVED value that squirrel classifies and
-// binds. Squirrel runs the same prologue in the other order, asserting
-// driver.Valuer before it tests the pointer, so a nil pointer to a type whose
-// Value() has a value receiver (`(*sql.NullString)(nil)`) dereferences nil and
-// PANICS inside ToSql (#1209). Resolving here settles that pointer as NULL,
-// which is also what JoinFilter's compare door renders, so one operand means
-// one thing at both families.
-func (ff *FilterFactory) equality(column, op string, value any) dbtypes.Filter {
-	resolved, _, err := resolveOperand(value)
-	if err != nil {
-		return filterOf(nil, wrapOperandErr(op, err))
-	}
-	if _, isExpr, exprErr := expressionOperand(op, resolved, filterFamily); isExpr {
-		return filterOf(nil, exprErr)
-	}
-	if op == opEqual {
-		return filterOf(ff.qb.Eq(column, resolved))
-	}
-	return filterOf(ff.qb.NotEq(column, resolved))
-}
-
 // Eq creates an equality filter (column = value).
 // Column names are automatically quoted according to database vendor rules.
 // A nil operand — untyped, a typed nil pointer, or a Valuer reporting NULL —
@@ -97,7 +74,7 @@ func (ff *FilterFactory) equality(column, op string, value any) dbtypes.Filter {
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
-	return ff.equality(column, opEqual, value)
+	return comparePredicate(ff.qb, column, opEqual, value, filterFamily, wrapFilter)
 }
 
 // NotEq creates a not-equal filter (column <> value).
@@ -106,7 +83,7 @@ func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
-	return ff.equality(column, opNotEqual, value)
+	return comparePredicate(ff.qb, column, opNotEqual, value, filterFamily, wrapFilter)
 }
 
 // Lt creates a less-than filter (column < value).
@@ -115,11 +92,7 @@ func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
-	resolved, _, err := orderingOperand("<", value, filterFamily)
-	if err != nil {
-		return filterOf(nil, err)
-	}
-	return filterOf(ff.qb.Lt(column, resolved))
+	return comparePredicate(ff.qb, column, "<", value, filterFamily, wrapFilter)
 }
 
 // Lte creates a less-than-or-equal filter (column <= value).
@@ -128,11 +101,7 @@ func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
-	resolved, _, err := orderingOperand("<=", value, filterFamily)
-	if err != nil {
-		return filterOf(nil, err)
-	}
-	return filterOf(ff.qb.LtOrEq(column, resolved))
+	return comparePredicate(ff.qb, column, "<=", value, filterFamily, wrapFilter)
 }
 
 // Gt creates a greater-than filter (column > value).
@@ -141,11 +110,7 @@ func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
-	resolved, _, err := orderingOperand(">", value, filterFamily)
-	if err != nil {
-		return filterOf(nil, err)
-	}
-	return filterOf(ff.qb.Gt(column, resolved))
+	return comparePredicate(ff.qb, column, ">", value, filterFamily, wrapFilter)
 }
 
 // Gte creates a greater-than-or-equal filter (column >= value).
@@ -154,11 +119,7 @@ func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
-	resolved, _, err := orderingOperand(">=", value, filterFamily)
-	if err != nil {
-		return filterOf(nil, err)
-	}
-	return filterOf(ff.qb.GtOrEq(column, resolved))
+	return comparePredicate(ff.qb, column, ">=", value, filterFamily, wrapFilter)
 }
 
 // In creates an IN filter (column IN (values...)).
@@ -261,26 +222,7 @@ func (ff *FilterFactory) NotNull(column string) dbtypes.Filter {
 // A RawExpression bound, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
 func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbtypes.Filter {
-	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-	// A BETWEEN bound is an ordering operand, so it takes the ordering contract:
-	// there is no rendering of `col >= NULL`, and a nil pointer to a Valuer would
-	// otherwise reach squirrel's GtOrEq prologue and panic (#1209).
-	lower, _, err := orderingOperand(">=", lowerBound, filterFamily)
-	if err != nil {
-		return filterOf(nil, err)
-	}
-	upper, _, err := orderingOperand("<=", upperBound, filterFamily)
-	if err != nil {
-		return filterOf(nil, err)
-	}
-	condition := squirrel.And{
-		squirrel.GtOrEq{quotedColumn: lower},
-		squirrel.LtOrEq{quotedColumn: upper},
-	}
-	return Filter{sqlizer: condition}
+	return betweenPredicate(ff.qb, column, lowerBound, upperBound, filterFamily, wrapFilter)
 }
 
 // ========== Logical Operators ==========
@@ -511,16 +453,4 @@ func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryB
 	return Filter{sqlizer: &inSubqueryFilter{
 		sqlizer: squirrel.Expr(quotedColumn+" IN ("+sql+")", args...),
 	}}
-}
-
-// filterOf lifts a (sqlizer, error) pair into a Filter, turning a column-validation
-// failure into the deferred-error Filter that ToSQL() surfaces. Written to take the
-// pair directly so each factory method stays one line — `return filterOf(ff.qb.Eq(...))`
-// — which makes the whole column surface reviewable as one shape rather than as
-// thirty hand-written guards (ADR-082).
-func filterOf(sqlizer squirrel.Sqlizer, err error) dbtypes.Filter {
-	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
-	}
-	return Filter{sqlizer: sqlizer}
 }

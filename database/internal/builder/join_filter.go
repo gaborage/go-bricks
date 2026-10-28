@@ -137,53 +137,6 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 	return JoinFilter{sqlizer: columnComparison{left, ">=", right}}
 }
 
-// compare renders `<column> <op> <value>`: the operand is resolved ONCE by
-// resolveOperand and it is the RESOLVED value that is judged, classified,
-// rendered and bound — a RawExpression, or a pointer to one, is validated and
-// interpolated verbatim with no placeholder by expressionOperand.
-func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	resolved, nullOrList, resolveErr := resolveOperand(value)
-	if resolveErr != nil {
-		return joinFilterErr(wrapOperandErr(op, resolveErr))
-	}
-	exprSQL, isExpr, exprErr := expressionOperand(op, resolved, joinFilterFamily)
-	if exprErr != nil {
-		return joinFilterErr(exprErr)
-	}
-	if isExpr {
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " " + op + " " + exprSQL)}
-	}
-
-	// A nil or slice operand delegates to the SAME construct f.Eq/f.NotEq use, so
-	// one operand means one thing at both doors: nil renders IS NULL / IS NOT
-	// NULL, a slice expands to IN / NOT IN, an empty slice takes squirrel's own
-	// constant. `col = ?` bound nil to a placeholder (never true) and a slice to
-	// one argument the driver rejects (#1167).
-	//
-	// A SCALAR keeps the `col op ?` form: it renders the same token squirrel's
-	// construct would (#1200), so the two doors agree on spelling as well as on
-	// meaning, and the ordering operators keep one code path.
-	if nullOrList {
-		switch op {
-		case opEqual:
-			return JoinFilter{sqlizer: squirrel.Eq{quotedColumn: resolved}}
-		case opNotEqual:
-			return JoinFilter{sqlizer: squirrel.NotEq{quotedColumn: resolved}}
-		default:
-			// Ordering has no rendering for these, so the door fails closed rather
-			// than emitting SQL that silently matches nothing.
-			return joinFilterErr(orderingOperandErr(op))
-		}
-	}
-
-	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" "+op+" ?", resolved)}
-}
-
 // ========== Column-to-Value Comparison Operators ==========
 
 // Eq creates an equality condition (column = value).
@@ -196,42 +149,42 @@ func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.Join
 //	expr, _ := qb.Expr("TO_NUMBER(amount_str)")
 //	jf.Eq("amount", expr)                              // amount = TO_NUMBER(amount_str) (expression, no bound placeholder)
 func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, opEqual, value)
+	return comparePredicate(jff.qb, column, opEqual, value, joinFilterFamily, wrapJoinFilter)
 }
 
 // NotEq creates an inequality condition (column <> value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, opNotEqual, value)
+	return comparePredicate(jff.qb, column, opNotEqual, value, joinFilterFamily, wrapJoinFilter)
 }
 
 // Lt creates a less-than condition (column < value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Lt(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, "<", value)
+	return comparePredicate(jff.qb, column, "<", value, joinFilterFamily, wrapJoinFilter)
 }
 
 // Lte creates a less-than-or-equal condition (column <= value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Lte(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, "<=", value)
+	return comparePredicate(jff.qb, column, "<=", value, joinFilterFamily, wrapJoinFilter)
 }
 
 // Gt creates a greater-than condition (column > value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Gt(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, ">", value)
+	return comparePredicate(jff.qb, column, ">", value, joinFilterFamily, wrapJoinFilter)
 }
 
 // Gte creates a greater-than-or-equal condition (column >= value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, ">=", value)
+	return comparePredicate(jff.qb, column, ">=", value, joinFilterFamily, wrapJoinFilter)
 }
 
 // In creates an IN condition (column IN (values...)).
@@ -306,61 +259,7 @@ func (jff *JoinFilterFactory) NotNull(column string) dbtypes.JoinFilter {
 //	hi, _ := qb.Expr("65")
 //	jf.Between("age", lo, hi)                        // age BETWEEN 18 AND 65 (expressions)
 func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	// Each bound is resolved on its own and renders itself, so the door has two
-	// steps rather than a branch per COMBINATION of bound kinds — the four-way
-	// tree the pair-wise form needed (expr/expr, expr/value, value/expr,
-	// value/value) said nothing the bounds do not each say for themselves.
-	lower, err := resolveBetweenBound(">=", lowerBound)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	upper, err := resolveBetweenBound("<=", upperBound)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	return JoinFilter{sqlizer: squirrel.And{
-		lower.sqlizer(quotedColumn, ">="),
-		upper.sqlizer(quotedColumn, "<="),
-	}}
-}
-
-// betweenBound is one resolved BETWEEN bound: either the SQL of a RawExpression
-// to splice verbatim, or an ordering operand already resolved to the value that
-// will be bound.
-type betweenBound struct {
-	exprSQL string
-	value   any
-}
-
-// resolveBetweenBound resolves a bound through orderingOperand, which returns
-// the SQL of an expression — or a pointer to one — for this family to splice. A
-// value bound is an ordering operand wherever it ends up rendered —
-// squirrel.Expr, the construct a mixed pair uses, resolves nothing at build
-// time, so a bound spliced into it unresolved reached the driver as written: a
-// nil rendered `col <= ?` bound to NULL, matching nothing, and a nil pointer to
-// a Valuer was dereferenced at EXEC.
-func resolveBetweenBound(op string, bound any) (resolved betweenBound, err error) {
-	value, exprSQL, operandErr := orderingOperand(op, bound, joinFilterFamily)
-	if operandErr != nil {
-		return betweenBound{}, operandErr
-	}
-	return betweenBound{exprSQL: exprSQL, value: value}, nil
-}
-
-// sqlizer renders this bound as `<column> <op> …`: an expression inline with no
-// placeholder and no argument, a value as a placeholder bound to the value the
-// door already resolved.
-func (b betweenBound) sqlizer(quotedColumn, op string) squirrel.Sqlizer {
-	if b.exprSQL != "" {
-		return squirrel.Expr(quotedColumn + " " + op + " " + b.exprSQL)
-	}
-	return squirrel.Expr(quotedColumn+" "+op+" ?", b.value)
+	return betweenPredicate(jff.qb, column, lowerBound, upperBound, joinFilterFamily, wrapJoinFilter)
 }
 
 // ========== Logical Operators ==========
