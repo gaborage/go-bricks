@@ -398,10 +398,9 @@ func TestLoadThroughReportsLoaderPanicByTypeOnly(t *testing.T) {
 	const secret = "hunter2-should-never-print"
 	load := func(context.Context) (ltUser, error) { panic(secret) }
 
-	_, err := cache.LoadThrough(t.Context(), mock, ltKey, ltTTL, load)
+	_, err := cache.LoadThrough(t.Context(), mock, "user:4111111111111111", ltTTL, load)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "(type: string)")
-	assert.NotContains(t, err.Error(), secret)
+	assert.Equal(t, "cache: load-through loader panicked for key (len=21) (type: string)", err.Error())
 	require.Never(t, func() bool { return mock.OperationCount("Set") > 0 }, 100*time.Millisecond, ltWaitTick)
 }
 

@@ -141,7 +141,6 @@ func TestOperationError(t *testing.T) {
 		assert.Equal(t, underlying, err.Err)
 		assert.Contains(t, err.Error(), "cache operation error")
 		assert.Contains(t, err.Error(), "get")
-		assert.Contains(t, err.Error(), testRedisKey1)
 		assert.Contains(t, err.Error(), "timeout")
 	})
 
@@ -152,7 +151,6 @@ func TestOperationError(t *testing.T) {
 		assert.Equal(t, "set", err.Op)
 		assert.Equal(t, testRedisKey2, err.Key)
 		assert.Contains(t, err.Error(), "set")
-		assert.Contains(t, err.Error(), testRedisKey2)
 	})
 
 	t.Run("CASOperation", func(t *testing.T) {
@@ -189,7 +187,6 @@ func TestOperationError(t *testing.T) {
 		require.NoError(t, err.Err)
 		assert.Contains(t, err.Error(), "cache operation error")
 		require.Contains(t, err.Error(), "get")
-		assert.Contains(t, err.Error(), testRedisKey1)
 		assert.NotContains(t, err.Error(), "<nil>")
 	})
 }
@@ -199,7 +196,6 @@ func TestErrorWrapping(t *testing.T) {
 		err := NewOperationError("get", "user:999", ErrNotFound)
 
 		assert.Contains(t, err.Error(), "get")
-		assert.Contains(t, err.Error(), "user:999")
 		require.ErrorIs(t, err, ErrNotFound)
 	})
 
@@ -207,7 +203,6 @@ func TestErrorWrapping(t *testing.T) {
 		err := NewOperationError("cas", "lock:123", ErrCASFailed)
 
 		require.Contains(t, err.Error(), "cas")
-		assert.Contains(t, err.Error(), "lock:123")
 		require.ErrorIs(t, err, ErrCASFailed)
 	})
 
@@ -234,10 +229,57 @@ func TestErrorMessages(t *testing.T) {
 		err := NewConnectionError("ping", testRedisHost, underlying)
 		assert.Contains(t, err.Error(), "cache connection error: ping failed for localhost:6379: timeout")
 	})
+}
 
-	t.Run("OperationErrorMessage", func(t *testing.T) {
-		underlying := errors.New("timeout")
-		err := NewOperationError("get", testRedisKey1, underlying)
-		assert.Contains(t, err.Error(), "cache operation error: get failed for key \"user:123\": timeout")
+func TestOperationErrorRendersKeyByLengthOnly(t *testing.T) {
+	const panKey = "user:4111111111111111"
+	tests := []struct {
+		name string
+		key  string
+		err  error
+		want string
+	}{
+		{
+			name: "pan_bearing_key_with_cause",
+			key:  panKey,
+			err:  errors.New("timeout"),
+			want: "cache operation error: get failed for key (len=21): timeout",
+		},
+		{
+			name: "pan_bearing_key_without_cause",
+			key:  panKey,
+			want: "cache operation error: get failed for key (len=21)",
+		},
+		{
+			name: "empty_key",
+			key:  "",
+			want: "cache operation error: get failed for key (len=0)",
+		},
+		{
+			name: "multibyte_key_counts_bytes",
+			key:  "ñ",
+			want: "cache operation error: get failed for key (len=2)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opErr := NewOperationError("get", tt.key, tt.err)
+			assert.Equal(t, tt.want, opErr.Error())
+		})
+	}
+}
+
+// panickingNilCauseError is an error whose Error method dereferences its receiver, so a
+// typed-nil value of it panics when asked for its text.
+type panickingNilCauseError struct{ msg string }
+
+func (c *panickingNilCauseError) Error() string { return c.msg }
+
+func TestOperationErrorTypedNilCauseDoesNotPanic(t *testing.T) {
+	var cause *panickingNilCauseError // typed nil: the error interface is non-nil, Error() panics
+	opErr := NewOperationError("get", "k", cause)
+
+	assert.NotPanics(t, func() {
+		assert.Equal(t, "cache operation error: get failed for key (len=1): <nil>", opErr.Error())
 	})
 }
