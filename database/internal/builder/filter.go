@@ -133,7 +133,6 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 //	f.In("status", []string{"active", "pending"})  // IN with multiple values
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
-	// Empty slice special case: generate "1=0" to ensure no matches
 	return comparePredicate(ff.qb, column, opIn, values, filterFamily, wrapFilter)
 }
 
@@ -148,7 +147,6 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 //	f.NotIn("status", []string{"deleted", "banned"})  // NOT IN with multiple values
 //	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
-	// Empty NOT IN list - always true
 	return comparePredicate(ff.qb, column, opNotIn, values, filterFamily, wrapFilter)
 }
 

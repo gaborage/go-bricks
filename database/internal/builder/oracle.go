@@ -238,9 +238,9 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	quotedInsertCols := qb.quoteColumnsForDML(insertKeys...)
 	usingValues := make([]string, len(insertKeys))
 	for i, col := range quotedInsertCols {
-		cell, cellErr := mergeCell(insertKeys[i], insertColumns[insertKeys[i]], &args)
-		if cellErr != nil {
-			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
+		cell, mergeErr := mergeCell(insertKeys[i], insertColumns[insertKeys[i]], &args)
+		if mergeErr != nil {
+			return "", nil, fmt.Errorf("BuildUpsert: %w", mergeErr)
 		}
 		usingValues[i] = cell + " AS " + col
 	}
@@ -259,9 +259,9 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	quotedUpdateCols := qb.quoteColumnsForDML(updateKeys...)
 	updateSets := make([]string, len(updateKeys))
 	for i, col := range quotedUpdateCols {
-		cell, cellErr := mergeCell(updateKeys[i], updateColumns[updateKeys[i]], &args)
-		if cellErr != nil {
-			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
+		cell, mergeErr := mergeCell(updateKeys[i], updateColumns[updateKeys[i]], &args)
+		if mergeErr != nil {
+			return "", nil, fmt.Errorf("BuildUpsert: %w", mergeErr)
 		}
 		updateSets[i] = col + " = " + cell
 	}
@@ -301,6 +301,6 @@ func mergeCell(column string, value any, args *[]any) (string, error) {
 	if judged.kind == operandSpliced {
 		return strings.ReplaceAll(judged.sql, "??", "?"), nil
 	}
-	*args = append(*args, value)
+	*args = append(*args, judged.value)
 	return fmt.Sprintf(":%d", len(*args)), nil
 }

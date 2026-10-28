@@ -41,15 +41,15 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 // valueCell prepares one SET/VALUES cell for squirrel: an expression the judge
 // splices becomes squirrel.Expr so no placeholder or argument is emitted, and
 // any other value is returned untouched. args, when given, bind the
-// expression's `?` placeholders (SetExpr's door); Set/Values pass none. The
-// label names the column or one-based position in the error.
+// expression's `?` placeholders (SetExpr's door); Set passes none. The label
+// names the column in the error.
 func valueCell(label string, value any, args ...any) (any, error) {
 	judged, err := judgeOperand("", value, valueFamily)
 	if err != nil {
 		return nil, cellErr(label, err)
 	}
 	if judged.kind != operandSpliced {
-		return value, nil
+		return judged.value, nil
 	}
 	return squirrel.Expr(judged.sql, args...), nil
 }
@@ -454,9 +454,9 @@ func (w *operandWalk) askValuer(value *any) (asked bool, err error) {
 	return true, nil
 }
 
-// doorFamily names the predicate family judging an operand: a FilterFactory
-// door takes values only, a JoinFilterFactory door also splices a
-// RawExpression (#1259).
+// doorFamily names the family judging an operand: a FilterFactory door takes
+// values only, a JoinFilterFactory door also splices a RawExpression (#1259),
+// and a SET / VALUES cell splices one found on its surface.
 type doorFamily uint8
 
 const (
@@ -468,22 +468,26 @@ const (
 	valueFamily
 )
 
-// expressionOperand judges a RESOLVED operand that is a dbtypes.RawExpression —
-// so a pointer to one is judged the same — by the door's family: a filterFamily
-// door refuses it, a joinFilterFamily door splices its SQL verbatim, with no
-// placeholder and no argument. Its alias is refused before Validate() — a
-// predicate operand projects nothing — and the rest is validated HERE, at
-// consumption, because RawExpression is a plain struct a caller can build
-// without Expr() (#1153).
+// expressionOperand judges an operand that is a dbtypes.RawExpression by the
+// door's family: a filterFamily door refuses it; a joinFilterFamily door and a
+// SET / VALUES cell splice its SQL verbatim, with no placeholder and no
+// argument. A predicate door hands it the RESOLVED operand, so a pointer to an
+// expression is judged the same there; a cell hands it the surface value. Its
+// alias is refused before Validate() — neither a predicate operand nor a cell
+// projects anything — and the rest is validated HERE, at consumption, because
+// RawExpression is a plain struct a caller can build without Expr() (#1153).
 func expressionOperand(op string, resolved any, family doorFamily) (sql string, isExpr bool, err error) {
 	expr, isExpr := resolved.(dbtypes.RawExpression)
 	if !isExpr {
 		return "", false, nil
 	}
-	if family != joinFilterFamily {
+	if family == filterFamily {
 		return "", true, fmt.Errorf("%w: %s", dbtypes.ErrExpressionInFilter, op)
 	}
 	if expr.Alias != "" {
+		if family == valueFamily {
+			return "", true, fmt.Errorf("%w: %s", dbtypes.ErrAliasInValue, expr.Alias)
+		}
 		return "", true, fmt.Errorf("%s: %w: %s", op, dbtypes.ErrAliasInPredicate, expr.Alias)
 	}
 	if validateErr := expr.Validate(); validateErr != nil {
@@ -622,7 +626,8 @@ const (
 	// operandSpliced renders a RawExpression's SQL verbatim, binding nothing.
 	operandSpliced
 	// operandNullOrSet renders through squirrel's Eq / NotEq: IS [NOT] NULL,
-	// IN / NOT IN, or the empty-set constant.
+	// IN / NOT IN, or, for an Eq / NotEq door's empty list, squirrel's own
+	// empty-set constant.
 	operandNullOrSet
 	// operandEmptySet renders a list operator's constant for a set holding
 	// nothing: "(1=0)" for IN, always false, "(1=1)" for NOT IN, always true.
@@ -678,9 +683,9 @@ func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 // renderPredicate renders a judged operand against quotedColumn, the one
 // rendering every compare door shares; the answer alone decides the form. A
 // bound value, a null and a set go through squirrel's own construct for op
-// (comparison), so IS [NOT] NULL, IN / NOT IN and the empty-set constant keep
-// squirrel's spelling; operandPlaceholder renders the same `col op ?` token
-// (#1200) through squirrel.Expr.
+// (comparison), so IS [NOT] NULL and IN / NOT IN keep squirrel's spelling;
+// operandPlaceholder renders the same `col op ?` token (#1200) through
+// squirrel.Expr, and operandEmptySet an IN / NOT IN door's constant.
 func renderPredicate(quotedColumn, op string, judged operand) squirrel.Sqlizer {
 	if judged.kind == operandSpliced {
 		return squirrel.Expr(quotedColumn + " " + op + " " + judged.sql)
@@ -738,7 +743,8 @@ func orderingOperandErr(op string) error {
 // TYPE, so a list whose elements cannot need resolution is not walked at all.
 var valuerType = reflect.TypeOf((*driver.Valuer)(nil)).Elem()
 
-// judgeList answers an IN / NOT IN operand with the list squirrel renders, resolving EVERY element that could need it the way the compare doors
+// judgeList answers an IN / NOT IN operand with the list squirrel renders,
+// resolving EVERY element that could need it the way the compare doors
 // resolve a single one: a nil pointer — typed, or pointing at a driver.Valuer —
 // becomes an untyped nil, and a Valuer holding a value is asked once, here, so
 // its answer is what gets bound.
@@ -797,55 +803,19 @@ func judgeList(op string, values any, family doorFamily) (operand, error) {
 	return operand{kind: operandNullOrSet, value: []any{element}}, nil
 }
 
-// listOperand answers a list operand whose elements resolveList resolved.
+// listOperand answers an already-classified list operand, resolving its
+// elements. It takes both the reflect.Value and the original interface because
+// the two answer different questions: driver.IsValue judges the interface,
+// while the element type and length come from the reflected value.
 func listOperand(op string, v reflect.Value, values any) (operand, error) {
-	normalized, empty, err := resolveList(op, v, values)
-	if err != nil {
-		return operand{}, err
-	}
-	if empty {
-		return emptySet(op), nil
-	}
-	return operand{kind: operandNullOrSet, value: normalized}, nil
-}
-
-// emptySet answers a set holding nothing with op's constant.
-func emptySet(op string) operand {
-	if op == opNotIn {
-		return operand{kind: operandEmptySet, sql: "(1=1)"}
-	}
-	return operand{kind: operandEmptySet, sql: "(1=0)"}
-}
-
-// judgeCell judges one SET / VALUES cell: a dbtypes.RawExpression is validated
-// here — a plain struct can reach this door without passing Expr() — and its
-// SQL spliced, with the alias judged first because a cell projects nothing.
-// Any other value is bound as written: a cell never resolves, so a pointer to
-// an expression and a driver.Valuer bind untouched.
-func judgeCell(value any) (operand, error) {
-	expr, isExpr := value.(dbtypes.RawExpression)
-	if !isExpr {
-		return operand{kind: operandBound, value: value}, nil
-	}
-	if expr.Alias != "" {
-		return operand{}, fmt.Errorf("%w: %s", dbtypes.ErrAliasInValue, expr.Alias)
-	}
-	if validateErr := expr.Validate(); validateErr != nil {
-		return operand{}, validateErr
-	}
-	return operand{kind: operandSpliced, sql: expr.SQL}, nil
-}
-
-// resolveList resolves an already-classified list operand. It takes both the
-// reflect.Value and the original interface because the two answer different
-// questions: driver.IsValue judges the interface, while the element type and
-// length come from the reflected value.
-func resolveList(op string, v reflect.Value, values any) (normalized any, empty bool, err error) {
 	// A []byte is a driver.Value, not a list — squirrel's own rule, which the
 	// compare doors follow through driver.IsValue. Splitting it into a list of
 	// bytes would turn one operand into N.
 	if driver.IsValue(values) {
-		return []any{values}, false, nil
+		return operand{kind: operandNullOrSet, value: []any{values}}, nil
+	}
+	if v.Len() == 0 {
+		return emptySet(op), nil
 	}
 
 	// The ELEMENT TYPE decides whether the list has to be walked. Resolution can
@@ -857,18 +827,41 @@ func resolveList(op string, v reflect.Value, values any) (normalized any, empty 
 	// pure duplication, not a shortcut.
 	elem := v.Type().Elem()
 	if elem.Kind() != reflect.Pointer && elem.Kind() != reflect.Interface && !elem.Implements(valuerType) {
-		return values, v.Len() == 0, nil
+		return operand{kind: operandNullOrSet, value: values}, nil
 	}
 
 	resolved := make([]any, v.Len())
 	for i := range resolved {
 		element, _, resolveErr := resolveOperand(v.Index(i).Interface())
 		if resolveErr != nil {
-			return nil, false, fmt.Errorf("resolving element %d of the %s operand: %w", i, op, resolveErr)
+			return operand{}, fmt.Errorf("resolving element %d of the %s operand: %w", i, op, resolveErr)
 		}
 		resolved[i] = element
 	}
-	return resolved, len(resolved) == 0, nil
+	return operand{kind: operandNullOrSet, value: resolved}, nil
+}
+
+// emptySet answers a set holding nothing with op's constant.
+func emptySet(op string) operand {
+	if op == opNotIn {
+		return operand{kind: operandEmptySet, sql: "(1=1)"}
+	}
+	return operand{kind: operandEmptySet, sql: "(1=0)"}
+}
+
+// judgeCell judges one SET / VALUES cell on its surface: a dbtypes.RawExpression
+// is judged by expressionOperand, and any other value is bound as written. A
+// cell never resolves, so a pointer to an expression and a driver.Valuer bind
+// untouched.
+func judgeCell(value any) (operand, error) {
+	exprSQL, isExpr, err := expressionOperand("", value, valueFamily)
+	if err != nil {
+		return operand{}, err
+	}
+	if isExpr {
+		return operand{kind: operandSpliced, sql: exprSQL}, nil
+	}
+	return operand{kind: operandBound, value: value}, nil
 }
 
 // renderSubquery is the one place a filter or projection subquery becomes

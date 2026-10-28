@@ -46,9 +46,8 @@ func combineLogical[T squirrel.Sqlizer, C logicalContainer](
 
 // comparePredicate is the shared body of Filter and JoinFilter Eq, NotEq, Lt,
 // Lte, Gt, Gte, In and NotIn: quote the column, judge the operand, render the
-// answer. A
-// column failure or a refused operand is lifted through errorSqlizer, whose
-// ToSql defers the error to the parent query's build.
+// answer. A column failure or a refused operand is lifted through errorSqlizer,
+// whose ToSql defers the error to the parent query's build.
 func comparePredicate[T squirrel.Sqlizer](
 	qb *QueryBuilder,
 	column, op string,
