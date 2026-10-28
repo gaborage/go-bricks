@@ -1471,8 +1471,6 @@ func RegisterHandler[T any, R any](
 	// registry's resolver. Panics at startup on any failure (Fail Fast principle).
 	scanRouteJOSE(&descriptor, hr.joseResolver)
 
-	DefaultRouteRegistry.Register(&descriptor)
-
 	// Lazy-init observability bundle on the first JOSE-tagged route registration so
 	// non-JOSE deployments pay zero cost for instrument creation. Subsequent JOSE
 	// registrations reuse the same bundle (counters and histograms are process-global).
@@ -1492,15 +1490,14 @@ func RegisterHandler[T any, R any](
 	}
 	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, hr.log, descriptor.RawResponse, joseCfg)
 	// Hot path: register the echo handler directly through routeGroup.addEcho so the typed
-	// handler path adds zero per-request adapter overhead (ADR-026). The fallback adapts for
-	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
+	// handler path adds zero per-request adapter overhead (ADR-026); addEcho describes the
+	// route only if it is admitted. The fallback adapts for non-routeGroup registrars (test
+	// fakes) and describes the route itself; it round-trips through the unexported escape
 	// hatch and never executes on the framework's real registrar.
 	if rg, ok := r.(*routeGroup); ok {
-		rg.addEcho(method, path, wrappedHandler, RouteRegistrant{
-			HandlerName: descriptor.HandlerName,
-			Package:     descriptor.Package,
-		})
+		rg.addEcho(method, path, wrappedHandler, &descriptor)
 	} else {
+		DefaultRouteRegistry.Register(&descriptor)
 		r.Add(method, path, func(c HandlerContext) error {
 			ec := c.echoContext()
 			if ec == nil {

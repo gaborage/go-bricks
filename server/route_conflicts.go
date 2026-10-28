@@ -88,10 +88,21 @@ func duplicateRouteError(conflicts []RouteConflict) error {
 	return &DuplicateRouteError{Conflicts: conflicts}
 }
 
-// routeConflictTracker records every route added through a Server's routeGroups
-// and accumulates conflicts. One instance per Server; a nil tracker disables
-// recording (bare newRouteGroup construction in tests).
-type routeConflictTracker struct {
+// admittedRoute is one registration offered to routeAdmission. Path is the full template on the
+// application listener, the spelling the conflict key is built from; Descriptor, when non-nil,
+// is written to DefaultRouteRegistry only if the route is admitted.
+type admittedRoute struct {
+	Method     string
+	Path       string
+	Registrant RouteRegistrant
+	Descriptor *RouteDescriptor
+}
+
+// routeAdmission is the one admission step every go-bricks route door on a Server goes
+// through: key the route on its echo node, refuse a duplicate (the first registration wins),
+// describe the admitted route, then add it to the engine. One instance per Server; a nil
+// admission admits everything (bare newRouteGroup construction in tests).
+type routeAdmission struct {
 	mu        sync.Mutex
 	seen      map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts []RouteConflict
@@ -103,27 +114,39 @@ type seenRoute struct {
 	path string
 }
 
-func newRouteConflictTracker() *routeConflictTracker {
-	return &routeConflictTracker{seen: make(map[string]seenRoute)}
+func newRouteAdmission() *routeAdmission {
+	return &routeAdmission{seen: make(map[string]seenRoute)}
 }
 
-// record reports whether method+fullPath names a new route node. A duplicate is recorded as a conflict
-// and reported false, so the caller skips the engine Add and the first handler keeps the
-// route. A nil tracker reports true: untracked groups register everything.
-func (t *routeConflictTracker) record(method, fullPath string, reg RouteRegistrant) bool {
-	if t == nil {
+// admit reports whether r was admitted. An admitted route is described, then added through
+// add. A duplicate is recorded as a conflict and neither described nor added, so the first
+// handler keeps the route.
+func (a *routeAdmission) admit(r admittedRoute, add func()) bool {
+	if !a.claim(r) {
+		return false
+	}
+	if r.Descriptor != nil {
+		DefaultRouteRegistry.Register(r.Descriptor)
+	}
+	add()
+	return true
+}
+
+// claim reports whether r names a new route node, recording a conflict when it does not.
+func (a *routeAdmission) claim(r admittedRoute) bool {
+	if a == nil {
 		return true
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	key := routeNodeKey(method, fullPath)
-	if first, dup := t.seen[key]; dup {
-		t.conflicts = append(t.conflicts, RouteConflict{
-			Method: method, Path: fullPath, FirstPath: first.path, First: first.reg, Duplicate: reg,
+	key := routeNodeKey(r.Method, r.Path)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if first, dup := a.seen[key]; dup {
+		a.conflicts = append(a.conflicts, RouteConflict{
+			Method: r.Method, Path: r.Path, FirstPath: first.path, First: first.reg, Duplicate: r.Registrant,
 		})
 		return false
 	}
-	t.seen[key] = seenRoute{reg: reg, path: fullPath}
+	a.seen[key] = seenRoute{reg: r.Registrant, path: r.Path}
 	return true
 }
 
@@ -181,13 +204,13 @@ func isInlineVerb(rest string) bool {
 	return true
 }
 
-func (t *routeConflictTracker) snapshot() []RouteConflict {
-	if t == nil {
+func (a *routeAdmission) snapshot() []RouteConflict {
+	if a == nil {
 		return nil
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	out := make([]RouteConflict, len(t.conflicts))
-	copy(out, t.conflicts)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]RouteConflict, len(a.conflicts))
+	copy(out, a.conflicts)
 	return out
 }

@@ -37,7 +37,7 @@ type Server struct {
 	readyRoute   string
 	readyMu      sync.RWMutex
 	readyHandler echo.HandlerFunc
-	conflicts    *routeConflictTracker
+	admission    *routeAdmission
 	setupErr     error                    // a construction-time configuration error Start returns before binding
 	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
 	ready        chan struct{}
@@ -258,7 +258,7 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 		healthRoute:     healthRoute,
 		readyRoute:      readyRoute,
 		readyHandler:    nil,
-		conflicts:       newRouteConflictTracker(),
+		admission:       newRouteAdmission(),
 		ready:           make(chan struct{}),
 		probeErrs:       make(chan error, 1),
 		probeStopBudget: probeStopTimeout,
@@ -336,7 +336,7 @@ func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healt
 }
 
 // registerProbeRoutes wires /health and /ready. They register directly on the engine
-// (not through a routeGroup), so they are recorded explicitly. They record first, so a
+// (not through a routeGroup), so they are admitted explicitly, and first, so a
 // module claiming a probe path is the refused duplicate like any other collision. The
 // route table lists them like any other route. The reservation at <base><path> holds whatever
 // server.probes.port says, so flipping it never changes which module routes are legal;
@@ -354,18 +354,19 @@ func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
 	for _, p := range probes {
 		reg := RouteRegistrant{HandlerName: p.name, Package: serverPackagePath}
 		for _, method := range probeMethods {
+			route := admittedRoute{Method: method, Path: p.path, Registrant: reg}
+			var add func()
 			if s.probeEcho == nil {
-				if registerRoute(s.conflicts, method, p.path, reg) {
-					s.echo.Add(method, p.path, p.handler)
+				route.Descriptor = modellessDescriptor(method, p.path, reg)
+				add = func() { s.echo.Add(method, p.path, p.handler) }
+			} else {
+				route.Descriptor = probeListenerDescriptor(method, p.route, reg)
+				add = func() { // first wins on both engines
+					s.echo.Add(method, p.path, reservedProbeRoute)
+					s.probeEcho.Add(method, p.route, p.probeHandler)
 				}
-				continue
 			}
-			if !s.conflicts.record(method, p.path, reg) {
-				continue // first wins on both engines
-			}
-			s.echo.Add(method, p.path, reservedProbeRoute)
-			s.probeEcho.Add(method, p.route, p.probeHandler)
-			registerProbeListenerRoute(method, p.route, reg)
+			s.admission.admit(route, add)
 		}
 	}
 }
@@ -381,9 +382,9 @@ func reservedProbeRoute(*echo.Context) error {
 // registration. If no base path is configured, it returns a registrar with empty prefix.
 func (s *Server) ModuleGroup() RouteRegistrar {
 	if s.basePath == "" || s.basePath == "/" {
-		return newTrackedRouteGroup(s.echo.Group(""), "", s.cfg, s.conflicts)
+		return newAdmittingRouteGroup(s.echo.Group(""), "", s.cfg, s.admission)
 	}
-	return newTrackedRouteGroup(s.echo.Group(s.basePath), s.basePath, s.cfg, s.conflicts)
+	return newAdmittingRouteGroup(s.echo.Group(s.basePath), s.basePath, s.cfg, s.admission)
 }
 
 // RootGroup returns a route registrar rooted at the engine with NO base path applied. It
@@ -391,13 +392,13 @@ func (s *Server) ModuleGroup() RouteRegistrar {
 // root regardless of server.path.base — e.g. the debug/system endpoints. It replaces the
 // former Echo() accessor for that internal need without exposing the engine.
 func (s *Server) RootGroup() RouteRegistrar {
-	return newTrackedRouteGroup(s.echo.Group(""), "", s.cfg, s.conflicts)
+	return newAdmittingRouteGroup(s.echo.Group(""), "", s.cfg, s.admission)
 }
 
 // RouteConflicts returns every duplicate method+path registration observed on
 // this server's registrars, in registration order. Empty when there are none.
 func (s *Server) RouteConflicts() []RouteConflict {
-	return s.conflicts.snapshot()
+	return s.admission.snapshot()
 }
 
 // RegisterReadyHandler overrides the readiness endpoint handler with a go-bricks Handler.
