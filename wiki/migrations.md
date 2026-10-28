@@ -14067,14 +14067,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C73.17] the six unjudged comparator methods on `*database.QueryBuilder` are deleted; use the `qb.Filter()` compare doors · compile-break · when: match
 
-- detect: `git grep -nE '\.(Eq|NotEq|Lt|LtOrEq|Gt|GtOrEq)\(' -- '*.go'`, keeping only calls whose
-  receiver is a `*database.QueryBuilder`: a `database.NewQueryBuilder(…)` value, or a variable or
-  field of that type. Drop the `qb.Filter()`/`qb.JoinFilter()` factory calls (`f.Eq(`, `jf.Eq(`)
-  and squirrel's own types. Every `.LtOrEq(` or `.GtOrEq(` hit is one, since the Filter doors
-  spell them `Lte`/`Gte` and squirrel's are map literals. To shortlist the files that hold such a
-  receiver: `git grep -nlE 'database\.NewQueryBuilder\(|\*database\.QueryBuilder' -- '*.go'`.
-  After the bump, `go build ./...` names every call
-  (`qb.Eq undefined (type *database.QueryBuilder has no field or method Eq)`).
+- detect: `git grep -nE '\.(Eq|NotEq|Lt|LtOrEq|Gt|GtOrEq)([^A-Za-z0-9_]|$)' -- '*.go'`, keeping
+  only calls and method values (`eq := qb.Eq`) whose receiver is a `*database.QueryBuilder`: a
+  `database.NewQueryBuilder(…)` value, or a variable or field of that type. Drop the
+  `qb.Filter()`/`qb.JoinFilter()` factories (`f.Eq`, `jf.Eq`) and squirrel's own types. Every
+  `.LtOrEq` or `.GtOrEq` hit not naming squirrel's map type (`squirrel.LtOrEq{…}`) is one, since
+  the Filter doors spell them `Lte`/`Gte`. To shortlist the files that hold such a receiver:
+  `git grep -nlE 'database\.NewQueryBuilder\(|\*database\.QueryBuilder' -- '*.go'`. After the
+  bump, `go vet ./...`, which also type-checks test files, names the first call left in each
+  package (`qb.Eq undefined (type *database.QueryBuilder has no field or method Eq)`).
 - scope: `Eq`, `NotEq`, `Lt`, `LtOrEq`, `Gt` and `GtOrEq` on `*database.QueryBuilder`, promoted
   from the embedded internal builder. **Unchanged**: `types.QueryBuilderInterface` and
   `testing/mocks`, which never carried them; every `qb.Filter()` and `qb.JoinFilter()` door;
@@ -14105,7 +14106,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `Eq`/`NotEq` still renders `IN`/`NOT IN`, with each element judged. A nil or list operand at
   `Lt`/`Lte`/`Gt`/`Gte` fails with `dbtypes.ErrOrderingOperandNotComparable`, where squirrel
   returned its own error.
-- verify: `go build ./...` passes and the detect returns no hit; on Oracle,
+- verify: `go vet ./...` passes and the detect returns no hit; on Oracle,
   `database.NewQueryBuilder("oracle").Filter().Eq("number", "12345").ToSQL()` returns
   `"number" = ?` with args `[12345]`.
 - ref: [ADR-158](adr_158_unjudged_qb_comparators_deleted.md) ·
