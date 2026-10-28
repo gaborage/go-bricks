@@ -85,7 +85,8 @@ func TestClassifyJoinFilterSkipsNil(t *testing.T) {
 	assert.Nil(t, sqlizer)
 }
 
-// inListPredicate and nullPredicate have no direct tests here: every branch
+// The list doors (In/NotIn through comparePredicate) and nullPredicate have no
+// direct tests here: every branch
 // (empty/non-empty list, negate true/false, column-validation error, operand-
 // resolution error, the jf expression splice and its blank-SQL refusal, the f
 // expression refusal, Oracle reserved-word quoting) is already exercised through

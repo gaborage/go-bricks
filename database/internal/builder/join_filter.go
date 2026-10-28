@@ -193,7 +193,7 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 //	jf.In("day", qb.MustExpr("CURRENT_DATE"))       // day IN (CURRENT_DATE)
 func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 	// Empty IN list - always false
-	return inListPredicate(jff.qb, column, values, false, joinFilterFamily, wrapJoinFilter)
+	return comparePredicate(jff.qb, column, opIn, values, joinFilterFamily, wrapJoinFilter)
 }
 
 // NotIn creates a NOT IN condition (column NOT IN (values...)).
@@ -208,7 +208,7 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 //	jf.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilter {
 	// Empty NOT IN list - always true
-	return inListPredicate(jff.qb, column, values, true, joinFilterFamily, wrapJoinFilter)
+	return comparePredicate(jff.qb, column, opNotIn, values, joinFilterFamily, wrapJoinFilter)
 }
 
 // Like creates a LIKE condition.

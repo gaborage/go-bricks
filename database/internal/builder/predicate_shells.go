@@ -45,7 +45,8 @@ func combineLogical[T squirrel.Sqlizer, C logicalContainer](
 }
 
 // comparePredicate is the shared body of Filter and JoinFilter Eq, NotEq, Lt,
-// Lte, Gt and Gte: quote the column, judge the operand, render the answer. A
+// Lte, Gt, Gte, In and NotIn: quote the column, judge the operand, render the
+// answer. A
 // column failure or a refused operand is lifted through errorSqlizer, whose
 // ToSql defers the error to the parent query's build.
 func comparePredicate[T squirrel.Sqlizer](
@@ -94,56 +95,6 @@ func betweenPredicate[T squirrel.Sqlizer](
 		renderPredicate(quotedColumn, ">=", lower),
 		renderPredicate(quotedColumn, "<=", upper),
 	})
-}
-
-// inListPredicate is the shared body of Filter.In/NotIn and
-// JoinFilter.In/NotIn: quote the column, resolve the list operand through the
-// same normalization the compare doors use (nil/pointer/Valuer elements,
-// scalar-to-one-element wrapping, a RawExpression judged by family — spliced as
-// `col IN (<sql>)` or refused), and render either squirrel's own empty-list
-// constant or the column-to-list comparison.
-//
-// negate selects NOT IN over IN. The three facts that vary between the two —
-// the operand-resolution error's operator name, the vendor-neutral constant
-// squirrel has always rendered for the empty case ("(1=0)" for IN — always
-// false, "(1=1)" for NOT IN — always true), and squirrel.Eq vs squirrel.NotEq
-// for the non-empty case — moved in lockstep at every call site, so negate
-// derives all three internally instead of taking them as three separate,
-// coupled parameters.
-//
-// On a resolution failure, errorSqlizer (filter.go) is lifted through the
-// same wrap used for real predicates — its ToSql defers the error to the
-// parent query's build.
-func inListPredicate[T squirrel.Sqlizer](
-	qb *QueryBuilder,
-	column string,
-	values any,
-	negate bool,
-	family doorFamily,
-	wrap func(squirrel.Sqlizer) T,
-) T {
-	quotedColumn, err := qb.quoteColumnForQuery(column)
-	if err != nil {
-		return wrap(errorSqlizer{err: err})
-	}
-	op, emptySQL := "IN", "(1=0)"
-	if negate {
-		op, emptySQL = "NOT IN", "(1=1)"
-	}
-	normalized, exprSQL, empty, err := resolveListOperands(op, values, family)
-	if err != nil {
-		return wrap(errorSqlizer{err: err})
-	}
-	if exprSQL != "" {
-		return wrap(squirrel.Expr(quotedColumn + " " + op + " (" + exprSQL + ")"))
-	}
-	if empty {
-		return wrap(squirrel.Expr(emptySQL))
-	}
-	if negate {
-		return wrap(squirrel.NotEq{quotedColumn: normalized})
-	}
-	return wrap(squirrel.Eq{quotedColumn: normalized})
 }
 
 // nullPredicate is the shared body of Filter.Null/NotNull and

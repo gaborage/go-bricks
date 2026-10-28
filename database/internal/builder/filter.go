@@ -134,7 +134,7 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	// Empty slice special case: generate "1=0" to ensure no matches
-	return inListPredicate(ff.qb, column, values, false, filterFamily, wrapFilter)
+	return comparePredicate(ff.qb, column, opIn, values, filterFamily, wrapFilter)
 }
 
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
@@ -149,7 +149,7 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 //	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	// Empty NOT IN list - always true
-	return inListPredicate(ff.qb, column, values, true, filterFamily, wrapFilter)
+	return comparePredicate(ff.qb, column, opNotIn, values, filterFamily, wrapFilter)
 }
 
 // Like creates a case-insensitive LIKE filter.
