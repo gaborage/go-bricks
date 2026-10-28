@@ -534,7 +534,7 @@ jobs:
           pids="$pids $!"
           if [ "$INTEG_LEG" != db ]; then
           # renovate: datasource=docker depName=redis
-          docker pull redis:8.10.2-alpine &
+          docker pull redis:8.10.3-alpine &
           pids="$pids $!"
           fi
           rc=0
