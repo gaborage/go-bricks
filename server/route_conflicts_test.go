@@ -550,6 +550,8 @@ func requireReservedRefusal(t *testing.T, method string, register func(*Server, 
 	}
 	mark := DefaultRouteRegistry.Count()
 	register(srv, group, method)
+	rec := serveEngine(srv.echo, http.MethodGet, "/partner/v2/refused")
+	assert.Equal(t, http.StatusNotFound, rec.Code, "a refused registration installs no engine route")
 	if !middlewareFirst {
 		addGroupMiddleware()
 	}
