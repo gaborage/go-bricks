@@ -14087,8 +14087,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   one whose `Value()` dereferences its receiver panicked at build), and bound a list's elements as
   written. The map types have no `ToSQL`, so the result could not go to the framework's `Where`;
   it served a hand-built squirrel builder or `Having`.
-- after: the six names do not exist, and a call fails to compile. Code that still compiles renders
-  the same SQL as before.
+- after: the six names do not exist, and a call fails to compile.
 - apply: replace `qb.Eq(c, v)` with `qb.Filter().Eq(c, v)`, and likewise `NotEq`, `Lt` and `Gt`;
   `LtOrEq` becomes `Lte` and `GtOrEq` becomes `Gte`. The result is a `types.Filter`, not a map.
   Pass it to `Where`, or wherever the map went, since a `types.Filter` is a `squirrel.Sqlizer`. Code

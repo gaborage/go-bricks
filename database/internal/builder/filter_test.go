@@ -380,31 +380,36 @@ func TestFilterOrWithSelectQueryBuilder(t *testing.T) {
 
 // ========== Oracle-Specific Tests ==========
 
-func TestFilterOracleReservedWords(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.Oracle)
-	f := qb.Filter()
-
+// TestFilterComparisonsQuoteReservedWords pins the column each f compare door
+// renders: Oracle quotes a reserved word, PostgreSQL leaves it as written.
+func TestFilterComparisonsQuoteReservedWords(t *testing.T) {
 	tests := []struct {
 		name   string
+		vendor dbtypes.Vendor
 		column string
+		quoted string
 	}{
-		{"number", "number"},
-		{"level", "level"},
-		{"size", "size"},
-		{"access", "access"},
-		{"order", "order"},
+		{"oracle_number", dbtypes.Oracle, "number", `"number"`},
+		{"oracle_level", dbtypes.Oracle, "level", `"level"`},
+		{"oracle_size", dbtypes.Oracle, "size", `"size"`},
+		{"oracle_access", dbtypes.Oracle, "access", `"access"`},
+		{"oracle_order", dbtypes.Oracle, "order", `"order"`},
+		{"postgresql_number", dbtypes.PostgreSQL, "number", "number"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			filter := f.Eq(tt.column, "value")
-			sql, args, err := filter.ToSQL()
-
-			require.NoError(t, err)
-			// Verify quoting
-			assert.Contains(t, sql, `"`+tt.column+`"`)
-			assert.Equal(t, []any{"value"}, args)
-		})
+		f := NewQueryBuilder(tt.vendor).Filter()
+		for _, d := range compareDoors {
+			if d.f == nil {
+				continue
+			}
+			t.Run(tt.name+"/"+d.name, func(t *testing.T) {
+				sql, args, err := d.f(f, tt.column, "value").ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, tt.quoted+" "+d.op+" ?", sql)
+				assert.Equal(t, []any{"value"}, args)
+			})
+		}
 	}
 }
 
