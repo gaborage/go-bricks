@@ -14001,7 +14001,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep -nE "^[[:space:]]*(- )?[\"']?[^\"'#:[:space:]]*[A-Z][^\"'#:[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml'
   # YAML flow maps: the same keys written inline, server: {Port: 9999}
   git grep -nE "[{,][[:space:]]*[\"']?[^\"'#:,{}[:space:]]*[A-Z][^\"'#:,{}[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml'
-  # Go: maps handed to config.LoadFromMap; read each one's keys
+  # Go: maps handed to config.LoadFromMap; read each one's keys, a dotted one ("server.Port") by segment
   git grep -n 'LoadFromMap' -- '*.go'
   ```
 
@@ -14027,8 +14027,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   this framework version. **Unchanged**: a lone mixed-case key with no twin, which still decodes
   through mapstructure's case-insensitive match (`server: {probes: {Port: 9090}}` with no
   `SERVER_PROBES_PORT`); a lone header, which keeps its case; environment variables alone, which
-  are lowercased; a hand-built `*config.Config`, which is never decoded; a dynamic tenant source;
-  every signature and config key.
+  are lowercased; a flat-dotted YAML key such as `server.Port:`, which YAML loading keeps as one
+  literal root key that decode never reads, so it twins only with another spelling of that same
+  literal key (a dotted `LoadFromMap` key is unflattened and twins as a nested one does); a
+  hand-built `*config.Config`, which is never decoded; a dynamic tenant source; every signature and
+  config key.
 - gate: match = a hit that meets one of the three conditions. no-match = no hit, or no hit has a
   twin.
 - before (v0.72.0): mapstructure took a key's exact spelling first, otherwise the first
