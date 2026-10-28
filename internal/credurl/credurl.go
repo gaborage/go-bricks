@@ -58,7 +58,7 @@ func RedactError(err error, raw, reason string) error {
 
 // maskRawIn replaces every rendering of raw in msg with its masked form.
 func maskRawIn(msg, raw string) string {
-	masked := maskPassword(raw, false)
+	masked := maskPassword(raw, -1)
 	if masked == raw {
 		return msg
 	}
@@ -72,8 +72,8 @@ func maskRawIn(msg, raw string) string {
 // where a port belongs ("invalid port \":pa\" after host"). Masking the URL alone leaves
 // that copy behind, so rebuild the whole rendering instead of scrubbing it. urlErr.URL
 // is what url.Parse actually saw — raw with any '#' fragment already cut — so it, not
-// raw, is the string that reached the message. raw is read only for an '@' that marks
-// the authority as userinfo, and only when it extends urlErr.URL: a *url.Error naming
+// raw, is the string that reached the message. raw is read only for the last '@',
+// which ends the userinfo, and only when it extends urlErr.URL: a *url.Error naming
 // another URL, such as a dialer's own, is judged alone.
 func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 	src := urlErr.URL
@@ -81,7 +81,7 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 		src = raw // url.Parse cut raw's '#' tail before reporting
 	}
 	_, after, _ := strings.Cut(src, "://")
-	masked := maskPassword(urlErr.URL, strings.Contains(after, "@"))
+	masked := maskPassword(urlErr.URL, strings.LastIndex(after, "@"))
 	if masked == urlErr.URL {
 		return msg
 	}
@@ -97,9 +97,10 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 // parsing it — the URLs that leak are precisely the ones url.Parse rejects.
 // Non-URL strings (no "://") and URLs without a password pass through unchanged:
 // the leak is url.Parse's %q rendering of what it was handed, which only fires for
-// the URL form. userinfo reports that an '@' follows the authority, so a segment
-// that reads as host:port is still userinfo.
-func maskPassword(raw string, userinfo bool) string {
+// the URL form. userinfoEnd, unless -1, locates the '@' that ends the userinfo,
+// counted from the authority's start; past raw's end, that '@' sat in a tail
+// url.Parse cut, and the userinfo runs to raw's end. -1 leaves the end to the scan.
+func maskPassword(raw string, userinfoEnd int) string {
 	const schemeSep = "://"
 	sep := strings.Index(raw, schemeSep)
 	if sep == -1 {
@@ -115,12 +116,14 @@ func maskPassword(raw string, userinfo bool) string {
 	// net/url splits userinfo at the last '@' of the authority, so an unescaped '@'
 	// inside the password stays part of the userinfo.
 	at := strings.LastIndex(rest[:end], "@")
-	if at == -1 {
+	if userinfoEnd != -1 {
+		at = min(userinfoEnd, len(rest))
+	} else if at == -1 {
 		// An unescaped '/', '?' or '#' in the password hides the '@' behind the
 		// authority terminator, if raw holds it at all. A segment that cannot be a
 		// host[:port] is userinfo; one that can, as a digit-led password does, is
-		// userinfo only when an '@' follows.
-		if !userinfo && looksLikeHostPort(rest[:end]) {
+		// left as written.
+		if looksLikeHostPort(rest[:end]) {
 			return raw
 		}
 		if at = strings.LastIndex(rest, "@"); at == -1 {
@@ -139,9 +142,11 @@ func maskPassword(raw string, userinfo bool) string {
 
 // looksLikeHostPort reports whether an authority segment is a plausible host[:port],
 // i.e. carries no credentials to mask. url.Parse accepts the ambiguous shape
-// "amqps://user:1234/secret@broker" as written, and an accepted URL is never rendered
-// into an error, so the raw-URL pass leaves it alone on purpose: masking it would buy
-// nothing and would mangle its mirror image, a passwordless URL whose path holds an '@'.
+// "amqps://user:1234/secret@broker" as written, reading "user:1234" as the host, so
+// no *url.Error renders it; the raw-URL pass leaves it alone on purpose, since
+// masking it would mangle its mirror image, a passwordless URL whose path holds an
+// '@'. The accepted cost: a driver that echoes an accepted URL, or its host or port
+// (amqp091's port parse, a DNS lookup), shows that shape as written.
 func looksLikeHostPort(authority string) bool {
 	if strings.HasPrefix(authority, "[") {
 		// Skip an IPv6 literal so only a trailing ":port" is examined; an unterminated

@@ -79,7 +79,7 @@ func TestNetURLErrorFormatUnchanged(t *testing.T) {
 }
 
 func TestRedactError(t *testing.T) {
-	cases := slices.Concat(hostilePasswordCases(), digitPasswordCases(), scanCases(), seamCases())
+	cases := slices.Concat(hostilePasswordCases(), digitPasswordCases(), atSignUserinfoCases(), scanCases(), seamCases())
 
 	for i := range cases {
 		tc := &cases[i]
@@ -279,6 +279,54 @@ func digitPasswordCases() []redactErrorCase {
 	)
 }
 
+// atSignUserinfoCases pin an '@' in the username, or in the password ahead of an
+// unescaped '/', '?' or '#'. url.Parse splits the authority on that earlier '@', so
+// the password lands where the port belongs; the userinfo still ends at the last '@'
+// after the scheme separator, and runs to the end of what url.Parse reported when
+// that '@' was cut away with the fragment.
+func atSignUserinfoCases() []redactErrorCase {
+	hosts := []hostVariant{
+		{name: "named_host", addr: "broker:5672"},
+		{name: "ipv6_with_port", addr: "[::1]:5672"},
+	}
+	maskedUsername := `parse "amqp://svc@corp:xxxxx@{host}/vh": invalid URL ` + hint
+	maskedPassword := `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + hint
+	usernameSecrets := []string{"Se", "cretPW"}
+	passwordSecrets := []string{"Sec", "re:t", "PW"}
+
+	templates := []redactErrorCase{
+		{name: "at_sign_username_password_with_slash", raw: "amqp://svc@corp:Se/cretPW@{host}/vh", parse: parseRejects, want: maskedUsername, secrets: usernameSecrets},
+		{name: "at_sign_username_password_with_question_mark", raw: "amqp://svc@corp:Se?cretPW@{host}/vh", parse: parseRejects, want: maskedUsername, secrets: usernameSecrets},
+		{
+			name:    "at_sign_username_password_with_hash",
+			raw:     "amqp://svc@corp:Se#cretPW@{host}/vh",
+			parse:   parseRejects,
+			want:    `parse "amqp://svc@corp:xxxxx": invalid URL ` + hint,
+			secrets: usernameSecrets,
+		},
+		{name: "password_with_at_before_slash", raw: "amqp://user:Sec@re:t/PW@{host}/vh", parse: parseRejects, want: maskedPassword, secrets: passwordSecrets},
+		{name: "password_with_at_before_question_mark", raw: "amqp://user:Sec@re:t?PW@{host}/vh", parse: parseRejects, want: maskedPassword, secrets: passwordSecrets},
+		{
+			name:    "password_with_at_before_hash",
+			raw:     "amqp://user:Sec@re:t#PW@{host}/vh",
+			parse:   parseRejects,
+			want:    `parse "amqp://user:xxxxx": invalid URL ` + hint,
+			secrets: passwordSecrets,
+		},
+	}
+
+	return append(withHosts(hosts, templates),
+		// The '@' url.Parse reported is not the last one: the last sits in the cut tail.
+		redactErrorCase{
+			name:    "password_with_at_and_colon_before_hash",
+			raw:     "amqp://user:p@ss:x#y@broker/vh",
+			parse:   parseRejects,
+			want:    `parse "amqp://user:xxxxx": invalid URL ` + hint,
+			secrets: []string{"p@ss", "ss:x"},
+		},
+	)
+}
+
 // scanCases drive the password scan and its host[:port] guard through RedactError
 // with the oracle-shaped inputs the scan was first written against. An accepted URL
 // lands verbatim in the default builder's dial failure, so its row observes the scan
@@ -309,6 +357,13 @@ func scanCases() []redactErrorCase {
 			parse:   parseRejects,
 			want:    rejectedDSN,
 			secrets: []string{"pa?ss", invalidPortEcho},
+		},
+		{
+			name:    "at_sign_username_password_with_slash",
+			raw:     "oracle://svc@corp:zqxvwSe/cretPW@host:1521/XE",
+			parse:   parseRejects,
+			want:    `parse "oracle://svc@corp:xxxxx@host:1521/XE": invalid URL ` + hint,
+			secrets: []string{"zqxvwSe", "cretPW"},
 		},
 		// url.Parse cuts the fragment before it reports (the hostile rows pin that
 		// path), so this row renders raw verbatim to observe the scan over the whole

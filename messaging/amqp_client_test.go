@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -1753,6 +1754,7 @@ func TestConnectDialFailure(t *testing.T) {
 func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 	tests := []struct {
 		name     string
+		user     string // empty: "user"
 		password string
 		suffix   string
 		secrets  []string
@@ -1768,11 +1770,16 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 		// url.Parse reports "amqp://user:2024/%zz", cut at the '#', so only the '@' in
 		// the URL connect() dialed makes "user:2024" userinfo.
 		{name: "digit_password_with_invalid_escape_before_hash", password: "2024/%zz#x", secrets: []string{"2024"}, hostCut: true},
+		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
+		{name: "username_with_at_password_with_slash", user: "svc@corp", password: "Se/cretPW", secrets: []string{"Se/", "cretPW", `":Se"`}},
+		// url.Parse reports "amqp://user:p@ss:x", cut at the '#'; the last '@' is past it.
+		{name: "password_with_at_and_colon_before_hash", password: "p@ss:x#y", secrets: []string{"ss:x", "p@ss"}, hostCut: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw := "amqp://user:" + tt.password + "@broker:5672/vh" + tt.suffix
+			user := cmp.Or(tt.user, "user")
+			raw := "amqp://" + user + ":" + tt.password + "@broker:5672/vh" + tt.suffix
 			// Premise: the dial fails at parse, before any network I/O, and the vendor's
 			// error carries the password.
 			_, dialErr := amqp.Dial(raw)
@@ -1789,7 +1796,7 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 			for _, secret := range tt.secrets {
 				assert.NotContains(t, err.Error(), secret)
 			}
-			assert.Contains(t, err.Error(), "user", "the username identifies the failing connection")
+			assert.Contains(t, err.Error(), "//"+user+":", "the username identifies the failing connection")
 			if tt.hostCut {
 				assert.NotContains(t, err.Error(), "broker", "premise: url.Parse cut the host with the fragment")
 			} else {

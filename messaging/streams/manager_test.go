@@ -1,6 +1,7 @@
 package streams
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1181,6 +1182,7 @@ func TestSafeEnvError(t *testing.T) {
 	tests := []struct {
 		name    string
 		raw     string
+		user    string // empty: "svc"
 		secrets []string
 	}{
 		{name: "space_in_port", raw: "rabbitmq-stream://svc:fixture-pw@broker:55 52/", secrets: []string{"fixture-pw"}},
@@ -1191,6 +1193,8 @@ func TestSafeEnvError(t *testing.T) {
 		// url.Parse reports the URI cut at the '#', so only the URI passed in shows the
 		// '@' that makes "svc:2024" userinfo rather than host:port.
 		{name: "digit_password_with_hash_and_leading_space", raw: " rabbitmq-stream://svc:2024#x@broker:5552/", secrets: []string{"2024"}},
+		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
+		{name: "username_with_at_password_with_slash", raw: "rabbitmq-stream://svc@corp:Se/cretPW@127.0.0.1:1/vh", user: "svc@corp", secrets: []string{"Se/", "cretPW"}},
 	}
 
 	for _, tt := range tests {
@@ -1205,7 +1209,7 @@ func TestSafeEnvError(t *testing.T) {
 				assert.NotContains(t, safe.Error(), secret)
 			}
 			assert.Contains(t, safe.Error(), "invalid stream URI")
-			assert.Contains(t, safe.Error(), "svc", "the username identifies the failing endpoint")
+			assert.Contains(t, safe.Error(), "//"+cmp.Or(tt.user, "svc")+":", "the username identifies the failing endpoint")
 			var urlErr *url.Error
 			require.ErrorAs(t, safe, &urlErr)
 		})
