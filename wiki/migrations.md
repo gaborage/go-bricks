@@ -13873,9 +13873,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - the database identity keys `connectionstring`, `type`, `host`, `port`, `database`,
     `username`, `password`, `oracle.service.name` and `oracle.service.sid`, under `database`,
     `databases.<name>` or `multitenant.tenants.<id>.database`, with an empty or null value.
+  - the four retired messaging keys of `[C73.7]` (`messaging.broker.virtualhost`,
+    `messaging.routing.exchange`, `messaging.routing.key`, `messaging.headers` or a key under it)
+    spelled with a Unicode fold, such as `virtualhoſt:` or `headerſ:` (U+017F for `s`), with any
+    value. `[C73.7]`'s own detect covers their ASCII spellings.
   - Run all three greps. They list candidates, not matches: they also hit unrelated upper-case
     keys and non-ASCII values or comments, so a hit counts only once you confirm its full key path
-    is one listed above and its value is empty or null, or a second spelling exists. Block keys:
+    is one listed above and its value is empty or null (any value for a retired key), or a second
+    spelling exists. Block keys:
     `git grep -nE '^[[:space:]]*[^#[:space:]]*[A-Z][^:]*:' -- '*.yaml' '*.yml'`. Flow mappings
     (`server: {probes: {Host: ""}}`), quoted keys included:
     `git grep -nE '[{,][[:space:]]*[^#:{},]*[A-Z][^:{},]*:' -- '*.yaml' '*.yml'`. Unicode folds
@@ -13902,9 +13907,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `database identity field(s) delivered empty: [<lowercase key path>]` in root, named and tenant
   sections. Two spellings of one of these keys, one of them empty or null, are refused on every run,
   also in a database section that is otherwise configured. `allowedIPs: []` still clears the
-  allowlist deliberately.
-- apply: lowercase the key and give it a value, or remove it; delete any second spelling of the
-  same key.
+  allowlist deliberately. A retired messaging key spelled with a Unicode fold is refused as
+  `[C73.7]` describes.
+- apply: for the delivered-empty keys, lowercase the key and give it a value, or remove it, and
+  delete any second spelling of the same key. For a retired messaging key, remove it per
+  `[C73.7]`: lowercasing it does not make it valid.
 - verify: `config.Load()` succeeds.
 - ref: gaborage/go-bricks#2210 · [ADR-156](adr_156_delivered_empty_checks_match_every_spelling.md) ·
   `config/source.go` (`Config.deliveries`, `pathMatches`) · `config/delivered_empty.go`
