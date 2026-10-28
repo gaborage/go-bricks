@@ -3078,15 +3078,15 @@ func capitalizedIdentityYAML(key string, indent int, value string) string {
 func TestValidateNoDeliveredEmptyDatabaseUnderAnySpelling(t *testing.T) {
 	sections := []struct {
 		name   string
-		path   string
+		sec    section
 		yaml   string
 		indent int
 	}{
-		{name: "root", path: fieldDatabase, yaml: "database:\n", indent: 2},
-		{name: "named", path: "databases.reporting", yaml: "databases:\n  reporting:\n", indent: 4},
+		{name: "root", sec: rootDatabaseSection(), yaml: "database:\n", indent: 2},
+		{name: "named", sec: namedDatabaseSection("reporting"), yaml: "databases:\n  reporting:\n", indent: 4},
 		{
 			name:   "tenant",
-			path:   "multitenant.tenants.acme.database",
+			sec:    tenantDatabaseSection("acme"),
 			yaml:   "multitenant:\n  enabled: true\n  resolver:\n    type: header\n  tenants:\n    acme:\n      database:\n",
 			indent: 8,
 		},
@@ -3105,9 +3105,8 @@ func TestValidateNoDeliveredEmptyDatabaseUnderAnySpelling(t *testing.T) {
 					_, err := loadDeliveredEmptyFixture(t, sec.yaml+capitalizedIdentityYAML(key, sec.indent, value.yaml), nil)
 
 					require.Error(t, err)
-					assert.Contains(t, err.Error(), "delivered empty")
-					assert.Contains(t, err.Error(), sec.path+"."+key)
-					assert.NotContains(t, err.Error(), errDatabaseIncomplete)
+					assertDeliveredEmptyError(t, err.Error(),
+						[]string{"delivered empty", sec.sec.path + "." + key}, []string{errDatabaseIncomplete}, nil)
 				})
 			}
 		}
@@ -3168,12 +3167,13 @@ func TestValidateNoDeliveredEmptyDatabaseRefusesAnEmptyTwin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Staged once; each Load re-reads the same files and environment.
+			_, err := loadConfigFixture(t, tt.files, tt.env)
 			for range 50 {
-				_, err := loadConfigFixture(t, tt.files, tt.env)
-
 				require.Error(t, err)
 				require.Contains(t, err.Error(), "delivered empty")
 				require.Contains(t, err.Error(), tt.key)
+				_, err = Load()
 			}
 		})
 	}

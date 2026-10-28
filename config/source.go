@@ -228,15 +228,17 @@ type keyDelivery struct {
 }
 
 // deliveries is the key lookup every presence door asks (ADR-156). It returns each path one
-// of the operator's configuration layers recorded that matches key segment by segment —
-// with under set, a path below key too — AND that the final merged tree still holds
-// (ADR-104), with the raw value at that path, sorted by path. Recording is append-only, so
-// the tree half is what evicts a key a later layer replaced or nulled at an ancestor path.
+// of the operator's configuration layers recorded that matches key (pathMatches) — with
+// under set, a path below key too — AND that the final merged tree still holds (ADR-104),
+// with the raw value at that path, sorted by path. Recording is append-only, so the tree
+// half is what evicts a key a later layer replaced or nulled at an ancestor path. A caller
+// reads emptiness from each match's raw value, never from a lookup of key's own spelling.
+// Preloaded defaults are never recorded, and a sourceless Config has no deliveries at all.
 //
-// A segment matches as mapstructure matches a field name (pathMatches), so every spelling
-// decode accepts is found, and a caller reads emptiness from the raw value of each match,
-// never from a lookup of key's own spelling. Preloaded defaults are never recorded, and a
-// sourceless Config has no deliveries at all.
+// Without under, doors query LEAF keys — "database.host", never "database". A YAML null
+// written AT a section path is itself a leaf and records that path, so a section path must
+// not be used as a door key: it would read as delivered for the very shape that empties the
+// section.
 func (c *Config) deliveries(key string, under bool) []keyDelivery {
 	if c == nil || c.src == nil {
 		return nil
@@ -254,8 +256,8 @@ func (c *Config) deliveries(key string, under bool) []keyDelivery {
 
 // pathMatches reports whether path names key — or, with under set, a node below it —
 // comparing segment by segment with strings.EqualFold, the rule mapstructure applies to a
-// field name. It is the package's one case fold for keys: EqualFold matches Unicode simple
-// folds (U+017F for s), which strings.ToLower misses.
+// field name and the one visitSubtree and the keystore tree walk apply. EqualFold matches
+// Unicode simple folds (U+017F for s), which strings.ToLower misses.
 func pathMatches(key, path []string, under bool) bool {
 	if len(path) < len(key) || (len(path) > len(key) && !under) {
 		return false
@@ -273,13 +275,8 @@ func anyDeliveredEmpty(found []keyDelivery) bool {
 	return slices.ContainsFunc(found, func(d keyDelivery) bool { return deliveredEmptyValue(d.raw) })
 }
 
-// delivered reports whether key was delivered under any spelling (deliveries). It is
-// presence only: a delivered key may still hold an empty value, and each door composes
-// delivery with its own emptiness rule.
-//
-// Doors query LEAF keys — "database.host", never "database". A YAML null written AT a
-// section path is itself a leaf and records that path, so a section path must not be used as
-// a door key: it would read as delivered for the very shape that empties the section.
+// delivered reports whether the leaf key was delivered under any spelling (deliveries). It
+// is presence only: a delivered key may still hold an empty value.
 func (c *Config) delivered(key string) bool {
 	return len(c.deliveries(key, false)) > 0
 }

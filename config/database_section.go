@@ -257,7 +257,7 @@ func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 		for _, k := range databaseIdentityKeys {
 			key := sec.path + "." + k
 			found := cfg.deliveries(key, false)
-			if len(found) > 0 && (!configured || (len(found) > 1 && anyDeliveredEmpty(found))) {
+			if (!configured && len(found) > 0) || (len(found) > 1 && anyDeliveredEmpty(found)) {
 				offending = append(offending, key)
 			}
 		}

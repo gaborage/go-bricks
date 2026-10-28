@@ -223,21 +223,34 @@ func TestPresenceEvictedWhenOverlayNullsTheSection(t *testing.T) {
 // the delivered-empty check must not fire on a key the final tree does not hold. The
 // delivered-empty message is asserted against first, so a failure here is attributed to this
 // door rather than to any other reason a nulled debug section might be rejected; Load
-// succeeding is the pre-ADR-104 behavior this must restore.
+// succeeding is the pre-ADR-104 behavior this must restore. A mixed-case empty delivery is
+// evicted the same way (ADR-156).
 func TestPresenceEvictedWhenOverlayNullsDebugSection(t *testing.T) {
-	const base = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
-		"debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedips: \"10.0.0.1\"\n"
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
+		"debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n"
 
-	cfg, err := loadConfigFixture(t, map[string]string{
-		testConfigFileYAML: base,
-		"config.prod.yaml": "debug:\n",
-	}, map[string]string{"APP_ENV": "prod"})
-	if err != nil {
-		assert.NotContains(t, err.Error(), "delivered empty",
-			"the overlay's null evicted debug.allowedips; the delivered-empty door must stay quiet")
+	tests := []struct {
+		name      string
+		allowlist string
+	}{
+		{name: "lowercase_value", allowlist: "  allowedips: \"10.0.0.1\"\n"},
+		{name: "mixed_case_empty", allowlist: "  allowedIPs: \"\"\n"},
 	}
-	require.NoError(t, err)
-	require.NotNil(t, cfg)
-	assert.False(t, cfg.delivered(fieldDebugAllowedIPs), "the overlay's null evicted the base layer's delivery")
-	assert.Empty(t, cfg.Debug.AllowedIPs, "the nulled section carries no allowlist")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadConfigFixture(t, map[string]string{
+				testConfigFileYAML: header + tt.allowlist,
+				"config.prod.yaml": "debug:\n",
+			}, map[string]string{"APP_ENV": "prod"})
+			if err != nil {
+				assert.NotContains(t, err.Error(), "delivered empty",
+					"the overlay's null evicted debug.allowedips; the delivered-empty door must stay quiet")
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+			assert.False(t, cfg.delivered(fieldDebugAllowedIPs), "the overlay's null evicted the base layer's delivery")
+			assert.Empty(t, cfg.Debug.AllowedIPs, "the nulled section carries no allowlist")
+		})
+	}
 }

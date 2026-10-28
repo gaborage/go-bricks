@@ -21,9 +21,9 @@ simple folds that `EqualFold` matches, such as U+017F for `s`. Fixes #2210.
 1. **One key lookup answers every presence door.** `Config.deliveries` (`config/source.go`)
    returns every path an operator layer recorded that matches the key segment by segment under
    `strings.EqualFold`, and that the final tree still holds (ADR-104 eviction), each with its raw
-   value, sorted by path. `delivered` and `deliveredAtOrUnder` are built on it, and `pathMatches`
-   is the package's one case fold for keys. A preloaded default is never a match, and a hand-built
-   `Config` literal has none.
+   value, sorted by path. `delivered` and `deliveredAtOrUnder` are built on it. `pathMatches`
+   applies the per-segment rule `visitSubtree` and the keystore tree walk already use. A
+   preloaded default is never a match, and a hand-built `Config` literal has none.
 2. **Emptiness is read at the matched path.** `server.probes.host` and `debug.allowedips` read the
    raw value at each delivered spelling, never a `Get` of the lowercase key, so `Host: 127.0.0.2`
    is kept. The key is refused when any delivered spelling is empty or null, whether the spellings
