@@ -156,16 +156,19 @@ func newDefaultedSource() (*configSource, error) {
 	return src, nil
 }
 
-// decode unmarshals the tree with Load's decoder and attaches the tree and its presence
-// record to the result — one value, one point.
+// decode refuses a tree whose key spellings decode would read ambiguously, then unmarshals
+// it with Load's decoder; the result carries the tree and its presence record — one value,
+// one point.
 func (s *configSource) decode() (*Config, error) {
-	var cfg Config
+	cfg := Config{src: s}
+	if err := validateKeySpelling(&cfg); err != nil {
+		return nil, err
+	}
 	if err := s.k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 		DecoderConfig: buildDecoderConfig(),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-	cfg.src = s
 	return &cfg, nil
 }
 

@@ -2615,6 +2615,25 @@ reports ADR-051's message instead of "incomplete". See [migrations.md](migration
 **Key Benefits:** the checks see what decode sees, so a template that renders `Host: ""` fails at
 startup instead of widening a bind or emptying an allowlist.
 
+### [ADR-157: A Config Key Decode Would Read Under Another Spelling Fails Startup](adr_157_config_key_spelling_refused.md)
+
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a root key that case-folds to a framework section name without being spelled as it (`App:`, `Observability:`) fails `config.Load` and `config.LoadFromMap`, and, once the follow-up ships, so do two keys of one map node that differ only by case
+
+mapstructure decodes a key into a field by an exact match first and `strings.EqualFold` otherwise,
+while `Config.Exists`, the getters and the observability bootstrap name a key by its exact
+spelling. So `Observability:` booted the no-op telemetry provider, `App:` was dropped beside the
+lowercase `app` defaults, and of two twins such as `Port` and `port` one was dropped, possibly a
+different one per run. `configSource.decode` now refuses, before it unmarshals, a root key that
+folds to a `configSections` name without equaling it (`config_invalid: app is spelled App; …`),
+naming every spelling and never a value, so `go-bricks-migrate --source-config` refuses too. The
+fold-twin rule, at any map node and from any layer, framework defaults included, ships in a
+follow-up PR under #2219 (`[C73.19]`). Refuse, not normalize: lowercasing at load would break
+ADR-090's check and change keystore kids and header names. Environment variables and a lone
+mixed-case key below the root are unaffected. See [migrations.md](migrations.md) `[C73.14]`.
+
+**Key Benefits:** a config is read one way by decode and by every exact-name lookup, and a section
+or override the framework would have ignored fails at startup instead.
+
 ---
 
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
@@ -3426,7 +3445,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-156) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-157) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
