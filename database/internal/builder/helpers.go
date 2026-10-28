@@ -603,32 +603,110 @@ func isListKind(kind reflect.Kind) bool {
 	return kind == reflect.Slice || kind == reflect.Array
 }
 
-// orderingOperand resolves an ordering operand, judges a RawExpression by the
-// door's family, and fails closed on the shapes an ordering has no rendering
-// for. Both families call it, so nil, a set and a Valuer reporting NULL take
-// the SAME sentinel at `f` and at `jf` and errors.Is works on either (#1167,
-// #1205). Squirrel, which FilterFactory delegated to, returned its own text for
-// those, rendered `col < ?` bound to a typed nil pointer — the silent-no-rows
-// shape — and panicked on a nil pointer to a Valuer (#1209). A non-empty
-// exprSQL is an expression the family splices in place of a bound value.
-func orderingOperand(op string, value any, family doorFamily) (resolved any, exprSQL string, err error) {
+// Comparison operators whose operand contract differs from the ordering ones':
+// nil and slices are meaningful for equality and refused for ordering.
+const (
+	opEqual    = "="
+	opNotEqual = "<>"
+)
+
+// operandKind is the judge's answer for one operand: how the door renders it.
+type operandKind uint8
+
+const (
+	// operandBound renders `col op ?` through squirrel's own construct for op,
+	// binding the resolved value whole.
+	operandBound operandKind = iota
+	// operandPlaceholder renders `col op ?` through squirrel.Expr: the same
+	// token, but an operand that is itself a squirrel.Sqlizer expands in place.
+	// Only a jf door answers it, where an f door answers operandBound — the two
+	// families have always differed there.
+	operandPlaceholder
+	// operandSpliced renders a RawExpression's SQL verbatim, binding nothing.
+	operandSpliced
+	// operandNullOrSet renders through squirrel's Eq / NotEq: IS [NOT] NULL,
+	// IN / NOT IN, or the empty-set constant.
+	operandNullOrSet
+)
+
+// operand is the judge's verdict on one operand at one door.
+type operand struct {
+	kind  operandKind
+	value any
+	sql   string
+}
+
+// judgeOperand is the one place a compare operand becomes an answer, for both
+// families and every operator: resolve it ONCE (resolveOperand), judge a
+// RawExpression by the door's family (expressionOperand), then classify what
+// resolution produced. An ordering operator has no rendering for a nil or a
+// set, so it fails closed with ErrOrderingOperandNotComparable at `f` and `jf`
+// alike (#1167, #1205); an equality operator renders nil as IS [NOT] NULL and
+// a set as IN / NOT IN, its elements bound as the caller wrote them.
+func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 	resolved, nullOrList, err := resolveOperand(value)
 	if err != nil {
-		return nil, "", wrapOperandErr(op, err)
+		return operand{}, wrapOperandErr(op, err)
 	}
 	exprSQL, isExpr, err := expressionOperand(op, resolved, family)
+	if err != nil {
+		return operand{}, err
+	}
 	if isExpr {
-		return nil, exprSQL, err
+		return operand{kind: operandSpliced, sql: exprSQL}, nil
 	}
-	if nullOrList {
-		return nil, "", orderingOperandErr(op)
+	if !nullOrList && family == joinFilterFamily {
+		return operand{kind: operandPlaceholder, value: resolved}, nil
 	}
-	return resolved, "", nil
+	if !nullOrList {
+		return operand{kind: operandBound, value: resolved}, nil
+	}
+	if op != opEqual && op != opNotEqual {
+		return operand{}, orderingOperandErr(op)
+	}
+	return operand{kind: operandNullOrSet, value: resolved}, nil
+}
+
+// renderPredicate renders a judged operand against quotedColumn, the one
+// rendering every compare door shares; the answer alone decides the form. A
+// bound value, a null and a set go through squirrel's own construct for op
+// (comparison), so IS [NOT] NULL, IN / NOT IN and the empty-set constant keep
+// squirrel's spelling; operandPlaceholder renders the same `col op ?` token
+// (#1200) through squirrel.Expr.
+func renderPredicate(quotedColumn, op string, judged operand) squirrel.Sqlizer {
+	if judged.kind == operandSpliced {
+		return squirrel.Expr(quotedColumn + " " + op + " " + judged.sql)
+	}
+	if judged.kind == operandPlaceholder {
+		return squirrel.Expr(quotedColumn+" "+op+" ?", judged.value)
+	}
+	return comparison(quotedColumn, op, judged.value)
+}
+
+// comparison renders `<column> <op> <value>` through squirrel's construct for
+// op, binding the value whole.
+func comparison(quotedColumn, op string, value any) squirrel.Sqlizer {
+	if op == opEqual {
+		return squirrel.Eq{quotedColumn: value}
+	}
+	if op == opNotEqual {
+		return squirrel.NotEq{quotedColumn: value}
+	}
+	if op == "<" {
+		return squirrel.Lt{quotedColumn: value}
+	}
+	if op == "<=" {
+		return squirrel.LtOrEq{quotedColumn: value}
+	}
+	if op == ">" {
+		return squirrel.Gt{quotedColumn: value}
+	}
+	return squirrel.GtOrEq{quotedColumn: value}
 }
 
 // wrapOperandErr and orderingOperandErr are the two spellings every door shares.
 // A Valuer failure names the operator it was resolving for; a nil or set operand
-// at an ordering door names the same sentinel, written ONCE so the six doors that
+// at an ordering door names the same sentinel, written ONCE so the doors that
 // report it cannot drift apart in wording while still matching errors.Is.
 func wrapOperandErr(op string, err error) error {
 	return fmt.Errorf("resolving the %s operand: %w", op, err)
