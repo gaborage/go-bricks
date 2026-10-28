@@ -2616,8 +2616,9 @@ holds for both reasons; a duplicate-only error reads as before. Echo's own catch
 through admission and are unaffected. Per-module custom 404 handlers are unsupported, and no
 replacement is provided. See [migrations.md](migrations.md) `[C73.12]`.
 
-**Key Benefits:** the catch-all premise ADR-124 assumed now holds by construction, so the
-group-level gates cover every unmatched sub-path.
+**Key Benefits:** the catch-all premise ADR-124 assumed now holds by construction: no module
+handler can take a group's catch-all over, so a group's gates run on every sub-path that no route
+claims. A route that needs a group's gate must still register on that group.
 
 ---
 

@@ -80,9 +80,12 @@ middleware runs there.
   replacing or replaced by a group's catch-all, or answering every method at its template. Now
   the framework server's `Start` refuses, and so does app startup when its server reports
   `RouteConflicts()`. Migration is [migrations.md](migrations.md) `[C73.12]`.
-- **ADR-124's catch-all premise is enforced.** No module handler can occupy a catch-all node, so
-  the `/_sys` IP-range gate and the debug gates cover unmatched sub-paths whatever the modules
-  register.
+- **ADR-124's catch-all premise is enforced.** No module handler can take a group's catch-all
+  over, so a group's middleware, the `/_sys` IP-range gate and the debug gates included, runs on
+  every sub-path that no route claims. It does not reach a route registered outside the group:
+  `GET <prefix>/*` on `ModuleGroup()` is an ordinary route, admitted, and echo serves it ahead of
+  the group's catch-all without the group's middleware, as before. A route that needs a group's
+  gate must register on that group.
 - **Source-breaking for unkeyed `RouteConflict` literals.** `RouteConflict` gains `Reason`, so an
   unkeyed `server.RouteConflict{...}` literal stops compiling until its fields are keyed. A
   literal built by hand must set `Reason`: one left empty renders with the refusal head, not as a
