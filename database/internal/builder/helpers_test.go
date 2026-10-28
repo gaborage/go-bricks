@@ -1139,6 +1139,12 @@ type listAnswerValuer struct{}
 
 func (listAnswerValuer) Value() (driver.Value, error) { return []int64{1, 2}, nil }
 
+// nullValuerList is a slice-shaped driver.Valuer answering NULL, whatever its
+// length: its answer, not its length, is what the door judges.
+type nullValuerList []int
+
+func (nullValuerList) Value() (driver.Value, error) { return nil, nil }
+
 // selfPointer is a pointer type that names itself.
 type selfPointer *selfPointer
 
@@ -1389,6 +1395,13 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 		{"valuer_over_ints_is_asked", inValuerList{1, 2}, listOf("asked")},
 		{"valuer_over_pointers_is_asked", intPtrsValuer{&seven}, listOf("asked")},
 		{"valuer_answering_a_list", listAnswerValuer{}, listOf(int64(1), int64(2))},
+		// Its length is never judged: an empty or nil one is asked, not the empty
+		// set, and a NULL answer is one NULL element, whatever its length.
+		{"empty_valuer_slice_is_asked", inValuerList{}, listOf("asked")},
+		{"nil_valuer_slice_is_asked", inValuerList(nil), listOf("asked")},
+		{"valuer_slice_answering_null", nullValuerList{1, 2}, listOf(nil)},
+		{"empty_valuer_slice_answering_null", nullValuerList{}, listOf(nil)},
+		{"nil_valuer_slice_answering_null", nullValuerList(nil), listOf(nil)},
 		{"valuer_error", erroringValuer{err: errJudgeBoom}, valuerBoomVerdict},
 		{"valuer_error_element", []any{1, erroringValuer{err: errJudgeBoom}}, func(d compareDoor) operandVerdict {
 			return operandVerdict{errText: "resolving element 1 of the " + d.op + " operand: boom", is: errJudgeBoom}

@@ -2110,8 +2110,8 @@ type inScalarStatus string
 
 type inScalarPoint struct{ X int }
 
-// inValuerList is a slice that is also a driver.Valuer: squirrel asks it for
-// its value and binds the answer as one operand.
+// inValuerList is a slice that is also a driver.Valuer: the door asks it for
+// its value, whatever its length, and binds the answer as one operand.
 type inValuerList []int
 
 func (inValuerList) Value() (driver.Value, error) { return "asked", nil }
