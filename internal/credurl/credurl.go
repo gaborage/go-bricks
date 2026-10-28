@@ -36,6 +36,10 @@ func (e *redactedError) Unwrap() error { return e.err }
 // tell which connection failed; only the password is masked (pgx's redactPW
 // precedent). The result unwraps to err; when nothing needs masking, err itself is
 // returned.
+//
+// err must be non-nil, and a *url.Error in it must be reachable through errors.As and
+// rendered as its own Error() text. A later errors.As on the result reaches the
+// original *url.Error, so RedactError must be the last transform before rendering.
 func RedactError(err error, raw, reason string) error {
 	msg := err.Error()
 	redacted := msg
