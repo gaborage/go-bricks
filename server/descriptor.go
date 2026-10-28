@@ -49,8 +49,8 @@ func formatHandlerID(method, fullPath string) string {
 
 // formatListenerHandlerID builds the HandlerID for a route served on a non-application listener
 // ("probes:GET:/ready"). The listener prefix keeps it distinct from an application-listener route
-// at the same path (a RootGroup GET /ready under base /api), and it never equals a conflict-tracker
-// key, which begins with the HTTP method.
+// at the same path (a RootGroup GET /ready under base /api), and it never equals an admission key,
+// which begins with the HTTP method.
 func formatListenerHandlerID(listener, method, path string) string {
 	return listener + ":" + formatHandlerID(method, path)
 }

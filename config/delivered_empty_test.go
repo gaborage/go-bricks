@@ -316,6 +316,95 @@ func TestLoadRejectsDeliveredEmptyProbeHost(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsDeliveredEmptyKeyUnderAnySpelling pins ADR-156: mapstructure decodes a
+// key whose segments differ only by case (or by a Unicode fold such as U+017F for s), so
+// the delivered-empty check finds it under that spelling and reads the value at that path.
+// Two spellings of one key are refused when either is empty, wherever each came from, so
+// every case is loaded repeatedly: map order must not decide it.
+func TestLoadRejectsDeliveredEmptyKeyUnderAnySpelling(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+	const debug = "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n"
+	base := func(yaml string) map[string]string { return map[string]string{testConfigFileYAML: header + yaml} }
+
+	tests := []struct {
+		name  string
+		files map[string]string
+		env   map[string]string
+		field string
+	}{
+		{name: "probe_host_camel_case_empty", files: base("  probes:\n    port: 9090\n    Host: \"\"\n"), field: fieldServerProbesHost},
+		{name: "probe_host_camel_case_null", files: base("  probes:\n    port: 9090\n    Host:\n"), field: fieldServerProbesHost},
+		{name: "probe_section_camel_case_empty", files: base("  Probes:\n    port: 9090\n    host: \"\"\n"), field: fieldServerProbesHost},
+		{name: "probe_section_long_s_empty", files: base("  probeſ:\n    port: 9090\n    host: \"\"\n"), field: fieldServerProbesHost},
+		{name: "allowedips_camel_case_empty", files: base(debug + "  allowedIPs: \"\"\n"), field: fieldDebugAllowedIPs},
+		{name: "allowedips_camel_case_null", files: base(debug + "  allowedIPs:\n"), field: fieldDebugAllowedIPs},
+		{name: "allowedips_long_s_empty", files: base(debug + "  allowedipſ: \"\"\n"), field: fieldDebugAllowedIPs},
+		{
+			name:  "probe_host_empty_beside_lowercase_value",
+			files: base("  probes:\n    port: 9090\n    host: 127.0.0.2\n    Host: \"\"\n"),
+			field: fieldServerProbesHost,
+		},
+		{
+			name:  "probe_host_lowercase_empty_beside_value",
+			files: base("  probes:\n    port: 9090\n    host: \"\"\n    Host: 127.0.0.2\n"),
+			field: fieldServerProbesHost,
+		},
+		{
+			name: "probe_host_overlay_empty_over_base_value",
+			files: map[string]string{
+				testConfigFileYAML: header + "  probes:\n    port: 9090\n    host: 127.0.0.2\n",
+				"config.prod.yaml": "server:\n  probes:\n    Host: \"\"\n",
+			},
+			env:   map[string]string{"APP_ENV": "prod"},
+			field: fieldServerProbesHost,
+		},
+		{
+			name:  "allowedips_empty_beside_lowercase_list",
+			files: base(debug + "  allowedips: [\"10.0.0.0/8\"]\n  allowedIPs: \"\"\n"),
+			field: fieldDebugAllowedIPs,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Staged once; each Load re-reads the same files and environment.
+			_, err := loadConfigFixture(t, tt.files, tt.env)
+			for range 50 {
+				var cfgErr *ConfigError
+				require.ErrorAs(t, err, &cfgErr)
+				require.Equal(t, tt.field, cfgErr.Field)
+				require.Contains(t, cfgErr.Message, "delivered empty")
+				_, err = Load()
+			}
+		})
+	}
+}
+
+// TestLoadKeepsAValueDeliveredUnderAnySpelling is the counterweight: a value read from the
+// matched path, not from the lowercase key, so a real mixed-case value is never mistaken for
+// an empty one, and the empty list stays the deliberate clear.
+func TestLoadKeepsAValueDeliveredUnderAnySpelling(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "probe_host_camel_case_value", yaml: header + "  probes:\n    port: 9090\n    Host: 127.0.0.2\n"},
+		{name: "probe_section_camel_case_value", yaml: header + "  Probes:\n    port: 9090\n    host: 127.0.0.2\n"},
+		{name: "allowedips_camel_case_empty_list", yaml: header + "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedIPs: []\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
+
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+		})
+	}
+}
+
 // TestLoadProbeHostDeliberateShapesUnchanged is the counterweight: an absent key takes
 // server.host, and a real value is kept.
 func TestLoadProbeHostDeliberateShapesUnchanged(t *testing.T) {

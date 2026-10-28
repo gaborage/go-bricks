@@ -259,9 +259,9 @@ func TestServerNewRegistersProbeDescriptors(t *testing.T) {
 
 // TestServerNewRegistersProbeListenerDescriptors pins the route table with the probe
 // listener enabled: the four probe descriptors name the probe listener and the unprefixed
-// path, the application engine's 404 reservations carry no descriptor, and the conflict
-// tracker does not also record the unprefixed path (TestServerReservedProbePathStillConflicts
-// pins the prefixed reservation).
+// path, the application engine's 404 reservations carry no descriptor, and admission does
+// not also claim the unprefixed path (TestServerReservedProbePathStillConflicts pins the
+// prefixed reservation).
 func TestServerNewRegistersProbeListenerDescriptors(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
