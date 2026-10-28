@@ -109,21 +109,19 @@ func TestTriggerJobHandler(t *testing.T) {
 	assert.Positive(t, job.Count(), "Job should have executed at least once")
 }
 
-// TestTriggerJobHandlerNotFound verifies 404 for unknown job
+// TestTriggerJobHandlerNotFound verifies 404 for an unknown job never echoes the
+// caller-supplied id (a PAN-shaped path segment must not reach the response).
 func TestTriggerJobHandlerNotFound(t *testing.T) {
 	module := NewModule()
+	ctx := server.HandlerContext{Config: &config.Config{}}
 
-	req := JobIDParam{JobID: "non-existent-job"}
-	ctx := server.HandlerContext{
-		Config: &config.Config{},
-	}
+	_, apiErr := module.triggerJobHandler(JobIDParam{JobID: "4111111111111111"}, ctx)
 
-	_, apiErr := module.triggerJobHandler(req, ctx)
-
-	// Verify not found error
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusNotFound, apiErr.HTTPStatus())
 	assert.Contains(t, apiErr.ErrorCode(), "NOT_FOUND")
+	assert.Equal(t, "job not found", apiErr.Message())
+	assert.Empty(t, apiErr.Details())
 }
 
 // TestTriggerJobHandlerShuttingDown verifies 503 when scheduler is shutting down

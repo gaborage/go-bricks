@@ -77,7 +77,8 @@ func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (ser
 	m.mu.RUnlock()
 
 	if !exists {
-		return server.Result[JobTriggerResponse]{}, server.NewNotFoundError("job").WithDetails("job_id", jobID)
+		// The id is caller-supplied path input; never echo it back (#2212).
+		return server.Result[JobTriggerResponse]{}, server.NewNotFoundError("job")
 	}
 
 	// Atomically check shutdown + register the in-flight slot under m.mu (Shutdown
