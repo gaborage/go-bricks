@@ -3113,11 +3113,11 @@ func TestValidateNoDeliveredEmptyDatabaseUnderAnySpelling(t *testing.T) {
 	}
 }
 
-// TestValidateNoDeliveredEmptyDatabaseRefusesAnEmptyTwin pins the two-spellings rule for
-// identity keys (ADR-156): a section that is configured is still refused when one identity
-// key arrives in two spellings and either is empty, wherever each came from. Every case is
-// loaded repeatedly, so map order cannot decide it.
-func TestValidateNoDeliveredEmptyDatabaseRefusesAnEmptyTwin(t *testing.T) {
+// TestLoadRefusesDatabaseIdentityTwins pins that two spellings of one identity key are
+// ADR-157 twins, refused at decode whatever either holds and wherever each came from, so the
+// ADR-051 check never sees them. Every case is loaded repeatedly, so map order cannot
+// decide it.
+func TestLoadRefusesDatabaseIdentityTwins(t *testing.T) {
 	const named = "databases:\n  reporting:\n    type: postgresql\n    host: db.internal\n    port: 5432\n" +
 		"    database: reports\n    username: app\n    password: s3cretpw\n"
 
@@ -3163,6 +3163,11 @@ func TestValidateNoDeliveredEmptyDatabaseRefusesAnEmptyTwin(t *testing.T) {
 			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + named + "    Host: \"\"\n"},
 			key:   "databases.reporting.host",
 		},
+		{
+			name:  "root_twins_both_set",
+			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Host: db.other\n"},
+			key:   "database.host",
+		},
 	}
 
 	for _, tt := range tests {
@@ -3170,34 +3175,23 @@ func TestValidateNoDeliveredEmptyDatabaseRefusesAnEmptyTwin(t *testing.T) {
 			// Staged once; each Load re-reads the same files and environment.
 			_, err := loadConfigFixture(t, tt.files, tt.env)
 			for range 50 {
-				require.Error(t, err)
-				require.Contains(t, err.Error(), "delivered empty")
-				require.Contains(t, err.Error(), tt.key)
+				var cfgErr *ConfigError
+				require.ErrorAs(t, err, &cfgErr)
+				require.Equal(t, tt.key, cfgErr.Field)
+				require.Contains(t, cfgErr.Message, twinMessagePrefix)
+				require.NotContains(t, err.Error(), "delivered empty")
 				_, err = Load()
 			}
 		})
 	}
 }
 
-// TestValidateNoDeliveredEmptyDatabaseLeavesAConfiguredSectionWithoutAnEmptyTwin pins that
-// the two-spellings rule adds nothing else to ADR-051: one empty identity key in a configured
-// section, and two spellings that both hold a value, are not delivered-empty refusals.
-func TestValidateNoDeliveredEmptyDatabaseLeavesAConfiguredSectionWithoutAnEmptyTwin(t *testing.T) {
-	tests := []struct {
-		name string
-		yaml string
-	}{
-		{name: "one_empty_spelling", yaml: presenceIdentityDatabaseYAML + "  oracle:\n    service:\n      name: \"\"\n"},
-		{name: "two_spellings_both_set", yaml: presenceIdentityDatabaseYAML + "  Host: db.other\n"},
-	}
+// TestValidateNoDeliveredEmptyDatabaseLeavesAConfiguredSectionWithOneEmptyKey pins that one
+// empty identity key in an otherwise configured section is not a delivered-empty refusal.
+func TestValidateNoDeliveredEmptyDatabaseLeavesAConfiguredSectionWithOneEmptyKey(t *testing.T) {
+	_, err := loadDeliveredEmptyFixture(t, presenceIdentityDatabaseYAML+"  oracle:\n    service:\n      name: \"\"\n", nil)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
-
-			require.NoError(t, err)
-		})
-	}
+	require.NoError(t, err)
 }
 
 // TestLoadDefaultsCarryNoDatabaseIdentityKeys pins the ADR-047 invariant that outlived

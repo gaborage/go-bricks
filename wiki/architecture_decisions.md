@@ -2617,7 +2617,7 @@ startup instead of widening a bind or emptying an allowlist.
 
 ### [ADR-157: A Config Key Decode Would Read Under Another Spelling Fails Startup](adr_157_config_key_spelling_refused.md)
 
-**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a root key that case-folds to a framework section name without being spelled as it (`App:`, `Observability:`) fails `config.Load` and `config.LoadFromMap`, and, once the follow-up ships, so do two keys of one map node that differ only by case
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a root key that case-folds to a framework section name without being spelled as it (`App:`, `Observability:`) fails `config.Load` and `config.LoadFromMap`, and so do two keys of one map node that differ only by case, a mixed-case override of a framework default included
 
 mapstructure decodes a key into a field by an exact match first and `strings.EqualFold` otherwise,
 while `Config.Exists`, the getters and the observability bootstrap name a key by its exact
@@ -2626,10 +2626,11 @@ lowercase `app` defaults, and of two twins such as `Port` and `port` one was dro
 different one per run. `configSource.decode` now refuses, before it unmarshals, a root key that
 folds to a `configSections` name without equaling it (`config_invalid: app is spelled App; …`),
 naming every spelling and never a value, so `go-bricks-migrate --source-config` refuses too. The
-fold-twin rule, at any map node and from any layer, framework defaults included, ships in a
-follow-up PR under #2219 (`[C73.19]`). Refuse, not normalize: lowercasing at load would break
-ADR-090's check and change keystore kids and header names. Environment variables and a lone
-mixed-case key below the root are unaffected. See [migrations.md](migrations.md) `[C73.14]`.
+fold-twin rule refuses two such keys at any map node, from any layer, framework defaults
+included, naming each spelling and the variable that reaches the lowercase one (`[C73.19]`).
+Refuse, not normalize: lowercasing at load would break ADR-090's check and change keystore kids
+and header names. Environment variables alone and a lone mixed-case key below the root with no
+twin are unaffected. See [migrations.md](migrations.md) `[C73.14]`, `[C73.19]`.
 
 **Key Benefits:** a config is read one way by decode and by every exact-name lookup, and a section
 or override the framework would have ignored fails at startup instead.

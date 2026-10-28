@@ -42,19 +42,21 @@ lowercases them. Fixes #2219.
    differently is refused, whatever layer each came from (framework default, YAML base, overlay,
    environment variable, or the same layer), and in data-keyed maps too:
    `observability.{trace,metrics,logs}.headers`, `custom.*`, keystore names, and maps inside
-   sequences. Rule 2 ships in a follow-up PR under #2219 (atom `[C73.19]`); the first PR ships
-   rule 1 alone.
+   sequences. At the root, a group that folds to a section name is rule 1's to report. Rule 2
+   ships in the second PR under #2219 (atom `[C73.19]`), after rule 1 (`[C73.14]`).
 3. **Both rules run at decode, so every load path refuses.** `configSource.decode` runs
    `checkKeySpelling` (`config/key_spelling.go`) before it unmarshals, so `config.Load`,
    `config.LoadFromMap`, and the `go-bricks-migrate` CLI, whose `--source-config` decodes through
-   `LoadFromMap` (from the CLI's first release that pins this framework version), all refuse the
-   tree. Unlike ADR-153's retired keys, `LoadFromMap` is not silent
-   here: the refusal is about how decode reads the tree, not a `Validate` rule.
+   `LoadFromMap`, all refuse the tree; the CLI from its first release that pins this framework
+   version. Unlike ADR-153's retired keys, `LoadFromMap` is not silent here: the refusal is about
+   how decode reads the tree, not a `Validate` rule.
 4. **The error names spellings, never a value.** Each is a `*config.ConfigError` of category
    `invalid`. Rule 1 reports one error per section, every wrong spelling sorted:
    `config_invalid: app is spelled App; framework section names are lowercase: rename App to app`.
-   Rule 2 names every spelling of the key, sorted, tags one that came from the framework defaults
-   `(framework default)`, and gives the lowercase key and its environment variable:
+   Rule 2 names every spelling of the key, sorted, tags `(framework default)` a spelling no
+   operator layer delivered at or under that exact path, and gives the lowercase key, with its
+   environment variable when the key round-trips through `envVarForKey` and no sequence lies on
+   its path (`orders.routes[0].name` gets none):
    `config_invalid: server.port is written in spellings that differ only by case: server.Port,
    server.port (framework default); keys are lowercase: write it once as server.port (SERVER_PORT)`.
 5. **A lone mixed-case key below the root still decodes.** A key with no twin beside it, such as
@@ -87,17 +89,25 @@ protocol identifier the framework does not own.
   startup, on `config.Load` and on `go-bricks-migrate --source-config` alike. Renaming it makes
   values that were ignored take effect: `App: {name: orders}` ran as `gobricks-service`, and
   `Observability:` turns telemetry on once renamed.
-- **Breaking, with rule 2.** A config holding fold twins anywhere, including a mixed-case
-  override of a framework default, fails startup.
-- Environment variables are unaffected; they are lowercased before they reach the tree.
+- **Breaking, rule 2.** A config holding fold twins anywhere fails startup. The common case is a
+  mixed-case override of a defaulted key: `server: {Port: …}` and `log: {Level: …}` were
+  silently ignored for the default, and `debug: {allowedIPs: …}`, a list, `[]`, `""` or null
+  alike, decoded beside it. A YAML key beside the variable that reaches its lowercase spelling
+  fails too: `server: {probes: {Port: 9090}}` with `SERVER_PROBES_PORT`, or a header
+  `Authorization:` with `OBSERVABILITY_TRACE_HEADERS_AUTHORIZATION` (or `.metrics.`/`.logs.`),
+  each two map entries before.
+- Environment variables alone trip neither rule, since they are lowercased before they reach the
+  tree; one can still be the lowercase twin of a mixed-case YAML key.
 - Blind spots: a hand-built `*config.Config` handed to `app.NewWithConfig` or `Builder.WithConfig`,
   which is never decoded, and a dynamic tenant source, which never passes through koanf.
 
 ## References
 
-- `config/key_spelling.go`: `checkKeySpelling`, `misspelledSections`, `sectionNamed`
+- `config/key_spelling.go`: `checkKeySpelling`, `misspelledSections`, `sectionNamed`,
+  `collectCaseTwins`, `caseTwinError`, and `fromDefaults`, which asks `Config.deliveries`
+  (ADR-156) whether an operator layer delivered a spelling
 - `config/config.go`: `configSource.decode`, `configSections`
 - `config/source.go`: `sameSegment`, the package's one case fold for keys
 - `app/bootstrap.go`: the observability bootstrap's `Exists` lookup
 - gaborage/go-bricks#2219
-- See [migrations.md](migrations.md) `[C73.14]`.
+- See [migrations.md](migrations.md) `[C73.14]` and `[C73.19]`.

@@ -1,5 +1,6 @@
 # Example configuration file demonstrating both standard and custom configurations
 # Framework section names at the root are lowercase: a root key spelled any other way (App:, Observability:) is refused at startup (ADR-157).
+# Keys are lowercase: two keys of one map that differ only by case (Port: beside port: or its default) are refused anywhere, consumer and header maps included (ADR-157).
 
 # Standard framework configurations
 app:
