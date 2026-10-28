@@ -13915,11 +13915,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   retired messaging keys of `[C73.7]` were folded with `strings.ToLower`, which misses U+017F for
   `s`.
 - after: each fails configuration resolution as its lowercase spelling does: a `config_invalid`
-  error with `Field` `server.probes.host` or `debug.allowedips` and "delivered empty", or
+  error with `Field` `server.probes.host` and "delivered empty", or
   `database identity field(s) delivered empty: [<lowercase key path>]` in root, named and tenant
   sections. Two spellings of one of these keys are refused at decode as `[C73.19]` twins, also
-  in a database section that is otherwise configured, and so is a mixed-case `allowedIPs:`
-  beside its lowercase default; `allowedips: []` still clears the allowlist deliberately. A
+  in a database section that is otherwise configured, and so is every non-lowercase spelling of
+  `debug.allowedips` (`allowedIPs:`), which always sits beside its lowercase framework default; a
+  root `Database:` is refused as `[C73.14]`. `allowedips: []` still clears the allowlist
+  deliberately. A
   retired messaging key spelled with a Unicode fold is refused as `[C73.7]` describes.
 - apply: for the delivered-empty keys, lowercase the key and give it a value, or remove it, and
   delete any second spelling of the same key. For a retired messaging key, remove it per
