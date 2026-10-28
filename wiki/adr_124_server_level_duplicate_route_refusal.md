@@ -36,7 +36,7 @@ exemption rested on a check that `app` alone ran.
 
 ## Decision
 
-> **Amended (2026-10-28, #2222):** every route door (`addEcho`, `RouteRegistrar.Add` and both
+> **Amended (2026-10-28, #2222):** every framework-built route door (`addEcho`, `RouteRegistrar.Add` and both
 > probe arms) now goes through one admission step, `routeAdmission.admit`, which replaces
 > `routeConflictTracker.record` and `registerRoute`. It keys the route, refuses a duplicate, and
 > only then writes the route-registry descriptor and calls the engine `Add`. A refused route is
@@ -110,7 +110,7 @@ while a check runs, not by construction.
 > **Amended (2026-10-28, #2222):** the premise of the next bullet was false: a module could
 > register `echo_route_not_found` at a catch-all's template, and the two replaced each other in
 > registration order, outside the tracker. It is now an enforced invariant: admission refuses
-> `echo_route_not_found` and `echo_route_any` at every route door, recording a `RouteConflict`
+> `echo_route_not_found` and `echo_route_any` at every framework-built route door, recording a `RouteConflict`
 > whose `Reason` is `RouteConflictReasonReservedMethod`. See
 > [ADR-155](adr_155_reserved_engine_methods_refused.md).
 

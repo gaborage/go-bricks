@@ -31,7 +31,7 @@ accepted the sentinel, that premise was false.
 ## Decision
 
 - **Admission refuses the two sentinel methods before keying.** `routeAdmission.admit` is the
-  one step every door goes through (ADR-124 amendment), so the check exists once. A route whose
+  one step every framework-built door goes through (ADR-124 amendment), so the check exists once. A route whose
   method is exactly `echo.RouteNotFound` or `echo.RouteAny` is recorded as a `RouteConflict`
   whose `Duplicate` is the refused registrant, with no `First` and no `FirstPath`. The match is
   case-sensitive, as echo's is. The route is neither described nor added, and it never claims a
@@ -86,7 +86,7 @@ middleware runs there.
   unkeyed `server.RouteConflict{...}` literal stops compiling until its fields are keyed. A
   literal built by hand must set `Reason`: one left empty renders with the refusal head, not as a
   duplicate.
-- **A refused sentinel is never described.** It is absent from `DefaultRouteRegistry`,
+- **A sentinel refused at a framework-built door is never described.** It is absent from `DefaultRouteRegistry`,
   `PostRegisterRoutes`, the `server.logroutes` startup log and OpenAPI.
 - **A sentinel registered after `Start` is dropped.** As with a late duplicate, it is visible only
   through `RouteConflicts()`.
