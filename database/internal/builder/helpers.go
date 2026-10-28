@@ -603,12 +603,25 @@ func isListKind(kind reflect.Kind) bool {
 	return kind == reflect.Slice || kind == reflect.Array
 }
 
+// Comparison operators whose operand contract differs from the ordering ones':
+// nil and slices are meaningful for equality and refused for ordering.
+const (
+	opEqual    = "="
+	opNotEqual = "<>"
+)
+
 // operandKind is the judge's answer for one operand: how the door renders it.
 type operandKind uint8
 
 const (
-	// operandBound renders one placeholder bound to the resolved value.
+	// operandBound renders `col op ?` through squirrel's own construct for op,
+	// binding the resolved value whole.
 	operandBound operandKind = iota
+	// operandPlaceholder renders `col op ?` through squirrel.Expr: the same
+	// token, but an operand that is itself a squirrel.Sqlizer expands in place.
+	// Only a jf door answers it, where an f door answers operandBound — the two
+	// families have always differed there.
+	operandPlaceholder
 	// operandSpliced renders a RawExpression's SQL verbatim, binding nothing.
 	operandSpliced
 	// operandNullOrSet renders through squirrel's Eq / NotEq: IS [NOT] NULL,
@@ -642,6 +655,9 @@ func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 	if isExpr {
 		return operand{kind: operandSpliced, sql: exprSQL}, nil
 	}
+	if !nullOrList && family == joinFilterFamily {
+		return operand{kind: operandPlaceholder, value: resolved}, nil
+	}
 	if !nullOrList {
 		return operand{kind: operandBound, value: resolved}, nil
 	}
@@ -652,18 +668,16 @@ func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 }
 
 // renderPredicate renders a judged operand against quotedColumn, the one
-// rendering every compare door shares. Everything but a jf door's bound scalar
-// goes through squirrel's own construct for op (comparison), so IS [NOT] NULL,
-// IN / NOT IN and the empty-set constant keep squirrel's spelling and a value
-// is bound whole. A jf door's bound scalar renders through squirrel.Expr, which
-// renders the same `col op ?` token (#1200) but expands an operand that is
-// itself a squirrel.Sqlizer in place, where an f door binds it: the two
-// families have always differed there.
-func renderPredicate(quotedColumn, op string, judged operand, family doorFamily) squirrel.Sqlizer {
+// rendering every compare door shares; the answer alone decides the form. A
+// bound value, a null and a set go through squirrel's own construct for op
+// (comparison), so IS [NOT] NULL, IN / NOT IN and the empty-set constant keep
+// squirrel's spelling; operandPlaceholder renders the same `col op ?` token
+// (#1200) through squirrel.Expr.
+func renderPredicate(quotedColumn, op string, judged operand) squirrel.Sqlizer {
 	if judged.kind == operandSpliced {
 		return squirrel.Expr(quotedColumn + " " + op + " " + judged.sql)
 	}
-	if judged.kind == operandBound && family == joinFilterFamily {
+	if judged.kind == operandPlaceholder {
 		return squirrel.Expr(quotedColumn+" "+op+" ?", judged.value)
 	}
 	return comparison(quotedColumn, op, judged.value)

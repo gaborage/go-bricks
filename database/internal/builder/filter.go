@@ -274,8 +274,8 @@ func classifyFilter(filter dbtypes.Filter) (sqlizer squirrel.Sqlizer, include bo
 }
 
 // wrapFilter lifts a bare squirrel.Sqlizer into the family's own dbtypes.Filter.
-// It is the constructor combineLogical, inListPredicate and nullPredicate close
-// over for every Filter-family predicate built from a shared helper.
+// It is the constructor every shared body in predicate_shells.go closes over for
+// a Filter-family predicate.
 func wrapFilter(sqlizer squirrel.Sqlizer) dbtypes.Filter {
 	return Filter{sqlizer: sqlizer}
 }

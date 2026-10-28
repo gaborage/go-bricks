@@ -1488,7 +1488,7 @@ func TestFilterEqNilAndSliceRendering(t *testing.T) {
 // to a type whose Value() has a VALUE receiver satisfies driver.Valuer, so
 // squirrel's Eq prologue asserts the interface and dereferences nil before it
 // ever reaches its own pointer test. The door must settle the pointer first and
-// render the NULL that JoinFilter's compare door already renders.
+// render the NULL the JoinFilter door renders for the same operand.
 func TestFilterEqNilPointerToValuer(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 

@@ -8,13 +8,6 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// Comparison operators whose operand contract differs from the ordering ones':
-// nil and slices are meaningful for equality and refused for ordering.
-const (
-	opEqual    = "="
-	opNotEqual = "<>"
-)
-
 // JoinFilter represents a composable JOIN ON condition that compares columns to other columns.
 // JoinFilters are created through JoinFilterFactory methods and maintain vendor-specific quoting rules.
 //
@@ -310,9 +303,8 @@ func classifyJoinFilter(filter dbtypes.JoinFilter) (sqlizer squirrel.Sqlizer, in
 }
 
 // wrapJoinFilter lifts a bare squirrel.Sqlizer into the family's own
-// dbtypes.JoinFilter. It is the constructor combineLogical, inListPredicate
-// and nullPredicate close over for every JoinFilter-family predicate built
-// from a shared helper.
+// dbtypes.JoinFilter. It is the constructor every shared body in
+// predicate_shells.go closes over for a JoinFilter-family predicate.
 func wrapJoinFilter(sqlizer squirrel.Sqlizer) dbtypes.JoinFilter {
 	return JoinFilter{sqlizer: sqlizer}
 }
@@ -359,7 +351,7 @@ func (jff *JoinFilterFactory) columnPair(leftColumn, rightColumn string) (left, 
 }
 
 // joinFilterErr wraps a column-validation failure as the deferred-error JoinFilter
-// that ToSQL() surfaces. One place to change the shape, rather than eighteen.
+// that ToSQL() surfaces. One place to change the shape.
 func joinFilterErr(err error) dbtypes.JoinFilter {
 	return JoinFilter{sqlizer: errorSqlizer{err: err}}
 }

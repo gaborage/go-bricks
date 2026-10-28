@@ -4,7 +4,6 @@ import (
 	dbsql "database/sql"
 	"errors"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 
@@ -1265,20 +1264,19 @@ func assertOperandVerdict(t *testing.T, qb *QueryBuilder, placeholders *strings.
 // invalid reports the column.
 func TestCompareDoorsJudgeTheColumnBeforeTheOperand(t *testing.T) {
 	bad := erroringValuer{err: errJudgeBoom}
-	operands := map[string]any{}
-	for _, d := range compareDoors {
-		operands[d.name] = bad
-	}
-	for _, d := range betweenDoors {
-		operands[d.name] = [2]any{bad, bad}
-	}
-
-	for _, d := range slices.Concat(compareDoors, betweenDoors) {
+	check := func(d compareDoor, operand any) {
 		t.Run(d.name, func(t *testing.T) {
-			_, _, _, err := d.statement(NewQueryBuilder(dbtypes.PostgreSQL), "bad column", operands[d.name])
+			_, _, _, err := d.statement(NewQueryBuilder(dbtypes.PostgreSQL), "bad column", operand)
 
 			require.ErrorContains(t, err, `invalid column identifier "bad column"`)
 			require.NotErrorIs(t, err, errJudgeBoom)
 		})
+	}
+
+	for _, d := range compareDoors {
+		check(d, bad)
+	}
+	for _, d := range betweenDoors {
+		check(d, [2]any{bad, bad})
 	}
 }

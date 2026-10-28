@@ -2,12 +2,12 @@ package builder
 
 import "github.com/Masterminds/squirrel"
 
-// This file holds the generic bodies for the method pairs that were structural
-// copies between Filter and JoinFilter — And/Or, Eq..Gte, Between, In, NotIn,
-// Null/NotNull (#1259). The one real interface difference between the
-// families — a jf value door splices a RawExpression, an f value door refuses
-// it with ErrExpressionInFilter (a WHERE-side expression takes an annotated
-// f.Raw) — is a doorFamily argument the shells pass to the operand judge.
+// This file holds the generic bodies shared by Filter and JoinFilter — And/Or,
+// Eq..Gte, Between, In, NotIn, Null/NotNull (#1259). The one real interface
+// difference between the families — a jf value door splices a RawExpression,
+// an f value door refuses it with ErrExpressionInFilter (a WHERE-side
+// expression takes an annotated f.Raw) — is a doorFamily argument the value
+// shells thread down to expressionOperand.
 
 // logicalContainer is the squirrel wrapper And/Or fold into. squirrel.And and
 // squirrel.Or are both named []squirrel.Sqlizer types that also render
@@ -63,7 +63,7 @@ func comparePredicate[T squirrel.Sqlizer](
 	if err != nil {
 		return wrap(errorSqlizer{err: err})
 	}
-	return wrap(renderPredicate(quotedColumn, op, judged, family))
+	return wrap(renderPredicate(quotedColumn, op, judged))
 }
 
 // betweenPredicate is the shared body of Filter.Between and
@@ -91,8 +91,8 @@ func betweenPredicate[T squirrel.Sqlizer](
 		return wrap(errorSqlizer{err: err})
 	}
 	return wrap(squirrel.And{
-		renderPredicate(quotedColumn, ">=", lower, family),
-		renderPredicate(quotedColumn, "<=", upper, family),
+		renderPredicate(quotedColumn, ">=", lower),
+		renderPredicate(quotedColumn, "<=", upper),
 	})
 }
 
