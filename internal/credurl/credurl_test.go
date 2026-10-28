@@ -1,0 +1,420 @@
+package credurl
+
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// testReason is the stand-in every row passes; the oracle package pins its own.
+const testReason = "invalid URL"
+
+// amqpHint is the advice amqp091's ParseURI (v1.16.0) appends to a url.Parse failure.
+const amqpHint = `(if the username or password contains a reserved character such as "?", "#", "@", ":", or "/", ` +
+	`it must be percent-encoded per RFC 3986 §3.2.1 -- see ParseURI's doc comment and net/url.UserPassword)`
+
+// hostSlot marks where a hostile-password template takes its host.
+const hostSlot = "{host}"
+
+// parseVerdict pins what url.Parse makes of a row's raw URL, so a stdlib change that
+// moves a shape across the accept/reject line fails the row's premise, not its want.
+type parseVerdict int
+
+const (
+	parseUnpinned parseVerdict = iota
+	parseAccepts
+	parseRejects
+)
+
+type redactErrorCase struct {
+	name    string
+	raw     string
+	err     func(raw string) error // nil: amqpErr
+	parse   parseVerdict
+	want    string   // the full Error() text; unused when same
+	same    bool     // nothing to mask, so RedactError must return the original value
+	secrets []string // substrings that must not survive in the result
+}
+
+// amqpErr is the default builder: url.Parse's failure wrapped the way amqp091's
+// ParseURI wraps it, or, for a URL url.Parse accepts, a dial failure that renders
+// raw verbatim.
+func amqpErr(raw string) error {
+	if _, err := url.Parse(raw); err != nil {
+		return fmt.Errorf("%w %s", err, amqpHint)
+	}
+	return fmt.Errorf("dial %s: connection refused", raw)
+}
+
+// bareParseErr returns url.Parse's *url.Error unwrapped, the way go-ora does.
+func bareParseErr(raw string) error {
+	_, err := url.Parse(raw)
+	return err
+}
+
+// verbatimDialErr renders raw verbatim whether or not url.Parse accepts it.
+func verbatimDialErr(raw string) error {
+	return fmt.Errorf("dial %s: connection refused", raw)
+}
+
+// TestNetURLErrorFormatUnchanged is a tripwire on the single stdlib assumption
+// RedactError's maskURLError depends on: net/url renders url.Error as `%s %q: %s`
+// over Op, URL, Err. maskURLError replaces urlErr.Error() with a rebuild of that
+// exact format, so a format change makes the replacement silently stop matching and
+// the password is exposed again — a redaction that fails open. If this test ever
+// fails, revisit maskURLError before anything else.
+func TestNetURLErrorFormatUnchanged(t *testing.T) {
+	err := &url.Error{Op: "parse", URL: "x", Err: errors.New("boom")}
+
+	assert.Equal(t, `parse "x": boom`, err.Error())
+}
+
+func TestRedactError(t *testing.T) {
+	cases := slices.Concat(hostilePasswordCases(), scanCases(), seamCases())
+
+	for i := range cases {
+		tc := &cases[i]
+		t.Run(tc.name, func(t *testing.T) {
+			assertRedacted(t, tc)
+		})
+	}
+}
+
+func assertRedacted(t *testing.T, tc *redactErrorCase) {
+	t.Helper()
+
+	_, parseErr := url.Parse(tc.raw)
+	switch tc.parse {
+	case parseAccepts:
+		require.NoError(t, parseErr, "premise: url.Parse accepts the raw URL")
+	case parseRejects:
+		require.Error(t, parseErr, "premise: url.Parse rejects the raw URL")
+	case parseUnpinned:
+		// A custom builder decides what the row renders.
+	}
+
+	build := tc.err
+	if build == nil {
+		build = amqpErr
+	}
+	original := build(tc.raw)
+	require.Error(t, original, "premise: the row must start from an error")
+
+	got := RedactError(original, tc.raw, testReason)
+
+	if tc.same {
+		assert.Same(t, original, got, "nothing to mask must return the original error")
+	} else {
+		assert.Equal(t, tc.want, got.Error())
+	}
+	require.ErrorIs(t, got, original, "the result must unwrap to the original error")
+	var urlErr *url.Error
+	if errors.As(original, &urlErr) {
+		var gotURLErr *url.Error
+		require.ErrorAs(t, got, &gotURLErr, "the *url.Error must stay reachable")
+		assert.Same(t, urlErr, gotURLErr)
+	}
+	for _, secret := range tc.secrets {
+		assert.NotContains(t, got.Error(), secret)
+	}
+}
+
+// hostilePasswordCases runs each hostile password through the amqp shape on a named
+// host, an IPv6 literal with a port and an IPv6 literal without one.
+func hostilePasswordCases() []redactErrorCase {
+	hosts := []struct{ name, addr string }{
+		{name: "named_host", addr: "broker:5672"},
+		{name: "ipv6_with_port", addr: "[::1]:5672"},
+		{name: "ipv6_without_port", addr: "[2001:db8::1]"},
+	}
+	maskedRejection := `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + amqpHint
+	maskedDial := "dial amqp://user:xxxxx@{host}/vh: connection refused"
+	rejectedSecrets := []string{"s3cr", "etPW", "%et"}
+	passwordSecrets := []string{"s3cr", "etPW"}
+
+	templates := []redactErrorCase{
+		// url.Parse rejects these with a reason that quotes part of the password — an
+		// "invalid port" echo or an "invalid URL escape" — so the reason is replaced.
+		{name: "password_with_question_mark", raw: "amqp://user:s3cr?etPW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: rejectedSecrets},
+		{name: "password_with_slash", raw: "amqp://user:s3cr/etPW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: rejectedSecrets},
+		{name: "password_with_invalid_escape", raw: "amqp://user:s3cr%etPW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: rejectedSecrets},
+		// url.Parse cuts the fragment before it parses, so the URL it rejects — and so
+		// the want — stops at "s3cr" and never reaches the host.
+		{
+			name:    "password_with_hash",
+			raw:     "amqp://user:s3cr#etPW@{host}/vh",
+			parse:   parseRejects,
+			want:    `parse "amqp://user:xxxxx": invalid URL ` + amqpHint,
+			secrets: rejectedSecrets,
+		},
+		// "net/url: invalid userinfo" quotes nothing, so the reason survives.
+		{
+			name:    "password_with_double_quote",
+			raw:     `amqp://user:s3cr"etPW@{host}/vh`,
+			parse:   parseRejects,
+			want:    `parse "amqp://user:xxxxx@{host}/vh": net/url: invalid userinfo ` + amqpHint,
+			secrets: passwordSecrets,
+		},
+		{
+			name:    "password_with_open_bracket",
+			raw:     "amqp://user:s3cr[etPW@{host}/vh",
+			parse:   parseRejects,
+			want:    `parse "amqp://user:xxxxx@{host}/vh": net/url: invalid userinfo ` + amqpHint,
+			secrets: passwordSecrets,
+		},
+		// url.Parse accepts these, so no *url.Error exists and only the verbatim
+		// rendering of raw in the dial failure is masked.
+		{name: "password_with_at", raw: "amqp://user:s3cr@etPW@{host}/vh", parse: parseAccepts, want: maskedDial, secrets: passwordSecrets},
+		{name: "password_with_colon", raw: "amqp://user:s3cr:etPW@{host}/vh", parse: parseAccepts, want: maskedDial, secrets: passwordSecrets},
+		{name: "empty_password", raw: "amqp://user:@{host}/vh", parse: parseAccepts, want: maskedDial},
+		{
+			name:    "percent_encoded_password",
+			raw:     "amqp://user:s3cr%3FetPW@{host}/vh",
+			parse:   parseAccepts,
+			want:    maskedDial,
+			secrets: []string{"s3cr", "etPW", "%3F"},
+		},
+		// A digits-only segment reads as a port, so url.Parse takes "user:1234" for the
+		// host and never rejects the URL: the ambiguous shape is left alone on purpose.
+		{name: "digit_password_reads_as_port", raw: "amqp://user:1234/etPW@{host}/vh", parse: parseAccepts, same: true},
+		// url.Parse reads "et" as the host and the rest as the query, so "s3cr" is all
+		// it reads as the password — and all that is masked.
+		{
+			name:    "password_with_at_then_question_mark",
+			raw:     "amqp://user:s3cr@et?PW@{host}/vh",
+			parse:   parseAccepts,
+			want:    "dial amqp://user:xxxxx@et?PW@{host}/vh: connection refused",
+			secrets: []string{"s3cr"},
+		},
+	}
+
+	cases := make([]redactErrorCase, 0, len(hosts)*len(templates))
+	for _, host := range hosts {
+		for _, tc := range templates {
+			tc.name += "_" + host.name
+			tc.raw = strings.ReplaceAll(tc.raw, hostSlot, host.addr)
+			tc.want = strings.ReplaceAll(tc.want, hostSlot, host.addr)
+			cases = append(cases, tc)
+		}
+	}
+	return cases
+}
+
+// scanCases drive the password scan and its host[:port] guard through RedactError
+// with the oracle-shaped inputs the scan was first written against. An accepted URL
+// lands verbatim in the default builder's dial failure, so its row observes the scan
+// directly; a rejected one observes it through the rebuilt *url.Error.
+func scanCases() []redactErrorCase {
+	const rejectedDSN = `parse "oracle://appuser:xxxxx@host:1521/XE": invalid URL ` + amqpHint
+	const maskedDialDSN = "dial oracle://appuser:xxxxx@host:1521/XE: connection refused"
+	invalidPortEcho := `":pa"`
+	delHost := "zonk\x7fhost"
+
+	return []redactErrorCase{
+		{name: "empty_url", raw: "", parse: parseAccepts, same: true},
+		{name: "no_userinfo", raw: "oracle://host:1521/XE", parse: parseAccepts, same: true},
+		{name: "user_only_no_colon", raw: "oracle://appuser@host:1521/XE", parse: parseAccepts, same: true},
+		{name: "user_and_password", raw: "oracle://appuser:s3cr3t@host:1521/XE", parse: parseAccepts, want: maskedDialDSN, secrets: []string{"s3cr3t"}},
+		{name: "empty_password", raw: "oracle://appuser:@host:1521/XE", parse: parseAccepts, want: maskedDialDSN},
+		{name: "password_with_at", raw: "oracle://appuser:pa@ss@host:1521/XE", parse: parseAccepts, want: maskedDialDSN, secrets: []string{"pa@ss"}},
+		{name: "password_with_colon", raw: "oracle://appuser:pa:ss@host:1521/XE", parse: parseAccepts, want: maskedDialDSN, secrets: []string{"pa:ss"}},
+		{
+			name:    "password_with_slash",
+			raw:     "oracle://appuser:pa/ss@host:1521/XE",
+			parse:   parseRejects,
+			want:    rejectedDSN,
+			secrets: []string{"pa/ss", invalidPortEcho},
+		},
+		{
+			name:    "password_with_question_mark",
+			raw:     "oracle://appuser:pa?ss@host:1521/XE",
+			parse:   parseRejects,
+			want:    rejectedDSN,
+			secrets: []string{"pa?ss", invalidPortEcho},
+		},
+		// url.Parse cuts the fragment before it reports (the hostile rows pin that
+		// path), so this row renders raw verbatim to observe the scan over the whole
+		// URL: the '@' hides behind the '#', and the scan still finds it.
+		{
+			name:    "password_with_hash",
+			raw:     "oracle://appuser:pa#ss@host:1521/XE",
+			err:     verbatimDialErr,
+			want:    maskedDialDSN,
+			secrets: []string{"pa#ss"},
+		},
+		// What url.Parse is handed once it drops the fragment: no '@' survives, so the
+		// userinfo is only recognizable by "appuser:pa" not being a valid host[:port].
+		{
+			name:    "fragment_truncated_userinfo",
+			raw:     "oracle://appuser:pa",
+			parse:   parseRejects,
+			want:    `parse "oracle://appuser:xxxxx": invalid URL ` + amqpHint,
+			secrets: []string{invalidPortEcho},
+		},
+		// looksLikeHostPort rejects a non-numeric port, so this credential-free authority
+		// reads as userinfo and everything past "host:" is masked — including the "/XE"
+		// tail. Over-masking on purpose: the shape is one url.Parse rejects, so the URL
+		// does reach an error message, and masking a URL that holds no password is the
+		// safe direction. The accepted cost is that a plain port typo costs the operator
+		// the invalid-port text and the service path.
+		{
+			name:  "credential_free_authority_with_non_numeric_port",
+			raw:   "oracle://host:abc/XE",
+			parse: parseRejects,
+			want:  `parse "oracle://host:xxxxx": invalid URL ` + amqpHint,
+		},
+		{name: "ipv6_host_with_port", raw: "oracle://[::1]:1521/XE", parse: parseAccepts, same: true},
+		{name: "ipv6_host_without_port", raw: "oracle://[::1]/XE", parse: parseAccepts, same: true},
+		// A zero-compressed literal ends in the ':' the port scan looks for, so it is the
+		// only shape where skipping to the wrong side of the ']' changes the verdict.
+		{name: "ipv6_zero_compressed_host_without_port", raw: "oracle://[::]/XE", parse: parseAccepts, same: true},
+		// The scan tests each strings.Index result against -1, so index 0 must read as a
+		// hit. One case per sentinel: scheme, authority terminator, '@', ':'.
+		{
+			name:    "scheme_separator_at_index_zero",
+			raw:     "://appuser:s3cr3t@host:1521/XE",
+			parse:   parseRejects,
+			want:    `parse "://appuser:xxxxx@host:1521/XE": missing protocol scheme ` + amqpHint,
+			secrets: []string{"s3cr3t"},
+		},
+		{name: "authority_terminator_at_index_zero", raw: "oracle:///user:pass@host", parse: parseAccepts, same: true},
+		{name: "at_sign_at_index_zero", raw: "oracle://@host:1521/XE", parse: parseAccepts, same: true},
+		{
+			name:    "empty_username_with_password",
+			raw:     "oracle://:s3cr3t@host:1521/XE",
+			parse:   parseAccepts,
+			want:    "dial oracle://:xxxxx@host:1521/XE: connection refused",
+			secrets: []string{"s3cr3t"},
+		},
+		{
+			name:    "query_options_preserved",
+			raw:     "oracle://appuser:s3cr3t@host:1521/XE?SID=XE",
+			parse:   parseAccepts,
+			want:    "dial oracle://appuser:xxxxx@host:1521/XE?SID=XE: connection refused",
+			secrets: []string{"s3cr3t"},
+		},
+		{name: "at_sign_only_in_path", raw: "oracle://host:1521/XE@weird", parse: parseAccepts, same: true},
+		// '#' terminates the authority too, so an '@' in the fragment is not userinfo.
+		{name: "at_sign_only_in_fragment", raw: "oracle://host:1521#XE@weird", parse: parseAccepts, same: true},
+		{name: "scheme_without_authority", raw: "oracle://", parse: parseAccepts, same: true},
+		// A reason that quotes nothing survives the rebuild.
+		{
+			name:    "unparseable_host_still_masked",
+			raw:     "oracle://appuser:s3cr3t@" + delHost + ":1521/XE",
+			parse:   parseRejects,
+			want:    "parse " + strconv.Quote("oracle://appuser:xxxxx@"+delHost+":1521/XE") + ": net/url: invalid control character in URL " + amqpHint,
+			secrets: []string{"s3cr3t"},
+		},
+		// Non-URL strings pass through: the leak is url.Parse's %q rendering of what it
+		// was handed, which only fires for the URL form.
+		{name: "ez_connect_not_a_url", raw: "appuser/s3cr3t@host:1521/XE", parse: parseAccepts, same: true},
+		{
+			name:  "tns_descriptor_not_a_url",
+			raw:   "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=host)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))",
+			parse: parseAccepts,
+			same:  true,
+		},
+		// The looksLikeHostPort guard is the whole reason these two are left unmasked:
+		// url.Parse ACCEPTS both, so neither is ever rendered into a parse error. They
+		// are the same shape read two ways — credentials in the first, host:port plus an
+		// '@' in the path in the second — so masking one necessarily mangles the other,
+		// for no security gain.
+		{name: "digit_password_segment_reads_as_a_real_port", raw: "oracle://user:1234/secret@db", parse: parseAccepts, same: true},
+		{name: "host_port_with_at_sign_in_path", raw: "oracle://host:1521/XE@weird", parse: parseAccepts, same: true},
+		// looksLikeHostPort verdicts. Each accepted authority carries a ':' the scan would
+		// mask on a false verdict — the path's ":1" for the bare host.
+		{name: "bare_host", raw: "oracle://host/XE:1", parse: parseAccepts, same: true},
+		{name: "host_with_numeric_port", raw: "oracle://host:1521", parse: parseAccepts, same: true},
+		{name: "userinfo_with_non_numeric_tail", raw: "oracle://user:pa", parse: parseRejects, want: `parse "oracle://user:xxxxx": invalid URL ` + amqpHint},
+		{name: "bracketed_ipv6_without_port", raw: "oracle://[::1]", parse: parseAccepts, same: true},
+		// Skipping to the wrong side of the ']' leaves a ':' behind and turns the
+		// trailing "]" into the port.
+		{name: "zero_compressed_ipv6_without_port", raw: "oracle://[::]", parse: parseAccepts, same: true},
+		{name: "bracketed_ipv6_with_port", raw: "oracle://[2001:db8::1]:1521", parse: parseAccepts, same: true},
+		// Only the segment after the last ':' is the port.
+		{name: "unbracketed_multi_colon_host_with_port", raw: "oracle://fe80::1:1521/XE", parse: parseAccepts, same: true},
+		// LastIndex returns -1 for an unterminated literal, so the +1 slice is a no-op
+		// and the whole segment is examined: "db8" is not a port, so the segment reads as
+		// userinfo and over-masks. The reason quotes nothing, so it survives.
+		{
+			name:  "unterminated_ipv6_literal",
+			raw:   "oracle://[2001:db8",
+			parse: parseRejects,
+			want:  `parse "oracle://[2001:xxxxx": missing ']' in host ` + amqpHint,
+		},
+	}
+}
+
+// seamCases pin the rendering seams around the scan: raw rendered outside any
+// *url.Error, a *url.Error built by hand, and errors with nothing to mask.
+func seamCases() []redactErrorCase {
+	const password = "zqxvwgirdlespan"
+	// The DEL byte makes %q escape the URL, so the quoted rendering is not a substring
+	// of the message and only the second replacement can reach it.
+	delHost := "zonk\x7fhost"
+	leaky := "oracle://appuser:" + password + "@" + delHost + ":1521/XE"
+	masked := "oracle://appuser:xxxxx@" + delHost + ":1521/XE"
+	bothRenderings := func(raw string) error {
+		return errors.New("dial " + raw + ": parse " + strconv.Quote(raw) + ": bad")
+	}
+
+	return []redactErrorCase{
+		{
+			name: "url_without_password_leaves_the_message_alone",
+			raw:  "oracle://host:1521/XE",
+			err:  bothRenderings,
+			same: true,
+		},
+		{
+			name:    "verbatim_and_quoted_renderings_both_masked",
+			raw:     leaky,
+			err:     bothRenderings,
+			want:    "dial " + masked + ": parse " + strconv.Quote(masked) + ": bad",
+			secrets: []string{password},
+		},
+		// url.Error is a plain struct, so a driver can hand one back with no wrapped
+		// reason at all; the stand-in takes its place.
+		{
+			name:    "url_error_without_reason",
+			raw:     "amqp://user:zqxvwbarrowclasp@broker:5672/vh",
+			err:     func(raw string) error { return &url.Error{Op: "parse", URL: raw} },
+			want:    `parse "amqp://user:xxxxx@broker:5672/vh": invalid URL`,
+			secrets: []string{"zqxvwbarrowclasp"},
+		},
+		{
+			name:    "reason_without_quote_survives",
+			raw:     "amqp://user:zqxvwlanternquill@" + delHost + ":5672/vh",
+			err:     bareParseErr,
+			parse:   parseRejects,
+			want:    "parse " + strconv.Quote("amqp://user:xxxxx@"+delHost+":5672/vh") + ": net/url: invalid control character in URL",
+			secrets: []string{"zqxvwlanternquill"},
+		},
+		{
+			name: "url_error_without_password",
+			raw:  "amqp://broker:5672/vh",
+			err: func(string) error {
+				return &url.Error{Op: "parse", URL: "amqp://broker:5672/vh", Err: errors.New("boom")}
+			},
+			same: true,
+		},
+		{
+			name: "message_omits_raw",
+			raw:  "amqp://user:s3cr3t@broker:5672/vh",
+			err:  func(string) error { return errors.New("context deadline exceeded") },
+			same: true,
+		},
+		{
+			name: "raw_without_password",
+			raw:  "amqp://broker:5672/vh",
+			err:  func(string) error { return errors.New("boom: amqp://broker:5672/vh") },
+			same: true,
+		},
+	}
+}
