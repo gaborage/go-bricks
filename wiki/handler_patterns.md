@@ -304,9 +304,8 @@ header value therefore wins over a conflicting body value:
 - `SetPathParams()` (above) feeds the same overlay, so a path parameter injected
   by middleware also beats the body.
 
-This holds on every method, including POST/PUT/PATCH. It is not the underlying
-engine's default — echo's binder binds the body *last* — so the framework runs
-its own overlay pass afterwards to guarantee it.
+This holds on every method, including POST/PUT/PATCH, because the overlay runs
+after the JSON step.
 
 **For a security-sensitive identifier, do not lean on this ordering — give the
 field only its URL tag.** Dropping the `json` tag makes "the body cannot set

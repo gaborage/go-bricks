@@ -3,6 +3,7 @@ package builder
 import (
 	dbsql "database/sql"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -1071,9 +1072,9 @@ func (d compareDoor) joinOnly(op string, want operandVerdict) operandVerdict {
 	return want
 }
 
-// negated picks the negated spelling of an equality door's rendering.
+// negated picks the negated spelling of an equality or list door's rendering.
 func (d compareDoor) negated(positive, negative string) string {
-	if d.op == "<>" {
+	if d.op == "<>" || d.op == "NOT IN" {
 		return negative
 	}
 	return positive
@@ -1107,6 +1108,22 @@ func nullVerdict(d compareDoor) operandVerdict {
 	return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IS NULL", "IS NOT NULL")})
 }
 
+func valuerBoomVerdict(d compareDoor) operandVerdict {
+	return operandVerdict{errText: "resolving the " + d.op + " operand: boom", is: errJudgeBoom}
+}
+
+func cyclicVerdict(d compareDoor) operandVerdict {
+	return operandVerdict{errText: "resolving the " + d.op + " operand: operand pointer chain is cyclic"}
+}
+
+func aliasedVerdict(d compareDoor) operandVerdict {
+	return d.joinOnly(d.op, operandVerdict{errText: d.op + ": alias is not allowed in a predicate operand: d", is: dbtypes.ErrAliasInPredicate})
+}
+
+func blankVerdict(d compareDoor) operandVerdict {
+	return d.joinOnly(d.op, operandVerdict{errText: dbtypes.ErrEmptyExpressionSQL.Error(), is: dbtypes.ErrEmptyExpressionSQL})
+}
+
 func splicedVerdict(d compareDoor) operandVerdict {
 	return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " UPPER(x)"})
 }
@@ -1124,8 +1141,12 @@ var (
 	judgeExpr = dbtypes.MustExpr("UPPER(x)")
 	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword with an alias, never rendered
 	judgeAliased = dbtypes.MustExpr("CURRENT_DATE", "d")
+	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
+	judgeBlank = dbtypes.RawExpression{SQL: "  "}
 	// judgeNested is an operand that is itself a squirrel.Sqlizer.
 	judgeNested = squirrel.Eq{"x": 1}
+	// SECURITY: Manual SQL review completed - literal NOW() call, no user input
+	judgeStructSqlizer = squirrel.Expr("NOW()")
 )
 
 // TestOperandJudgeAtTheCompareDoors pins, as one table through the public doors
@@ -1135,8 +1156,6 @@ func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
 	var cyclic any
 	cyclic = &cyclic
 	seven := 7
-	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
-	blank := dbtypes.RawExpression{SQL: "  "}
 	payload := map[string]any{"k": 1}
 
 	runOperandRows(t, compareDoors, []operandRow{
@@ -1168,20 +1187,12 @@ func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
 			}
 			return operandVerdict{pred: "c " + d.op + " x = ?1", args: []any{1}}
 		}},
-		{"valuer_error", erroringValuer{err: errJudgeBoom}, func(d compareDoor) operandVerdict {
-			return operandVerdict{errText: "resolving the " + d.op + " operand: boom", is: errJudgeBoom}
-		}},
-		{"cyclic_pointer", cyclic, func(d compareDoor) operandVerdict {
-			return operandVerdict{errText: "resolving the " + d.op + " operand: operand pointer chain is cyclic"}
-		}},
+		{"valuer_error", erroringValuer{err: errJudgeBoom}, valuerBoomVerdict},
+		{"cyclic_pointer", cyclic, cyclicVerdict},
 		{"expression", judgeExpr, splicedVerdict},
 		{"pointer_to_expression", &judgeExpr, splicedVerdict},
-		{"aliased_expression", judgeAliased, func(d compareDoor) operandVerdict {
-			return d.joinOnly(d.op, operandVerdict{errText: d.op + ": alias is not allowed in a predicate operand: d", is: dbtypes.ErrAliasInPredicate})
-		}},
-		{"blank_expression", blank, func(d compareDoor) operandVerdict {
-			return d.joinOnly(d.op, operandVerdict{errText: dbtypes.ErrEmptyExpressionSQL.Error(), is: dbtypes.ErrEmptyExpressionSQL})
-		}},
+		{"aliased_expression", judgeAliased, aliasedVerdict},
+		{"blank_expression", judgeBlank, blankVerdict},
 	})
 }
 
@@ -1278,5 +1289,217 @@ func TestCompareDoorsJudgeTheColumnBeforeTheOperand(t *testing.T) {
 	}
 	for _, d := range betweenDoors {
 		check(d, [2]any{bad, bad})
+	}
+}
+
+// listDoors are the f and jf In / NotIn doors, judged under their operator.
+var listDoors = []compareDoor{
+	{name: "f_in", op: "IN", f: dbtypes.FilterFactory.In},
+	{name: "f_not_in", op: "NOT IN", f: dbtypes.FilterFactory.NotIn},
+	{name: "jf_in", op: "IN", jf: dbtypes.JoinFilterFactory.In},
+	{name: "jf_not_in", op: "NOT IN", jf: dbtypes.JoinFilterFactory.NotIn},
+}
+
+// emptySet is the constant a list door renders for a set holding nothing.
+func (d compareDoor) emptySet() operandVerdict {
+	return operandVerdict{pred: d.negated("(1=0)", "(1=1)")}
+}
+
+// boundWhole is the verdict of an operand a list door binds as one `=` / `<>`
+// argument rather than expanding.
+func boundWhole(arg any) func(compareDoor) operandVerdict {
+	return func(d compareDoor) operandVerdict {
+		return operandVerdict{pred: "c " + d.negated("=", "<>") + " ?1", args: []any{arg}}
+	}
+}
+
+// listOf is the verdict of a list door expanding args.
+func listOf(args ...any) func(compareDoor) operandVerdict {
+	return func(d compareDoor) operandVerdict {
+		marks := make([]string, len(args))
+		for i := range args {
+			marks[i] = fmt.Sprintf("?%d", i+1)
+		}
+		return operandVerdict{pred: "c " + d.op + " (" + strings.Join(marks, ",") + ")", args: args}
+	}
+}
+
+// TestOperandJudgeAtTheListDoors pins what every operand shape renders to at f
+// and jf In / NotIn, on both vendors.
+func TestOperandJudgeAtTheListDoors(t *testing.T) {
+	var typedNil *int
+	var nilSlice *[]int
+	var cyclic any
+	cyclic = &cyclic
+	payload := map[string]any{"k": 1}
+
+	runOperandRows(t, listDoors, []operandRow{
+		{"slice", []int{1, 2}, listOf(1, 2)},
+		{"pointer_to_slice", &[]int{1, 2}, listOf(1, 2)},
+		{"empty_slice", []int{}, compareDoor.emptySet},
+		{"untyped_nil", nil, compareDoor.emptySet},
+		// Probe 05, pinned as it is today: a nil pointer to a slice is one NULL
+		// element, where an untyped nil is the empty set.
+		{"nil_pointer_to_slice", nilSlice, listOf(nil)},
+		{"scalar_is_one_element", 5, listOf(5)},
+		{"byte_slice_is_one_element", []byte("ab"), listOf([]byte("ab"))},
+		{"map_binds_whole", payload, boundWhole(payload)},
+		{"empty_map", map[string]any{}, compareDoor.emptySet},
+		{"nil_pointer_element_resolves", []any{typedNil}, listOf(nil)},
+		{"typed_pointer_elements_resolve", []*int{typedNil}, listOf(nil)},
+		{"valuer_element_is_asked", []any{dbsql.NullString{String: "s", Valid: true}}, listOf("s")},
+		{"valuer_error", erroringValuer{err: errJudgeBoom}, valuerBoomVerdict},
+		{"valuer_error_element", []any{1, erroringValuer{err: errJudgeBoom}}, func(d compareDoor) operandVerdict {
+			return operandVerdict{errText: "resolving element 1 of the " + d.op + " operand: boom", is: errJudgeBoom}
+		}},
+		{"cyclic_pointer", cyclic, cyclicVerdict},
+		{"expression", judgeExpr, listSpliced},
+		{"pointer_to_expression", &judgeExpr, listSpliced},
+		{"aliased_expression", judgeAliased, aliasedVerdict},
+		{"blank_expression", judgeBlank, blankVerdict},
+		// Probe 02, pinned as it is today: an expression INSIDE a list binds the
+		// struct at both families.
+		{"expression_element", []any{judgeExpr}, listOf(judgeExpr)},
+		{"expression_slice", []dbtypes.RawExpression{judgeExpr}, listOf(judgeExpr)},
+		// judgeNested is a squirrel.Eq, a map: bound whole, as any map is.
+		{"sqlizer_operand", judgeNested, boundWhole(judgeNested)},
+		{"struct_sqlizer_is_one_element", judgeStructSqlizer, listOf(judgeStructSqlizer)},
+	})
+}
+
+func listSpliced(d compareDoor) operandVerdict {
+	return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (UPPER(x))"})
+}
+
+// cellDoor is one SET / VALUES position. render builds a full statement with v
+// in the cell; want renders the expected statement with cell in its place,
+// `?` placeholders numbered by the vendor afterwards, and the arguments around
+// cellArgs.
+type cellDoor struct {
+	name   string
+	label  string
+	render func(qb *QueryBuilder, v any) (string, []any, error)
+	want   func(cell string, cellArgs []any) (string, []any)
+}
+
+func updateCellWant(cell string, a []any) (sqlText string, args []any) {
+	return "UPDATE t SET c = " + cell + " WHERE id = ?", append(a, 1)
+}
+
+var cellDoors = []cellDoor{
+	{
+		name: "update_set", label: "c",
+		render: func(qb *QueryBuilder, v any) (string, []any, error) {
+			return qb.Update("t").Set("c", v).Where(qb.Filter().Eq("id", 1)).ToSQL()
+		},
+		want: updateCellWant,
+	},
+	{
+		name: "update_set_map", label: "c",
+		render: func(qb *QueryBuilder, v any) (string, []any, error) {
+			return qb.Update("t").SetMap(map[string]any{"c": v}).Where(qb.Filter().Eq("id", 1)).ToSQL()
+		},
+		want: updateCellWant,
+	},
+	{
+		name: "insert_values", label: "value position 2",
+		render: func(qb *QueryBuilder, v any) (string, []any, error) {
+			return qb.Insert("t").Columns("id", "c").Values(1, v).ToSQL()
+		},
+		want: func(cell string, a []any) (string, []any) {
+			return "INSERT INTO t (id,c) VALUES (?," + cell + ")", append([]any{1}, a...)
+		},
+	},
+	{
+		name: "insert_set_map", label: "c",
+		render: func(qb *QueryBuilder, v any) (string, []any, error) {
+			return qb.Insert("t").SetMap(map[string]any{"c": v, "id": 1}).ToSQL()
+		},
+		want: func(cell string, a []any) (string, []any) {
+			return "INSERT INTO t (c,id) VALUES (" + cell + ",?)", append(a, 1)
+		},
+	},
+}
+
+// numberPlaceholders numbers the `?` marks of an expected statement by hand,
+// independent of the squirrel numberer the builder itself uses.
+func numberPlaceholders(vendor, sqlText string) string {
+	prefix := "$"
+	if vendor == dbtypes.Oracle {
+		prefix = ":"
+	}
+	var b strings.Builder
+	n := 0
+	for _, r := range sqlText {
+		if r == '?' {
+			n++
+			fmt.Fprintf(&b, "%s%d", prefix, n)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// TestOperandJudgeAtTheValueCells pins what a SET / VALUES cell does with each
+// operand shape on both vendors: only a RawExpression on the surface is
+// spliced; every other value, a pointer to an expression and a Valuer
+// included, is bound as written.
+func TestOperandJudgeAtTheValueCells(t *testing.T) {
+	valuer := dbsql.NullString{String: "s", Valid: true}
+	failing := erroringValuer{err: errJudgeBoom}
+	var typedNil *int
+	var cyclic any
+	cyclic = &cyclic
+
+	rows := []struct {
+		name    string
+		operand any
+		cell    string
+		args    []any
+		errText string
+		is      error
+	}{
+		{name: "scalar", operand: 5, cell: "?", args: []any{5}},
+		{name: "nil", operand: nil, cell: "?", args: []any{nil}},
+		{name: "valuer_is_not_asked", operand: valuer, cell: "?", args: []any{valuer}},
+		{name: "valuer_error_is_not_asked", operand: failing, cell: "?", args: []any{failing}},
+		{name: "typed_nil_binds_as_written", operand: typedNil, cell: "?", args: []any{typedNil}},
+		{name: "cyclic_pointer_binds", operand: cyclic, cell: "?", args: []any{cyclic}},
+		// A Sqlizer in a cell is expanded by squirrel's SET / VALUES rendering.
+		{name: "sqlizer_splices", operand: judgeNested, cell: "x = ?", args: []any{1}},
+		{name: "expression", operand: judgeExpr, cell: "UPPER(x)"},
+		{name: "pointer_to_expression_binds", operand: &judgeExpr, cell: "?", args: []any{&judgeExpr}},
+		{
+			name: "aliased_expression", operand: judgeAliased, is: dbtypes.ErrAliasInValue,
+			errText: dbtypes.ErrAliasInValue.Error() + ": d",
+		},
+		{
+			name: "blank_expression", operand: judgeBlank, is: dbtypes.ErrEmptyExpressionSQL,
+			errText: dbtypes.ErrEmptyExpressionSQL.Error(),
+		},
+	}
+
+	for _, v := range inListVendors {
+		for _, d := range cellDoors {
+			for _, row := range rows {
+				t.Run(v.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
+					var sqlText string
+					var args []any
+					var err error
+					require.NotPanics(t, func() { sqlText, args, err = d.render(NewQueryBuilder(v.vendor), row.operand) })
+
+					if row.errText != "" {
+						require.EqualError(t, err, d.label+": "+row.errText)
+						require.ErrorIs(t, err, row.is)
+						return
+					}
+					require.NoError(t, err)
+					wantSQL, wantArgs := d.want(row.cell, append([]any(nil), row.args...))
+					assert.Equal(t, numberPlaceholders(v.vendor, wantSQL), sqlText)
+					assert.Equal(t, wantArgs, args)
+				})
+			}
+		}
 	}
 }
