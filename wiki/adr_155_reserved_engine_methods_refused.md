@@ -1,4 +1,4 @@
-# ADR-155: Module Route Doors Refuse Echo's Reserved Engine Methods
+# ADR-155: Framework-Built Route Doors Refuse Echo's Reserved Engine Methods
 
 **Status:** Accepted
 **Date:** 2026-10-28
@@ -76,12 +76,14 @@ middleware runs there.
 
 ## Consequences
 
-- **Breaking for a module that registers either sentinel.** It used to boot, with its handler
-  replacing or replaced by a group's catch-all, or answering every method at its template. Now
+- **Breaking for a service that registers either sentinel through a framework-built door.** It
+  used to boot. An `echo_route_not_found` route replaced a group's catch-all, or was replaced by
+  it, in registration order, and an `echo_route_any` route answered every method at its template
+  without the group's middleware. Now
   the framework server's `Start` refuses, and so does app startup when its server reports
   `RouteConflicts()`. Migration is [migrations.md](migrations.md) `[C73.12]`.
-- **ADR-124's catch-all premise is enforced.** No module handler can take a group's catch-all
-  over, so a group's middleware, the `/_sys` IP-range gate and the debug gates included, runs on
+- **ADR-124's catch-all premise is enforced.** No route registered through a framework-built
+  door can take a group's catch-all over, so a group's middleware, the `/_sys` IP-range gate and the debug gates included, runs on
   every sub-path that no route claims. It does not reach a route registered outside the group:
   `GET <prefix>/*` on `ModuleGroup()` is an ordinary route, admitted, and echo serves it ahead of
   the group's catch-all without the group's middleware, as before. A route that needs a group's
