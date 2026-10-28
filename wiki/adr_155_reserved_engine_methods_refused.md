@@ -35,12 +35,19 @@ accepted the sentinel, that premise was false.
   method is exactly `echo.RouteNotFound` or `echo.RouteAny` is recorded as a `RouteConflict`
   whose `Duplicate` is the refused registrant, with no `First` and no `FirstPath`. The match is
   case-sensitive, as echo's is. The route is neither described nor added, and it never claims a
-  router node, so it cannot turn a later registration into a duplicate.
+  router node, so it cannot turn a later registration into a duplicate. The guarantee covers the
+  registrars the framework builds (`ModuleGroup()`, `RootGroup()`, every registrar their `Group`
+  returns) and the probes. `RegisterHandler` given a registrar the framework did not build (a test
+  fake) describes the route and calls that registrar's own `Add`, with no admission step, so
+  neither the refusal nor the descriptor rule applies there.
 - **`RouteConflict` gains `Reason`.** Every recorded conflict sets one:
   `RouteConflictReasonDuplicate` (`"duplicate"`) or `RouteConflictReasonReservedMethod`
   (`"reserved engine method"`). No reader may treat an empty `Reason` as a duplicate.
-- **One error, one sentinel.** `Server.Start` and app startup fail with `*server.DuplicateRouteError`,
-  as for a duplicate, before either listener binds and before `PostRegisterRoutes`.
+- **One error, one sentinel.** `Server.Start` fails with `*server.DuplicateRouteError`, as for a
+  duplicate, before either listener binds. App startup fails the same way before
+  `PostRegisterRoutes` when its server reports `RouteConflicts()`; the framework's server does, and
+  an injected `ServerRunner` that does not is refused at its own `Start`, as a duplicate is under
+  ADR-124.
   `errors.Is(err, server.ErrDuplicateRoute)` holds for both reasons. An error holding only
   duplicates reads byte for byte as before. When any conflict has another reason, the head reads
   `route registration refused (N conflict(s))`, so a reserved refusal is never called a

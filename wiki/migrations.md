@@ -13884,8 +13884,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `echo_route_any` at that template answered every method, in either order, without the group
   middleware. Neither reached the duplicate-route check, and each wrote a route descriptor with the
   sentinel as its method, which `PostRegisterRoutes`, the `server.logroutes` log and OpenAPI saw.
-- after: the registration is refused, never added and never described. `server.Start`, and app
-  startup before `PostRegisterRoutes`, fail with a `*server.DuplicateRouteError`
+- after: a registration through a registrar the framework built is refused, never added and never
+  described (`RegisterHandler` given a test-fake registrar has no admission step). `server.Start`
+  fails, and so does app startup before `PostRegisterRoutes` when the server reports
+  `RouteConflicts()` (the framework's does), with a `*server.DuplicateRouteError`
   (`errors.Is(err, server.ErrDuplicateRoute)` holds) whose conflict carries `Reason`
   `server.RouteConflictReasonReservedMethod`:
 
