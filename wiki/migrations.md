@@ -14111,11 +14111,28 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   pointer or a stateful Valuer holds.
   The operand is now judged: move a `RawExpression` to a `jf` door, or to `f.Raw` with its
   `// SECURITY:` annotation, since `f` refuses it with `dbtypes.ErrExpressionInFilter`. A list at
-  `Eq`/`NotEq` still renders `IN`/`NOT IN`, with each element judged. An untyped nil or a list at
-  `Lt`/`Lte`/`Gt`/`Gte` fails with `dbtypes.ErrOrderingOperandNotComparable`, where squirrel
-  returned its own error. A typed nil pointer (`(*int)(nil)`), which squirrel rendered as `c < ?`
-  bound to NULL and so matched no row, now fails the same way at build, so guard it before
-  building where the no-match was intended.
+  `Eq`/`NotEq` still renders `IN`/`NOT IN`, with each element judged. Squirrel dereferenced one
+  pointer level at `Eq`/`NotEq` and none at the ordering doors, and asked a Valuer before checking
+  for a nil pointer; the judge resolves every pointer level first. Every operand whose rendering
+  moves (v0.72.0 `qb.*` against v0.73.0 `qb.Filter()`, on PostgreSQL):
+
+  | # | operand | door | v0.72.0 `qb.*` | v0.73.0 `qb.Filter()` | rows |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | `**int` to a nil `*int` | `Eq` | `c = $1`, `[(*int)(nil)]`, sent as NULL | `c IS NULL` | none → the NULL rows: **widens**, an `Update`/`Delete` hazard |
+  | 2 | `**int` to a nil `*int` | `NotEq` | `c <> $1`, `[(*int)(nil)]`, sent as NULL | `c IS NOT NULL` | none → every non-NULL row: **widens**, an `Update`/`Delete` hazard |
+  | 3 | nil pointer to a value-receiver Valuer (`(*sql.NullString)(nil)`) | `Eq` / `NotEq` | panicked at build | `c IS NULL` / `c IS NOT NULL` | no statement → the NULL rows / every non-NULL row: **widens**, an `Update`/`Delete` hazard |
+  | 4 | nil pointer at any level (`(*int)(nil)`, `**int` to a nil `*int`, `(*[]int)(nil)`) | `Lt`/`Lte`/`Gt`/`Gte` | `c < $1` bound the pointer, sent as NULL | `ErrOrderingOperandNotComparable` at build | none → no statement |
+  | 5 | nil pointer to a value-receiver Valuer | `Lt`/`Lte`/`Gt`/`Gte` | panicked at build | `ErrOrderingOperandNotComparable` at build | no statement → no statement |
+  | 6 | untyped nil, a Valuer answering NULL, or a list (empty or nil included) | `Lt`/`Lte`/`Gt`/`Gte` | squirrel's `cannot use null …` or `cannot use array or slice …` | `ErrOrderingOperandNotComparable` at build | no statement → no statement; the error changes |
+  | 7 | pointer to a list (`&[]int{1, 2}`) | `Lt`/`Lte`/`Gt`/`Gte` | `c < $1` bound the pointer to the list | `ErrOrderingOperandNotComparable` at build | the list as one argument → no statement |
+  | 8 | `*int` to a value, or `**int` to a `*int` to one | `Lt`/`Lte`/`Gt`/`Gte`; the `**int` also `Eq`/`NotEq` | `c < $1` bound the pointer | `c < $1` bound the value | same rows; a pinned argument moves |
+
+  **Unchanged**: a scalar at every door; at `Eq`/`NotEq`, an untyped nil, a nil `*int`, a `*int`
+  to a value, a nil pointer to a slice, a nil pointer-receiver Valuer, a Valuer answering NULL,
+  and a list, an empty or nil slice or a pointer to a list. Rows 1–3 touch rows under `Update` or
+  `Delete` that the old call left alone, and rows 4–5 turn a no-match into a build error: guard a
+  pointer that can be nil at any level before building, and match the build error with
+  `errors.Is(err, dbtypes.ErrOrderingOperandNotComparable)`, not squirrel's text.
 - verify: `go vet ./...` passes and the detect returns no hit; on Oracle,
   `database.NewQueryBuilder("oracle").Filter().Eq("number", "12345").ToSQL()` returns
   `"number" = ?` with args `[12345]`.

@@ -21,6 +21,9 @@ contract* in [database.md](database.md)). Squirrel rendered it by its own rules:
 - a `driver.Valuer` was asked before any nil check, so a nil pointer to a Valuer type whose
   `Value()` dereferences its receiver panicked when the statement was built, where the judge
   reads a nil pointer as NULL before asking it anything;
+- a pointer was dereferenced one level at `Eq`/`NotEq` and not at all at the ordering doors, so a
+  `**int` to a nil `*int` at any door, or a nil `*int` at `Lt`, was bound as a pointer the driver
+  sent as NULL, matching no row, where the judge resolves every pointer level first;
 - a list operand's elements were bound as written, so an expression, pointer or Valuer element
   reached the driver unjudged, where the judge resolves each element as its own operand (C73.16).
 
@@ -56,10 +59,14 @@ UPDATE's SET targets still use it.
   the enclosing statement's `ToSQL()`.
 - The replacement judges the operand. A `RawExpression` is refused with `ErrExpressionInFilter`
   (move it to a `jf` door, or to `f.Raw` with its `// SECURITY:` annotation). A list at
-  `Eq`/`NotEq` renders `IN`/`NOT IN` with each element judged. A nil or list operand at
-  `Lt`/`Lte`/`Gt`/`Gte` fails with `ErrOrderingOperandNotComparable`, where squirrel returned
-  its own error. A typed nil pointer fails too: squirrel bound it as NULL and matched no row,
-  and the replacement resolves it to nil and refuses it at build.
+  `Eq`/`NotEq` renders `IN`/`NOT IN` with each element judged. Where the same operand now renders
+  differently, the `[C73.17]` table lists every case. Three widen, so under `Update`/`Delete` they
+  touch rows the old call left alone: a `**int` to a nil `*int` at `Eq` or `NotEq` (bound as
+  NULL, no row, now `IS NULL`/`IS NOT NULL`), and a nil pointer to a value-receiver Valuer at
+  either (a build panic, now the same). At `Lt`/`Lte`/`Gt`/`Gte`, a nil pointer at any level, a
+  list, a pointer to a list or a NULL answer fails with `ErrOrderingOperandNotComparable` at
+  build, where squirrel bound a pointer the driver sent as NULL (no row), returned its own error,
+  or panicked. Callers guard a pointer that can be nil at any level before building.
 - `types.QueryBuilderInterface` and `testing/mocks` never carried the six names, so neither
   changes.
 
