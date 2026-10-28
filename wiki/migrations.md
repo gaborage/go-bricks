@@ -13873,7 +13873,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - the database identity keys `connectionstring`, `type`, `host`, `port`, `database`,
     `username`, `password`, `oracle.service.name` and `oracle.service.sid`, under `database`,
     `databases.<name>` or `multitenant.tenants.<id>.database`, with an empty or null value.
-  - Run all three greps, each kept to those key paths. Block keys:
+  - Run all three greps. They list candidates, not matches: they also hit unrelated upper-case
+    keys and non-ASCII values or comments, so a hit counts only once you confirm its full key path
+    is one listed above and its value is empty or null, or a second spelling exists. Block keys:
     `git grep -nE '^[[:space:]]*[^#[:space:]]*[A-Z][^:]*:' -- '*.yaml' '*.yml'`. Flow mappings
     (`server: {probes: {Host: ""}}`), quoted keys included:
     `git grep -nE '[{,][[:space:]]*[^#:{},]*[A-Z][^:{},]*:' -- '*.yaml' '*.yml'`. Unicode folds
@@ -13886,8 +13888,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   with a real value; one empty identity key in a database section that is otherwise configured;
   `config.LoadFromMap`, which skips `Validate`; hand-built literals; and an empty string at a
   database `port`, still refused at decode in any spelling.
-- gate: match = a hit on any of the three greps at one of those key paths. no-match = all three
-  greps clean for those paths; the first grep alone is not enough.
+- gate: match = a confirmed hit from any of the three greps. no-match = no confirmed hit from
+  all three; the first grep alone is not enough.
 - before: v0.72.0 decoded these spellings, because mapstructure falls back to a case-insensitive
   match, but its delivered-empty checks looked only for the lowercase key.
   `server: {probes: {Host: ""}}` widened a loopback probe bind to `server.host`,
