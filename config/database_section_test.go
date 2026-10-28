@@ -3056,6 +3056,150 @@ func TestValidateNoDeliveredEmptyDatabasePassesForLiteral(t *testing.T) {
 	assert.NoError(t, validateNoDeliveredEmptyDatabase(&Config{}))
 }
 
+// capitalizedIdentityYAML renders one identity key at indent with every segment
+// capitalized, the spelling mapstructure decodes by case-insensitive fallback. An empty
+// value renders a bare null.
+func capitalizedIdentityYAML(key string, indent int, value string) string {
+	var b strings.Builder
+	for i, segment := range strings.Split(key, ".") {
+		b.WriteString(strings.Repeat(" ", indent+2*i) + strings.ToUpper(segment[:1]) + segment[1:] + ":")
+		if value != "" && i == strings.Count(key, ".") {
+			b.WriteString(" " + value)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// TestValidateNoDeliveredEmptyDatabaseUnderAnySpelling pins ADR-051 under ADR-156's lookup:
+// an identity key delivered empty or null in a mixed-case spelling decodes into the section,
+// so it is refused with ADR-051's message and the canonical key in every section kind — a
+// named section included, which used to fall through to the generic "incomplete" refusal.
+func TestValidateNoDeliveredEmptyDatabaseUnderAnySpelling(t *testing.T) {
+	sections := []struct {
+		name   string
+		path   string
+		yaml   string
+		indent int
+	}{
+		{name: "root", path: fieldDatabase, yaml: "database:\n", indent: 2},
+		{name: "named", path: "databases.reporting", yaml: "databases:\n  reporting:\n", indent: 4},
+		{
+			name:   "tenant",
+			path:   "multitenant.tenants.acme.database",
+			yaml:   "multitenant:\n  enabled: true\n  resolver:\n    type: header\n  tenants:\n    acme:\n      database:\n",
+			indent: 8,
+		},
+	}
+	values := []struct{ name, yaml string }{{name: "empty", yaml: `""`}, {name: "null"}}
+
+	for _, sec := range sections {
+		for _, key := range databaseIdentityKeys {
+			for _, value := range values {
+				if key == identityKeyPort && value.yaml != "" {
+					// An empty string at a numeric key is refused at decode, before ADR-051, in
+					// any spelling.
+					continue
+				}
+				t.Run(sec.name+"_"+strings.ReplaceAll(key, ".", "_")+"_"+value.name, func(t *testing.T) {
+					_, err := loadDeliveredEmptyFixture(t, sec.yaml+capitalizedIdentityYAML(key, sec.indent, value.yaml), nil)
+
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), "delivered empty")
+					assert.Contains(t, err.Error(), sec.path+"."+key)
+					assert.NotContains(t, err.Error(), errDatabaseIncomplete)
+				})
+			}
+		}
+	}
+}
+
+// TestValidateNoDeliveredEmptyDatabaseRefusesAnEmptyTwin pins the two-spellings rule for
+// identity keys (ADR-156): a section that is configured is still refused when one identity
+// key arrives in two spellings and either is empty, wherever each came from. Every case is
+// loaded repeatedly, so map order cannot decide it.
+func TestValidateNoDeliveredEmptyDatabaseRefusesAnEmptyTwin(t *testing.T) {
+	const named = "databases:\n  reporting:\n    type: postgresql\n    host: db.internal\n    port: 5432\n" +
+		"    database: reports\n    username: app\n    password: s3cretpw\n"
+
+	tests := []struct {
+		name  string
+		files map[string]string
+		env   map[string]string
+		key   string
+	}{
+		{
+			name:  "root_empty_twin_beside_value",
+			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Host: \"\"\n"},
+			key:   "database.host",
+		},
+		{
+			name:  "root_null_twin_beside_value",
+			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Password:\n"},
+			key:   "database.password",
+		},
+		{
+			name: "root_lowercase_empty_beside_twin_value",
+			files: map[string]string{testConfigFileYAML: "database:\n  type: postgresql\n  Host: db.internal\n  host: \"\"\n" +
+				"  port: 5432\n  database: appdb\n  username: app\n  password: s3cretpw\n"},
+			key: "database.host",
+		},
+		{
+			name: "root_overlay_empty_twin",
+			files: map[string]string{
+				testConfigFileYAML: presenceIdentityDatabaseYAML,
+				"config.prod.yaml": "database:\n  Host: \"\"\n",
+			},
+			env: map[string]string{"APP_ENV": "prod"},
+			key: "database.host",
+		},
+		{
+			name:  "root_env_value_beside_yaml_empty_twin",
+			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Username: \"\"\n"},
+			env:   map[string]string{testDatabaseUsername: "app"},
+			key:   "database.username",
+		},
+		{
+			name:  "named_empty_twin_beside_value",
+			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + named + "    Host: \"\"\n"},
+			key:   "databases.reporting.host",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for range 50 {
+				_, err := loadConfigFixture(t, tt.files, tt.env)
+
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "delivered empty")
+				require.Contains(t, err.Error(), tt.key)
+			}
+		})
+	}
+}
+
+// TestValidateNoDeliveredEmptyDatabaseLeavesAConfiguredSectionWithoutAnEmptyTwin pins that
+// the two-spellings rule adds nothing else to ADR-051: one empty identity key in a configured
+// section, and two spellings that both hold a value, are not delivered-empty refusals.
+func TestValidateNoDeliveredEmptyDatabaseLeavesAConfiguredSectionWithoutAnEmptyTwin(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{name: "one_empty_spelling", yaml: presenceIdentityDatabaseYAML + "  oracle:\n    service:\n      name: \"\"\n"},
+		{name: "two_spellings_both_set", yaml: presenceIdentityDatabaseYAML + "  Host: db.other\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
+
+			require.NoError(t, err)
+		})
+	}
+}
+
 // TestLoadDefaultsCarryNoDatabaseIdentityKeys pins the ADR-047 invariant that outlived
 // preloadDeniedPrefixes (ADR-104): the loaded defaults register nothing under any of the
 // three prefixes the retired deny-list covered — database., databases, and
