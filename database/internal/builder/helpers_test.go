@@ -2,6 +2,7 @@ package builder
 
 import (
 	dbsql "database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -1128,8 +1129,20 @@ func splicedVerdict(d compareDoor) operandVerdict {
 	return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " UPPER(x)"})
 }
 
+// intPtrsValuer is a driver.Valuer over a slice of pointers: like inValuerList,
+// one scalar operand, asked once, whatever its Go shape.
+type intPtrsValuer []*int
+
+// listAnswerValuer answers with a slice, which no driver accepts: the door
+// judges the answer in its place.
+type listAnswerValuer struct{}
+
+func (listAnswerValuer) Value() (driver.Value, error) { return []int64{1, 2}, nil }
+
 // selfPointer is a pointer type that names itself.
 type selfPointer *selfPointer
+
+func (intPtrsValuer) Value() (driver.Value, error) { return "asked", nil }
 
 // operandRow is one operand shape and what it renders to at each door.
 type operandRow struct {
@@ -1195,6 +1208,8 @@ func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
 			}
 			return operandVerdict{pred: "c " + d.op + " x = ?1", args: []any{1}}
 		}},
+		{"valuer_over_ints", inValuerList{1, 2}, bound("asked")},
+		{"valuer_over_pointers", intPtrsValuer{&seven}, bound("asked")},
 		{"valuer_error", erroringValuer{err: errJudgeBoom}, valuerBoomVerdict},
 		{"cyclic_pointer", cyclic, cyclicVerdict},
 		{"expression", judgeExpr, splicedVerdict},
@@ -1340,6 +1355,7 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 	var anyNilSlice any = nilSlice
 	var nilSelf, cyclicSelf selfPointer
 	cyclicSelf = &cyclicSelf
+	seven := 7
 	var cyclic any
 	cyclic = &cyclic
 	payload := map[string]any{"k": 1}
@@ -1369,6 +1385,10 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 		{"nil_pointer_element_resolves", []any{typedNil}, listOf(nil)},
 		{"typed_pointer_elements_resolve", []*int{typedNil}, listOf(nil)},
 		{"valuer_element_is_asked", []any{dbsql.NullString{String: "s", Valid: true}}, listOf("s")},
+		// A Valuer is asked before its list-ness is judged: its answer is one element.
+		{"valuer_over_ints_is_asked", inValuerList{1, 2}, listOf("asked")},
+		{"valuer_over_pointers_is_asked", intPtrsValuer{&seven}, listOf("asked")},
+		{"valuer_answering_a_list", listAnswerValuer{}, listOf(int64(1), int64(2))},
 		{"valuer_error", erroringValuer{err: errJudgeBoom}, valuerBoomVerdict},
 		{"valuer_error_element", []any{1, erroringValuer{err: errJudgeBoom}}, func(d compareDoor) operandVerdict {
 			return operandVerdict{errText: "resolving element 1 of the " + d.op + " operand: boom", is: errJudgeBoom}
@@ -1473,6 +1493,20 @@ func updateCellWant(cell string, a []any) (sqlText string, args []any) {
 	return "UPDATE t SET c = " + cell + " WHERE id = ?", append(a, 1)
 }
 
+func insertValuesWant(cell string, a []any) (sqlText string, args []any) {
+	return "INSERT INTO t (id,c) VALUES (?," + cell + ")", append([]any{1}, a...)
+}
+
+func insertMapWant(cell string, a []any) (sqlText string, args []any) {
+	return "INSERT INTO t (c,id) VALUES (" + cell + ",?)", append(a, 1)
+}
+
+// cellRow is the struct InsertStruct and InsertFields read a cell from.
+type cellRow struct {
+	ID int `db:"id"`
+	C  any `db:"c"`
+}
+
 var cellDoors = []cellDoor{
 	{
 		name: "update_set", label: "c",
@@ -1493,18 +1527,28 @@ var cellDoors = []cellDoor{
 		render: func(qb *QueryBuilder, v any) (string, []any, error) {
 			return qb.Insert("t").Columns("id", "c").Values(1, v).ToSQL()
 		},
-		want: func(cell string, a []any) (string, []any) {
-			return "INSERT INTO t (id,c) VALUES (?," + cell + ")", append([]any{1}, a...)
+		want: insertValuesWant,
+	},
+	{
+		name: "insert_struct", label: "c",
+		render: func(qb *QueryBuilder, v any) (string, []any, error) {
+			return qb.InsertStruct("t", &cellRow{ID: 1, C: v}).ToSQL()
 		},
+		want: insertMapWant,
+	},
+	{
+		name: "insert_fields", label: "c",
+		render: func(qb *QueryBuilder, v any) (string, []any, error) {
+			return qb.InsertFields("t", &cellRow{ID: 1, C: v}, "ID", "C").ToSQL()
+		},
+		want: insertValuesWant,
 	},
 	{
 		name: "insert_set_map", label: "c",
 		render: func(qb *QueryBuilder, v any) (string, []any, error) {
 			return qb.Insert("t").SetMap(map[string]any{"c": v, "id": 1}).ToSQL()
 		},
-		want: func(cell string, a []any) (string, []any) {
-			return "INSERT INTO t (c,id) VALUES (" + cell + ",?)", append(a, 1)
-		},
+		want: insertMapWant,
 	},
 }
 
