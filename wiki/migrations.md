@@ -13951,8 +13951,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   its routine go-bricks pin bump, every `go-bricks-migrate --source-config` run. **Unchanged**: environment variables; a root key that
   folds to no section (`Orders:`, `custom:`); a lone mixed-case key below the root, such as `Keys`
   in `keystore: {Keys: …}`, which still decodes through mapstructure's case-insensitive match; a
-  flat-dotted YAML key such as `App.name:`, which YAML loading keeps as one literal root key that
-  neither decode nor this check reads, in any case; a hand-built `*config.Config` handed to `app.NewWithConfig` or `Builder.WithConfig`, which is
+  flat-dotted YAML key such as `App.name:` under `config.Load`, which keeps it as one literal root
+  key that neither decode nor this check reads, in any case (`go-bricks-migrate --source-config`
+  already refuses a top-level dotted key before decoding: write it nested, or remove it); a
+  hand-built `*config.Config` handed to `app.NewWithConfig` or `Builder.WithConfig`, which is
   never decoded; a dynamic tenant source; every signature and config key.
 - gate: match = a detect hit, or the verify step failing on any loaded configuration. no-match = no
   detect hit, and the verify step passing on every configuration a deployment, a test or a
