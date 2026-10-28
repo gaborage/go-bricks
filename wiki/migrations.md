@@ -14018,8 +14018,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - an environment variable reaches its lowercase spelling: the path upper-cased with each `.`
     as `_`, such as `SERVER_PROBES_PORT` for `server.probes.Port`, or
     `OBSERVABILITY_TRACE_HEADERS_AUTHORIZATION` for a trace header `Authorization:` (likewise
-    `.metrics.` and `.logs.`). Search the deployment's env files and manifests with
-    `grep -rn '<VARIABLE>=' k8s/ deploy/ .env* 2>/dev/null`.
+    `.metrics.` and `.logs.`). Search the deployment's env files and manifests for the bare name,
+    `grep -rnw '<VARIABLE>' k8s/ deploy/ .env* 2>/dev/null`, and keep a hit that sets it:
+    `<VARIABLE>=` in an env file, `name: <VARIABLE>` in a manifest.
 - scope: `config.Load` and `config.LoadFromMap`, at every map node of the merged tree, data-keyed
   maps included (`observability.{trace,metrics,logs}.headers`, `custom.*`, keystore names) and
   maps inside sequences; `go-bricks-migrate --source-config` from the first CLI release that pins
