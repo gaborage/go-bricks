@@ -13933,10 +13933,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
   ```bash
   N='app|server|databases?|cache|log|messaging|multitenant|debug|source|scheduler|outbox|inbox|keystore|auth|observability'
-  # YAML: a root key, nested (App:), quoted ("App":) or flat-dotted (Server.port:), not spelled lowercase
-  git grep -niE "^[\"']?($N)[\"']?[[:space:]]*[.:]" -- '*.yaml' '*.yml' | grep -vE ":[0-9]+:[\"']?($N)[\"']?[[:space:]]*[.:]"
-  # Go: a config.LoadFromMap map key spelled other than lowercase
-  git grep -noiE "\"($N)\"[[:space:]]*:" -- '*.go' | grep -vE ":\"($N)\"[[:space:]]*:"
+  # YAML: a root key, plain (App:) or quoted ("App":), not spelled lowercase
+  git grep -niE "^[\"']?($N)[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' | grep -vE ":[0-9]+:[\"']?($N)[\"']?[[:space:]]*:"
+  # Go: a config.LoadFromMap map key, plain ("App") or dotted ("App.name"), not spelled lowercase
+  git grep -noiE "\"($N)(\.[^\"]*)?\"[[:space:]]*:" -- '*.go' | grep -vE ":\"($N)(\.[^\"]*)?\"[[:space:]]*:"
   ```
 
   Keep a YAML hit only in a file a deployment or a `go-bricks-migrate --source-config` run
@@ -13948,7 +13948,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   its routine go-bricks pin bump, every `go-bricks-migrate --source-config` run. **Unchanged**: environment variables; a root key that
   folds to no section (`Orders:`, `custom:`); a lone mixed-case key below the root, such as `Keys`
   in `keystore: {Keys: …}`, which still decodes through mapstructure's case-insensitive match; a
-  hand-built `*config.Config` handed to `app.NewWithConfig` or `Builder.WithConfig`, which is
+  flat-dotted YAML key such as `App.name:`, which YAML loading keeps as one literal root key that
+  neither decode nor this check reads, in any case; a hand-built `*config.Config` handed to `app.NewWithConfig` or `Builder.WithConfig`, which is
   never decoded; a dynamic tenant source; every signature and config key.
 - gate: match = a detect hit. no-match = every framework section at the root of every loaded file
   and map is spelled lowercase.
@@ -13967,7 +13968,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - apply: rename each hit to its lowercase section name. First review the block's values: they
   were ignored, or read by the struct decode alone, and take effect once renamed, so a renamed
   `App:` applies the name and env it sets, and a renamed `Observability:` turns telemetry on with
-  its endpoint.
+  its endpoint. A dotted `LoadFromMap` key is renamed at its first segment: `"App.name"` becomes
+  `"app.name"`, which `LoadFromMap` unflattens into the `app` section.
   Where the same file or another layer already holds the lowercase section, merge the two blocks
   into one.
 - verify: `config.Load()` succeeds, `cfg.Exists("<section>")` is true for each renamed section,
