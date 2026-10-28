@@ -1762,8 +1762,6 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 		{name: "password_with_question_mark", password: "s3cr?etPW", secrets: brokerPasswordSecrets},
 		{name: "password_with_percent", password: "s3cr%etPW", secrets: brokerPasswordSecrets},
 		{name: "password_with_slash", password: "s3cr/etPW", secrets: brokerPasswordSecrets},
-		// url.Parse cuts the fragment before it reports, but connect() rebuilds the error
-		// from the URL it dialed, so the host past the '#' still shows.
 		{name: "password_with_hash", password: "s3cr#etPW", secrets: brokerPasswordSecrets},
 		// "user:2024" reads as host:port; the newline is what makes url.Parse reject it.
 		{name: "digit_password_with_trailing_newline", password: "2024/Spring", suffix: "\n", secrets: []string{"2024", "Spring"}},

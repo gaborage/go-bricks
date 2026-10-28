@@ -104,8 +104,6 @@ func TestRedactRendersOnePosture(t *testing.T) {
 		{name: "escaped_username_and_vhost", raw: "amqp://us%40er:zq9x@broker:5672/%2Fproduction", parse: parseAccepts, want: "amqp://us%40er:xxxxx@broker:5672/%2Fproduction"},
 		{name: "hostile_password_characters", raw: "amqp://user:zq9x?#/@:PW@broker:5672/vh", parse: parseRejects, want: "amqp://user:xxxxx@broker:5672/vh"},
 		{name: "password_with_invalid_escape", raw: "amqp://user:s3cr%etPW@broker:5672/vh", parse: parseRejects, want: "amqp://user:xxxxx@broker:5672/vh"},
-		// Rejected with no '@' anywhere: masked from the first ':' to the end of the
-		// authority, the brackets of an IPv6 literal skipped.
 		{name: "rejected_without_at", raw: "amqp://user:pass/broker", parse: parseRejects, want: "amqp://user:xxxxx/broker"},
 		{name: "rejected_without_at_with_query", raw: "amqp://user:zq9x?token=zq9x", parse: parseRejects, want: "amqp://user:xxxxx?xxxxx"},
 		{name: "rejected_ipv6_without_at", raw: "amqp://[::1]:5672/vh\n", parse: parseRejects, want: "amqp://[::1]:xxxxx/vh\n"},
@@ -473,8 +471,9 @@ func scanCases() []redactErrorCase {
 		{name: "ipv6_host_with_port", raw: "oracle://[::1]:1521/XE", parse: parseAccepts, same: true},
 		{name: "ipv6_host_without_port", raw: "oracle://[::1]/XE", parse: parseAccepts, same: true},
 		{name: "ipv6_zero_compressed_host_without_port", raw: "oracle://[::]/XE", parse: parseAccepts, same: true},
-		// The scan tests each strings.Index result against -1, so index 0 must read as a
-		// hit. One case per sentinel: scheme, authority terminator, '@', ':'.
+		// Index 0 must read as a hit for each sentinel: the scheme separator, a rejected
+		// URL's authority terminator, the '@' and the ':'. An accepted URL whose path
+		// starts at index 0 still has its userinfo read to the last '@'.
 		{
 			name:    "scheme_separator_at_index_zero",
 			raw:     "://appuser:s3cr3t@host:1521/XE",
@@ -484,7 +483,6 @@ func scanCases() []redactErrorCase {
 		},
 		{name: "authority_terminator_at_index_zero", raw: "oracle:///user:pass@host", parse: parseAccepts, want: "dial oracle:///user:xxxxx@host: connection refused", secrets: []string{"pass"}},
 		{name: "rejected_authority_terminator_at_index_zero", raw: "oracle:///XE:1\n", parse: parseRejects, same: true},
-		// An empty userinfo is a lone one.
 		{name: "at_sign_at_index_zero", raw: "oracle://@host:1521/XE", parse: parseAccepts, want: maskedLoneDSN, secrets: []string{"//@"}},
 		{
 			name:    "empty_username_with_password",
@@ -509,7 +507,6 @@ func scanCases() []redactErrorCase {
 			want:    "parse " + strconv.Quote("oracle://appuser:xxxxx@"+delHost+":1521/XE") + ": net/url: invalid control character in URL " + hint,
 			secrets: []string{"s3cr3t"},
 		},
-		// Input with no "://" is masked whole.
 		{name: "ez_connect_not_a_url", raw: "appuser/s3cr3t@host:1521/XE", parse: parseAccepts, want: maskedWhole, secrets: []string{"s3cr3t"}},
 		{
 			name:  "tns_descriptor_not_a_url",

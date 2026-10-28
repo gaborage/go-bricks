@@ -1,4 +1,4 @@
-# ADR-159: One Credential-URL Posture for Log and Error Text
+# ADR-159: One Credential-URL Posture
 
 **Status:** Accepted
 **Date:** 2026-10-28
@@ -22,7 +22,7 @@ so the host never showed.
 
 ## Decision
 
-**`internal/credurl` is the one renderer for a credential-bearing URL in log and error text, and it
+**`internal/credurl` is the one renderer for a credential-bearing URL in error text, and it
 renders one posture.** `Redact(raw) string` gives the posture for a raw URL. `RedactError`
 rebuilds a buried `*url.Error`, and masks every other rendering of raw, through the same rules.
 
@@ -30,8 +30,8 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
 - The password becomes `xxxxx`. The username is kept only beside a non-empty password: a lone
   userinfo (`amqp://tok@h`, the API-key-as-username shape) or an empty password (`amqp://u:@h`)
   becomes `xxxxx@`.
-- A query, when one was present, becomes `?xxxxx`. Nothing is appended to a URL without one. The
-  fragment is dropped.
+- A non-empty query becomes `?xxxxx`; an empty one is dropped with its `?`. The fragment is
+  dropped.
 - The userinfo runs to the last `@` after `://`, wherever url.Parse would end it, whether it
   accepts the input or rejects it: `amqp://user:1234/Spring@broker/vh` renders
   `amqp://user:xxxxx@broker/vh`.
@@ -42,7 +42,7 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   before reporting, whenever the raw URL extends it: the `@` that ends the userinfo can be in the
   cut.
 - Input without `://`, or with any of `:`, `/`, `?`, `#` or `@` before the first `://`, renders
-  whole as `xxxxx`.
+  whole as `xxxxx`; empty input renders as the empty string.
 - A `*url.Error` reason that quotes anything is replaced, which is the rule `RedactError` already
   applied.
 
@@ -54,7 +54,7 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
 
 | Door | Text | Renderer |
 | --- | --- | --- |
-| AMQP `connect()` | dial error, dial logs | `RedactError` |
+| AMQP `connect()` | dial error, and the `Failed to connect to AMQP broker` log line carrying it | `RedactError` |
 | Streams `safeEnvError` | environment error | `RedactError` |
 | Streams `safeStartError` | consumer and publisher start errors | `RedactError` |
 | Oracle connector (`redactDSNError`) | DSN error | `RedactError` |
@@ -86,8 +86,13 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   the same shape as `amqp://h:5672/vh`, so it renders verbatim, as it did before.
 - A query value, such as an Oracle `WALLET PASSWORD` or an AMQP `connection_name`, no longer shows
   in these errors.
+- The `broker_url` and streams `uri` log fields, and the endpoint the streams start error names,
+  still render through their own renderers (`redactAMQPURL`, `redactStreamURI`), which keep a lone
+  username and render a misparsed password as written; the logger filter masks `broker_url` whole
+  by name.
 - Tests, log queries and alerts that match the old error text stop matching. See `[C73.18]`.
-- No exported symbol changes (`credurl` is internal), and no configuration key changes.
+- No public API changes (`credurl` is internal; `Redact` is new there), and no configuration key
+  changes.
 
 ## Open question: refuse a misparsed URL before dialing
 
@@ -97,7 +102,7 @@ text to the resolver, and the dial error names that host as the vendor wrote it.
 the dial would close that, but it is a breaking change (a URL that dials today would refuse to
 start), and it has no exact trigger. `amqp://user:1234/Spring@broker/vh` (misparsed password) and
 `amqp://h:5672/my@vhost` (host, port, `@` vhost) have the same shape, and the candidate heuristics
-each either refuse a valid vhost or miss a misparse. Left open, with a drafted follow-up.
+each either refuse a valid vhost or miss a misparse. Left open.
 
 ## References
 

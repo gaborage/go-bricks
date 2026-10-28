@@ -1,7 +1,7 @@
-// Package credurl is the one credential-URL renderer: it masks a URL's credentials
-// in log fields and error text without echoing the input url.Parse rejected. A
-// connection URL that carries inline credentials reaches startup errors — hence logs
-// and pod termination messages — through net/url's %q rendering, so every driver that
+// Package credurl is the one credential-URL renderer: it masks a URL's credentials in
+// error text without echoing the input url.Parse rejected. A connection URL that
+// carries inline credentials reaches startup errors — hence logs and pod
+// termination messages — through net/url's %q rendering, so every driver that
 // dials one shares these masking rules instead of re-deriving them.
 package credurl
 
@@ -28,11 +28,11 @@ func (e *redactedError) Error() string { return e.msg }
 func (e *redactedError) Unwrap() error { return e.err }
 
 // RedactError returns err with every rendering of raw masked as Redact renders it.
-// Shapes url.Parse accepts never yield a *url.Error, so they are masked only where
-// raw itself is rendered in the message. A *url.Error's rendering is rebuilt rather
-// than scrubbed, and a failure reason that quotes part of the URL is replaced by
-// reason. The result unwraps to err; when nothing needs masking, err itself is
-// returned.
+// Shapes url.Parse accepts never yield a *url.Error, so they are masked
+// only where raw itself is rendered in the message. A *url.Error's rendering is
+// rebuilt rather than scrubbed, and a failure reason that quotes part of the URL is
+// replaced by reason. The result unwraps to err; when
+// nothing needs masking, err itself is returned.
 //
 // err must be non-nil, and a *url.Error in it must be reachable through errors.As and
 // rendered as its own Error() text. A later errors.As on the result reaches the
@@ -68,15 +68,16 @@ func maskRawIn(msg, raw string) string {
 // rejected, and an unescaped '/', '?' or '#' in the password lands part of the password
 // where a port belongs ("invalid port \":pa\" after host"). Masking the URL alone leaves
 // that copy behind, so rebuild the whole rendering instead of scrubbing it. urlErr.URL
-// is what url.Parse actually saw — the raw URL with any '#' fragment already stripped —
-// so it, not the raw URL the caller dialed, is the string that reached the message. When
-// raw extends it, the rebuild renders raw: the '@' ending the userinfo can be in the cut.
+// is what url.Parse actually saw — raw with any '#' fragment already cut — so it, not
+// raw, is the string that reached the message. When raw extends it, the rebuild renders
+// raw, since the '@' ending the userinfo can sit in the cut. A *url.Error naming
+// another URL, such as a dialer's own, is judged alone.
 func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
-	judged := urlErr.URL
-	if strings.HasPrefix(raw, urlErr.URL) {
-		judged = raw
+	src := urlErr.URL
+	if strings.HasPrefix(raw, src) {
+		src = raw // url.Parse cut raw's '#' tail before reporting
 	}
-	masked := Redact(judged)
+	masked := Redact(src)
 	if masked == urlErr.URL {
 		return msg
 	}
@@ -93,7 +94,8 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 // dropped. The username is kept only beside a non-empty password; any other userinfo
 // is masked whole. The userinfo runs to the last '@', wherever url.Parse would end it;
 // with no '@', a URL url.Parse rejects is masked from the first ':' to the end of its
-// authority. Input with no "://" renders as xxxxx, and empty input as "".
+// authority. Input with no "://", or with a ':', '/', '?', '#' or '@' before its first
+// "://", renders as xxxxx, and empty input as "".
 func Redact(raw string) string {
 	if raw == "" {
 		return ""
@@ -120,7 +122,7 @@ func Redact(raw string) string {
 }
 
 func maskUserinfo(userinfo string) string {
-	if user, password, ok := strings.Cut(userinfo, ":"); ok && password != "" {
+	if user, password, _ := strings.Cut(userinfo, ":"); password != "" {
 		return user + ":" + redactionPlaceholder + "@"
 	}
 	return redactionPlaceholder + "@"

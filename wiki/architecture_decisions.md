@@ -2617,13 +2617,13 @@ startup instead of widening a bind or emptying an allowlist.
 
 ---
 
-### [ADR-159: One Credential-URL Posture for Log and Error Text](adr_159_one_credential_url_posture.md)
+### [ADR-159: One Credential-URL Posture](adr_159_one_credential_url_posture.md)
 
 **Date:** 2026-10-28 | **Status:** Accepted
 
 `internal/credurl` is the one credential-URL renderer, and `Redact` gives its posture: scheme,
 host, port and path kept, the password `xxxxx`, the username kept only beside a non-empty password,
-a present query `?xxxxx`, the fragment dropped. `RedactError`, behind the AMQP `connect()` dial
+a non-empty query `?xxxxx`, the fragment dropped. `RedactError`, behind the AMQP `connect()` dial
 error, the streams environment and start errors and the Oracle DSN error, renders through the same
 rules, where it kept the query and a lone username and trusted url.Parse once it accepted the URL.
 An unencoded `/`, `?` or `#` in a password makes url.Parse end the authority early, so the userinfo
