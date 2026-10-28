@@ -13997,16 +13997,18 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: every config key holding an upper-case letter, then the ones that have a twin.
 
   ```bash
-  # YAML: every key holding an upper-case letter, at any depth, inside sequences too
-  git grep -nE "^[[:space:]]*(- )?[\"']?[^\"'#:[:space:]]*[A-Z][^\"'#:[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml'
+  # YAML in tracked, untracked and gitignored files (a rendered config.production.yaml) and templates:
+  # every key holding an upper-case letter, at any depth, inside sequences too
+  git grep --untracked --no-exclude-standard -nE "^[[:space:]]*(- )?[\"']?[^\"'#:[:space:]]*[A-Z][^\"'#:[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl'
   # YAML flow maps: the same keys written inline, server: {Port: 9999}
-  git grep -nE "[{,][[:space:]]*[\"']?[^\"'#:,{}[:space:]]*[A-Z][^\"'#:,{}[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml'
+  git grep --untracked --no-exclude-standard -nE "[{,][[:space:]]*[\"']?[^\"'#:,{}[:space:]]*[A-Z][^\"'#:,{}[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl'
   # Go: maps handed to config.LoadFromMap; read each one's keys, a dotted one ("server.Port") by segment
   git grep -n 'LoadFromMap' -- '*.go'
   ```
 
   Keep a hit only in a file or map a deployment, a test or a `go-bricks-migrate --source-config`
-  run actually loads, and leave a root key that folds to a section name to `[C73.14]`. A hit
+  run actually loads, rendered from its template where it has one, and leave a root key that folds
+  to a section name to `[C73.14]`. A hit
   matches when any of these holds for its path:
   - its lowercase spelling is a framework default: on the current version,
     `cfg, _ := config.LoadFromMap(nil)` answers `cfg.Exists("<lowercase path>")` true. That is
@@ -14032,8 +14034,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   literal key (a dotted `LoadFromMap` key is unflattened and twins as a nested one does); a
   hand-built `*config.Config`, which is never decoded; a dynamic tenant source; every signature and
   config key.
-- gate: match = a hit that meets one of the three conditions. no-match = no hit, or no hit has a
-  twin.
+- gate: match = a hit that meets one of the three conditions, or the verify step failing on any
+  loaded configuration. no-match = no hit has a twin, and the verify step passing on every
+  configuration a deployment, a test or a `go-bricks-migrate --source-config` run loads (each
+  rendered file with its variables, each `LoadFromMap` caller's test); run it even with no hit,
+  since a Unicode fold or a key built at run time escapes the greps.
 - before (v0.72.0): mapstructure took a key's exact spelling first, otherwise the first
   `EqualFold` match a Go map yields, and nothing reported the spelling it dropped. A mixed-case
   override of a defaulted key lost to the default: `server: {Port: 9999}` ran on the default port
