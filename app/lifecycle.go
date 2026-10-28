@@ -184,8 +184,8 @@ func stopEach(ctx context.Context, slots []resourceSlot) {
 }
 
 // checkRouteConflicts fails startup when two registrations claimed the same
-// method+path. The server itself keeps the first handler and refuses Start on any
-// conflict; this is the earlier check, at registration time, so a conflict aborts
+// method+path, or one used a reserved engine method. The server itself refuses Start
+// on any conflict; this is the earlier check, at registration time, so a conflict aborts
 // before PostRegisterRoutes sees the route table. Fail Fast: surface every collision
 // at once. Servers that don't expose conflict tracking (test fakes) are skipped.
 func (a *App) checkRouteConflicts() error {

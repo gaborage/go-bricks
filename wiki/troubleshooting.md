@@ -404,4 +404,8 @@ on 1.27.
 #   (errors.Is(err, server.ErrDuplicateRoute)), naming both registrants
 # → Templates differing only in a param/wildcard name (/users/:id, /users/:uid)
 #   are duplicates too — see wiki/startup_defaults.md#duplicate-route-detection
+
+# "route registration refused (N conflict(s))" + "reserved engine method"
+# → A module registered echo_route_not_found or echo_route_any (ADR-155): delete it;
+#   per-module custom 404 handlers are unsupported, with no replacement
 ```

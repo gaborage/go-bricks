@@ -6,12 +6,26 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/labstack/echo/v5"
+
 	"github.com/gaborage/go-bricks/internal/pathutil"
 )
 
-// ErrDuplicateRoute is what every *DuplicateRouteError matches: two registrations claimed
-// the same method + full path. Match it with errors.Is.
+// ErrDuplicateRoute is what every *DuplicateRouteError matches, whatever the Reason of its
+// conflicts. Match it with errors.Is.
 var ErrDuplicateRoute = errors.New("duplicate route registration")
+
+// RouteConflictReason says why a route registration was refused.
+type RouteConflictReason string
+
+// Reasons carried by RouteConflict.Reason (ADR-155).
+const (
+	// RouteConflictReasonDuplicate is a second registration of a route node; the first keeps it.
+	RouteConflictReasonDuplicate RouteConflictReason = "duplicate"
+	// RouteConflictReasonReservedMethod is a registration with one of echo's sentinel methods,
+	// "echo_route_not_found" or "echo_route_any", which only the engine itself may register.
+	RouteConflictReasonReservedMethod RouteConflictReason = "reserved engine method"
+)
 
 // serverPackagePath attributes framework-registered routes (health/ready probes)
 // in conflict reports.
@@ -25,28 +39,32 @@ type RouteRegistrant struct {
 	Package     string
 }
 
-// RouteConflict reports two registrations of the same method + route node. Path is the
-// duplicate's literal path and FirstPath the first registration's; they differ when the two
-// templates name a path parameter or wildcard differently (/users/:id, /users/:uid), which
-// echo's router treats as one route.
+// RouteConflict reports one refused registration. For RouteConflictReasonDuplicate, two
+// registrations of the same method + route node: Path is the duplicate's literal path and
+// FirstPath the first registration's; they differ when the two templates name a path parameter
+// or wildcard differently (/users/:id, /users/:uid), which echo's router treats as one route.
+// For RouteConflictReasonReservedMethod, Duplicate is the refused registrant and First and
+// FirstPath are empty.
 type RouteConflict struct {
 	Method    string
 	Path      string
 	FirstPath string
 	First     RouteRegistrant
 	Duplicate RouteRegistrant
+	Reason    RouteConflictReason
 }
 
-// DuplicateRouteError reports every duplicate method+path registration at once.
+// DuplicateRouteError reports every refused route registration at once.
 // Server.Start and app startup both fail with it; errors.As recovers the conflicts,
-// errors.Is(err, ErrDuplicateRoute) holds, and Unwrap returns the head (wrapping
+// errors.Is(err, ErrDuplicateRoute) holds, and Unwrap returns the head (matching
 // ErrDuplicateRoute) followed by one child per conflict.
 type DuplicateRouteError struct {
 	Conflicts []RouteConflict
 }
 
-// Error renders a head with the conflict count, then one line per conflict naming both
-// registrants; the first registration's path is shown only where it differs.
+// Error renders a head with the conflict count, then one line per conflict: a duplicate names
+// both registrants, showing the first registration's path only where it differs; any other
+// reason names it and the refused registrant.
 func (e *DuplicateRouteError) Error() string {
 	var b strings.Builder
 	b.WriteString(e.head().Error())
@@ -67,12 +85,31 @@ func (e *DuplicateRouteError) Unwrap() []error {
 	return errs
 }
 
+// head names the duplicate sentinel only when every conflict is a duplicate.
 func (e *DuplicateRouteError) head() error {
+	for i := range e.Conflicts {
+		if e.Conflicts[i].Reason != RouteConflictReasonDuplicate {
+			return refusedRoutesHeadError(len(e.Conflicts))
+		}
+	}
 	return fmt.Errorf("%w (%d conflict(s))", ErrDuplicateRoute, len(e.Conflicts))
 }
 
+// refusedRoutesHeadError heads an error holding a refusal that is not a duplicate; it still
+// matches ErrDuplicateRoute.
+type refusedRoutesHeadError int
+
+func (n refusedRoutesHeadError) Error() string {
+	return fmt.Sprintf("route registration refused (%d conflict(s))", int(n))
+}
+
+func (refusedRoutesHeadError) Unwrap() error { return ErrDuplicateRoute }
+
 // line renders one conflict as it appears in DuplicateRouteError's text.
 func (c *RouteConflict) line() string {
+	if c.Reason != RouteConflictReasonDuplicate {
+		return fmt.Sprintf("%s %s — %s, refused: %s (%s)", c.Method, c.Path, c.Reason, c.Duplicate.HandlerName, c.Duplicate.Package)
+	}
 	s := fmt.Sprintf("%s %s — first: %s (%s)", c.Method, c.Path, c.First.HandlerName, c.First.Package)
 	if c.FirstPath != "" && c.FirstPath != c.Path {
 		s += " at " + c.FirstPath
@@ -116,9 +153,10 @@ func newRouteAdmission() *routeAdmission {
 	return &routeAdmission{seen: make(map[string]seenRoute)}
 }
 
-// admit keys r on its echo node and refuses a duplicate, recording it as a conflict, so the
-// first registration keeps the route. An admitted route is described in DefaultRouteRegistry,
-// then added through add.
+// admit refuses a reserved engine method, then keys r on its echo node and refuses a duplicate,
+// recording either refusal as a conflict: a duplicate leaves the first handler on the route and
+// a reserved engine method leaves echo's own catch-alls in place. An admitted route is described
+// in DefaultRouteRegistry, then added through add.
 func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	if !a.claim(r) {
 		return
@@ -127,18 +165,26 @@ func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	add()
 }
 
-// claim reports whether r names a new route node, recording a conflict when it does not.
+// claim reports whether r names a new route node, recording a conflict when it does not. A
+// reserved engine method is refused before keying, so it never claims a node.
 func (a *routeAdmission) claim(r admittedRoute) bool {
 	if a == nil {
 		return true
 	}
 	reg := RouteRegistrant{HandlerName: r.Descriptor.HandlerName, Package: r.Descriptor.Package}
-	key := routeNodeKey(r.Method, r.Path)
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if r.Method == echo.RouteNotFound || r.Method == echo.RouteAny {
+		a.conflicts = append(a.conflicts, RouteConflict{
+			Method: r.Method, Path: r.Path, Duplicate: reg, Reason: RouteConflictReasonReservedMethod,
+		})
+		return false
+	}
+	key := routeNodeKey(r.Method, r.Path)
 	if first, dup := a.seen[key]; dup {
 		a.conflicts = append(a.conflicts, RouteConflict{
 			Method: r.Method, Path: r.Path, FirstPath: first.path, First: first.reg, Duplicate: reg,
+			Reason: RouteConflictReasonDuplicate,
 		})
 		return false
 	}

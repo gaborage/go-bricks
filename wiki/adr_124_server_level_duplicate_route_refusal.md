@@ -106,6 +106,14 @@ while a check runs, not by construction.
   startup.
 - **A duplicate registered after `Start` is dropped.** It is visible only through
   `RouteConflicts()`; nothing returns an error, since `Start` already ran.
+
+> **Amended (2026-10-28, #2222):** the premise of the next bullet was false: a module could
+> register `echo_route_not_found` at a catch-all's template, and the two replaced each other in
+> registration order, outside the tracker. It is now an enforced invariant: admission refuses
+> `echo_route_not_found` and `echo_route_any` at every route door, recording a `RouteConflict`
+> whose `Reason` is `RouteConflictReasonReservedMethod`. See
+> [ADR-155](adr_155_reserved_engine_methods_refused.md).
+
 - **Echo's own `RouteNotFound` catch-alls stay outside the tracker.** `Group.Use` registers them at
   `<prefix>` and `<prefix>/*` with overwrite allowed, so a second `Group("/api", mw)` replaces the
   first group's 404 chain; they serve no GET/HEAD handler and no module handler.
