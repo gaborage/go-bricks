@@ -117,6 +117,8 @@ func TestPresenceAtOrUnderFoldsTheKey(t *testing.T) {
 
 	assert.True(t, cfg.deliveredAtOrUnder("Messaging.Headers"))
 	assert.False(t, cfg.deliveredAtOrUnder("Messaging.Broker"))
+	assert.False(t, cfg.delivered("Messaging.Headers"), "delivered asks for the leaf, never a path below it")
+	assert.True(t, cfg.delivered("Messaging.Headers.X-App"))
 }
 
 // TestDeliveriesFindEverySpellingDecodeAccepts pins the key lookup every presence door asks
