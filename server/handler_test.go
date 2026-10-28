@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -3022,6 +3023,142 @@ func TestBindJSONBodyTrailingContent(t *testing.T) {
 		rec := bind("{\"name\":\"x\"}\n")
 		assert.Equal(t, http.StatusOK, rec.Code, "a trailing newline is whitespace and must still bind")
 	})
+}
+
+const mergePatchJSON = "application/merge-patch+json"
+
+// BodyDecodePath and BodyDecodeQuery are embedded so only bindJSONBody's side-binding
+// reaches their fields: buildBindingPlan reads top-level tags only.
+type BodyDecodePath struct {
+	ID int `param:"id"`
+}
+
+// BodyDecodeQuery is embedded in bodyDecodeReq; see BodyDecodePath.
+type BodyDecodeQuery struct {
+	Page int `query:"page"`
+}
+
+type bodyDecodeReq struct {
+	BodyDecodePath
+	BodyDecodeQuery
+	Name string `json:"name"`
+}
+
+type bodyDecodeCall struct {
+	method      string
+	target      string
+	contentType string
+	pathID      string // stands in for the router's path match; empty sets none
+	body        io.Reader
+}
+
+// serveBodyDecode runs one request through WrapHandler and returns the request the
+// handler bound and the Content-Type header it saw.
+func serveBodyDecode[T any](t *testing.T, call *bodyDecodeCall) (bound T, contentType string, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	h := WrapHandler(func(req T, ctx HandlerContext) (helloResp, IAPIError) {
+		bound = req
+		contentType = ctx.RequestHeader(echo.HeaderContentType)
+		return helloResp{}, nil
+	}, NewRequestBinder(), cfg)
+
+	req := httptest.NewRequestWithContext(context.Background(), call.method, call.target, call.body)
+	req.Header.Set(echo.HeaderContentType, call.contentType)
+	rec = httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	if call.pathID != "" {
+		c.SetPathValues(echo.PathValues{{Name: "id", Value: call.pathID}})
+	}
+	require.NoError(t, h(c))
+	return bound, contentType, rec
+}
+
+func bodyDecodeErrorDetail(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	detail, ok := resp.Error.Details["error"].(string)
+	require.True(t, ok)
+	return detail
+}
+
+// TestBindJSONBodyEmptyBodySkipsDecode pins the empty-body skip for every admitted JSON
+// media type: a zero-length body binds a zero-valued request instead of failing to decode.
+func TestBindJSONBodyEmptyBodySkipsDecode(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+	}{
+		{name: "application_json", contentType: echo.MIMEApplicationJSON},
+		{name: "merge_patch_json", contentType: mergePatchJSON},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bound, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+				method: http.MethodPost, target: "/items", contentType: tt.contentType, body: strings.NewReader(""),
+			})
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, bodyDecodeReq{}, bound)
+		})
+	}
+}
+
+// TestBindJSONBodySideBindsByMethod pins the side-binding a JSON body brings: path values
+// bind on every method, query params only on GET, DELETE, HEAD and QUERY.
+func TestBindJSONBodySideBindsByMethod(t *testing.T) {
+	contentTypes := []struct {
+		name        string
+		contentType string
+	}{
+		{name: "application_json", contentType: echo.MIMEApplicationJSON},
+	}
+	methods := []struct {
+		method   string
+		wantPage int
+	}{
+		{method: http.MethodGet, wantPage: 3},
+		{method: http.MethodDelete, wantPage: 3},
+		{method: http.MethodHead, wantPage: 3},
+		{method: echo.QUERY, wantPage: 3},
+		{method: http.MethodPost},
+		{method: http.MethodPut},
+		{method: http.MethodPatch},
+	}
+	for _, ct := range contentTypes {
+		for _, m := range methods {
+			t.Run(ct.name+"_"+strings.ToLower(m.method), func(t *testing.T) {
+				bound, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+					method: m.method, target: "/items/5?page=3", contentType: ct.contentType, pathID: "5",
+					body: strings.NewReader(`{"name":"ada"}`),
+				})
+				require.Equal(t, http.StatusOK, rec.Code)
+				assert.Equal(t, bodyDecodeReq{
+					BodyDecodePath:  BodyDecodePath{ID: 5},
+					BodyDecodeQuery: BodyDecodeQuery{Page: m.wantPage},
+					Name:            "ada",
+				}, bound)
+			})
+		}
+	}
+}
+
+// TestBindJSONBodySideBindingFailureAnswersBadRequest pins that a side-binding failure is
+// not swallowed: an unparsable path value answers 400 with one summary across JSON types.
+func TestBindJSONBodySideBindingFailureAnswersBadRequest(t *testing.T) {
+	detail := func(contentType string) string {
+		_, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+			method: http.MethodPost, target: "/items/abc", contentType: contentType, pathID: "abc",
+			body: strings.NewReader(`{"name":"ada"}`),
+		})
+		return bodyDecodeErrorDetail(t, rec)
+	}
+
+	assert.Equal(t, detail(echo.MIMEApplicationJSON), detail(mergePatchJSON))
 }
 
 // wideJSONOnlyRequest is a 12-field JSON-body-only struct: no param/query/header tags,
