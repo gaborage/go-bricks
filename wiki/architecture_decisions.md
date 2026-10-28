@@ -2599,6 +2599,31 @@ or `server.NewWithOptions` without `config.Validate` is outside this rule.
 
 ---
 
+### [ADR-155: Framework-Built Route Doors Refuse Echo's Reserved Engine Methods](adr_155_reserved_engine_methods_refused.md)
+
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a route registered with `echo_route_not_found` or `echo_route_any` through a framework-built route door now fails the framework server's `Start`, and app startup when its server reports `RouteConflicts()` (an injected `ServerRunner` without that method is left to its own `Start`), where `echo_route_not_found` replaced, or was replaced by, a middleware-bearing group's catch-all in registration order and `echo_route_any` answered every method there without the group's middleware; `RouteConflict` gains `Reason`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
+
+Every route door accepted echo's two sentinel methods, so a module's not-found handler at a
+middleware-bearing group's `<prefix>/*` and the group's own catch-all replaced each other in
+registration order, outside the duplicate-route tracker, and `echo_route_any` there answered every
+method without the group middleware. ADR-124's premise that catch-alls serve no module handler was
+false. `routeAdmission.admit` now refuses both methods before keying, records the refusal with
+`Reason` `RouteConflictReasonReservedMethod`, and neither describes nor adds the route.
+`RegisterHandler` given a registrar the framework did not build (a test fake) skips admission, so
+the refusal does not apply there.
+`*server.DuplicateRouteError` stays the one error and `errors.Is(err, server.ErrDuplicateRoute)`
+holds for both reasons; a duplicate-only error reads as before. Echo's own catch-alls never pass
+through admission and are unaffected. Per-module custom 404 handlers are unsupported, and no
+replacement is provided. See [migrations.md](migrations.md) `[C73.12]`.
+
+**Key Benefits:** the catch-all premise ADR-124 assumed now holds by construction: no route
+registered through a framework-built door can take a group's catch-all over, so a group's gates
+run on every sub-path that no route claims. A route registered outside the group, such as
+`GET <prefix>/*` on `ModuleGroup()`, is admitted and skips the group's middleware, as before, so a
+route that needs a group's gate must register on that group.
+
+---
+
 ### [ADR-156: Delivered-Empty Checks Find a Key Under Every Spelling Decode Accepts](adr_156_delivered_empty_checks_match_every_spelling.md)
 
 **Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a mixed-case empty or null `server.probes.host`, `debug.allowedips` or database identity key, or two spellings of one with one empty, fails startup where it booted
