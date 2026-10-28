@@ -3185,9 +3185,19 @@ func TestBindJSONBodyFailureParityAcrossMediaTypes(t *testing.T) {
 		require.NotEqual(t, unauditedBindSummary, want)
 		assert.Equal(t, want, bodyDecodeErrorDetail(t, serve(mergePatchJSON, "", `{"name":}`)))
 	})
-	t.Run("side_binding_failure_renders_one_summary", func(t *testing.T) {
+	t.Run("path_binding_failure_renders_one_summary", func(t *testing.T) {
 		want := bodyDecodeErrorDetail(t, serve(echo.MIMEApplicationJSON, "abc", `{"name":"ada"}`))
 		assert.Equal(t, want, bodyDecodeErrorDetail(t, serve(mergePatchJSON, "abc", `{"name":"ada"}`)))
+	})
+	t.Run("query_binding_failure_renders_one_summary", func(t *testing.T) {
+		detail := func(contentType string) string {
+			_, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+				method: http.MethodGet, target: "/items?page=abc", contentType: contentType,
+				body: strings.NewReader(`{"name":"ada"}`),
+			})
+			return bodyDecodeErrorDetail(t, rec)
+		}
+		assert.Equal(t, detail(echo.MIMEApplicationJSON), detail(mergePatchJSON))
 	})
 	t.Run("trailing_garbage_answers_bad_request", func(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, serve(mergePatchJSON, "", `{"name":"x"}garbage`).Code)
