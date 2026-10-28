@@ -1151,9 +1151,9 @@ func TestRedactStreamURI(t *testing.T) {
 	}
 }
 
-// TestManagerStartDoesNotLeakURIOnParseFailure covers the path reachable when
-// config.Validate never ran (app.NewWithConfig): the client returns a *url.Error
-// whose Error() renders the raw URI, credentials included.
+// TestManagerStartDoesNotLeakURIOnParseFailure covers the path reachable when a URI
+// reaches NewManager without config.Validate: the client returns a *url.Error whose
+// Error() renders the raw URI, credentials included.
 func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
 	const fixturePassword = "fixture-pw"
 	m := NewManager(ManagerOptions{
@@ -1175,21 +1175,44 @@ func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
 }
 
 func TestSafeEnvError(t *testing.T) {
-	// Not const: a constant expression here lets staticcheck evaluate the
-	// deliberately-invalid URL and report SA1007 on the fixture itself.
-	fixturePassword := "fixture-pw"
-	raw := "rabbitmq-stream://svc:" + fixturePassword + "@broker:55 52/"
-	_, parseErr := url.Parse(raw)
-	require.Error(t, parseErr)
-	require.Contains(t, parseErr.Error(), fixturePassword, "the premise: the vendor's error carries the credential")
+	passwordSecrets := []string{"s3cr", "etPW", "%et"}
+	// Table fields, not consts: a constant URL lets staticcheck evaluate the
+	// deliberately-invalid fixture and report SA1007 on it.
+	tests := []struct {
+		name    string
+		raw     string
+		secrets []string
+	}{
+		{name: "space_in_port", raw: "rabbitmq-stream://svc:fixture-pw@broker:55 52/", secrets: []string{"fixture-pw"}},
+		// The reason quotes the password: `invalid port ":s3cr" after host`.
+		{name: "password_with_question_mark", raw: "rabbitmq-stream://svc:s3cr?etPW@broker:5552/", secrets: passwordSecrets},
+		// The reason quotes the password: `invalid URL escape "%et"`.
+		{name: "password_with_percent", raw: "rabbitmq-stream://svc:s3cr%etPW@broker:5552/", secrets: passwordSecrets},
+		// url.Parse reports the URI cut at the '#', so only the URI passed in shows the
+		// '@' that makes "svc:2024" userinfo rather than host:port.
+		{name: "digit_password_with_hash_and_leading_space", raw: " rabbitmq-stream://svc:2024#x@broker:5552/", secrets: []string{"2024"}},
+	}
 
-	safe := safeEnvError(parseErr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, parseErr := url.Parse(tt.raw)
+			require.Error(t, parseErr)
+			require.Contains(t, parseErr.Error(), tt.secrets[0], "the premise: the vendor's error carries the credential")
 
-	assert.NotContains(t, safe.Error(), fixturePassword)
-	assert.Contains(t, safe.Error(), "invalid stream URI")
+			safe := safeEnvError(parseErr, tt.raw)
+
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, safe.Error(), secret)
+			}
+			assert.Contains(t, safe.Error(), "invalid stream URI")
+			assert.Contains(t, safe.Error(), "svc", "the username identifies the failing endpoint")
+			var urlErr *url.Error
+			require.ErrorAs(t, safe, &urlErr)
+		})
+	}
 
 	other := errors.New("connection refused")
-	assert.Equal(t, other, safeEnvError(other), "non-URL errors pass through untouched")
+	assert.Same(t, other, safeEnvError(other, "rabbitmq-stream://svc:fixture-pw@broker:5552/"), "non-URL errors pass through untouched")
 }
 
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the

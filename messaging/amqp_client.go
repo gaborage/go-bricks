@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	rawbackoff "github.com/gaborage/go-bricks/internal/backoff"
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
@@ -1458,13 +1459,18 @@ func reconnectBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
 	return rawbackoff.Saturating(base, maxDelay, attempt)
 }
 
+// invalidBrokerURLReason replaces a broker-URL parse failure reason that quotes the URL.
+const invalidBrokerURLReason = "invalid URL"
+
 // connect creates a new AMQP connection.
 func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	// Use pluggable dialer
 	dial := getAmqpDialFunc()
 	ac, err := dial(c.brokerURL)
 	if err != nil {
-		return nil, err
+		// SECURITY: a broker URL url.Parse rejects comes back rendered whole, password
+		// included, and every reconnect attempt logs it. Masking here covers every dialer.
+		return nil, credurl.RedactError(err, c.brokerURL, invalidBrokerURLReason)
 	}
 	// Store as interface and also return underlying real connection when available.
 	// A dial that finished after Close must not be installed: Close already ran

@@ -12,6 +12,7 @@ import (
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -235,7 +236,7 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 
 	env, err := m.dialEnvironment(m.environmentOptions())
 	if err != nil {
-		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err))
+		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err, m.opts.URI))
 	}
 	m.env = env
 
@@ -647,17 +648,21 @@ func (m *Manager) reportOffsetQuery(err error, consumerName, streamName string, 
 		Msg("Could not query the stored stream offset; attaching at a position that replays rather than skips")
 }
 
-// safeEnvError strips the URI out of an environment-construction failure.
+// invalidStreamURIReason replaces a stream-URI parse failure reason that quotes the URI.
+const invalidStreamURIReason = "invalid URL"
+
+// safeEnvError masks the URI's password in an environment-construction failure.
 //
 // SECURITY: the client parses the endpoint with url.Parse and returns its
-// *url.Error verbatim, whose Error() renders the raw URI — credentials included.
-// Only the cause is kept; the endpoint is reported separately, redacted. This is
-// reachable when config.Validate never ran (a Builder assembled without
-// WithConfig, see app/streams_setup.go).
-func safeEnvError(err error) error {
+// *url.Error verbatim, whose Error() renders the raw URI — credentials included —
+// and whose reason can quote part of the password. credurl.RedactError masks both;
+// the endpoint is also reported separately, redacted. This is reachable when a
+// caller hands ManagerOptions.URI straight to NewManager: that skips config.Validate,
+// the only place a stream URI is parsed before the dial.
+func safeEnvError(err error, uri string) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return fmt.Errorf("invalid stream URI: %w", urlErr.Err)
+		return fmt.Errorf("invalid stream URI: %w", credurl.RedactError(err, uri, invalidStreamURIReason))
 	}
 	return err
 }

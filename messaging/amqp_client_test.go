@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -1740,8 +1741,60 @@ func TestConnectDialFailure(t *testing.T) {
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected dial error, got: %v", err)
 	}
+	assert.Same(t, expectedErr, err, "a dial error without a URL passes through unchanged")
 	if conn != nil {
 		t.Fatalf("expected nil connection on error")
+	}
+}
+
+// TestConnectRedactsBrokerURLPassword drives the default dialer: amqp091 returns
+// url.Parse's *url.Error, whose %q rendering and rejected-component echo carry the
+// password into the error every reconnect attempt logs.
+func TestConnectRedactsBrokerURLPassword(t *testing.T) {
+	passwordSecrets := []string{"s3cr", "etPW", "%et"}
+	tests := []struct {
+		name       string
+		password   string
+		suffix     string
+		secrets    []string
+		hostInText bool
+	}{
+		{name: "password_with_question_mark", password: "s3cr?etPW", secrets: passwordSecrets, hostInText: true},
+		{name: "password_with_percent", password: "s3cr%etPW", secrets: passwordSecrets, hostInText: true},
+		{name: "password_with_slash", password: "s3cr/etPW", secrets: passwordSecrets, hostInText: true},
+		// url.Parse cuts the fragment before it reports, so the host never reaches the error.
+		{name: "password_with_hash", password: "s3cr#etPW", secrets: passwordSecrets},
+		// "user:2024" reads as host:port; the newline is what makes url.Parse reject it.
+		{name: "digit_password_with_trailing_newline", password: "2024/Spring", suffix: "\n", secrets: []string{"2024", "Spring"}, hostInText: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := "amqp://user:" + tt.password + "@broker:5672/vh" + tt.suffix
+			// Premise: the dial fails at parse, before any network I/O, and the vendor's
+			// error carries the password.
+			_, dialErr := amqp.Dial(raw)
+			var premise *url.Error
+			require.ErrorAs(t, dialErr, &premise)
+			require.Contains(t, dialErr.Error(), tt.secrets[0])
+
+			c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: raw}
+
+			conn, err := c.connect()
+
+			require.Error(t, err)
+			assert.Nil(t, conn)
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, err.Error(), secret)
+			}
+			assert.Contains(t, err.Error(), "user", "the username identifies the failing connection")
+			if tt.hostInText {
+				assert.Contains(t, err.Error(), "broker")
+			}
+			assert.Contains(t, err.Error(), "must be percent-encoded", "the vendor's hint survives")
+			var urlErr *url.Error
+			require.ErrorAs(t, err, &urlErr)
+		})
 	}
 }
 
@@ -3511,11 +3564,13 @@ const (
 // redialStep scripts one dial of a redialHarness: a dial error, or a connection
 // which closes hold after it opened (hold < 0: never). The connection's channel
 // never opens, unless broker serves it through a fake broker, which hands init
-// a real *amqp.Channel. The last step repeats.
+// a real *amqp.Channel. closeFirst closes the client before the dial returns. The
+// last step repeats.
 type redialStep struct {
-	err    error
-	hold   time.Duration
-	broker bool
+	err        error
+	hold       time.Duration
+	broker     bool
+	closeFirst bool
 }
 
 // redialHarness drives handleReconnect through a scripted dialer inside a
@@ -3570,6 +3625,9 @@ func (h *redialHarness) dial(string) (amqpConnection, error) {
 		return nil, errors.New("redial harness: dial bound passed")
 	}
 	step := h.steps[min(n, len(h.steps)-1)]
+	if step.closeFirst {
+		_ = h.c.Close()
+	}
 	if step.err != nil {
 		return nil, step.err
 	}
@@ -3849,6 +3907,62 @@ func TestHandleReconnectStableCloseResetsLadder(t *testing.T) {
 		failures := h.log.Matching(msgConnectFailed)
 		require.Len(t, failures, 2)
 		assert.Equal(t, []string{"1"}, failures[1].Values("attempt"), "the stable close must reset the ladder the first dial error climbed")
+	})
+}
+
+// hostileBrokerURL carries a password with an unescaped '?', which amqp091 fails
+// to parse before any network I/O.
+const hostileBrokerURL = "amqp://user:s3cr?etPW@broker:5672/vh"
+
+// assertNoBrokerPassword fails on any recorded field value that carries a
+// fragment of hostileBrokerURL's password.
+func assertNoBrokerPassword(t *testing.T, lines []recordedLine) {
+	t.Helper()
+	for _, line := range lines {
+		for _, pair := range line.Pairs {
+			for _, secret := range []string{"s3cr", "etPW"} {
+				assert.NotContains(t, pair[1], secret, "%q field %q", line.Msg, pair[0])
+			}
+		}
+	}
+}
+
+func TestHandleReconnectRedactsDialErrorOnEveryAttempt(t *testing.T) {
+	const base = 5 * time.Second
+	runRedialBubble(t, func(t *testing.T) {
+		_, dialErr := amqp.Dial(hostileBrokerURL)
+		require.ErrorContains(t, dialErr, "s3cr", "premise: the vendor's error carries the password")
+		h := newRedialHarness(t, base, 0, redialStep{err: dialErr})
+
+		// The first retry waits under 2*base, so a second dial has failed by then.
+		time.Sleep(2 * base)
+		synctest.Wait()
+		h.stop()
+
+		failures := h.log.Matching(msgConnectFailed)
+		require.GreaterOrEqual(t, len(failures), 2)
+		assertNoBrokerPassword(t, h.log.Lines())
+		for _, line := range failures {
+			require.Len(t, line.Values("error"), 1)
+			assert.Contains(t, line.Values("error")[0], "user", "the username identifies the failing connection")
+		}
+	})
+}
+
+func TestHandleReconnectRedactsDialErrorAfterClose(t *testing.T) {
+	runRedialBubble(t, func(t *testing.T) {
+		_, dialErr := amqp.Dial(hostileBrokerURL)
+		require.ErrorContains(t, dialErr, "s3cr", "premise: the vendor's error carries the password")
+		h := newRedialHarness(t, time.Second, 0, redialStep{err: dialErr, closeFirst: true})
+		defer h.stop()
+
+		synctest.Wait()
+
+		line := h.log.Line(t, "AMQP connect ended after client close")
+		assert.Equal(t, logger.LevelDebug, line.Level)
+		require.Len(t, line.Values("error"), 1)
+		assert.Contains(t, line.Values("error")[0], "user", "the username identifies the failing connection")
+		assertNoBrokerPassword(t, h.log.Lines())
 	})
 }
 
