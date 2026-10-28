@@ -1128,6 +1128,9 @@ func splicedVerdict(d compareDoor) operandVerdict {
 	return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " UPPER(x)"})
 }
 
+// selfPointer is a pointer type that names itself.
+type selfPointer *selfPointer
+
 // operandRow is one operand shape and what it renders to at each door.
 type operandRow struct {
 	name    string
@@ -1334,6 +1337,9 @@ func listOf(args ...any) func(compareDoor) operandVerdict {
 func TestOperandJudgeAtTheListDoors(t *testing.T) {
 	var typedNil *int
 	var nilSlice *[]int
+	var anyNilSlice any = nilSlice
+	var nilSelf, cyclicSelf selfPointer
+	cyclicSelf = &cyclicSelf
 	var cyclic any
 	cyclic = &cyclic
 	payload := map[string]any{"k": 1}
@@ -1347,8 +1353,14 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 		// set, as an untyped nil is. A scalar NULL stays one element.
 		{"nil_pointer_to_slice", nilSlice, compareDoor.emptySet},
 		{"nil_pointer_to_pointer_to_slice", &nilSlice, compareDoor.emptySet},
+		{"nil_pointer_to_array", (*[2]int)(nil), compareDoor.emptySet},
+		{"interface_holding_nil_pointer_to_slice", &anyNilSlice, compareDoor.emptySet},
 		{"nil_pointer_to_scalar", typedNil, listOf(nil)},
 		{"nil_pointer_to_valuer", (*dbsql.NullString)(nil), listOf(nil)},
+		{"nil_pointer_to_byte_slice", (*[]byte)(nil), listOf(nil)},
+		{"nil_pointer_to_valuer_slice", (*inValuerList)(nil), listOf(nil)},
+		{"nil_self_pointer", nilSelf, listOf(nil)},
+		{"cyclic_self_pointer", cyclicSelf, cyclicVerdict},
 		{"valuer_null", dbsql.NullString{}, listOf(nil)},
 		{"scalar_is_one_element", 5, listOf(5)},
 		{"byte_slice_is_one_element", []byte("ab"), listOf([]byte("ab"))},
@@ -1368,18 +1380,18 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 		{"blank_expression", judgeBlank, blankVerdict},
 		// An expression INSIDE a list is judged as each element's own operand: an
 		// f door refuses it, a jf door splices it beside the bound elements.
-		{"expression_element", []any{judgeExpr}, func(d compareDoor) operandVerdict { return inElement(0, d.op, listSpliced(d)) }},
-		{"expression_slice", []dbtypes.RawExpression{judgeExpr}, func(d compareDoor) operandVerdict { return inElement(0, d.op, listSpliced(d)) }},
-		{"pointer_to_expression_element", []any{&judgeExpr}, func(d compareDoor) operandVerdict { return inElement(0, d.op, listSpliced(d)) }},
-		{"expression_beside_values", []any{1, judgeExpr, nil}, func(d compareDoor) operandVerdict {
-			return inElement(1, d.op, d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (?1,UPPER(x),?2)", args: []any{1, nil}}))
-		}},
-		{"aliased_element", []any{judgeAliased}, func(d compareDoor) operandVerdict { return inElement(0, d.op, aliasedVerdict(d)) }},
-		{"blank_element", []dbtypes.RawExpression{judgeBlank}, func(d compareDoor) operandVerdict { return inElement(0, d.op, blankVerdict(d)) }},
+		{"expression_element", []any{judgeExpr}, atElement(0, listSpliced)},
+		{"expression_slice", []dbtypes.RawExpression{judgeExpr}, atElement(0, listSpliced)},
+		{"pointer_to_expression_element", []any{&judgeExpr}, atElement(0, listSpliced)},
+		{"expression_beside_values", []any{1, judgeExpr, nil}, atElement(1, func(d compareDoor) operandVerdict {
+			return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (?1,UPPER(x),?2)", args: []any{1, nil}})
+		})},
+		{"aliased_element", []any{judgeAliased}, atElement(0, aliasedVerdict)},
+		{"blank_element", []dbtypes.RawExpression{judgeBlank}, atElement(0, blankVerdict)},
 		// A Sqlizer element beside a spliced one stays one bound argument.
-		{"sqlizer_beside_expression", []any{judgeStructSqlizer, judgeExpr}, func(d compareDoor) operandVerdict {
-			return inElement(1, d.op, d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (?1,UPPER(x))", args: []any{judgeStructSqlizer}}))
-		}},
+		{"sqlizer_beside_expression", []any{judgeStructSqlizer, judgeExpr}, atElement(1, func(d compareDoor) operandVerdict {
+			return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (?1,UPPER(x))", args: []any{judgeStructSqlizer}})
+		})},
 		// judgeNested is a squirrel.Eq, a map: bound whole, as any map is.
 		{"sqlizer_operand", judgeNested, boundWhole(judgeNested)},
 		{"struct_sqlizer_is_one_element", judgeStructSqlizer, listOf(judgeStructSqlizer)},
@@ -1431,6 +1443,11 @@ func TestOperandJudgeAtTheJSONPayload(t *testing.T) {
 			})
 		}
 	}
+}
+
+// atElement is verdict for the element at position i of a list operand.
+func atElement(i int, verdict func(compareDoor) operandVerdict) func(compareDoor) operandVerdict {
+	return func(d compareDoor) operandVerdict { return inElement(i, d.op, verdict(d)) }
 }
 
 // inElement places an element's error verdict under the element spelling.

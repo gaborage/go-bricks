@@ -1791,8 +1791,9 @@ func TestFilterCompareDoorsBindTheResolvedValue(t *testing.T) {
 }
 
 // TestInResolvesTypedPointerSliceElements guards the fast path added for large
-// lists: a slice whose ELEMENT TYPE can never be a nil pointer or a Valuer is
-// passed through unresolved, because resolving it could not change any element.
+// lists: a slice whose ELEMENT TYPE can never be a nil pointer, a Valuer or a
+// RawExpression is passed through unresolved, because judging it could not
+// change any element.
 // A []*int can, so it must still take the per-element path — this is the case
 // that fails if the fast path's type test is widened by mistake.
 func TestInResolvesTypedPointerSliceElements(t *testing.T) {

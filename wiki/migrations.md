@@ -13939,7 +13939,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   1. **Nil pointer to a list.** At `In`/`NotIn`, a nil pointer whose pointee, through every pointer
      level, is a slice or array (`(*[]int)(nil)`) is the empty set, as an untyped nil is: `In`
      renders `(1=0)`, which matched no rows before and after, and `NotIn` renders `(1=1)`, which
-     now MATCHES EVERY ROW where `c NOT IN (NULL)` matched none.
+     now MATCHES EVERY ROW where `c NOT IN (NULL)` matched none. Reached through an interface
+     (`*any` holding a nil `*[]int`) it is the same empty set. A nil pointer to a `[]byte` or to a
+     `driver.Valuer` type (`*uuid.UUID`, a pointer to a slice-typed Valuer) is not a list: it stays
+     one NULL element, as its non-nil form is one element.
   2. **Expression element.** A `RawExpression` inside a list, at `In`/`NotIn` and at `Eq`/`NotEq`
      given a list, follows its family's scalar rule. `f` refuses it, aliased or blank included,
      with `resolving element <i> of the <op> operand: a RawExpression is not allowed as a Filter
@@ -13954,9 +13957,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
      and its answer bound, and a pointer element binds its element.
   4. **`JSONContains` payload.** A `RawExpression`, a pointer to one or an aliased one is refused
      with `dbtypes.ErrExpressionInFilter` (`a RawExpression is not allowed as a Filter operand:
-     JSONContains`) on both vendors, judged before any vendor renders. A cyclic payload
-     (`var v any; v = &v`) fails `ToSQL()` with `resolving the JSONContains operand: operand
-     pointer chain is cyclic` on both vendors. Every other payload is marshaled as written: a
+     JSONContains`) on both vendors, judged before any vendor renders. A cyclic top-level pointer
+     chain (`var v any; v = &v`) fails `ToSQL()` with `resolving the JSONContains operand: operand
+     pointer chain is cyclic` on both vendors; a cycle nested inside the payload is still
+     `json.Marshal`'s. Every other payload is marshaled as written: a
      `driver.Valuer` is not asked, and a nil pointer marshals to `null`.
 
   **Supersedes**, for a service crossing both E72 and E73, the parts of `[C72.32]`, `[C72.33]` and
