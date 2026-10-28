@@ -1350,10 +1350,20 @@ func TestManagerStartMasksARebuiltBrokerURI(t *testing.T) {
 			}
 			assert.Contains(t, err.Error(), tt.want)
 			assert.Contains(t, err.Error(), "//user:", "the username identifies the failing endpoint")
+			assert.Contains(t, err.Error(), `@leader:5552/vh": `+invalidStreamURIReason, "a reason quoting the password is replaced")
 			var urlErr *url.Error
 			require.ErrorAs(t, err, &urlErr)
 		})
 	}
+
+	// A vendor error that renders the configured URI itself is masked through it too.
+	m := NewManager(ManagerOptions{URI: configuredURI, Logger: logger.New("error", false)})
+	fake := newFakeEnvironment()
+	fake.failOn(callNewProducer+":"+testStream, fmt.Errorf("dial %s: connection refused", configuredURI))
+	dialFake(m, fake)
+	startErr := m.Start(context.Background(), onePublisher(t))
+	require.Error(t, startErr)
+	assert.NotContains(t, startErr.Error(), "cretPW", "the configured URI's password leaked")
 }
 
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the
