@@ -117,6 +117,90 @@ func TestPresenceAtOrUnderFoldsTheKey(t *testing.T) {
 
 	assert.True(t, cfg.deliveredAtOrUnder("Messaging.Headers"))
 	assert.False(t, cfg.deliveredAtOrUnder("Messaging.Broker"))
+	assert.False(t, cfg.delivered("Messaging.Headers"), "delivered asks for the leaf, never a path below it")
+	assert.True(t, cfg.delivered("Messaging.Headers.X-App"))
+}
+
+// TestDeliveriesFindEverySpellingDecodeAccepts pins the key lookup every presence door asks
+// (ADR-156): each segment matches as mapstructure matches a field name, every delivered
+// spelling comes back sorted with the raw value its path holds, and a path one segment off
+// in either direction matches only when asked for what lies under the key.
+func TestDeliveriesFindEverySpellingDecodeAccepts(t *testing.T) {
+	tests := []struct {
+		name  string
+		yaml  string
+		key   string
+		under bool
+		want  []keyDelivery
+	}{
+		{
+			name: "mixed_case_segments",
+			yaml: "orders:\n  Api:\n    URL: https://a\n",
+			key:  "orders.api.url",
+			want: []keyDelivery{{path: "orders.Api.URL", raw: "https://a"}},
+		},
+		{
+			name: "every_spelling_sorted_with_its_value",
+			yaml: "orders:\n  url: https://b\n  URL: \"\"\n",
+			key:  "orders.url",
+			want: []keyDelivery{{path: "orders.URL", raw: ""}, {path: "orders.url", raw: "https://b"}},
+		},
+		{
+			name: "null_is_delivered",
+			yaml: "orders:\n  Url:\n",
+			key:  "orders.url",
+			want: []keyDelivery{{path: "orders.Url", raw: nil}},
+		},
+		{
+			// U+017F folds to s under strings.EqualFold, as mapstructure decodes it; ToLower
+			// leaves it alone.
+			name: "long_s_folds_to_s",
+			yaml: "orderſ:\n  url: https://c\n",
+			key:  "orders.url",
+			want: []keyDelivery{{path: "orderſ.url", raw: "https://c"}},
+		},
+		{
+			name: "preloaded_default_is_not_delivered",
+			key:  fieldDebugAllowedIPs,
+		},
+		{
+			name: "segment_boundary_is_respected",
+			yaml: "orders:\n  urlx: https://d\n",
+			key:  "orders.url",
+		},
+		{
+			name: "deeper_path_needs_under",
+			yaml: "orders:\n  Url:\n    primary: https://e\n",
+			key:  "orders.url",
+		},
+		{
+			name:  "deeper_path_found_under",
+			yaml:  "orders:\n  Url:\n    primary: https://e\n",
+			key:   "orders.url",
+			under: true,
+			want:  []keyDelivery{{path: "orders.Url.primary", raw: "https://e"}},
+		},
+		{
+			name:  "shallower_path_never_matches",
+			yaml:  "orders:\n  url: https://f\n",
+			key:   "orders.url.primary",
+			under: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadDeliveredEmptyFixture(t, "app:\n  name: a\n  version: v1\n"+tt.yaml, nil)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.want, cfg.deliveries(tt.key, tt.under))
+		})
+	}
+
+	t.Run("config_literal_has_none", func(t *testing.T) {
+		assert.Nil(t, (&Config{}).deliveries(fieldServerProbesHost, false))
+		assert.Nil(t, (*Config)(nil).deliveries(fieldServerProbesHost, true))
+	})
 }
 
 // TestPresenceEvictedWhenOverlayNullsTheSection pins the eviction half of Presence
@@ -141,21 +225,34 @@ func TestPresenceEvictedWhenOverlayNullsTheSection(t *testing.T) {
 // the delivered-empty check must not fire on a key the final tree does not hold. The
 // delivered-empty message is asserted against first, so a failure here is attributed to this
 // door rather than to any other reason a nulled debug section might be rejected; Load
-// succeeding is the pre-ADR-104 behavior this must restore.
+// succeeding is the pre-ADR-104 behavior this must restore. A mixed-case empty delivery is
+// evicted the same way (ADR-156).
 func TestPresenceEvictedWhenOverlayNullsDebugSection(t *testing.T) {
-	const base = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
-		"debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedips: \"10.0.0.1\"\n"
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
+		"debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n"
 
-	cfg, err := loadConfigFixture(t, map[string]string{
-		testConfigFileYAML: base,
-		"config.prod.yaml": "debug:\n",
-	}, map[string]string{"APP_ENV": "prod"})
-	if err != nil {
-		assert.NotContains(t, err.Error(), "delivered empty",
-			"the overlay's null evicted debug.allowedips; the delivered-empty door must stay quiet")
+	tests := []struct {
+		name      string
+		allowlist string
+	}{
+		{name: "lowercase_value", allowlist: "  allowedips: \"10.0.0.1\"\n"},
+		{name: "mixed_case_empty", allowlist: "  allowedIPs: \"\"\n"},
 	}
-	require.NoError(t, err)
-	require.NotNil(t, cfg)
-	assert.False(t, cfg.delivered(fieldDebugAllowedIPs), "the overlay's null evicted the base layer's delivery")
-	assert.Empty(t, cfg.Debug.AllowedIPs, "the nulled section carries no allowlist")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadConfigFixture(t, map[string]string{
+				testConfigFileYAML: header + tt.allowlist,
+				"config.prod.yaml": "debug:\n",
+			}, map[string]string{"APP_ENV": "prod"})
+			if err != nil {
+				assert.NotContains(t, err.Error(), "delivered empty",
+					"the overlay's null evicted debug.allowedips; the delivered-empty door must stay quiet")
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+			assert.False(t, cfg.delivered(fieldDebugAllowedIPs), "the overlay's null evicted the base layer's delivery")
+			assert.Empty(t, cfg.Debug.AllowedIPs, "the nulled section carries no allowlist")
+		})
+	}
 }

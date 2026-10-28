@@ -7,6 +7,11 @@
 **Amends:** ADR-002 (base path), ADR-048 (503 text), ADR-057 (probe limiter coverage), ADR-066
 (rule 3), ADR-094, ADR-114
 
+> **Amended (2026-10-28, [ADR-156](adr_156_delivered_empty_checks_match_every_spelling.md), #2210):**
+> the delivered-empty check on `server.probes.host` finds the key under any spelling decode
+> accepts (`Host:`, `Probes:`) and reads the raw value at each delivered spelling; any empty
+> spelling refuses it, and a real mixed-case value is kept.
+
 ## Context
 
 `/health` and `/ready` register directly on the one Echo engine the application serves

@@ -9,18 +9,27 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/config"
 )
 
-func TestRouteConflictTrackerRecordsDuplicate(t *testing.T) {
-	tr := newRouteConflictTracker()
-
+func TestRouteAdmissionRecordsDuplicate(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
 	first := RouteRegistrant{HandlerName: "handlerA", Package: "pkg/a"}
 	dup := RouteRegistrant{HandlerName: "handlerB", Package: "pkg/b"}
+	route := func(method string, reg RouteRegistrant) admittedRoute {
+		return admittedRoute{Method: method, Path: "/users", Descriptor: modellessDescriptor(method, "/users", reg)}
+	}
+	added := 0
+	add := func() { added++ }
 
-	assert.True(t, tr.record(http.MethodGet, "/users", first), "a new route is reported new")
-	assert.False(t, tr.record(http.MethodGet, "/users", dup), "a duplicate is reported so the caller skips it")
+	a := newRouteAdmission()
+	a.admit(route(http.MethodGet, first), add)
+	a.admit(route(http.MethodGet, dup), add)
+	assert.Equal(t, 1, added, "only the admitted route is added")
 
-	conflicts := tr.snapshot()
+	conflicts := a.snapshot()
 	require.Len(t, conflicts, 1)
 	assert.Equal(t, RouteConflict{
 		Method: http.MethodGet, Path: "/users", FirstPath: "/users",
@@ -28,17 +37,20 @@ func TestRouteConflictTrackerRecordsDuplicate(t *testing.T) {
 	}, conflicts[0])
 
 	// Different methods, same path — no conflict.
-	trMethods := newRouteConflictTracker()
-	trMethods.record(http.MethodGet, "/users", first)
-	trMethods.record(http.MethodPost, "/users", dup)
-	assert.Empty(t, trMethods.snapshot())
+	aMethods := newRouteAdmission()
+	aMethods.admit(route(http.MethodGet, first), add)
+	aMethods.admit(route(http.MethodPost, dup), add)
+	assert.Empty(t, aMethods.snapshot())
 
-	// A nil tracker must not panic and must report no conflicts.
-	var nilTracker *routeConflictTracker
+	// A nil admission must not panic, admits everything and reports no conflicts.
+	var nilAdmission *routeAdmission
+	added = 0
 	assert.NotPanics(t, func() {
-		assert.True(t, nilTracker.record(http.MethodGet, "/x", first), "an untracked group registers everything")
+		nilAdmission.admit(route(http.MethodGet, first), add)
+		nilAdmission.admit(route(http.MethodGet, dup), add)
 	})
-	assert.Nil(t, nilTracker.snapshot())
+	assert.Equal(t, 2, added, "an untracked group registers everything")
+	assert.Nil(t, nilAdmission.snapshot())
 }
 
 func TestServerRouteConflictsAcrossGroups(t *testing.T) {
@@ -58,7 +70,7 @@ func TestServerRouteConflictsAcrossGroups(t *testing.T) {
 	assert.Equal(t, "/shared", conflicts[0].Path)
 
 	// Nested Group() registration colliding with a flat registration of the identical
-	// full path proves tracker propagation through Group().
+	// full path proves admission propagation through Group().
 	sub := moduleGroup.Group("/sub")
 	sub.Add(http.MethodGet, "/leaf", noop)
 	moduleGroup.Add(http.MethodGet, "/sub/leaf", noop)
@@ -165,7 +177,7 @@ func TestDuplicateRouteError(t *testing.T) {
 	}
 }
 
-// TestRouteNodeKey pins the tracker key to echo v5's node identity (DefaultRouter.Add).
+// TestRouteNodeKey pins the admission key to echo v5's node identity (DefaultRouter.Add).
 func TestRouteNodeKey(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -470,10 +482,7 @@ func TestServerStartRefusesRouteConflict(t *testing.T) {
 // listener is enabled and server.path.health equals server.path.ready: health registers first,
 // so it keeps the path on the probe engine, and Start refuses on the recorded conflict.
 func TestServerProbeListenerHealthEqualsReady(t *testing.T) {
-	cfg := newProbeTestConfig("")
-	cfg.Server.Path.Health = "/probe"
-	cfg.Server.Path.Ready = "/probe"
-	srv := newProbeTestServer(cfg, &testLogger{})
+	srv := newProbeTestServer(sharedProbePath(newProbeTestConfig("")), &testLogger{})
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
 	rec := serveEngine(srv.probeEcho, http.MethodGet, "/probe")
@@ -484,4 +493,91 @@ func TestServerProbeListenerHealthEqualsReady(t *testing.T) {
 
 	err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite health == ready")
 	require.ErrorIs(t, err, ErrDuplicateRoute)
+}
+
+// sharedProbePath points health and ready at one path, so readiness is the refused duplicate.
+func sharedProbePath(cfg *config.Config) *config.Config {
+	cfg.Server.Path.Health = "/probe"
+	cfg.Server.Path.Ready = "/probe"
+	return cfg
+}
+
+// TestRouteAdmissionRefusedDuplicateIsNotDescribed pins that every route door describes only the
+// route admission keeps: a refused duplicate writes no route-registry descriptor.
+func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {
+	noop := func(c HandlerContext) error { return c.String(http.StatusOK, "") }
+	typed := func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil }
+	tests := []struct {
+		name      string
+		newServer func() *Server // nil builds the default test server
+		register  func(srv *Server)
+		path      string
+		methods   []string
+	}{
+		{
+			name: "typed_get_twice",
+			register: func(srv *Server) {
+				hr := NewHandlerRegistry(srv.cfg)
+				GET(hr, srv.ModuleGroup(), "/admitted", typed)
+				GET(hr, srv.ModuleGroup(), "/admitted", typed)
+			},
+			path:    "/admitted",
+			methods: []string{http.MethodGet},
+		},
+		{
+			name: "raw_add_twice",
+			register: func(srv *Server) {
+				srv.ModuleGroup().Add(http.MethodGet, "/admitted", noop)
+				srv.ModuleGroup().Add(http.MethodGet, "/admitted", noop)
+			},
+			path:    "/admitted",
+			methods: []string{http.MethodGet},
+		},
+		{
+			name:     "module_route_on_probe_path",
+			register: func(srv *Server) { srv.ModuleGroup().Add(http.MethodGet, healthRoute, noop) },
+			path:     healthRoute,
+			methods:  []string{http.MethodGet},
+		},
+		{
+			name:      "shared_health_ready_path_port0",
+			newServer: func() *Server { return New(sharedProbePath(newTestConfig("", "", "")), &testLogger{}) },
+			path:      "/probe",
+			methods:   probeMethods,
+		},
+		{
+			name:      "probe_listener_duplicate",
+			newServer: func() *Server { return newProbeTestServer(sharedProbePath(newProbeTestConfig("")), &testLogger{}) },
+			path:      "/probe",
+			methods:   probeMethods,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			DefaultRouteRegistry.Clear()
+			t.Cleanup(DefaultRouteRegistry.Clear)
+			newServer := tt.newServer
+			if newServer == nil {
+				newServer = func() *Server { return newTestServer("", "", "") }
+			}
+			srv := newServer()
+			t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+			if tt.register != nil {
+				tt.register(srv)
+			}
+
+			conflicts := srv.RouteConflicts()
+			require.Len(t, conflicts, len(tt.methods), "one refused route per method")
+			routes := DefaultRouteRegistry.ByPath(tt.path)
+			described := map[string][]string{}
+			for i := range routes {
+				described[routes[i].Method] = append(described[routes[i].Method], routes[i].HandlerName)
+			}
+			for i, method := range tt.methods {
+				require.Equal(t, method, conflicts[i].Method)
+				assert.Equal(t, []string{conflicts[i].First.HandlerName}, described[method],
+					"%s %s: only the admitted route is described", method, tt.path)
+			}
+		})
+	}
 }
