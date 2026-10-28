@@ -3029,14 +3029,14 @@ const mergePatchJSON = "application/merge-patch+json"
 
 // BodyDecodePath and BodyDecodeQuery are embedded so only bindJSONBody's side-binding
 // reaches their fields: buildBindingPlan reads top-level tags only.
-type BodyDecodePath struct {
-	ID int `param:"id"`
-}
-
-// BodyDecodeQuery is embedded in bodyDecodeReq; see BodyDecodePath.
-type BodyDecodeQuery struct {
-	Page int `query:"page"`
-}
+type (
+	BodyDecodePath struct {
+		ID int `param:"id"`
+	}
+	BodyDecodeQuery struct {
+		Page int `query:"page"`
+	}
+)
 
 type bodyDecodeReq struct {
 	BodyDecodePath
@@ -3058,12 +3058,11 @@ func serveBodyDecode[T any](t *testing.T, call *bodyDecodeCall) (bound T, conten
 	t.Helper()
 	e := echo.New()
 	e.Validator = NewValidator()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	h := WrapHandler(func(req T, ctx HandlerContext) (helloResp, IAPIError) {
 		bound = req
 		contentType = ctx.RequestHeader(echo.HeaderContentType)
 		return helloResp{}, nil
-	}, NewRequestBinder(), cfg)
+	}, NewRequestBinder(), devDebugConfig())
 
 	req := httptest.NewRequestWithContext(context.Background(), call.method, call.target, call.body)
 	req.Header.Set(echo.HeaderContentType, call.contentType)
@@ -3081,29 +3080,39 @@ func bodyDecodeErrorDetail(t *testing.T, rec *httptest.ResponseRecorder) string 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Error)
-	detail, ok := resp.Error.Details["error"].(string)
-	require.True(t, ok)
-	return detail
+	return requireDetailString(t, resp)
 }
 
-// TestBindJSONBodyEmptyBodySkipsDecode pins the empty-body skip for every admitted JSON
-// media type: a zero-length body binds a zero-valued request instead of failing to decode.
-func TestBindJSONBodyEmptyBodySkipsDecode(t *testing.T) {
+// TestBindJSONBodyByMediaType pins which bodies decode: every admitted JSON media type binds
+// and the handler sees the Content-Type sent, a zero Content-Length skips the decode while an
+// unknown length does not, and a non-JSON body is never read.
+func TestBindJSONBodyByMediaType(t *testing.T) {
+	const body = `{"name":"ada"}`
+	ada := bodyDecodeReq{Name: "ada"}
 	tests := []struct {
 		name        string
 		contentType string
+		body        io.Reader
+		want        bodyDecodeReq
 	}{
-		{name: "application_json", contentType: echo.MIMEApplicationJSON},
-		{name: "merge_patch_json", contentType: mergePatchJSON},
+		{name: "application_json", contentType: echo.MIMEApplicationJSON, body: strings.NewReader(body), want: ada},
+		{name: "merge_patch_json", contentType: mergePatchJSON, body: strings.NewReader(body), want: ada},
+		{name: "vnd_api_json_with_charset", contentType: "application/vnd.api+json; charset=utf-8", body: strings.NewReader(body), want: ada},
+		{name: "problem_json", contentType: "application/problem+json", body: strings.NewReader(body), want: ada},
+		{name: "mixed_case_application_json", contentType: "Application/JSON", body: strings.NewReader(body), want: ada},
+		{name: "merge_patch_json_unknown_length", contentType: mergePatchJSON, body: io.NopCloser(strings.NewReader(body)), want: ada},
+		{name: "application_json_empty_body", contentType: echo.MIMEApplicationJSON, body: strings.NewReader("")},
+		{name: "merge_patch_json_empty_body", contentType: mergePatchJSON, body: strings.NewReader("")},
+		{name: "text_plain_body_ignored", contentType: echo.MIMETextPlain, body: strings.NewReader(body)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bound, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
-				method: http.MethodPost, target: "/items", contentType: tt.contentType, body: strings.NewReader(""),
+			got, seenContentType, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+				method: http.MethodPost, target: "/items", contentType: tt.contentType, body: tt.body,
 			})
-			assert.Equal(t, http.StatusOK, rec.Code)
-			assert.Equal(t, bodyDecodeReq{}, bound)
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.contentType, seenContentType)
 		})
 	}
 }
@@ -3148,105 +3157,44 @@ func TestBindJSONBodySideBindsByMethod(t *testing.T) {
 	}
 }
 
-// TestBindJSONBodySideBindingFailureAnswersBadRequest pins that a side-binding failure is
-// not swallowed: an unparsable path value answers 400 with one summary across JSON types.
-func TestBindJSONBodySideBindingFailureAnswersBadRequest(t *testing.T) {
-	detail := func(contentType string) string {
-		_, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
-			method: http.MethodPost, target: "/items/abc", contentType: contentType, pathID: "abc",
-			body: strings.NewReader(`{"name":"ada"}`),
-		})
-		return bodyDecodeErrorDetail(t, rec)
-	}
-
-	assert.Equal(t, detail(echo.MIMEApplicationJSON), detail(mergePatchJSON))
-}
-
-// TestBindJSONBodyAdmitsEveryJSONMediaType pins admission: a body under any media type
-// bindJSONBody admits as JSON binds, and the handler sees the Content-Type the client sent.
-func TestBindJSONBodyAdmitsEveryJSONMediaType(t *testing.T) {
-	tests := []struct {
-		name        string
-		contentType string
-	}{
-		{name: "application_json", contentType: echo.MIMEApplicationJSON},
-		{name: "merge_patch_json", contentType: mergePatchJSON},
-		{name: "vnd_api_json_with_charset", contentType: "application/vnd.api+json; charset=utf-8"},
-		{name: "problem_json", contentType: "application/problem+json"},
-		{name: "mixed_case_application_json", contentType: "Application/JSON"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			bound, seenContentType, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
-				method: http.MethodPost, target: "/items", contentType: tt.contentType,
-				body: strings.NewReader(`{"name":"ada"}`),
-			})
-			require.Equal(t, http.StatusOK, rec.Code)
-			assert.Equal(t, "ada", bound.Name)
-			assert.Equal(t, tt.contentType, seenContentType)
-		})
-	}
-}
-
-// TestBindJSONBodyDecodesUnknownLengthBody pins that only a zero Content-Length skips the
-// decode: a chunked (-1) body is read like any other.
-func TestBindJSONBodyDecodesUnknownLengthBody(t *testing.T) {
-	bound, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
-		method: http.MethodPost, target: "/items", contentType: mergePatchJSON,
-		body: io.NopCloser(strings.NewReader(`{"name":"ada"}`)),
+// TestBindJSONBodyParamOnlyTypeAcceptsJSONBody pins that a request type with no JSON fields
+// still answers 200 to a +json body: unknown body keys are ignored, not refused.
+func TestBindJSONBodyParamOnlyTypeAcceptsJSONBody(t *testing.T) {
+	bound, _, rec := serveBodyDecode[BodyDecodePath](t, &bodyDecodeCall{
+		method: http.MethodPatch, target: "/items/5", contentType: mergePatchJSON, pathID: "5",
+		body: strings.NewReader(`{"name":"ada"}`),
 	})
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "ada", bound.Name)
+	assert.Equal(t, BodyDecodePath{ID: 5}, bound)
 }
 
-// TestBindJSONBodyDecodeParityAcrossMediaTypes pins that a +json body decodes exactly as an
-// application/json one: the same failure summary, trailing garbage refused, a trailing
-// newline accepted.
-func TestBindJSONBodyDecodeParityAcrossMediaTypes(t *testing.T) {
-	serve := func(contentType, body string) *httptest.ResponseRecorder {
+// TestBindJSONBodyFailureParityAcrossMediaTypes pins that a +json request fails exactly as an
+// application/json one: the same decode and side-binding summaries, trailing garbage refused,
+// a trailing newline accepted.
+func TestBindJSONBodyFailureParityAcrossMediaTypes(t *testing.T) {
+	serve := func(contentType, pathID, body string) *httptest.ResponseRecorder {
 		_, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
-			method: http.MethodPost, target: "/items", contentType: contentType, body: strings.NewReader(body),
+			method: http.MethodPost, target: "/items", contentType: contentType, pathID: pathID,
+			body: strings.NewReader(body),
 		})
 		return rec
 	}
 
 	t.Run("malformed_body_renders_the_json_summary", func(t *testing.T) {
-		want := bodyDecodeErrorDetail(t, serve(echo.MIMEApplicationJSON, `{"name":}`))
+		want := bodyDecodeErrorDetail(t, serve(echo.MIMEApplicationJSON, "", `{"name":}`))
 		require.NotEqual(t, unauditedBindSummary, want)
-		assert.Equal(t, want, bodyDecodeErrorDetail(t, serve(mergePatchJSON, `{"name":}`)))
+		assert.Equal(t, want, bodyDecodeErrorDetail(t, serve(mergePatchJSON, "", `{"name":}`)))
+	})
+	t.Run("side_binding_failure_renders_one_summary", func(t *testing.T) {
+		want := bodyDecodeErrorDetail(t, serve(echo.MIMEApplicationJSON, "abc", `{"name":"ada"}`))
+		assert.Equal(t, want, bodyDecodeErrorDetail(t, serve(mergePatchJSON, "abc", `{"name":"ada"}`)))
 	})
 	t.Run("trailing_garbage_answers_bad_request", func(t *testing.T) {
-		assert.Equal(t, http.StatusBadRequest, serve(mergePatchJSON, `{"name":"x"}garbage`).Code)
+		assert.Equal(t, http.StatusBadRequest, serve(mergePatchJSON, "", `{"name":"x"}garbage`).Code)
 	})
 	t.Run("trailing_newline_binds", func(t *testing.T) {
-		assert.Equal(t, http.StatusOK, serve(mergePatchJSON, "{\"name\":\"x\"}\n").Code)
+		assert.Equal(t, http.StatusOK, serve(mergePatchJSON, "", "{\"name\":\"x\"}\n").Code)
 	})
-}
-
-// TestBindJSONBodyIgnoresNonJSONBody pins that a body bindJSONBody does not admit is never
-// read: a text/plain body leaves the request zero-valued.
-func TestBindJSONBodyIgnoresNonJSONBody(t *testing.T) {
-	bound, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
-		method: http.MethodPost, target: "/items", contentType: echo.MIMETextPlain,
-		body: strings.NewReader(`{"name":"ada"}`),
-	})
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, bodyDecodeReq{}, bound)
-}
-
-type paramOnlyReq struct {
-	ID int `param:"id"`
-}
-
-// TestBindJSONBodyParamOnlyTypeAcceptsJSONBody pins that a request type with no JSON fields
-// still answers 200 to a +json body: unknown body keys are ignored, not refused.
-func TestBindJSONBodyParamOnlyTypeAcceptsJSONBody(t *testing.T) {
-	bound, _, rec := serveBodyDecode[paramOnlyReq](t, &bodyDecodeCall{
-		method: http.MethodPatch, target: "/items/5", contentType: mergePatchJSON, pathID: "5",
-		body: strings.NewReader(`{"name":"ada"}`),
-	})
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, 5, bound.ID)
 }
 
 // wideJSONOnlyRequest is a 12-field JSON-body-only struct: no param/query/header tags,

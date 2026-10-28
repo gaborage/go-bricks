@@ -777,9 +777,9 @@ func wrapHandlerWithJOSE[T any, R any](
 // avoiding per-request struct-tag reflection. When plan is empty — the common case, e.g. a
 // JSON-body-only struct — only bindJSONBody runs.
 //
-// Source precedence is load-bearing and tested (TestRequestBinderPrecedence*): the JSON step
-// runs first, then the param/query/header overlay runs after it, so a non-empty URL value wins
-// over a conflicting body value for a dual-tagged field. Do not reorder or drop the overlay.
+// Source precedence is load-bearing and tested (TestRequestBinderPrecedence*): the
+// param/query/header overlay runs after the JSON step, so a non-empty URL value wins over a
+// conflicting body value for a dual-tagged field. Do not reorder or drop the overlay.
 func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []boundField, fieldPathIsSchema bool) error {
 	if err := rb.bindJSONBody(c, target, fieldPathIsSchema); err != nil {
 		return err

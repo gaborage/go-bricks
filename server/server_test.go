@@ -958,7 +958,7 @@ func TestServerPatchBindsMergePatchBody(t *testing.T) {
 		Name string `json:"name"`
 	}
 
-	srv := New(newTestConfig("", "", ""), &testLogger{})
+	srv := newTestServer("", "", "")
 	hr := NewHandlerRegistry(srv.cfg)
 	PATCH(hr, srv.ModuleGroup(), "/users/:id", func(req patchReq, _ HandlerContext) (patchResp, IAPIError) {
 		return patchResp(req), nil
