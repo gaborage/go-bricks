@@ -62,9 +62,7 @@ type DuplicateRouteError struct {
 	Conflicts []RouteConflict
 }
 
-// Error renders a head with the conflict count, then one line per conflict: a duplicate names
-// both registrants, showing the first registration's path only where it differs; any other
-// reason names it and the refused registrant.
+// Error renders a head with the conflict count, then one line per conflict.
 func (e *DuplicateRouteError) Error() string {
 	var b strings.Builder
 	b.WriteString(e.head().Error())
@@ -85,36 +83,44 @@ func (e *DuplicateRouteError) Unwrap() []error {
 	return errs
 }
 
-// head names the duplicate sentinel only when every conflict is a duplicate.
 func (e *DuplicateRouteError) head() error {
+	label := ErrDuplicateRoute.Error()
 	for i := range e.Conflicts {
 		if e.Conflicts[i].Reason != RouteConflictReasonDuplicate {
-			return refusedRoutesHeadError(len(e.Conflicts))
+			label = "route registration refused"
+			break
 		}
 	}
-	return fmt.Errorf("%w (%d conflict(s))", ErrDuplicateRoute, len(e.Conflicts))
+	return conflictsHeadError{label: label, n: len(e.Conflicts)}
 }
 
-// refusedRoutesHeadError heads an error holding a refusal that is not a duplicate; it still
-// matches ErrDuplicateRoute.
-type refusedRoutesHeadError int
-
-func (n refusedRoutesHeadError) Error() string {
-	return fmt.Sprintf("route registration refused (%d conflict(s))", int(n))
+// conflictsHeadError heads a DuplicateRouteError; it matches ErrDuplicateRoute whatever its label.
+type conflictsHeadError struct {
+	label string
+	n     int
 }
 
-func (refusedRoutesHeadError) Unwrap() error { return ErrDuplicateRoute }
+func (h conflictsHeadError) Error() string {
+	return fmt.Sprintf("%s (%d conflict(s))", h.label, h.n)
+}
+
+func (conflictsHeadError) Unwrap() error { return ErrDuplicateRoute }
+
+func (r RouteRegistrant) label() string {
+	return r.HandlerName + " (" + r.Package + ")"
+}
 
 // line renders one conflict as it appears in DuplicateRouteError's text.
 func (c *RouteConflict) line() string {
+	prefix := c.Method + " " + c.Path + " — "
 	if c.Reason != RouteConflictReasonDuplicate {
-		return fmt.Sprintf("%s %s — %s, refused: %s (%s)", c.Method, c.Path, c.Reason, c.Duplicate.HandlerName, c.Duplicate.Package)
+		return prefix + string(c.Reason) + ", refused: " + c.Duplicate.label()
 	}
-	s := fmt.Sprintf("%s %s — first: %s (%s)", c.Method, c.Path, c.First.HandlerName, c.First.Package)
+	s := prefix + "first: " + c.First.label()
 	if c.FirstPath != "" && c.FirstPath != c.Path {
 		s += " at " + c.FirstPath
 	}
-	return s + fmt.Sprintf(", duplicate: %s (%s)", c.Duplicate.HandlerName, c.Duplicate.Package)
+	return s + ", duplicate: " + c.Duplicate.label()
 }
 
 // duplicateRouteError returns nil for no conflicts, otherwise a *DuplicateRouteError.
@@ -153,10 +159,9 @@ func newRouteAdmission() *routeAdmission {
 	return &routeAdmission{seen: make(map[string]seenRoute)}
 }
 
-// admit refuses a reserved engine method, then keys r on its echo node and refuses a duplicate,
-// recording either refusal as a conflict: a duplicate leaves the first handler on the route and
-// a reserved engine method leaves echo's own catch-alls in place. An admitted route is described
-// in DefaultRouteRegistry, then added through add.
+// admit refuses a reserved engine method, then a duplicate of a claimed echo route node (the first
+// registration keeps it), recording each refusal as a conflict; an admitted route is described in
+// DefaultRouteRegistry, then added through add.
 func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	if !a.claim(r) {
 		return
@@ -165,8 +170,7 @@ func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	add()
 }
 
-// claim reports whether r names a new route node, recording a conflict when it does not. A
-// reserved engine method is refused before keying, so it never claims a node.
+// claim reports whether r is admitted, recording a conflict when it is not.
 func (a *routeAdmission) claim(r admittedRoute) bool {
 	if a == nil {
 		return true

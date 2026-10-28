@@ -395,8 +395,8 @@ func (s *Server) RootGroup() RouteRegistrar {
 	return newAdmittingRouteGroup(s.echo.Group(""), "", s.cfg, s.admission)
 }
 
-// RouteConflicts returns every registration this server's registrars refused, a duplicate
-// method+path or a reserved engine method, in registration order. Empty when there are none.
+// RouteConflicts returns every registration this server's registrars refused (RouteConflict.Reason
+// says why), in registration order. Empty when there are none.
 func (s *Server) RouteConflicts() []RouteConflict {
 	return s.admission.snapshot()
 }
