@@ -2632,8 +2632,9 @@ Refuse, not normalize: lowercasing at load would break ADR-090's check and chang
 and header names. Environment variables alone and a lone mixed-case key below the root with no
 twin are unaffected. See [migrations.md](migrations.md) `[C73.14]`, `[C73.19]`.
 
-**Key Benefits:** a config is read one way by decode and by every exact-name lookup, and a section
-or override the framework would have ignored fails at startup instead.
+**Key Benefits:** a framework section is read under one spelling by decode and by every exact-name
+lookup, and a misspelled section, or a mixed-case override beside its default, that the framework
+would have ignored fails at startup instead.
 
 ---
 
