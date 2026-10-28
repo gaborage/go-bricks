@@ -69,6 +69,10 @@ func (s *configSource) caseTwinErrors(node any, prefix string, inSequence, root 
 	var errs []error
 	if isSequence(node) {
 		items := reflect.ValueOf(node)
+		// A byte slice or array is a scalar: its elements hold no keys.
+		if items.Type().Elem().Kind() == reflect.Uint8 {
+			return nil
+		}
 		for i := range items.Len() {
 			errs = append(errs, s.caseTwinErrors(items.Index(i).Interface(), prefix+"["+strconv.Itoa(i)+"]", true, false)...)
 		}
