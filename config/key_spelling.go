@@ -11,14 +11,6 @@ import (
 	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
-// caseTwin is one group of sibling keys that fold to one key: their dotted paths, sorted.
-// inSequence marks a group found in a map inside a sequence, whose paths carry an element
-// index that no environment variable and no presence record reaches.
-type caseTwin struct {
-	paths      []string
-	inSequence bool
-}
-
 // checkKeySpelling refuses a merged tree that decode would read under a spelling the
 // operator did not choose (ADR-157). mapstructure matches a key to its field
 // case-insensitively, so a root key that folds to a framework section name decodes into
@@ -32,11 +24,7 @@ type caseTwin struct {
 func (s *configSource) checkKeySpelling() error {
 	root := s.k.Raw()
 	errs := misspelledSections(root)
-	var twins []caseTwin
-	collectCaseTwins(root, "", false, &twins)
-	for _, twin := range twins {
-		errs = append(errs, s.caseTwinError(twin))
-	}
+	errs = append(errs, s.caseTwinErrors(root, "", false, true)...)
 	return errors.Join(errs...)
 }
 
@@ -73,35 +61,33 @@ func sectionNamed(key string) string {
 	return ""
 }
 
-// collectCaseTwins appends every group of two or more sibling keys in node that fold to one
-// key, depth first in sorted key order so the groups come out the same on every run. A root
-// group that folds to a section name is misspelledSections' to report.
-func collectCaseTwins(node any, prefix string, inSequence bool, twins *[]caseTwin) {
+// caseTwinErrors returns one error per group of two or more sibling keys in node that fold
+// to one key, depth first in sorted key order so they come out the same on every run. A map
+// inside a sequence is a node too. At the root, a group that folds to a section name is
+// misspelledSections' to report.
+func (s *configSource) caseTwinErrors(node any, prefix string, inSequence, root bool) []error {
+	var errs []error
 	if isSequence(node) {
-		seq := reflect.ValueOf(node)
-		for i := range seq.Len() {
-			collectCaseTwins(seq.Index(i).Interface(), prefix+"["+strconv.Itoa(i)+"]", true, twins)
+		items := reflect.ValueOf(node)
+		for i := range items.Len() {
+			errs = append(errs, s.caseTwinErrors(items.Index(i).Interface(), prefix+"["+strconv.Itoa(i)+"]", true, false)...)
 		}
-		return
+		return errs
 	}
 	tree, isMap := stringMap(node)
 	if !isMap {
-		return
+		return nil
 	}
 	keys := slices.Sorted(maps.Keys(tree))
 	for _, group := range foldGroups(keys) {
-		if len(group) < 2 || (prefix == "" && sectionNamed(group[0]) != "") {
-			continue
+		if len(group) > 1 && (!root || sectionNamed(group[0]) == "") {
+			errs = append(errs, s.caseTwinError(prefix, group, inSequence))
 		}
-		paths := make([]string, len(group))
-		for i, key := range group {
-			paths[i] = joinPath(prefix, key)
-		}
-		*twins = append(*twins, caseTwin{paths: paths, inSequence: inSequence})
 	}
 	for _, key := range keys {
-		collectCaseTwins(tree[key], joinPath(prefix, key), inSequence, twins)
+		errs = append(errs, s.caseTwinErrors(tree[key], joinName(prefix, key), inSequence, false)...)
 	}
+	return errs
 }
 
 // foldGroups partitions sorted sibling keys into the groups sameSegment folds together,
@@ -119,33 +105,33 @@ func foldGroups(keys []string) [][]string {
 	return groups
 }
 
-func joinPath(prefix, key string) string {
-	if prefix == "" {
-		return key
-	}
-	return prefix + koanfDelim + key
-}
-
-// caseTwinError names every spelling of a twin, marks the ones the framework's defaults
-// put there, and points at the one spelling to keep with the environment variable that
-// reaches it.
-func (s *configSource) caseTwinError(twin caseTwin) error {
-	field := lowercaseKey(twin.paths[0])
-	listed := make([]string, len(twin.paths))
-	for i, path := range twin.paths {
-		listed[i] = path
-		if !twin.inSequence && s.fromDefaults(path) {
-			listed[i] += " (framework default)"
-		}
+// caseTwinError names every spelling of the keys under prefix, marks the ones the
+// framework's defaults put there, and points at the one spelling to keep with the
+// environment variable that reaches it. Only the twinned segment is lowercased: a parent
+// keeps the case it was written in, and envVarForKey then offers no variable that would
+// land beside it.
+func (s *configSource) caseTwinError(prefix string, keys []string, inSequence bool) error {
+	field := joinName(prefix, lowercaseKey(keys[0]))
+	paths := make([]string, len(keys))
+	for i, key := range keys {
+		paths[i] = joinName(prefix, key)
 	}
 	keep := field
-	if envVar := envVarForKey(field); envVar != "" && !twin.inSequence {
-		keep += " (" + envVar + ")"
+	// Inside a sequence, no presence record and no environment variable reaches a path.
+	if !inSequence {
+		for i, path := range paths {
+			if s.fromDefaults(path) {
+				paths[i] += " (framework default)"
+			}
+		}
+		if envVar := envVarForKey(field); envVar != "" {
+			keep += " (" + envVar + ")"
+		}
 	}
 	return &ConfigError{
 		Category: errCategoryInvalid,
 		Field:    field,
-		Message:  "is written in spellings that differ only by case: " + strings.Join(listed, ", ") + ";",
+		Message:  "is written in spellings that differ only by case: " + strings.Join(paths, ", ") + ";",
 		Action:   "keys are lowercase: write it once as " + keep,
 	}
 }
@@ -161,9 +147,9 @@ func (s *configSource) fromDefaults(path string) bool {
 	})
 }
 
-// lowercaseKey is the documented spelling of a folded path, for messages only: upper then
+// lowercaseKey is the documented spelling of a folded key, for messages only: upper then
 // lower case maps every simple fold onto one letter, so U+017F reads as s. What folds
 // together is sameSegment's to decide, never this.
-func lowercaseKey(path string) string {
-	return strings.ToLower(strings.ToUpper(path))
+func lowercaseKey(key string) string {
+	return strings.ToLower(strings.ToUpper(key))
 }

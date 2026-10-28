@@ -82,6 +82,10 @@ func TestLoadRefusesACapitalizedSectionBeforeItsSequence(t *testing.T) {
 // the lowercase one is a framework default or the operator's own, and in a data-keyed map
 // as much as under a struct field.
 func TestLoadRefusesCaseTwins(t *testing.T) {
+	const (
+		allowedIPsTwin = "debug.allowedIPs, debug.allowedips (framework default)"
+		allowedIPsKeep = "debug.allowedips (DEBUG_ALLOWEDIPS)"
+	)
 	tests := []struct {
 		name  string
 		yaml  string
@@ -107,12 +111,30 @@ func TestLoadRefusesCaseTwins(t *testing.T) {
 			name:  "allowedips_list_beside_its_default",
 			yaml:  "debug:\n  allowedIPs: [\"10.0.0.0/8\"]\n",
 			field: fieldDebugAllowedIPs,
-			paths: "debug.allowedIPs, debug.allowedips (framework default)",
-			keep:  "debug.allowedips (DEBUG_ALLOWEDIPS)",
+			paths: allowedIPsTwin,
+			keep:  allowedIPsKeep,
 		},
-		{name: "allowedips_empty_list_beside_its_default", yaml: "debug:\n  allowedIPs: []\n", field: fieldDebugAllowedIPs},
-		{name: "allowedips_empty_beside_its_default", yaml: "debug:\n  allowedIPs: \"\"\n", field: fieldDebugAllowedIPs},
-		{name: "allowedips_null_beside_its_default", yaml: "debug:\n  allowedIPs:\n", field: fieldDebugAllowedIPs},
+		{
+			name:  "allowedips_empty_list_beside_its_default",
+			yaml:  "debug:\n  allowedIPs: []\n",
+			field: fieldDebugAllowedIPs,
+			paths: allowedIPsTwin,
+			keep:  allowedIPsKeep,
+		},
+		{
+			name:  "allowedips_empty_beside_its_default",
+			yaml:  "debug:\n  allowedIPs: \"\"\n",
+			field: fieldDebugAllowedIPs,
+			paths: allowedIPsTwin,
+			keep:  allowedIPsKeep,
+		},
+		{
+			name:  "allowedips_null_beside_its_default",
+			yaml:  "debug:\n  allowedIPs:\n",
+			field: fieldDebugAllowedIPs,
+			paths: allowedIPsTwin,
+			keep:  allowedIPsKeep,
+		},
 		{
 			name:  "long_s_beside_its_default",
 			yaml:  "server:\n  hoſt: sentinel\n",
@@ -137,9 +159,23 @@ func TestLoadRefusesCaseTwins(t *testing.T) {
 		{
 			name:  "password_twins",
 			yaml:  "database:\n  password: sentinel-a\n  Password: sentinel-b\n",
-			field: "database.password",
+			field: fieldDatabasePassword,
 			paths: "database.Password, database.password",
 			keep:  "database.password (DATABASE_PASSWORD)",
+		},
+		{
+			name:  "mixed_case_parent_keeps_its_case",
+			yaml:  "orders:\n  Api:\n    Url: sentinel-a\n    url: sentinel-b\n",
+			field: "orders.Api.url",
+			paths: "orders.Api.Url, orders.Api.url",
+			keep:  "orders.Api.url",
+		},
+		{
+			name:  "section_name_below_the_root",
+			yaml:  "orders:\n  Server: sentinel-a\n  server: sentinel-b\n",
+			field: "orders.server",
+			paths: "orders.Server, orders.server",
+			keep:  "orders.server (ORDERS_SERVER)",
 		},
 		{
 			name:  "twins_in_a_sequence_element",
@@ -154,13 +190,6 @@ func TestLoadRefusesCaseTwins(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
 
-			if tt.paths == "" {
-				var cfgErr *ConfigError
-				require.ErrorAs(t, err, &cfgErr)
-				assert.Equal(t, tt.field, cfgErr.Field)
-				assert.Contains(t, cfgErr.Message, twinMessagePrefix)
-				return
-			}
 			requireSpellingError(t, err, tt.field, twinMessagePrefix+tt.paths+";", "keys are lowercase: write it once as "+tt.keep)
 		})
 	}

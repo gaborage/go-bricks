@@ -54,9 +54,10 @@ lowercases them. Fixes #2219.
    `invalid`. Rule 1 reports one error per section, every wrong spelling sorted:
    `config_invalid: app is spelled App; framework section names are lowercase: rename App to app`.
    Rule 2 names every spelling of the key, sorted, tags `(framework default)` a spelling no
-   operator layer delivered at or under that exact path, and gives the lowercase key, with its
+   operator layer delivered at or under that exact path, and gives the key with its twinned
+   segment lowercased (a parent keeps the case it was written in: `orders.Api.url`), with its
    environment variable when the key round-trips through `envVarForKey` and no sequence lies on
-   its path (`orders.routes[0].name` gets none):
+   its path (`orders.Api.url` and `orders.routes[0].name` get none):
    `config_invalid: server.port is written in spellings that differ only by case: server.Port,
    server.port (framework default); keys are lowercase: write it once as server.port (SERVER_PORT)`.
 5. **A lone mixed-case key below the root still decodes.** A key with no twin beside it, such as
@@ -104,7 +105,7 @@ protocol identifier the framework does not own.
 ## References
 
 - `config/key_spelling.go`: `checkKeySpelling`, `misspelledSections`, `sectionNamed`,
-  `collectCaseTwins`, `caseTwinError`, and `fromDefaults`, which asks `Config.deliveries`
+  `caseTwinErrors`, `caseTwinError`, and `fromDefaults`, which asks `Config.deliveries`
   (ADR-156) whether an operator layer delivered a spelling
 - `config/config.go`: `configSource.decode`, `configSections`
 - `config/source.go`: `sameSegment`, the package's one case fold for keys

@@ -14049,7 +14049,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - verify: `config.Load()` succeeds with each environment's files and variables, and
   `cfg.Int("server.port")` and `cfg.String("log.level")` return the values you wrote.
 - ref: gaborage/go-bricks#2219 · [ADR-157](adr_157_config_key_spelling_refused.md) ·
-  `config/key_spelling.go` (`collectCaseTwins`, `caseTwinError`, `fromDefaults`) ·
+  `config/key_spelling.go` (`caseTwinErrors`, `caseTwinError`, `fromDefaults`) ·
   `config/source.go` (`Config.deliveries`)
 
 ---
