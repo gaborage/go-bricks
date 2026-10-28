@@ -406,6 +406,8 @@ on 1.27.
 #   are duplicates too — see wiki/startup_defaults.md#duplicate-route-detection
 
 # "route registration refused (N conflict(s))" + "reserved engine method"
-# → A module registered echo_route_not_found or echo_route_any (ADR-155): delete it;
-#   per-module custom 404 handlers are unsupported, with no replacement
+# → A module registered echo_route_not_found or echo_route_any (ADR-155)
+# → echo_route_not_found: delete it; per-module custom 404 handlers are
+#   unsupported, with no replacement
+# → echo_route_any: register each HTTP method it served instead (C73.12)
 ```
