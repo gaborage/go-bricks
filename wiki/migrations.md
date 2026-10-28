@@ -13933,17 +13933,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
   ```bash
   N='app|server|databases?|cache|log|messaging|multitenant|debug|source|scheduler|outbox|inbox|keystore|auth|observability'
-  # YAML: a root key, nested (App:) or flat-dotted (Server.port:), not spelled lowercase
-  git grep -niE "^($N)[[:space:]]*[.:]" -- '*.yaml' '*.yml' | grep -vE ":[0-9]+:($N)[[:space:]]*[.:]"
+  # YAML: a root key, nested (App:), quoted ("App":) or flat-dotted (Server.port:), not spelled lowercase
+  git grep -niE "^[\"']?($N)[\"']?[[:space:]]*[.:]" -- '*.yaml' '*.yml' | grep -vE ":[0-9]+:[\"']?($N)[\"']?[[:space:]]*[.:]"
   # Go: a config.LoadFromMap map key spelled other than lowercase
   git grep -noiE "\"($N)\"[[:space:]]*:" -- '*.go' | grep -vE ":\"($N)\"[[:space:]]*:"
   ```
 
   Keep a YAML hit only in a file a deployment or a `go-bricks-migrate --source-config` run
   actually loads, and a Go hit only where the key sits at the root of a map handed to
-  `config.LoadFromMap`. A quoted root key (`"App":`) and a Unicode fold such as U+017F for `s`
-  (`meſſaging:`) are refused too and escape the grep; the verify step catches them. Environment
-  variables need no detect: `envVarToKey` lowercases every one.
+  `config.LoadFromMap`. A Unicode fold such as U+017F for `s` (`meſſaging:`) is refused too and
+  escapes the grep; the verify step catches it. Environment variables need no detect:
+  `envVarToKey` lowercases every one.
 - scope: `config.Load` and `config.LoadFromMap`, so every service built through `app` and, from
   its routine go-bricks pin bump, every `go-bricks-migrate --source-config` run. **Unchanged**: environment variables; a root key that
   folds to no section (`Orders:`, `custom:`); a lone mixed-case key below the root, such as `Keys`
