@@ -13959,7 +13959,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gate: match = a detect hit, or the verify step failing on any loaded configuration. no-match = no
   detect hit, and the verify step passing on every configuration a deployment, a test or a
   `go-bricks-migrate --source-config` run loads (each rendered file, each `LoadFromMap` caller's
-  test); run it even with no hit.
+  test). Run the verify step against the target framework version, in a branch or staging build
+  that carries the bump, since the current version accepts every spelling; run it even with no
+  hit.
 - before (v0.72.0): mapstructure decoded such a key into its section by `strings.EqualFold`, but
   `Config.Exists`, the getters and the observability bootstrap name a section by its exact
   spelling. `Observability:` booted the no-op telemetry provider, because the bootstrap's
@@ -13977,10 +13979,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `App:` applies the name and env it sets, and a renamed `Observability:` turns telemetry on with
   its endpoint. A dotted `LoadFromMap` key is renamed at its first segment: `"App.name"` becomes
   `"app.name"`, which `LoadFromMap` unflattens into the `app` section.
-  Where the same file or another layer already holds the lowercase section, merge the two blocks
-  into one.
-- verify: `config.Load()` succeeds, `cfg.Exists("<section>")` is true for each renamed section,
-  and `cfg.String("app.name")` returns the name the renamed block sets.
+  Rename a block in the file that holds it. Where the same file already holds the lowercase
+  section, merge the two blocks into one; where another layer holds it, keep each layer's block,
+  so an overlay still overrides the base.
+- verify: on the target version, `config.Load()` succeeds, `cfg.Exists("<section>")` is true for
+  each renamed section, and each renamed key reads back its effective value: the one a higher
+  layer (an overlay, or an environment variable such as `APP_NAME`) sets where it sets one,
+  otherwise the renamed block's.
 - ref: gaborage/go-bricks#2219 · [ADR-157](adr_157_config_key_spelling_refused.md) ·
   `config/key_spelling.go` (`checkKeySpelling`, `misspelledSections`) · `config/config.go`
   (`configSource.decode`, `configSections`)
