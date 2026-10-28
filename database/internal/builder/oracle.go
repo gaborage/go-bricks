@@ -238,9 +238,9 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	quotedInsertCols := qb.quoteColumnsForDML(insertKeys...)
 	usingValues := make([]string, len(insertKeys))
 	for i, col := range quotedInsertCols {
-		cell, cellErr := mergeCell(insertKeys[i], insertColumns[insertKeys[i]], &args)
-		if cellErr != nil {
-			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
+		cell, mergeErr := mergeCell(insertKeys[i], insertColumns[insertKeys[i]], &args)
+		if mergeErr != nil {
+			return "", nil, fmt.Errorf("BuildUpsert: %w", mergeErr)
 		}
 		usingValues[i] = cell + " AS " + col
 	}
@@ -259,9 +259,9 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	quotedUpdateCols := qb.quoteColumnsForDML(updateKeys...)
 	updateSets := make([]string, len(updateKeys))
 	for i, col := range quotedUpdateCols {
-		cell, cellErr := mergeCell(updateKeys[i], updateColumns[updateKeys[i]], &args)
-		if cellErr != nil {
-			return "", nil, fmt.Errorf("BuildUpsert: %w", cellErr)
+		cell, mergeErr := mergeCell(updateKeys[i], updateColumns[updateKeys[i]], &args)
+		if mergeErr != nil {
+			return "", nil, fmt.Errorf("BuildUpsert: %w", mergeErr)
 		}
 		updateSets[i] = col + " = " + cell
 	}
@@ -290,17 +290,17 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	return query, args, nil
 }
 
-// mergeCell renders one MERGE value: an expression judged by valueExpression is
-// spliced with squirrel's `??` escape resolved, as Set renders it, and any other
-// value is appended to args and rendered as the next `:N`.
+// mergeCell renders one MERGE value: an expression the judge splices keeps
+// squirrel's `??` escape resolved, as Set renders it, and any other value is
+// appended to args and rendered as the next `:N`.
 func mergeCell(column string, value any, args *[]any) (string, error) {
-	exprSQL, isExpr, err := valueExpression(column, value)
+	judged, err := judgeOperand("", value, valueFamily)
 	if err != nil {
-		return "", err
+		return "", cellErr(column, err)
 	}
-	if isExpr {
-		return strings.ReplaceAll(exprSQL, "??", "?"), nil
+	if judged.kind == operandSpliced {
+		return strings.ReplaceAll(judged.sql, "??", "?"), nil
 	}
-	*args = append(*args, value)
+	*args = append(*args, judged.value)
 	return fmt.Sprintf(":%d", len(*args)), nil
 }
