@@ -404,6 +404,8 @@ func seamCases() []redactErrorCase {
 			},
 			same: true,
 		},
+		// No password to mask, so even a reason that quotes the URL is kept for the operator.
+		{name: "credential_free_url_keeps_quoting_reason", raw: "amqp://broker:5672/vh%zz", parse: parseRejects, same: true},
 		{
 			name: "message_omits_raw",
 			raw:  "amqp://user:s3cr3t@broker:5672/vh",
