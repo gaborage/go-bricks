@@ -14108,9 +14108,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   pointer or a stateful Valuer holds.
   The operand is now judged: move a `RawExpression` to a `jf` door, or to `f.Raw` with its
   `// SECURITY:` annotation, since `f` refuses it with `dbtypes.ErrExpressionInFilter`. A list at
-  `Eq`/`NotEq` still renders `IN`/`NOT IN`, with each element judged. A nil or list operand at
+  `Eq`/`NotEq` still renders `IN`/`NOT IN`, with each element judged. An untyped nil or a list at
   `Lt`/`Lte`/`Gt`/`Gte` fails with `dbtypes.ErrOrderingOperandNotComparable`, where squirrel
-  returned its own error.
+  returned its own error. A typed nil pointer (`(*int)(nil)`), which squirrel rendered as `c < ?`
+  bound to NULL and so matched no row, now fails the same way at build, so guard it before
+  building where the no-match was intended.
 - verify: `go vet ./...` passes and the detect returns no hit; on Oracle,
   `database.NewQueryBuilder("oracle").Filter().Eq("number", "12345").ToSQL()` returns
   `"number" = ?` with args `[12345]`.

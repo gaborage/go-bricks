@@ -58,7 +58,8 @@ UPDATE's SET targets still use it.
   (move it to a `jf` door, or to `f.Raw` with its `// SECURITY:` annotation). A list at
   `Eq`/`NotEq` renders `IN`/`NOT IN` with each element judged. A nil or list operand at
   `Lt`/`Lte`/`Gt`/`Gte` fails with `ErrOrderingOperandNotComparable`, where squirrel returned
-  its own error.
+  its own error. A typed nil pointer fails too: squirrel bound it as NULL and matched no row,
+  and the replacement resolves it to nil and refuses it at build.
 - `types.QueryBuilderInterface` and `testing/mocks` never carried the six names, so neither
   changes.
 
