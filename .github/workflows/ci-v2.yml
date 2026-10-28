@@ -491,7 +491,7 @@ jobs:
       # platform CLI tarballs mid-11.x; see the Install step).
       # renovate: datasource=github-releases depName=flyway/flyway
       FLYWAY_VERSION: 13.11.1
-      FLYWAY_SHA256: f0451f0ef9d1c558d5e1fd5a35ad65f039bebecd4eb2007a87022da21fc2dccf
+      FLYWAY_SHA256: c5397ad1c58dbbac94682f29322ec54896f15e9827c5dc3e02ca40240077d3f7
       TESTCONTAINERS_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       # Every test binary shares the reaper above, and Ryuk exits 10s after its
       # last client disconnects. `go test` starts packages in command-line order,
