@@ -1195,6 +1195,8 @@ func TestSafeEnvError(t *testing.T) {
 		{name: "digit_password_with_hash_and_leading_space", raw: " rabbitmq-stream://svc:2024#x@broker:5552/", secrets: []string{"2024"}},
 		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
 		{name: "username_with_at_password_with_slash", raw: "rabbitmq-stream://svc@corp:Se/cretPW@127.0.0.1:1/vh", user: "svc@corp", secrets: []string{"Se/", "cretPW"}},
+		// '+' and '.' are scheme characters too, so credurl still reads this URI.
+		{name: "scheme_with_plus_and_dot", raw: "rabbitmq+stream.tls://svc:s3cr?etPW@broker:5552/", secrets: passwordSecrets},
 	}
 
 	for _, tt := range tests {
@@ -1283,6 +1285,14 @@ func TestSafeEnvErrorRendersReasonOnlyForAMisreadURI(t *testing.T) {
 
 	nilReason := &url.Error{Op: "parse", URL: "rabbitmq-stream:/svc:fixture-pw@broker"}
 	assert.Equal(t, "invalid stream URI: "+invalidStreamURIReason, safeEnvError(nilReason, nilReason.URL).Error(), "a *url.Error without a reason")
+
+	// Assembled from a variable so staticcheck (SA1007) does not constant-fold the
+	// deliberately invalid URL away.
+	host := "broker"
+	noSeparator := "\n" + host
+	_, parseErr := url.Parse(noSeparator)
+	require.Error(t, parseErr)
+	assert.Equal(t, "invalid stream URI: net/url: invalid control character in URL", safeEnvError(parseErr, noSeparator).Error(), "a URI without \"://\"")
 }
 
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the
