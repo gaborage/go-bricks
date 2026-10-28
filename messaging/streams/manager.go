@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -658,13 +659,34 @@ const invalidStreamURIReason = "invalid URL"
 // and whose reason can quote part of the password. credurl.RedactError masks both;
 // the endpoint is also reported separately, redacted. This is reachable when a
 // caller hands ManagerOptions.URI straight to NewManager: that skips config.Validate,
-// the only place a stream URI is parsed before the dial.
+// the only place a stream URI is parsed before the dial. credurl reads the userinfo
+// after the first "://", which is the scheme separator only when a scheme precedes
+// it. Otherwise — a separator other than "://", or one that lost its ':' ahead of a
+// password starting with "//" — credurl can leave the password showing, so the URI
+// is not rendered at all: only the reason is, and a reason that quotes part of the
+// URI is replaced.
 func safeEnvError(err error, uri string) error {
 	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	if schemeLeadsSeparator(uri) {
 		return fmt.Errorf("invalid stream URI: %w", credurl.RedactError(err, uri, invalidStreamURIReason))
 	}
-	return err
+	if urlErr.Err != nil && !strings.Contains(urlErr.Err.Error(), `"`) {
+		return fmt.Errorf("invalid stream URI: %w", urlErr.Err)
+	}
+	return errors.New("invalid stream URI: " + invalidStreamURIReason)
+}
+
+// schemeChars are the characters a URI scheme is made of.
+const schemeChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-."
+
+// schemeLeadsSeparator reports whether only scheme characters precede uri's first
+// "://", past any leading whitespace a pasted value carries.
+func schemeLeadsSeparator(uri string) bool {
+	scheme, _, found := strings.Cut(uri, "://")
+	return found && strings.Trim(strings.TrimLeft(scheme, " \t\r\n"), schemeChars) == ""
 }
 
 // offsetSpecFor picks the position to attach at, given the broker's answer and

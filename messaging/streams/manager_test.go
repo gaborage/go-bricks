@@ -1219,6 +1219,72 @@ func TestSafeEnvError(t *testing.T) {
 	assert.Same(t, other, safeEnvError(other, "rabbitmq-stream://svc:fixture-pw@broker:5552/"), "non-URL errors pass through untouched")
 }
 
+// TestSafeEnvErrorRendersReasonOnlyForAMisreadURI covers the URIs whose first "://"
+// is not the scheme separator, which credurl reads differently from url.Parse: the
+// URI must not be rendered, and a reason that quotes part of it is replaced.
+func TestSafeEnvErrorRendersReasonOnlyForAMisreadURI(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		secrets []string
+	}{
+		{
+			name:    "single_slash_scheme_separator",
+			raw:     "rabbitmq-stream:/svc:fixture-pw@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"fixture-pw"},
+		},
+		// The reason quotes the password: `invalid port ":Se" after host`.
+		{
+			name:    "missing_scheme_with_quoting_reason",
+			raw:     "//svc:Se/cretPW@broker:5552/",
+			want:    "invalid stream URI: " + invalidStreamURIReason,
+			secrets: []string{"Se", "cretPW"},
+		},
+		// A "://" inside the password is not the scheme separator.
+		{
+			name:    "scheme_separator_inside_password",
+			raw:     "rabbitmq-stream:/svc:Se://cretPW@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"Se:", "cretPW"},
+		},
+		// A ':' after that "://" gives credurl a password to mask, but not the real one.
+		{
+			name:    "scheme_separator_inside_password_before_colon",
+			raw:     "rabbitmq-stream:/svc:Se://cret:PW@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"Se:", "cret"},
+		},
+		// Here the first ':' begins the "://", but what precedes it is no scheme: the
+		// separator lost its ':', and the password starts with "//".
+		{
+			name:    "malformed_scheme_before_separator",
+			raw:     "rabbitmq-stream//svc://Se/cretPW@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"Se/", "cretPW"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, parseErr := url.Parse(tt.raw)
+			require.Error(t, parseErr)
+			require.Contains(t, parseErr.Error(), tt.secrets[0], "the premise: the vendor's error carries the credential")
+
+			safe := safeEnvError(parseErr, tt.raw)
+
+			assert.Equal(t, tt.want, safe.Error())
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, safe.Error(), secret)
+			}
+		})
+	}
+
+	nilReason := &url.Error{Op: "parse", URL: "rabbitmq-stream:/svc:fixture-pw@broker"}
+	assert.Equal(t, "invalid stream URI: "+invalidStreamURIReason, safeEnvError(nilReason, nilReason.URL).Error(), "a *url.Error without a reason")
+}
+
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the
 // environment was never stored, so Close is a no-op. The post-dial half — where
 // the environment exists and must be disposed — is
