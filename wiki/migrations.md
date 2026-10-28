@@ -13933,16 +13933,20 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
   ```bash
   N='app|server|databases?|cache|log|messaging|multitenant|debug|source|scheduler|outbox|inbox|keystore|auth|observability'
-  # YAML: a root key, plain (App:) or quoted ("App":), not spelled lowercase
-  git grep -niE "^[\"']?($N)[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' | grep -vE ":[0-9]+:[\"']?($N)[\"']?[[:space:]]*:"
-  # Go: a config.LoadFromMap map key, plain ("App") or dotted ("App.name"), not spelled lowercase
-  git grep -noiE "\"($N)(\.[^\"]*)?\"[[:space:]]*:" -- '*.go' | grep -vE ":\"($N)(\.[^\"]*)?\"[[:space:]]*:"
+  # YAML in tracked, untracked and gitignored files (a rendered config.production.yaml) and templates:
+  # a root key, plain (App:) or quoted ("App":), not spelled lowercase
+  git grep --untracked --no-exclude-standard -niE "^[\"']?($N)[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl' | grep -vE ":[0-9]+:[\"']?($N)[\"']?[[:space:]]*:"
+  # YAML: a root flow map ({App: {name: orders}}); read each hit's root keys
+  git grep --untracked --no-exclude-standard -niE "^\{([^#]*[{,])?[[:space:]]*[\"']?($N)[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl'
+  # Go: a config.LoadFromMap map key, plain ("App") or dotted ("App.name"), in a literal or an index assignment
+  git grep -noiE "\"($N)(\.[^\"]*)?\"[[:space:]]*:|\[\"($N)(\.[^\"]*)?\"\][[:space:]]*=" -- '*.go' | grep -vE ":\[?\"($N)(\.[^\"]*)?\"\]?[[:space:]]*[:=]"
   ```
 
   Keep a YAML hit only in a file a deployment or a `go-bricks-migrate --source-config` run
-  actually loads, and a Go hit only where the key sits at the root of a map handed to
-  `config.LoadFromMap`. A Unicode fold such as U+017F for `s` (`meſſaging:`) is refused too and
-  escapes the grep; the verify step catches it. Environment variables need no detect:
+  actually loads, rendered from its template where it has one, and a Go hit only where the key sits
+  at the root of a map handed to `config.LoadFromMap`. A Unicode fold such as U+017F for `s`
+  (`meſſaging:`), or a map key built at run time, is refused too and escapes the greps, so the gate
+  runs the verify step on every loaded configuration. Environment variables need no detect:
   `envVarToKey` lowercases every one.
 - scope: `config.Load` and `config.LoadFromMap`, so every service built through `app` and, from
   its routine go-bricks pin bump, every `go-bricks-migrate --source-config` run. **Unchanged**: environment variables; a root key that
@@ -13951,8 +13955,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   flat-dotted YAML key such as `App.name:`, which YAML loading keeps as one literal root key that
   neither decode nor this check reads, in any case; a hand-built `*config.Config` handed to `app.NewWithConfig` or `Builder.WithConfig`, which is
   never decoded; a dynamic tenant source; every signature and config key.
-- gate: match = a detect hit. no-match = every framework section at the root of every loaded file
-  and map is spelled lowercase.
+- gate: match = a detect hit, or the verify step failing on any loaded configuration. no-match = no
+  detect hit, and the verify step passing on every configuration a deployment, a test or a
+  `go-bricks-migrate --source-config` run loads (each rendered file, each `LoadFromMap` caller's
+  test); run it even with no hit.
 - before (v0.72.0): mapstructure decoded such a key into its section by `strings.EqualFold`, but
   `Config.Exists`, the getters and the observability bootstrap name a section by its exact
   spelling. `Observability:` booted the no-op telemetry provider, because the bootstrap's
