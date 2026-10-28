@@ -45,9 +45,9 @@ accepted the sentinel, that premise was false.
   (`"reserved engine method"`). No reader may treat an empty `Reason` as a duplicate.
 - **One error, one sentinel.** `Server.Start` fails with `*server.DuplicateRouteError`, as for a
   duplicate, before either listener binds. App startup fails the same way before
-  `PostRegisterRoutes` when its server reports `RouteConflicts()`; the framework's server does, and
-  an injected `ServerRunner` that does not is refused at its own `Start`, as a duplicate is under
-  ADR-124.
+  `PostRegisterRoutes` when its server reports `RouteConflicts()`, as the framework's server does.
+  `app` runs no conflict check on an injected `ServerRunner` that lacks the method, so whether
+  that runner refuses the route is up to its own `Start`.
   `errors.Is(err, server.ErrDuplicateRoute)` holds for both reasons. An error holding only
   duplicates reads byte for byte as before. When any conflict has another reason, the head reads
   `route registration refused (N conflict(s))`, so a reserved refusal is never called a
