@@ -20,6 +20,14 @@ const testReason = "invalid URL"
 // tokens prove that quote-bearing text outside the *url.Error survives.
 const hint = `(hint: a reserved character such as "?" or "#" must be percent-encoded)`
 
+// maskedRejection is the amqp rendering once a rejected password is masked and its
+// quoting reason replaced; maskedCutAtPassword is that rendering when url.Parse cut
+// the URL at a '#' inside the password.
+const (
+	maskedRejection     = `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + hint
+	maskedCutAtPassword = `parse "amqp://user:xxxxx": invalid URL ` + hint
+)
+
 // hostSlot marks where a hostile-password template takes its host.
 const hostSlot = "{host}"
 
@@ -136,7 +144,6 @@ func hostilePasswordCases() []redactErrorCase {
 		{name: "ipv6_with_port", addr: "[::1]:5672"},
 		{name: "ipv6_without_port", addr: "[2001:db8::1]"},
 	}
-	maskedRejection := `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + hint
 	maskedUserinfo := `parse "amqp://user:xxxxx@{host}/vh": net/url: invalid userinfo ` + hint
 	maskedDial := "dial amqp://user:xxxxx@{host}/vh: connection refused"
 	rejectedSecrets := []string{"s3cr", "etPW", "%et"}
@@ -154,7 +161,7 @@ func hostilePasswordCases() []redactErrorCase {
 			name:    "password_with_hash",
 			raw:     "amqp://user:s3cr#etPW@{host}/vh",
 			parse:   parseRejects,
-			want:    `parse "amqp://user:xxxxx": invalid URL ` + hint,
+			want:    maskedCutAtPassword,
 			secrets: rejectedSecrets,
 		},
 		// "net/url: invalid userinfo" quotes nothing, so the reason survives.
@@ -204,6 +211,12 @@ func hostilePasswordCases() []redactErrorCase {
 // hostVariant names the host a template's {host} slot takes.
 type hostVariant struct{ name, addr string }
 
+// portedHosts are the host variants that carry a port.
+var portedHosts = []hostVariant{
+	{name: "named_host", addr: "broker:5672"},
+	{name: "ipv6_with_port", addr: "[::1]:5672"},
+}
+
 // withHosts expands every template once per host.
 func withHosts(hosts []hostVariant, templates []redactErrorCase) []redactErrorCase {
 	cases := make([]redactErrorCase, 0, len(hosts)*len(templates))
@@ -227,10 +240,6 @@ func withHosts(hosts []hostVariant, templates []redactErrorCase) []redactErrorCa
 // (the fragment is not checked for control characters) and "%zz" after a '?' (the
 // query is not unescaped).
 func digitPasswordCases() []redactErrorCase {
-	hosts := []hostVariant{
-		{name: "named_host", addr: "broker:5672"},
-		{name: "ipv6_with_port", addr: "[::1]:5672"},
-	}
 	const controlChar = ": net/url: invalid control character in URL " + hint
 	const colonInFirstSegment = ": first path segment in URL cannot contain colon " + hint
 	maskedNewline := "parse " + strconv.Quote("amqp://app:xxxxx@{host}/vh\n") + controlChar
@@ -260,7 +269,7 @@ func digitPasswordCases() []redactErrorCase {
 		{name: "hash_password_with_invalid_escape", raw: "amqp://app:2024#x@{host}/vh%zz", parse: parseRejects, want: maskedEscape, secrets: digitSecrets},
 	}
 
-	return append(withHosts(hosts, templates),
+	return append(withHosts(portedHosts, templates),
 		// With no '@' to follow, the host:port reading stands even once url.Parse rejects.
 		redactErrorCase{name: "credential_free_url_with_trailing_newline", raw: "amqp://broker:5672/vh\n", parse: parseRejects, same: true},
 		redactErrorCase{name: "credential_free_ipv6_url_with_trailing_newline", raw: "amqp://[::1]:5672/vh\n", parse: parseRejects, same: true},
@@ -285,12 +294,7 @@ func digitPasswordCases() []redactErrorCase {
 // after the scheme separator, and runs to the end of what url.Parse reported when
 // that '@' was cut away with the fragment.
 func atSignUserinfoCases() []redactErrorCase {
-	hosts := []hostVariant{
-		{name: "named_host", addr: "broker:5672"},
-		{name: "ipv6_with_port", addr: "[::1]:5672"},
-	}
 	maskedUsername := `parse "amqp://svc@corp:xxxxx@{host}/vh": invalid URL ` + hint
-	maskedPassword := `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + hint
 	usernameSecrets := []string{"Se", "cretPW"}
 	passwordSecrets := []string{"Sec", "re:t", "PW"}
 
@@ -304,25 +308,34 @@ func atSignUserinfoCases() []redactErrorCase {
 			want:    `parse "amqp://svc@corp:xxxxx": invalid URL ` + hint,
 			secrets: usernameSecrets,
 		},
-		{name: "password_with_at_before_slash", raw: "amqp://user:Sec@re:t/PW@{host}/vh", parse: parseRejects, want: maskedPassword, secrets: passwordSecrets},
-		{name: "password_with_at_before_question_mark", raw: "amqp://user:Sec@re:t?PW@{host}/vh", parse: parseRejects, want: maskedPassword, secrets: passwordSecrets},
+		{name: "password_with_at_before_slash", raw: "amqp://user:Sec@re:t/PW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: passwordSecrets},
+		{name: "password_with_at_before_question_mark", raw: "amqp://user:Sec@re:t?PW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: passwordSecrets},
 		{
 			name:    "password_with_at_before_hash",
 			raw:     "amqp://user:Sec@re:t#PW@{host}/vh",
 			parse:   parseRejects,
-			want:    `parse "amqp://user:xxxxx": invalid URL ` + hint,
+			want:    maskedCutAtPassword,
 			secrets: passwordSecrets,
 		},
 	}
 
-	return append(withHosts(hosts, templates),
+	return append(withHosts(portedHosts, templates),
 		// The '@' url.Parse reported is not the last one: the last sits in the cut tail.
 		redactErrorCase{
 			name:    "password_with_at_and_colon_before_hash",
 			raw:     "amqp://user:p@ss:x#y@broker/vh",
 			parse:   parseRejects,
-			want:    `parse "amqp://user:xxxxx": invalid URL ` + hint,
+			want:    maskedCutAtPassword,
 			secrets: []string{"p@ss", "ss:x"},
+		},
+		// An '@' in the path of a rejected credentialed URL ends the userinfo too, so
+		// the host is masked with the password: the accepted, safe direction.
+		redactErrorCase{
+			name:    "at_sign_in_path_of_rejected_credentialed_url",
+			raw:     "amqp://user:s3cr%zz@broker/vh@x",
+			parse:   parseRejects,
+			want:    `parse "amqp://user:xxxxx@x": invalid URL ` + hint,
+			secrets: []string{"s3cr", "%zz"},
 		},
 	)
 }

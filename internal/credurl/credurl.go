@@ -34,8 +34,9 @@ func (e *redactedError) Unwrap() error { return e.err }
 // rebuilt rather than scrubbed, and a failure reason that quotes part of the URL is
 // replaced by reason. Scheme, username and host survive so an operator can still
 // tell which connection failed; only the password is masked (pgx's redactPW
-// precedent). The result unwraps to err; when nothing needs masking, err itself is
-// returned.
+// precedent). The exception is a URL url.Parse rejects: its userinfo runs to the last
+// '@', so an '@' past the host masks the host too. The result unwraps to err; when
+// nothing needs masking, err itself is returned.
 //
 // err must be non-nil, and a *url.Error in it must be reachable through errors.As and
 // rendered as its own Error() text. A later errors.As on the result reaches the
@@ -56,7 +57,9 @@ func RedactError(err error, raw, reason string) error {
 	return &redactedError{err: err, msg: redacted}
 }
 
-// maskRawIn replaces every rendering of raw in msg with its masked form.
+// maskRawIn replaces every rendering of raw in msg with its masked form. The scan
+// alone judges raw here, without maskURLError's last-'@' rule, even when raw is the
+// URL url.Parse rejected.
 func maskRawIn(msg, raw string) string {
 	masked := maskPassword(raw, -1)
 	if masked == raw {
@@ -98,8 +101,8 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 // Non-URL strings (no "://") and URLs without a password pass through unchanged:
 // the leak is url.Parse's %q rendering of what it was handed, which only fires for
 // the URL form. userinfoEnd, unless -1, locates the '@' that ends the userinfo,
-// counted from the authority's start; past raw's end, that '@' sat in a tail
-// url.Parse cut, and the userinfo runs to raw's end. -1 leaves the end to the scan.
+// counted from the authority's start; beyond the URL masked here, that '@' sat in a
+// tail url.Parse cut, and the userinfo runs to its end. -1 leaves the end to the scan.
 func maskPassword(raw string, userinfoEnd int) string {
 	const schemeSep = "://"
 	sep := strings.Index(raw, schemeSep)
@@ -113,12 +116,13 @@ func maskPassword(raw string, userinfoEnd int) string {
 	if end == -1 {
 		end = len(rest)
 	}
-	// net/url splits userinfo at the last '@' of the authority, so an unescaped '@'
-	// inside the password stays part of the userinfo.
-	at := strings.LastIndex(rest[:end], "@")
+	// The caller's '@', when it names one, ends the userinfo. Otherwise net/url's own
+	// split decides: the last '@' of the authority, so an unescaped '@' inside the
+	// password stays part of the userinfo.
+	var at int
 	if userinfoEnd != -1 {
 		at = min(userinfoEnd, len(rest))
-	} else if at == -1 {
+	} else if at = strings.LastIndex(rest[:end], "@"); at == -1 {
 		// An unescaped '/', '?' or '#' in the password hides the '@' behind the
 		// authority terminator, if raw holds it at all. A segment that cannot be a
 		// host[:port] is userinfo; one that can, as a digit-led password does, is
