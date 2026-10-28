@@ -14030,9 +14030,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   this framework version. **Unchanged**: a lone mixed-case key with no twin, which still decodes
   through mapstructure's case-insensitive match (`server: {probes: {Port: 9090}}` with no
   `SERVER_PROBES_PORT`); a lone header, which keeps its case; environment variables alone, which
-  are lowercased; a flat-dotted YAML key such as `server.Port:`, which YAML loading keeps as one
-  literal root key that decode never reads, so it twins only with another spelling of that same
-  literal key (a dotted `LoadFromMap` key is unflattened and twins as a nested one does); a
+  are lowercased; a flat-dotted YAML key such as `server.Port:` under `config.Load`, which keeps
+  it as one literal root key that decode never reads, so it twins only with another spelling of
+  that same literal key (a dotted `LoadFromMap` key is unflattened and twins as a nested one does;
+  `go-bricks-migrate --source-config` already refuses a top-level dotted key before decoding); a
   hand-built `*config.Config`, which is never decoded; a dynamic tenant source; every signature and
   config key.
 - gate: match = a hit that meets one of the three conditions, or the verify step failing on any
