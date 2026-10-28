@@ -192,8 +192,8 @@ func TestDeliveriesFindEverySpellingDecodeAccepts(t *testing.T) {
 		})
 	}
 
-	// Decode refuses two spellings of one key (ADR-157), but the spelling check asks this
-	// lookup about that very tree first, so it is built here without decoding it.
+	// Decode refuses two spellings of one key (ADR-157), so a tree that holds them is built
+	// here without decoding it: before decode, the lookup still sees every spelling.
 	t.Run("every_spelling_sorted_with_its_value", func(t *testing.T) {
 		src := newConfigSource()
 		require.NoError(t, src.loadRecording(confmap.Provider(map[string]any{

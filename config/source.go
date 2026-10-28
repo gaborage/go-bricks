@@ -231,9 +231,10 @@ type keyDelivery struct {
 // of the operator's configuration layers recorded that matches key (pathMatches) — with
 // under set, a path below key too — AND that the final merged tree still holds (ADR-104),
 // with the raw value at that path, sorted by path. Recording is append-only, so the tree
-// half is what evicts a key a later layer replaced or nulled at an ancestor path. A caller
-// reads emptiness from each match's raw value, never from a lookup of key's own spelling.
-// Preloaded defaults are never recorded, and a sourceless Config has no deliveries at all.
+// half is what evicts a key a later layer replaced or nulled at an ancestor path. Emptiness
+// is read from a match's raw value (deliveredValue), never from a lookup of key's own
+// spelling. Preloaded defaults are never recorded, and a sourceless Config has no deliveries
+// at all.
 //
 // Without under, doors query LEAF keys — "database.host", never "database". A YAML null
 // written AT a section path is itself a leaf and records that path, so a section path must
@@ -280,6 +281,17 @@ func sameSegment(a, b string) bool {
 // is presence only: a delivered key may still hold an empty value.
 func (c *Config) delivered(key string) bool {
 	return len(c.deliveries(key, false)) > 0
+}
+
+// deliveredValue returns the raw value at the spelling under which the leaf key was
+// delivered. Decode refuses two spellings of one key (ADR-157), so a decoded Config holds at
+// most one.
+func (c *Config) deliveredValue(key string) (raw any, ok bool) {
+	found := c.deliveries(key, false)
+	if len(found) == 0 {
+		return nil, false
+	}
+	return found[0].raw, true
 }
 
 // deliveredAtOrUnder reports whether key or any path below it was delivered under any

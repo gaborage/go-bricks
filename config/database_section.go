@@ -245,10 +245,10 @@ var pgTLSMandatorySSLModes = []string{sslModeRequire, sslModeVerifyCA, sslModeVe
 // ADR-047 could not see (ADR-051). Presence is the recorded delivery of the key by
 // an operator layer (ADR-104) under any spelling decode accepts (ADR-156), so it is
 // naturally inert for hand-built Config literals (no source) and for dynamic-source
-// tenant configs (never loaded). Every offending
-// key is reported by its canonical spelling, not just the first: the error
-// promises "field(s)", and an operator who clears only the one named would hit
-// the same abort again. Sorted, so the startup error is deterministic.
+// tenant configs (never loaded). Every offending key is reported by its canonical
+// spelling, not just the first: the error promises "field(s)", and an operator who
+// clears only the one named would hit the same abort again. Sorted, so the startup
+// error is deterministic.
 func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 	var offending []string
 	_ = forEachDatabaseSection(cfg, func(sec section, db *DatabaseConfig) error {

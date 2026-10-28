@@ -3114,74 +3114,37 @@ func TestValidateNoDeliveredEmptyDatabaseUnderAnySpelling(t *testing.T) {
 }
 
 // TestLoadRefusesDatabaseIdentityTwins pins that two spellings of one identity key are
-// ADR-157 twins, refused at decode whatever either holds and wherever each came from, so the
-// ADR-051 check never sees them. Every case is loaded repeatedly, so map order cannot
-// decide it.
+// ADR-157 twins, refused at decode whatever either holds and in a named section too, so the
+// ADR-051 check never sees them. The layer and value shapes every key shares are pinned by
+// TestLoadRefusesCaseTwinsAcrossLayersEveryRun.
 func TestLoadRefusesDatabaseIdentityTwins(t *testing.T) {
 	const named = "databases:\n  reporting:\n    type: postgresql\n    host: db.internal\n    port: 5432\n" +
 		"    database: reports\n    username: app\n    password: s3cretpw\n"
 
 	tests := []struct {
-		name  string
-		files map[string]string
-		env   map[string]string
-		key   string
+		name string
+		yaml string
+		key  string
 	}{
-		{
-			name:  "root_empty_twin_beside_value",
-			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Host: \"\"\n"},
-			key:   "database.host",
-		},
-		{
-			name:  "root_null_twin_beside_value",
-			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Password:\n"},
-			key:   "database.password",
-		},
+		{name: "root_null_twin_beside_value", yaml: presenceIdentityDatabaseYAML + "  Password:\n", key: "database.password"},
 		{
 			name: "root_lowercase_empty_beside_twin_value",
-			files: map[string]string{testConfigFileYAML: "database:\n  type: postgresql\n  Host: db.internal\n  host: \"\"\n" +
-				"  port: 5432\n  database: appdb\n  username: app\n  password: s3cretpw\n"},
+			yaml: "database:\n  type: postgresql\n  Host: db.internal\n  host: \"\"\n" +
+				"  port: 5432\n  database: appdb\n  username: app\n  password: s3cretpw\n",
 			key: "database.host",
 		},
-		{
-			name: "root_overlay_empty_twin",
-			files: map[string]string{
-				testConfigFileYAML: presenceIdentityDatabaseYAML,
-				"config.prod.yaml": "database:\n  Host: \"\"\n",
-			},
-			env: map[string]string{"APP_ENV": "prod"},
-			key: "database.host",
-		},
-		{
-			name:  "root_env_value_beside_yaml_empty_twin",
-			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Username: \"\"\n"},
-			env:   map[string]string{testDatabaseUsername: "app"},
-			key:   "database.username",
-		},
-		{
-			name:  "named_empty_twin_beside_value",
-			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + named + "    Host: \"\"\n"},
-			key:   "databases.reporting.host",
-		},
-		{
-			name:  "root_twins_both_set",
-			files: map[string]string{testConfigFileYAML: presenceIdentityDatabaseYAML + "  Host: db.other\n"},
-			key:   "database.host",
-		},
+		{name: "named_empty_twin_beside_value", yaml: presenceIdentityDatabaseYAML + named + "    Host: \"\"\n", key: "databases.reporting.host"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Staged once; each Load re-reads the same files and environment.
-			_, err := loadConfigFixture(t, tt.files, tt.env)
-			for range 50 {
-				var cfgErr *ConfigError
-				require.ErrorAs(t, err, &cfgErr)
-				require.Equal(t, tt.key, cfgErr.Field)
-				require.Contains(t, cfgErr.Message, twinMessagePrefix)
-				require.NotContains(t, err.Error(), "delivered empty")
-				_, err = Load()
-			}
+			_, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.key, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, twinMessagePrefix)
+			assert.NotContains(t, err.Error(), "delivered empty")
 		})
 	}
 }

@@ -324,31 +324,25 @@ func TestLoadRejectsDeliveredEmptyProbeHost(t *testing.T) {
 // (debug.allowedips).
 func TestLoadRejectsDeliveredEmptyKeyUnderAnySpelling(t *testing.T) {
 	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
-	base := func(yaml string) map[string]string { return map[string]string{testConfigFileYAML: header + yaml} }
 
 	tests := []struct {
-		name  string
-		files map[string]string
-		env   map[string]string
-		field string
+		name string
+		yaml string
 	}{
-		{name: "probe_host_camel_case_empty", files: base("  probes:\n    port: 9090\n    Host: \"\"\n"), field: fieldServerProbesHost},
-		{name: "probe_host_camel_case_null", files: base("  probes:\n    port: 9090\n    Host:\n"), field: fieldServerProbesHost},
-		{name: "probe_section_camel_case_empty", files: base("  Probes:\n    port: 9090\n    host: \"\"\n"), field: fieldServerProbesHost},
-		{name: "probe_section_long_s_empty", files: base("  probeſ:\n    port: 9090\n    host: \"\"\n"), field: fieldServerProbesHost},
+		{name: "probe_host_camel_case_empty", yaml: "  probes:\n    port: 9090\n    Host: \"\"\n"},
+		{name: "probe_host_camel_case_null", yaml: "  probes:\n    port: 9090\n    Host:\n"},
+		{name: "probe_section_camel_case_empty", yaml: "  Probes:\n    port: 9090\n    host: \"\"\n"},
+		{name: "probe_section_long_s_empty", yaml: "  probeſ:\n    port: 9090\n    host: \"\"\n"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Staged once; each Load re-reads the same files and environment.
-			_, err := loadConfigFixture(t, tt.files, tt.env)
-			for range 50 {
-				var cfgErr *ConfigError
-				require.ErrorAs(t, err, &cfgErr)
-				require.Equal(t, tt.field, cfgErr.Field)
-				require.Contains(t, cfgErr.Message, "delivered empty")
-				_, err = Load()
-			}
+			_, err := loadDeliveredEmptyFixture(t, header+tt.yaml, nil)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, fieldServerProbesHost, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, "delivered empty")
 		})
 	}
 }

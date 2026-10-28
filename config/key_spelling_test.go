@@ -245,13 +245,14 @@ func TestLoadRefusesCaseTwinsAcrossLayersEveryRun(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Staged once; each Load re-reads the same files and environment.
+			_, err := loadConfigFixture(t, tt.files, tt.env)
 			for range 50 {
-				_, err := loadConfigFixture(t, tt.files, tt.env)
-
 				var cfgErr *ConfigError
 				require.ErrorAs(t, err, &cfgErr)
 				require.Equal(t, tt.field, cfgErr.Field)
 				require.Equal(t, twinMessagePrefix+tt.paths+";", cfgErr.Message)
+				_, err = Load()
 			}
 		})
 	}
