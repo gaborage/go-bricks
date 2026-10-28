@@ -2601,7 +2601,7 @@ or `server.NewWithOptions` without `config.Validate` is outside this rule.
 
 ### [ADR-155: Module Route Doors Refuse Echo's Reserved Engine Methods](adr_155_reserved_engine_methods_refused.md)
 
-**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a route registered with `echo_route_not_found` or `echo_route_any` through a framework-built route door now fails `Start` and app startup, where it replaced, or was replaced by, a middleware-bearing group's catch-all; `RouteConflict` gains `Reason`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a route registered with `echo_route_not_found` or `echo_route_any` through a framework-built route door now fails the framework server's `Start`, and app startup when its server reports `RouteConflicts()` (an injected `ServerRunner` without that method is left to its own `Start`), where it replaced, or was replaced by, a middleware-bearing group's catch-all; `RouteConflict` gains `Reason`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
 
 Every route door accepted echo's two sentinel methods, so a module's not-found handler at a
 middleware-bearing group's `<prefix>/*` and the group's own catch-all replaced each other in

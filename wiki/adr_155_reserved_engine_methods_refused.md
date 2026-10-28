@@ -78,7 +78,8 @@ middleware runs there.
 
 - **Breaking for a module that registers either sentinel.** It used to boot, with its handler
   replacing or replaced by a group's catch-all, or answering every method at its template. Now
-  `Start` and app startup refuse. Migration is [migrations.md](migrations.md) `[C73.12]`.
+  the framework server's `Start` refuses, and so does app startup when its server reports
+  `RouteConflicts()`. Migration is [migrations.md](migrations.md) `[C73.12]`.
 - **ADR-124's catch-all premise is enforced.** No module handler can occupy a catch-all node, so
   the `/_sys` IP-range gate and the debug gates cover unmatched sub-paths whatever the modules
   register.
