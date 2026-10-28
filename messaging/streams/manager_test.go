@@ -1295,6 +1295,67 @@ func TestSafeEnvErrorRendersReasonOnlyForAMisreadURI(t *testing.T) {
 	assert.Equal(t, "invalid stream URI: net/url: invalid control character in URL", safeEnvError(parseErr, noSeparator).Error(), "a URI without \"://\"")
 }
 
+// TestManagerStartMasksARebuiltBrokerURI covers a correctly encoded password that
+// the client decodes and then formats back, unescaped, into each leader or replica
+// URI it dials: url.Parse rejects that URI inside a consumer or producer
+// constructor, and the *url.Error renders the decoded password.
+func TestManagerStartMasksARebuiltBrokerURI(t *testing.T) {
+	const configuredURI = "rabbitmq-stream://user:Se%2FcretPW@broker:5552/vh"
+	// Rebuilt at run time, as the client does: a constant invalid URL trips
+	// staticcheck's SA1007.
+	configured, err := url.Parse(configuredURI)
+	require.NoError(t, err)
+	password, _ := configured.User.Password()
+	_, vendorErr := url.Parse(fmt.Sprintf("%s://%s:%s@leader:5552/vh", configured.Scheme, configured.User.Username(), password))
+	require.ErrorContains(t, vendorErr, "Se/cretPW", "the premise: the vendor's error carries the decoded password")
+
+	tests := []struct {
+		name   string
+		decls  *Declarations
+		failOn string
+		want   string
+	}{
+		{
+			name:   "stream_consumer",
+			decls:  oneConsumerDecls(),
+			failOn: callNewConsumer + ":" + testStream,
+			want:   fmt.Sprintf("failed to start consumer %q on stream %q", testConsumerName, testStream),
+		},
+		{
+			name:   "super_stream_consumer",
+			decls:  superConsumerDecls(),
+			failOn: callNewSuperConsumer + ":" + testSuperStream,
+			want:   fmt.Sprintf("failed to start consumer %q on super stream %q", testConsumerName, testSuperStream),
+		},
+		{
+			name:   "publisher",
+			decls:  onePublisher(t),
+			failOn: callNewProducer + ":" + testStream,
+			want:   fmt.Sprintf("failed to start the publisher on stream %q", testStream),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewManager(ManagerOptions{URI: configuredURI, Logger: logger.New("error", false)})
+			fake := newFakeEnvironment()
+			fake.failOn(tt.failOn, vendorErr)
+			dialFake(m, fake)
+
+			err := m.Start(context.Background(), tt.decls)
+
+			require.Error(t, err)
+			for _, secret := range []string{"Se/", "cretPW", `":Se"`} {
+				assert.NotContains(t, err.Error(), secret)
+			}
+			assert.Contains(t, err.Error(), tt.want)
+			assert.Contains(t, err.Error(), "user", "the username identifies the failing endpoint")
+			var urlErr *url.Error
+			require.ErrorAs(t, err, &urlErr)
+		})
+	}
+}
+
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the
 // environment was never stored, so Close is a no-op. The post-dial half — where
 // the environment exists and must be disposed — is

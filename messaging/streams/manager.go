@@ -419,7 +419,8 @@ func (m *Manager) openStreamConsumer(env environment, decl *consumerDeclaration,
 
 	handle, err := env.NewConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
+		// SECURITY: the client rebuilds each broker URI from the decoded password, so its *url.Error can render that password.
+		return nil, nil, fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, credurl.RedactError(err, m.opts.URI, invalidStreamURIReason))
 	}
 
 	// One stream, so one flush target: the reliable consumer itself. The assertion
@@ -451,7 +452,7 @@ func (m *Manager) openSuperStreamConsumer(env environment, decl *consumerDeclara
 
 	handle, err := env.NewSuperStreamConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
+		return nil, nil, fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, credurl.RedactError(err, m.opts.URI, invalidStreamURIReason))
 	}
 
 	// The shutdown flush goes through the Environment port, per partition:
@@ -539,7 +540,7 @@ func bindPublishers(ctx context.Context, decls []*publisherDeclaration, bind fun
 func (m *Manager) bindPublisher(env environment, decl *publisherDeclaration) error {
 	producer, err := m.constructProducer(env, decl)
 	if err != nil {
-		return fmt.Errorf("failed to start the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, err)
+		return fmt.Errorf("failed to start the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, credurl.RedactError(err, m.opts.URI, invalidStreamURIReason))
 	}
 
 	decl.Publisher.bind(producer)
