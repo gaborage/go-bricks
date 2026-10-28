@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -231,8 +232,8 @@ func TestRequestBinderPrecedencePathParamOverridesBody(t *testing.T) {
 
 // TestRequestBinderPrecedenceQueryParamOverridesBody locks in that a present
 // query param overwrites a conflicting JSON body value. GET is the interesting
-// method here: echo binds query params before the body for the GET family, so
-// inside c.Bind the body clobbers the query value — go-bricks' overlay is what
+// method here: the JSON step binds query params before the body for the GET family, so
+// inside that step the body clobbers the query value — go-bricks' overlay is what
 // restores it. See wiki/handler_patterns.md#binding-source-precedence.
 func TestRequestBinderPrecedenceQueryParamOverridesBody(t *testing.T) {
 	e := echo.New()
@@ -3021,6 +3022,188 @@ func TestBindJSONBodyTrailingContent(t *testing.T) {
 	t.Run("accepts_trailing_whitespace", func(t *testing.T) {
 		rec := bind("{\"name\":\"x\"}\n")
 		assert.Equal(t, http.StatusOK, rec.Code, "a trailing newline is whitespace and must still bind")
+	})
+}
+
+const mergePatchJSON = "application/merge-patch+json"
+
+// BodyDecodePath and BodyDecodeQuery are embedded so only bindJSONBody's side-binding
+// reaches their fields: buildBindingPlan reads top-level tags only.
+type (
+	BodyDecodePath struct {
+		ID int `param:"id"`
+	}
+	BodyDecodeQuery struct {
+		Page int `query:"page"`
+	}
+)
+
+type bodyDecodeReq struct {
+	BodyDecodePath
+	BodyDecodeQuery
+	Name string `json:"name"`
+}
+
+type bodyDecodeCall struct {
+	method      string
+	target      string
+	contentType string
+	pathID      string // stands in for the router's path match; empty sets none
+	body        io.Reader
+}
+
+// serveBodyDecode runs one request through WrapHandler and returns the request the
+// handler bound and the Content-Type header it saw.
+func serveBodyDecode[T any](t *testing.T, call *bodyDecodeCall) (bound T, contentType string, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	e := echo.New()
+	e.Validator = NewValidator()
+	h := WrapHandler(func(req T, ctx HandlerContext) (helloResp, IAPIError) {
+		bound = req
+		contentType = ctx.RequestHeader(echo.HeaderContentType)
+		return helloResp{}, nil
+	}, NewRequestBinder(), devDebugConfig())
+
+	req := httptest.NewRequestWithContext(context.Background(), call.method, call.target, call.body)
+	req.Header.Set(echo.HeaderContentType, call.contentType)
+	rec = httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	if call.pathID != "" {
+		c.SetPathValues(echo.PathValues{{Name: "id", Value: call.pathID}})
+	}
+	require.NoError(t, h(c))
+	return bound, contentType, rec
+}
+
+func bodyDecodeErrorDetail(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	return requireDetailString(t, resp)
+}
+
+// TestBindJSONBodyByMediaType pins which bodies decode: every admitted JSON media type binds
+// and the handler sees the Content-Type sent, a zero Content-Length skips the decode while an
+// unknown length does not, and a non-JSON body is never read.
+func TestBindJSONBodyByMediaType(t *testing.T) {
+	const body = `{"name":"ada"}`
+	ada := bodyDecodeReq{Name: "ada"}
+	tests := []struct {
+		name        string
+		contentType string
+		body        io.Reader
+		want        bodyDecodeReq
+	}{
+		{name: "application_json", contentType: echo.MIMEApplicationJSON, body: strings.NewReader(body), want: ada},
+		{name: "merge_patch_json", contentType: mergePatchJSON, body: strings.NewReader(body), want: ada},
+		{name: "vnd_api_json_with_charset", contentType: "application/vnd.api+json; charset=utf-8", body: strings.NewReader(body), want: ada},
+		{name: "problem_json", contentType: "application/problem+json", body: strings.NewReader(body), want: ada},
+		{name: "mixed_case_application_json", contentType: "Application/JSON", body: strings.NewReader(body), want: ada},
+		{name: "merge_patch_json_unknown_length", contentType: mergePatchJSON, body: io.NopCloser(strings.NewReader(body)), want: ada},
+		{name: "application_json_empty_body", contentType: echo.MIMEApplicationJSON, body: strings.NewReader("")},
+		{name: "merge_patch_json_empty_body", contentType: mergePatchJSON, body: strings.NewReader("")},
+		{name: "text_plain_body_ignored", contentType: echo.MIMETextPlain, body: strings.NewReader(body)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, seenContentType, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+				method: http.MethodPost, target: "/items", contentType: tt.contentType, body: tt.body,
+			})
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.contentType, seenContentType)
+		})
+	}
+}
+
+// TestBindJSONBodySideBindsByMethod pins the side-binding a JSON body brings: path values
+// bind on every method, query params only on GET, DELETE, HEAD and QUERY.
+func TestBindJSONBodySideBindsByMethod(t *testing.T) {
+	contentTypes := []struct {
+		name        string
+		contentType string
+	}{
+		{name: "application_json", contentType: echo.MIMEApplicationJSON},
+		{name: "merge_patch_json", contentType: mergePatchJSON},
+	}
+	methods := []struct {
+		method   string
+		wantPage int
+	}{
+		{method: http.MethodGet, wantPage: 3},
+		{method: http.MethodDelete, wantPage: 3},
+		{method: http.MethodHead, wantPage: 3},
+		{method: echo.QUERY, wantPage: 3},
+		{method: http.MethodPost},
+		{method: http.MethodPut},
+		{method: http.MethodPatch},
+	}
+	for _, ct := range contentTypes {
+		for _, m := range methods {
+			t.Run(ct.name+"_"+strings.ToLower(m.method), func(t *testing.T) {
+				bound, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+					method: m.method, target: "/items/5?page=3", contentType: ct.contentType, pathID: "5",
+					body: strings.NewReader(`{"name":"ada"}`),
+				})
+				require.Equal(t, http.StatusOK, rec.Code)
+				assert.Equal(t, bodyDecodeReq{
+					BodyDecodePath:  BodyDecodePath{ID: 5},
+					BodyDecodeQuery: BodyDecodeQuery{Page: m.wantPage},
+					Name:            "ada",
+				}, bound)
+			})
+		}
+	}
+}
+
+// TestBindJSONBodyParamOnlyTypeAcceptsJSONBody pins that a request type with no JSON fields
+// still answers 200 to a +json body: unknown body keys are ignored, not refused.
+func TestBindJSONBodyParamOnlyTypeAcceptsJSONBody(t *testing.T) {
+	bound, _, rec := serveBodyDecode[BodyDecodePath](t, &bodyDecodeCall{
+		method: http.MethodPatch, target: "/items/5", contentType: mergePatchJSON, pathID: "5",
+		body: strings.NewReader(`{"name":"ada"}`),
+	})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, BodyDecodePath{ID: 5}, bound)
+}
+
+// TestBindJSONBodyFailureParityAcrossMediaTypes pins that a +json request fails exactly as an
+// application/json one: the same decode and side-binding summaries, trailing garbage refused,
+// a trailing newline accepted.
+func TestBindJSONBodyFailureParityAcrossMediaTypes(t *testing.T) {
+	serve := func(contentType, pathID, body string) *httptest.ResponseRecorder {
+		_, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+			method: http.MethodPost, target: "/items", contentType: contentType, pathID: pathID,
+			body: strings.NewReader(body),
+		})
+		return rec
+	}
+
+	t.Run("malformed_body_renders_the_json_summary", func(t *testing.T) {
+		want := bodyDecodeErrorDetail(t, serve(echo.MIMEApplicationJSON, "", `{"name":}`))
+		require.NotEqual(t, unauditedBindSummary, want)
+		assert.Equal(t, want, bodyDecodeErrorDetail(t, serve(mergePatchJSON, "", `{"name":}`)))
+	})
+	t.Run("path_binding_failure_renders_one_summary", func(t *testing.T) {
+		want := bodyDecodeErrorDetail(t, serve(echo.MIMEApplicationJSON, "abc", `{"name":"ada"}`))
+		assert.Equal(t, want, bodyDecodeErrorDetail(t, serve(mergePatchJSON, "abc", `{"name":"ada"}`)))
+	})
+	t.Run("query_binding_failure_renders_one_summary", func(t *testing.T) {
+		detail := func(contentType string) string {
+			_, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
+				method: http.MethodGet, target: "/items?page=abc", contentType: contentType,
+				body: strings.NewReader(`{"name":"ada"}`),
+			})
+			return bodyDecodeErrorDetail(t, rec)
+		}
+		assert.Equal(t, detail(echo.MIMEApplicationJSON), detail(mergePatchJSON))
+	})
+	t.Run("trailing_garbage_answers_bad_request", func(t *testing.T) {
+		assert.Equal(t, http.StatusBadRequest, serve(mergePatchJSON, "", `{"name":"x"}garbage`).Code)
+	})
+	t.Run("trailing_newline_binds", func(t *testing.T) {
+		assert.Equal(t, http.StatusOK, serve(mergePatchJSON, "", "{\"name\":\"x\"}\n").Code)
 	})
 }
 

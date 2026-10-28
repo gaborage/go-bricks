@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-10-25
 
+> **Amended (2026-10-28, #2198):** typed routes now decode every `+json` media type, and
+> `application/json` in any letter case, the same way as `application/json`. An
+> unknown-length overflow on such a route therefore also answers 413 `BODY_TOO_LARGE`, and the
+> Consequences bullet saying it still answers 400 no longer holds.
+
 ## Context
 
 `server.bodylimit` (default 10 MB) caps the request body, and its docs promise a 413. Which
