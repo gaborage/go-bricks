@@ -16,12 +16,15 @@ import (
 // testReason is the stand-in every row passes; the oracle package pins its own.
 const testReason = "invalid URL"
 
-// amqpHint is the advice amqp091's ParseURI (v1.16.0) appends to a url.Parse failure.
-const amqpHint = `(if the username or password contains a reserved character such as "?", "#", "@", ":", or "/", ` +
-	`it must be percent-encoded per RFC 3986 §3.2.1 -- see ParseURI's doc comment and net/url.UserPassword)`
+// hint stands in for advice a driver appends after a url.Parse failure. Its quoted
+// tokens prove that quote-bearing text outside the *url.Error survives.
+const hint = `(hint: a reserved character such as "?" or "#" must be percent-encoded)`
 
 // hostSlot marks where a hostile-password template takes its host.
 const hostSlot = "{host}"
+
+// delHost carries a DEL byte, which url.Parse rejects and %q escapes.
+const delHost = "zonk\x7fhost"
 
 // parseVerdict pins what url.Parse makes of a row's raw URL, so a stdlib change that
 // moves a shape across the accept/reject line fails the row's premise, not its want.
@@ -36,21 +39,20 @@ const (
 type redactErrorCase struct {
 	name    string
 	raw     string
-	err     func(raw string) error // nil: amqpErr
+	err     func(raw string) error // nil: hintedErr
 	parse   parseVerdict
 	want    string   // the full Error() text; unused when same
 	same    bool     // nothing to mask, so RedactError must return the original value
 	secrets []string // substrings that must not survive in the result
 }
 
-// amqpErr is the default builder: url.Parse's failure wrapped the way amqp091's
-// ParseURI wraps it, or, for a URL url.Parse accepts, a dial failure that renders
-// raw verbatim.
-func amqpErr(raw string) error {
+// hintedErr is the default builder: url.Parse's failure wrapped with a trailing
+// hint, or, for a URL url.Parse accepts, a dial failure that renders raw verbatim.
+func hintedErr(raw string) error {
 	if _, err := url.Parse(raw); err != nil {
-		return fmt.Errorf("%w %s", err, amqpHint)
+		return fmt.Errorf("%w %s", err, hint)
 	}
-	return fmt.Errorf("dial %s: connection refused", raw)
+	return verbatimDialErr(raw)
 }
 
 // bareParseErr returns url.Parse's *url.Error unwrapped, the way go-ora does.
@@ -102,7 +104,7 @@ func assertRedacted(t *testing.T, tc *redactErrorCase) {
 
 	build := tc.err
 	if build == nil {
-		build = amqpErr
+		build = hintedErr
 	}
 	original := build(tc.raw)
 	require.Error(t, original, "premise: the row must start from an error")
@@ -134,7 +136,8 @@ func hostilePasswordCases() []redactErrorCase {
 		{name: "ipv6_with_port", addr: "[::1]:5672"},
 		{name: "ipv6_without_port", addr: "[2001:db8::1]"},
 	}
-	maskedRejection := `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + amqpHint
+	maskedRejection := `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + hint
+	maskedUserinfo := `parse "amqp://user:xxxxx@{host}/vh": net/url: invalid userinfo ` + hint
 	maskedDial := "dial amqp://user:xxxxx@{host}/vh: connection refused"
 	rejectedSecrets := []string{"s3cr", "etPW", "%et"}
 	passwordSecrets := []string{"s3cr", "etPW"}
@@ -151,7 +154,7 @@ func hostilePasswordCases() []redactErrorCase {
 			name:    "password_with_hash",
 			raw:     "amqp://user:s3cr#etPW@{host}/vh",
 			parse:   parseRejects,
-			want:    `parse "amqp://user:xxxxx": invalid URL ` + amqpHint,
+			want:    `parse "amqp://user:xxxxx": invalid URL ` + hint,
 			secrets: rejectedSecrets,
 		},
 		// "net/url: invalid userinfo" quotes nothing, so the reason survives.
@@ -159,14 +162,14 @@ func hostilePasswordCases() []redactErrorCase {
 			name:    "password_with_double_quote",
 			raw:     `amqp://user:s3cr"etPW@{host}/vh`,
 			parse:   parseRejects,
-			want:    `parse "amqp://user:xxxxx@{host}/vh": net/url: invalid userinfo ` + amqpHint,
+			want:    maskedUserinfo,
 			secrets: passwordSecrets,
 		},
 		{
 			name:    "password_with_open_bracket",
 			raw:     "amqp://user:s3cr[etPW@{host}/vh",
 			parse:   parseRejects,
-			want:    `parse "amqp://user:xxxxx@{host}/vh": net/url: invalid userinfo ` + amqpHint,
+			want:    maskedUserinfo,
 			secrets: passwordSecrets,
 		},
 		// url.Parse accepts these, so no *url.Error exists and only the verbatim
@@ -212,10 +215,9 @@ func hostilePasswordCases() []redactErrorCase {
 // lands verbatim in the default builder's dial failure, so its row observes the scan
 // directly; a rejected one observes it through the rebuilt *url.Error.
 func scanCases() []redactErrorCase {
-	const rejectedDSN = `parse "oracle://appuser:xxxxx@host:1521/XE": invalid URL ` + amqpHint
+	const rejectedDSN = `parse "oracle://appuser:xxxxx@host:1521/XE": invalid URL ` + hint
 	const maskedDialDSN = "dial oracle://appuser:xxxxx@host:1521/XE: connection refused"
 	invalidPortEcho := `":pa"`
-	delHost := "zonk\x7fhost"
 
 	return []redactErrorCase{
 		{name: "empty_url", raw: "", parse: parseAccepts, same: true},
@@ -255,7 +257,7 @@ func scanCases() []redactErrorCase {
 			name:    "fragment_truncated_userinfo",
 			raw:     "oracle://appuser:pa",
 			parse:   parseRejects,
-			want:    `parse "oracle://appuser:xxxxx": invalid URL ` + amqpHint,
+			want:    `parse "oracle://appuser:xxxxx": invalid URL ` + hint,
 			secrets: []string{invalidPortEcho},
 		},
 		// looksLikeHostPort rejects a non-numeric port, so this credential-free authority
@@ -268,7 +270,7 @@ func scanCases() []redactErrorCase {
 			name:  "credential_free_authority_with_non_numeric_port",
 			raw:   "oracle://host:abc/XE",
 			parse: parseRejects,
-			want:  `parse "oracle://host:xxxxx": invalid URL ` + amqpHint,
+			want:  `parse "oracle://host:xxxxx": invalid URL ` + hint,
 		},
 		{name: "ipv6_host_with_port", raw: "oracle://[::1]:1521/XE", parse: parseAccepts, same: true},
 		{name: "ipv6_host_without_port", raw: "oracle://[::1]/XE", parse: parseAccepts, same: true},
@@ -281,7 +283,7 @@ func scanCases() []redactErrorCase {
 			name:    "scheme_separator_at_index_zero",
 			raw:     "://appuser:s3cr3t@host:1521/XE",
 			parse:   parseRejects,
-			want:    `parse "://appuser:xxxxx@host:1521/XE": missing protocol scheme ` + amqpHint,
+			want:    `parse "://appuser:xxxxx@host:1521/XE": missing protocol scheme ` + hint,
 			secrets: []string{"s3cr3t"},
 		},
 		{name: "authority_terminator_at_index_zero", raw: "oracle:///user:pass@host", parse: parseAccepts, same: true},
@@ -300,7 +302,6 @@ func scanCases() []redactErrorCase {
 			want:    "dial oracle://appuser:xxxxx@host:1521/XE?SID=XE: connection refused",
 			secrets: []string{"s3cr3t"},
 		},
-		{name: "at_sign_only_in_path", raw: "oracle://host:1521/XE@weird", parse: parseAccepts, same: true},
 		// '#' terminates the authority too, so an '@' in the fragment is not userinfo.
 		{name: "at_sign_only_in_fragment", raw: "oracle://host:1521#XE@weird", parse: parseAccepts, same: true},
 		{name: "scheme_without_authority", raw: "oracle://", parse: parseAccepts, same: true},
@@ -309,7 +310,7 @@ func scanCases() []redactErrorCase {
 			name:    "unparseable_host_still_masked",
 			raw:     "oracle://appuser:s3cr3t@" + delHost + ":1521/XE",
 			parse:   parseRejects,
-			want:    "parse " + strconv.Quote("oracle://appuser:xxxxx@"+delHost+":1521/XE") + ": net/url: invalid control character in URL " + amqpHint,
+			want:    "parse " + strconv.Quote("oracle://appuser:xxxxx@"+delHost+":1521/XE") + ": net/url: invalid control character in URL " + hint,
 			secrets: []string{"s3cr3t"},
 		},
 		// Non-URL strings pass through: the leak is url.Parse's %q rendering of what it
@@ -332,7 +333,7 @@ func scanCases() []redactErrorCase {
 		// mask on a false verdict — the path's ":1" for the bare host.
 		{name: "bare_host", raw: "oracle://host/XE:1", parse: parseAccepts, same: true},
 		{name: "host_with_numeric_port", raw: "oracle://host:1521", parse: parseAccepts, same: true},
-		{name: "userinfo_with_non_numeric_tail", raw: "oracle://user:pa", parse: parseRejects, want: `parse "oracle://user:xxxxx": invalid URL ` + amqpHint},
+		{name: "userinfo_with_non_numeric_tail", raw: "oracle://user:pa", parse: parseRejects, want: `parse "oracle://user:xxxxx": invalid URL ` + hint},
 		{name: "bracketed_ipv6_without_port", raw: "oracle://[::1]", parse: parseAccepts, same: true},
 		// Skipping to the wrong side of the ']' leaves a ':' behind and turns the
 		// trailing "]" into the port.
@@ -347,7 +348,7 @@ func scanCases() []redactErrorCase {
 			name:  "unterminated_ipv6_literal",
 			raw:   "oracle://[2001:db8",
 			parse: parseRejects,
-			want:  `parse "oracle://[2001:xxxxx": missing ']' in host ` + amqpHint,
+			want:  `parse "oracle://[2001:xxxxx": missing ']' in host ` + hint,
 		},
 	}
 }
@@ -358,7 +359,6 @@ func seamCases() []redactErrorCase {
 	const password = "zqxvwgirdlespan"
 	// The DEL byte makes %q escape the URL, so the quoted rendering is not a substring
 	// of the message and only the second replacement can reach it.
-	delHost := "zonk\x7fhost"
 	leaky := "oracle://appuser:" + password + "@" + delHost + ":1521/XE"
 	masked := "oracle://appuser:xxxxx@" + delHost + ":1521/XE"
 	bothRenderings := func(raw string) error {

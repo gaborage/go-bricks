@@ -267,9 +267,7 @@ const invalidDSNReason = "invalid DSN"
 // SECURITY: go-ora returns url.Parse's *url.Error unwrapped, and net/url renders the
 // whole raw URL with %q — so a DSN carrying inline credentials puts the password in a
 // startup error, hence in the log and the pod termination message. Mask every rendering
-// of the DSN before the error escapes NewConnection. The masking is delegated to
-// credurl.RedactError, which keeps scheme, username and host so an operator can still
-// tell which connection failed.
+// of the DSN before the error escapes NewConnection; credurl.RedactError does the masking.
 func redactDSNError(err error, dsn string) error {
 	return credurl.RedactError(err, dsn, invalidDSNReason)
 }
