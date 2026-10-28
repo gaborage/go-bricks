@@ -1,9 +1,13 @@
 package builder
 
 import (
+	dbsql "database/sql"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -998,5 +1002,252 @@ func TestClassifyOperandFollowsSquirrelIsListType(t *testing.T) {
 			require.Equal(t, tt.wantResolved, resolved)
 			require.Equal(t, tt.wantNull, nullOrList)
 		})
+	}
+}
+
+// compareDoor is one value door of the compare family. Exactly one of f and jf
+// is set; the row builds a full statement through it, so it sees what a caller
+// sees.
+type compareDoor struct {
+	name string
+	op   string
+	f    func(f dbtypes.FilterFactory, v any) dbtypes.Filter
+	jf   func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter
+}
+
+var compareDoors = []compareDoor{
+	{name: "f_eq", op: "=", f: func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Eq("c", v) }},
+	{name: "f_not_eq", op: "<>", f: func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.NotEq("c", v) }},
+	{name: "f_lt", op: "<", f: func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lt("c", v) }},
+	{name: "f_lte", op: "<=", f: func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Lte("c", v) }},
+	{name: "f_gt", op: ">", f: func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gt("c", v) }},
+	{name: "f_gte", op: ">=", f: func(f dbtypes.FilterFactory, v any) dbtypes.Filter { return f.Gte("c", v) }},
+	{name: "jf_eq", op: "=", jf: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Eq("c", v) }},
+	{name: "jf_not_eq", op: "<>", jf: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.NotEq("c", v) }},
+	{name: "jf_lt", op: "<", jf: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lt("c", v) }},
+	{name: "jf_lte", op: "<=", jf: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Lte("c", v) }},
+	{name: "jf_gt", op: ">", jf: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gt("c", v) }},
+	{name: "jf_gte", op: ">=", jf: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter { return jf.Gte("c", v) }},
+}
+
+// statement renders the door's predicate inside a full statement and the
+// prefix that statement puts before it.
+func (d compareDoor) statement(qb *QueryBuilder, value any) (prefix, sqlText string, args []any, err error) {
+	if d.jf != nil {
+		sqlText, args, err = qb.Select("t.id").From("t").JoinOn("u", d.jf(qb.JoinFilter(), value)).ToSQL()
+		return "SELECT t.id FROM t JOIN u ON ", sqlText, args, err
+	}
+	sqlText, args, err = qb.Select("id").From("t").Where(d.f(qb.Filter(), value)).ToSQL()
+	return "SELECT id FROM t WHERE ", sqlText, args, err
+}
+
+// equalityOnly is want at an equality door; an ordering door refuses the
+// operand instead.
+func (d compareDoor) equalityOnly(want operandVerdict) operandVerdict {
+	if d.op != "=" && d.op != "<>" {
+		return notComparable(d.op)
+	}
+	return want
+}
+
+// joinOnly is want at a jf door; an f door refuses the expression under op.
+func (d compareDoor) joinOnly(op string, want operandVerdict) operandVerdict {
+	if d.jf == nil {
+		return refusedInFilter(op)
+	}
+	return want
+}
+
+// negated picks the negated spelling of an equality door's rendering.
+func (d compareDoor) negated(positive, negative string) string {
+	if d.op == "<>" {
+		return negative
+	}
+	return positive
+}
+
+// operandVerdict is what one operand renders to at one door: a predicate with
+// `?1`/`?2` standing for the vendor's placeholders, its arguments, or the exact
+// error text.
+type operandVerdict struct {
+	pred    string
+	args    []any
+	errText string
+	is      error
+}
+
+func refusedInFilter(op string) operandVerdict {
+	return operandVerdict{errText: dbtypes.ErrExpressionInFilter.Error() + ": " + op, is: dbtypes.ErrExpressionInFilter}
+}
+
+func notComparable(op string) operandVerdict {
+	return operandVerdict{
+		errText: dbtypes.ErrOrderingOperandNotComparable.Error() + ": " + op + " with a nil or slice operand",
+		is:      dbtypes.ErrOrderingOperandNotComparable,
+	}
+}
+
+// TestOperandJudgeAtTheCompareDoors pins, as one table through the public doors
+// of both vendors, what every operand shape renders to at f and jf Eq..Gte: one
+// rule set, so each row reads the same at every door it applies to.
+func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
+	boom := errors.New("boom")
+	var typedNil *int
+	var cyclic any
+	cyclic = &cyclic
+	// SECURITY: Manual SQL review completed - literal UPPER(x) over a fixed column, no user input
+	expr := dbtypes.MustExpr("UPPER(x)")
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword with an alias, never rendered
+	aliased := dbtypes.MustExpr("CURRENT_DATE", "d")
+	// SECURITY: Manual SQL review completed - blank expression literal, never rendered
+	blank := dbtypes.RawExpression{SQL: "  "}
+	payload := map[string]any{"k": 1}
+
+	rows := []struct {
+		name    string
+		operand any
+		verdict func(d compareDoor) operandVerdict
+	}{
+		{"scalar", 5, func(d compareDoor) operandVerdict {
+			return operandVerdict{pred: "c " + d.op + " ?1", args: []any{5}}
+		}},
+		{"byte_slice_is_one_scalar", []byte("ab"), func(d compareDoor) operandVerdict {
+			return operandVerdict{pred: "c " + d.op + " ?1", args: []any{[]byte("ab")}}
+		}},
+		{"map_is_one_scalar", payload, func(d compareDoor) operandVerdict {
+			return operandVerdict{pred: "c " + d.op + " ?1", args: []any{payload}}
+		}},
+		{"pointer_to_scalar", func() any { v := 7; return &v }(), func(d compareDoor) operandVerdict {
+			return operandVerdict{pred: "c " + d.op + " ?1", args: []any{7}}
+		}},
+		{"valuer_answer_is_bound", dbsql.NullString{String: "s", Valid: true}, func(d compareDoor) operandVerdict {
+			return operandVerdict{pred: "c " + d.op + " ?1", args: []any{"s"}}
+		}},
+		{"untyped_nil", nil, nullVerdict},
+		{"typed_nil_pointer", typedNil, nullVerdict},
+		{"nil_pointer_to_valuer", (*dbsql.NullString)(nil), nullVerdict},
+		{"valuer_answering_null", dbsql.NullString{}, nullVerdict},
+		{"list", []int{1, 2}, func(d compareDoor) operandVerdict {
+			return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IN", "NOT IN") + " (?1,?2)", args: []any{1, 2}})
+		}},
+		{"empty_list", []int{}, func(d compareDoor) operandVerdict {
+			return d.equalityOnly(operandVerdict{pred: d.negated("(1=0)", "(1=1)")})
+		}},
+		{"list_elements_bind_raw", []any{typedNil}, func(d compareDoor) operandVerdict {
+			return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IN", "NOT IN") + " (?1)", args: []any{typedNil}})
+		}},
+		{"valuer_error", erroringValuer{err: boom}, func(d compareDoor) operandVerdict {
+			return operandVerdict{errText: "resolving the " + d.op + " operand: boom", is: boom}
+		}},
+		{"cyclic_pointer", cyclic, func(d compareDoor) operandVerdict {
+			return operandVerdict{errText: "resolving the " + d.op + " operand: operand pointer chain is cyclic", is: errCyclicOperand}
+		}},
+		{"expression", expr, splicedVerdict},
+		{"pointer_to_expression", &expr, splicedVerdict},
+		{"aliased_expression", aliased, func(d compareDoor) operandVerdict {
+			return d.joinOnly(d.op, operandVerdict{errText: d.op + ": alias is not allowed in a predicate operand: d", is: dbtypes.ErrAliasInPredicate})
+		}},
+		{"blank_expression", blank, func(d compareDoor) operandVerdict {
+			return d.joinOnly(d.op, operandVerdict{errText: dbtypes.ErrEmptyExpressionSQL.Error(), is: dbtypes.ErrEmptyExpressionSQL})
+		}},
+	}
+
+	for _, v := range inListVendors {
+		for _, d := range compareDoors {
+			for _, row := range rows {
+				t.Run(v.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
+					assertOperandVerdict(t, v.vendor, d, row.operand, row.verdict(d))
+				})
+			}
+		}
+	}
+}
+
+// assertOperandVerdict renders operand through door d on vendor and checks it
+// against want: the exact error text and sentinel, or the exact statement with
+// `?1`/`?2` replaced by the vendor's placeholders, and the exact arguments.
+func assertOperandVerdict(t *testing.T, vendor string, d compareDoor, operand any, want operandVerdict) {
+	t.Helper()
+	var prefix, sqlText string
+	var args []any
+	var err error
+	require.NotPanics(t, func() { prefix, sqlText, args, err = d.statement(NewQueryBuilder(vendor), operand) })
+
+	if want.errText != "" {
+		if d.jf != nil {
+			want.errText = "JoinOn filter error: " + want.errText
+		}
+		require.EqualError(t, err, want.errText)
+		require.ErrorIs(t, err, want.is)
+		return
+	}
+	require.NoError(t, err)
+	placeholders := strings.NewReplacer("?1", "$1", "?2", "$2")
+	if vendor == dbtypes.Oracle {
+		placeholders = strings.NewReplacer("?1", ":1", "?2", ":2")
+	}
+	assert.Equal(t, prefix+placeholders.Replace(want.pred), sqlText)
+	assert.Equal(t, want.args, args)
+}
+
+func nullVerdict(d compareDoor) operandVerdict {
+	return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IS NULL", "IS NOT NULL")})
+}
+
+func splicedVerdict(d compareDoor) operandVerdict {
+	return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " UPPER(x)"})
+}
+
+// TestOperandJudgeAtTheBetweenDoors pins both BETWEEN bounds as ordering
+// operands judged one at a time: lower under `>=`, upper under `<=`.
+func TestOperandJudgeAtTheBetweenDoors(t *testing.T) {
+	boom := errors.New("boom")
+	// SECURITY: Manual SQL review completed - literal UPPER(x) over a fixed column, no user input
+	expr := dbtypes.MustExpr("UPPER(x)")
+	// SECURITY: Manual SQL review completed - literal CURRENT_DATE keyword with an alias, never rendered
+	aliased := dbtypes.MustExpr("CURRENT_DATE", "d")
+	doors := []compareDoor{
+		{name: "f_between", f: func(f dbtypes.FilterFactory, v any) dbtypes.Filter {
+			bounds := v.([2]any)
+			return f.Between("c", bounds[0], bounds[1])
+		}},
+		{name: "jf_between", jf: func(jf dbtypes.JoinFilterFactory, v any) dbtypes.JoinFilter {
+			bounds := v.([2]any)
+			return jf.Between("c", bounds[0], bounds[1])
+		}},
+	}
+
+	rows := []struct {
+		name    string
+		bounds  [2]any
+		verdict func(d compareDoor) operandVerdict
+	}{
+		{"values", [2]any{1, 9}, func(compareDoor) operandVerdict {
+			return operandVerdict{pred: "(c >= ?1 AND c <= ?2)", args: []any{1, 9}}
+		}},
+		{"nil_lower", [2]any{nil, 9}, func(compareDoor) operandVerdict { return notComparable(">=") }},
+		{"list_upper", [2]any{1, []int{1}}, func(compareDoor) operandVerdict { return notComparable("<=") }},
+		{"valuer_error_lower", [2]any{erroringValuer{err: boom}, 9}, func(compareDoor) operandVerdict {
+			return operandVerdict{errText: "resolving the >= operand: boom", is: boom}
+		}},
+		{"expression_lower", [2]any{expr, 9}, func(d compareDoor) operandVerdict {
+			return d.joinOnly(">=", operandVerdict{pred: "(c >= UPPER(x) AND c <= ?1)", args: []any{9}})
+		}},
+		{"pointer_to_expression_upper", [2]any{1, &expr}, func(d compareDoor) operandVerdict {
+			return d.joinOnly("<=", operandVerdict{pred: "(c >= ?1 AND c <= UPPER(x))", args: []any{1}})
+		}},
+		{"aliased_lower", [2]any{aliased, 9}, func(d compareDoor) operandVerdict {
+			return d.joinOnly(">=", operandVerdict{errText: ">=: alias is not allowed in a predicate operand: d", is: dbtypes.ErrAliasInPredicate})
+		}},
+	}
+
+	for _, v := range inListVendors {
+		for _, d := range doors {
+			for _, row := range rows {
+				t.Run(v.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
+					assertOperandVerdict(t, v.vendor, d, row.bounds, row.verdict(d))
+				})
+			}
+		}
 	}
 }
