@@ -1758,22 +1758,22 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 		password string
 		suffix   string
 		secrets  []string
-		hostCut  bool
 	}{
 		{name: "password_with_question_mark", password: "s3cr?etPW", secrets: brokerPasswordSecrets},
 		{name: "password_with_percent", password: "s3cr%etPW", secrets: brokerPasswordSecrets},
 		{name: "password_with_slash", password: "s3cr/etPW", secrets: brokerPasswordSecrets},
-		// url.Parse cuts the fragment before it reports, so the host never reaches the error.
-		{name: "password_with_hash", password: "s3cr#etPW", secrets: brokerPasswordSecrets, hostCut: true},
+		// url.Parse cuts the fragment before it reports, but connect() rebuilds the error
+		// from the URL it dialed, so the host past the '#' still shows.
+		{name: "password_with_hash", password: "s3cr#etPW", secrets: brokerPasswordSecrets},
 		// "user:2024" reads as host:port; the newline is what makes url.Parse reject it.
 		{name: "digit_password_with_trailing_newline", password: "2024/Spring", suffix: "\n", secrets: []string{"2024", "Spring"}},
 		// url.Parse reports "amqp://user:2024/%zz", cut at the '#', so only the '@' in
 		// the URL connect() dialed makes "user:2024" userinfo.
-		{name: "digit_password_with_invalid_escape_before_hash", password: "2024/%zz#x", secrets: []string{"2024"}, hostCut: true},
+		{name: "digit_password_with_invalid_escape_before_hash", password: "2024/%zz#x", secrets: []string{"2024", "%zz", "#x"}},
 		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
 		{name: "username_with_at_password_with_slash", user: "svc@corp", password: "Se/cretPW", secrets: []string{"Se/", "cretPW", `":Se"`}},
 		// url.Parse reports "amqp://user:p@ss:x", cut at the '#'; the last '@' is past it.
-		{name: "password_with_at_and_colon_before_hash", password: "p@ss:x#y", secrets: []string{"ss:x", "p@ss"}, hostCut: true},
+		{name: "password_with_at_and_colon_before_hash", password: "p@ss:x#y", secrets: []string{"ss:x", "p@ss", "#y"}},
 	}
 
 	for _, tt := range tests {
@@ -1797,11 +1797,7 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 				assert.NotContains(t, err.Error(), secret)
 			}
 			assert.Contains(t, err.Error(), "//"+user+":", "the username identifies the failing connection")
-			if tt.hostCut {
-				assert.NotContains(t, err.Error(), "broker", "premise: url.Parse cut the host with the fragment")
-			} else {
-				assert.Contains(t, err.Error(), "broker")
-			}
+			assert.Contains(t, err.Error(), "broker", "the dialed URL's host shows, even past a '#' url.Parse cut")
 			assert.Contains(t, err.Error(), "must be percent-encoded", "the vendor's hint survives")
 			var urlErr *url.Error
 			require.ErrorAs(t, err, &urlErr)

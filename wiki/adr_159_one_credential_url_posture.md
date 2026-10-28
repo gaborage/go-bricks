@@ -1,0 +1,108 @@
+# ADR-159: One Credential-URL Posture for Log and Error Text
+
+**Status:** Accepted
+**Date:** 2026-10-28
+
+## Context
+
+`internal/credurl.RedactError` masks a connection URL in the error text of four doors: the AMQP
+`connect()` dial error, the streams environment error (`safeEnvError`), the streams consumer and
+publisher start errors (`safeStartError`), and the Oracle DSN error. It masked the password as
+`xxxxx` and kept everything else: the username, even alone or beside an empty password, and the
+query. go-ora reads `WALLET PASSWORD` from a DSN query, so the query is credential material too.
+Input without `://`, such as an EZ Connect `user/pw@host` DSN, passed through verbatim.
+
+The scan trusted url.Parse once it accepted the URL: an accepted URL never yields a `*url.Error`,
+so a host:port-shaped authority was left as written. That premise does not hold. url.Parse ends
+the authority at the first `/`, `?` or `#`, so an unencoded one inside a password moves password
+text into the host, the port or the path. An error that echoed `amqp://user:1234/etPW@broker/vh`
+showed it whole, and `amqp://user:s3cr@et?PW@broker/vh` masked only `s3cr`. On the `*url.Error`
+path the rebuild rendered the URL url.Parse reported, which stops at a `#` cut from the password,
+so the host never showed.
+
+## Decision
+
+**`internal/credurl` is the one renderer for a credential-bearing URL in log and error text, and it
+renders one posture.** `Redact(raw) string` gives the posture for a raw URL. `RedactError`
+rebuilds a buried `*url.Error`, and masks every other rendering of raw, through the same rules.
+
+- The scheme, host, port and path are kept.
+- The password becomes `xxxxx`. The username is kept only beside a non-empty password: a lone
+  userinfo (`amqp://tok@h`, the API-key-as-username shape) or an empty password (`amqp://u:@h`)
+  becomes `xxxxx@`.
+- A query, when one was present, becomes `?xxxxx`. Nothing is appended to a URL without one. The
+  fragment is dropped.
+- The userinfo runs to the last `@` after `://`, wherever url.Parse would end it, whether it
+  accepts the input or rejects it: `amqp://user:1234/Spring@broker/vh` renders
+  `amqp://user:xxxxx@broker/vh`.
+- When url.Parse rejects input with no `@`, the mask runs from the first `:` after `//`, outside
+  an IPv6 literal, to the next `/`, `?`, `#` or the end. So `amqp://user:pass/broker` (rejected as
+  `invalid port ":pass" after host`) renders `amqp://user:xxxxx/broker`.
+- On the `*url.Error` path, the URL url.Parse reported is judged with the `#` fragment it cut
+  before reporting, whenever the raw URL extends it: the `@` that ends the userinfo can be in the
+  cut.
+- Input without `://`, or with any of `:`, `/`, `?`, `#` or `@` before the first `://`, renders
+  whole as `xxxxx`.
+- A `*url.Error` reason that quotes anything is replaced, which is the rule `RedactError` already
+  applied.
+
+**A door may render stricter, never looser:**
+
+- `redactURLForLog` (httpclient request logs) drops userinfo, query and fragment.
+- The logger filter masks the `broker_url` field whole by name.
+- The PostgreSQL connector renders a fixed message and never the DSN.
+
+| Door | Text | Renderer |
+| --- | --- | --- |
+| AMQP `connect()` | dial error, dial logs | `RedactError` |
+| Streams `safeEnvError` | environment error | `RedactError` |
+| Streams `safeStartError` | consumer and publisher start errors | `RedactError` |
+| Oracle connector (`redactDSNError`) | DSN error | `RedactError` |
+
+## Alternatives considered
+
+- **Keep a renderer per door.** Rejected: each door's rule drifts into a posture of its own, and
+  each misses the misparse differently.
+- **Keep the username always.** Rejected: an API key passed as the username is a common shape.
+- **A placeholder of its own for the query (`?<redacted>`).** Rejected: one placeholder for every
+  masked part.
+- **Refuse a misparsed userinfo before dialing.** Deferred to the open question below.
+
+## Consequences
+
+- An `@` that is legal unencoded in a path or query (`amqp://u:p@h/my@vhost`,
+  `?connection_name=app@host`) over-masks, since the scan cannot tell it from a misparsed
+  password. `amqp://u:p@h/my@vhost` renders `amqp://u:xxxxx@vhost`. That is accepted: a masked
+  vhost costs a debugging hint, never a secret.
+- A rejected URL with no credentials also loses its port, and with it the vendor's quoted reason:
+  `amqp://broker:5672/vh%zz` renders `amqp://broker:xxxxx/vh%zz: invalid URL`. A port-shaped
+  segment of a rejected URL may be password text, so the scan cannot keep it.
+- `RedactError` masks a non-URL DSN wherever the vendor message repeats it. EZ Connect
+  `user/pw@host` is now masked, and a TNS descriptor is over-masked. A very short DSN mangles the
+  vendor text, since every occurrence of it is replaced; the mangling never reveals anything.
+- On the `*url.Error` path the host and path after the last `@` now show, read from raw across the
+  cut fragment, where the cut URL used to end the render early. They are parts the posture keeps.
+- `amqp://user:1234/broker` (a forgotten `@` and an all-digit password) is a valid host and port,
+  the same shape as `amqp://h:5672/vh`, so it renders verbatim, as it did before.
+- A query value, such as an Oracle `WALLET PASSWORD` or an AMQP `connection_name`, no longer shows
+  in these errors.
+- Tests, log queries and alerts that match the old error text stop matching. See `[C73.18]`.
+- No exported symbol changes (`credurl` is internal), and no configuration key changes.
+
+## Open question: refuse a misparsed URL before dialing
+
+The posture fixes the render only. A misparsed AMQP URL still dials the host url.Parse read, which
+is password text (`zq9x` from `amqp://user:s3cr@zq9x?PW@broker:5672/vh`). The DNS lookup sends that
+text to the resolver, and the dial error names that host as the vendor wrote it. Refusing before
+the dial would close that, but it is a breaking change (a URL that dials today would refuse to
+start), and it has no exact trigger. `amqp://user:1234/Spring@broker/vh` (misparsed password) and
+`amqp://h:5672/my@vhost` (host, port, `@` vhost) have the same shape, and the candidate heuristics
+each either refuse a valid vhost or miss a misparse. Left open, with a drafted follow-up.
+
+## References
+
+- `internal/credurl/credurl.go`: `Redact`, `RedactError`, `maskURLError`, `maskRejectedAuthority`
+- `messaging/amqp_client.go`: `connect`
+- `messaging/streams/manager.go`: `safeEnvError`, `safeStartError`
+- `database/oracle/connection.go`: `redactDSNError`
+- See [migrations.md](migrations.md) `[C73.18]`.
