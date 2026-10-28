@@ -50,7 +50,7 @@ Implement an enhanced handler system with the following characteristics (updated
   - Single struct represents complete request context
   - Consistent with existing Go conventions
 - **Details:**
-  - Content-Type detection for JSON is tolerant (e.g., `application/json; charset=utf-8`).
+  - Content-Type detection for JSON is tolerant, including `*/*+json` structured-syntax types and any letter case (e.g., `application/json; charset=utf-8`).
   - Field kinds supported: primitives, pointers (auto-allocated), `time.Time` (RFC3339/DateTime/Date), and `[]string` from repeated query params or comma-separated headers.
   - Precedence: bind JSON body first, then overlay path params, then query params, then headers (later sources overwrite earlier values).
 - **Alternative Considered:** Separate binding methods for each source

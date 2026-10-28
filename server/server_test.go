@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -258,9 +259,9 @@ func TestServerNewRegistersProbeDescriptors(t *testing.T) {
 
 // TestServerNewRegistersProbeListenerDescriptors pins the route table with the probe
 // listener enabled: the four probe descriptors name the probe listener and the unprefixed
-// path, the application engine's 404 reservations carry no descriptor, and the conflict
-// tracker does not also record the unprefixed path (TestServerReservedProbePathStillConflicts
-// pins the prefixed reservation).
+// path, the application engine's 404 reservations carry no descriptor, and admission does
+// not also claim the unprefixed path (TestServerReservedProbePathStillConflicts pins the
+// prefixed reservation).
 func TestServerNewRegistersProbeListenerDescriptors(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
@@ -876,7 +877,7 @@ func TestStatusToErrorCodeMappings(t *testing.T) {
 
 // TestServerBodyLimitOverflowAnswersBodyTooLarge drives the real middleware chain and error
 // handler: an over-limit body answers 413 BODY_TOO_LARGE whether or not its length is known,
-// on a typed route and on a raw Handler route alike.
+// on a typed route and on a raw Handler route alike, and under a +json media type too.
 func TestServerBodyLimitOverflowAnswersBodyTooLarge(t *testing.T) {
 	type bodyLimitReq struct {
 		Data string `json:"data"`
@@ -897,9 +898,9 @@ func TestServerBodyLimitOverflowAnswersBodyTooLarge(t *testing.T) {
 		return c.JSON(http.StatusOK, v)
 	})
 
-	post := func(path string, body io.Reader) *httptest.ResponseRecorder {
+	post := func(path, contentType string, body io.Reader) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, body)
-		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		req.Header.Set(echo.HeaderContentType, cmp.Or(contentType, echo.MIMEApplicationJSON))
 		rec := httptest.NewRecorder()
 		srv.echo.ServeHTTP(rec, req)
 		return rec
@@ -915,13 +916,15 @@ func TestServerBodyLimitOverflowAnswersBodyTooLarge(t *testing.T) {
 	oversize := `{"data":"` + strings.Repeat("x", 4096) + `"}`
 
 	tests := []struct {
-		name string
-		path string
-		body io.Reader
-		want answer
+		name        string
+		path        string
+		contentType string // empty sends application/json
+		body        io.Reader
+		want        answer
 	}{
 		{name: "typed_known_length", path: "/typed", body: strings.NewReader(oversize), want: tooLarge},
 		{name: "typed_unknown_length", path: "/typed", body: unknown(oversize), want: tooLarge},
+		{name: "typed_merge_patch_unknown_length", path: "/typed", contentType: mergePatchJSON, body: unknown(oversize), want: tooLarge},
 		{name: "raw_known_length", path: "/raw", body: strings.NewReader(oversize), want: tooLarge},
 		{name: "raw_unknown_length", path: "/raw", body: unknown(oversize), want: tooLarge},
 		{name: "typed_malformed_under_limit", path: "/typed", body: unknown(`{"data":`), want: answer{status: http.StatusBadRequest, code: "BAD_REQUEST", message: "Invalid request data"}},
@@ -929,7 +932,7 @@ func TestServerBodyLimitOverflowAnswersBodyTooLarge(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := post(tt.path, tt.body)
+			rec := post(tt.path, tt.contentType, tt.body)
 
 			assert.Equal(t, tt.want.status, rec.Code)
 			var resp APIResponse
@@ -941,8 +944,41 @@ func TestServerBodyLimitOverflowAnswersBodyTooLarge(t *testing.T) {
 	}
 
 	t.Run("typed_under_limit_unknown_length", func(t *testing.T) {
-		assert.Equal(t, http.StatusOK, post("/typed", unknown(`{"data":"ok"}`)).Code)
+		assert.Equal(t, http.StatusOK, post("/typed", "", unknown(`{"data":"ok"}`)).Code)
 	})
+}
+
+// TestServerPatchBindsMergePatchBody drives a registered PATCH route over loopback TCP: an
+// application/merge-patch+json body reaches the handler through the full middleware chain.
+func TestServerPatchBindsMergePatchBody(t *testing.T) {
+	type patchReq struct {
+		Name string `json:"name"`
+	}
+	type patchResp struct {
+		Name string `json:"name"`
+	}
+
+	srv := newTestServer("", "", "")
+	hr := NewHandlerRegistry(srv.cfg)
+	PATCH(hr, srv.ModuleGroup(), "/users/:id", func(req patchReq, _ HandlerContext) (patchResp, IAPIError) {
+		return patchResp(req), nil
+	})
+	ts := httptest.NewServer(srv.echo)
+	t.Cleanup(ts.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPatch, ts.URL+"/users/7", strings.NewReader(`{"name":"ada"}`))
+	require.NoError(t, err)
+	req.Header.Set(echo.HeaderContentType, mergePatchJSON)
+	resp, err := ts.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		Data patchResp `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, "ada", body.Data.Name)
 }
 
 // TestServer405ProducesMethodNotAllowedEnvelope proves the wiring end-to-end: a real 405

@@ -36,6 +36,14 @@ exemption rested on a check that `app` alone ran.
 
 ## Decision
 
+> **Amended (2026-10-28, #2222):** every route door (`addEcho`, `RouteRegistrar.Add` and both
+> probe arms) now goes through one admission step, `routeAdmission.admit`, which replaces
+> `routeConflictTracker.record` and `registerRoute`. It keys the route, refuses a duplicate, and
+> only then writes the route-registry descriptor and calls the engine `Add`. A refused route is
+> never described, at `server.probes.port` 0 as with the probe listener, so the closing sentence
+> of the second bullet below ("goes through `registerRoute`, which writes the descriptor before
+> reporting the duplicate") is history.
+
 - **Key the tracker on echo's node identity.** `routeNodeKey` mirrors `DefaultRouter.Add`: a
   missing leading slash is added, an unescaped `:` starts a parameter anywhere in the path and its
   name (up to the next `/`) is dropped, an escaped `\:` is kept literally, and the first `*`
@@ -73,6 +81,11 @@ while a check runs, not by construction.
 
 ## Consequences
 
+> **Amended (2026-10-28, #2222):** the last bullet below is reversed. A refused duplicate writes
+> no route-registry descriptor: a typed route, a raw route and a probe are described only once
+> admitted. The startup route log (`server.logroutes`) reads the registry before `app`'s conflict
+> check, so it no longer lists the refused duplicate.
+
 - **Breaking for `server.New` users.** A service that registers one route twice used to boot with
   the later handler serving. Now the first handler keeps the route and `Start` refuses. Migration
   is [migrations.md](migrations.md) `[C69.3]`.
@@ -106,6 +119,6 @@ while a check runs, not by construction.
 
 - [ADR-036](adr_036_global_middleware.md): the probe exemption keyed on the matched template
 - [startup_defaults.md](startup_defaults.md#duplicate-route-detection): behaviour and error shape
-- `server/route_conflicts.go` (`DuplicateRouteError`, `routeNodeKey`, `routeConflictTracker.record`),
+- `server/route_conflicts.go` (`DuplicateRouteError`, `routeNodeKey`, `routeAdmission.admit`),
   `server/route_registrar.go` (`addEcho`, `Add`), `server/server.go` (`Start`,
   `registerProbeRoutes`), `app/lifecycle.go` (`checkRouteConflicts`)

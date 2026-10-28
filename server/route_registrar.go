@@ -8,10 +8,10 @@ import (
 )
 
 type routeGroup struct {
-	group   *echo.Group
-	prefix  string
-	cfg     *config.Config // populates HandlerContext.Config in the go-bricks↔echo adapters
-	tracker *routeConflictTracker
+	group     *echo.Group
+	prefix    string
+	cfg       *config.Config // populates HandlerContext.Config in the go-bricks↔echo adapters
+	admission *routeAdmission
 }
 
 func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) *routeGroup {
@@ -22,24 +22,25 @@ func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) *routeG
 	}
 }
 
-// newTrackedRouteGroup is newRouteGroup plus a shared conflict tracker: Server's group
+// newAdmittingRouteGroup is newRouteGroup plus the Server's route admission: Server's group
 // factories use it so every routeGroup they hand out (including nested Group() children)
-// records into the same per-Server tracker.
-func newTrackedRouteGroup(group *echo.Group, prefix string, cfg *config.Config, tracker *routeConflictTracker) RouteRegistrar {
+// admits through the same per-Server routeAdmission.
+func newAdmittingRouteGroup(group *echo.Group, prefix string, cfg *config.Config, admission *routeAdmission) RouteRegistrar {
 	rg := newRouteGroup(group, prefix, cfg)
-	rg.tracker = tracker
+	rg.admission = admission
 	return rg
 }
 
 // addEcho registers a pre-built echo.HandlerFunc directly, so the framework's
-// typed-handler hot path pays no per-request adapter cost (ADR-026). A duplicate
-// is not added; see routeConflictTracker.record.
-func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant) {
+// typed-handler hot path pays no per-request adapter cost (ADR-026). See
+// routeAdmission.admit.
+func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descriptor *RouteDescriptor) {
 	relative := rg.relativePath(path)
-	if !rg.tracker.record(method, rg.fullPathFromRelative(relative), reg) {
-		return
-	}
-	rg.group.Add(method, relative, h)
+	rg.admission.admit(admittedRoute{
+		Method:     method,
+		Path:       rg.fullPathFromRelative(relative),
+		Descriptor: descriptor,
+	}, func() { rg.group.Add(method, relative, h) })
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -48,42 +49,31 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg Route
 //
 // It also records a RouteDescriptor in DefaultRouteRegistry so raw routes are discoverable
 // alongside typed ones (issue #634). Typed handlers on the framework's routeGroup register
-// through routeGroup.addEcho (which emits its own descriptor and never traverses
-// Add) — framework-registered routes are never double-counted. Only the fields derivable at this
-// seam are populated (method, full path, handler ID/name, caller package); type- and JOSE-related
-// fields stay zero-valued because raw handlers carry no request/response models. A duplicate
-// is not added; see routeConflictTracker.record.
+// through routeGroup.addEcho, which never traverses Add, so no route is described twice.
+// Only the fields derivable at this seam are populated (method, full path, handler ID/name,
+// caller package); type- and JOSE-related fields stay zero-valued because raw handlers carry
+// no request/response models. See routeAdmission.admit.
 func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
 	relative := rg.relativePath(path)
+	fullPath := rg.fullPathFromRelative(relative)
 	pkg := getCallerPackage(2) // getCallerPackage → Add → module (best-effort, as typed routes)
-	if !registerRoute(rg.tracker, method, rg.fullPathFromRelative(relative),
-		RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg}) {
-		return
-	}
-	rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
+	reg := RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg}
+	rg.admission.admit(admittedRoute{
+		Method:     method,
+		Path:       fullPath,
+		Descriptor: modellessDescriptor(method, fullPath, reg),
+	}, func() { rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...) })
 }
 
-// registerRoute records a route that carries no request/response models in the conflict
-// tracker and in DefaultRouteRegistry: raw routes and, at server.probes.port 0, the
-// health/ready probes (with the probe listener enabled see registerProbeListenerRoute).
-// It returns the tracker's verdict (see routeConflictTracker.record): false for a
-// duplicate, which the caller must not add.
-func registerRoute(tracker *routeConflictTracker, method, fullPath string, reg RouteRegistrant) bool {
-	isNew := tracker.record(method, fullPath, reg)
-	DefaultRouteRegistry.Register(modellessDescriptor(method, fullPath, reg))
-	return isNew
-}
-
-// registerProbeListenerRoute records a probe served on the probe listener in
-// DefaultRouteRegistry only, at its unprefixed path. The application listener's
-// reservation of <base><path> is the tracker's, and carries no descriptor. The
-// HandlerID carries the "probes:" prefix (probes:GET:/ready), so it stays unique
-// across listeners and never equals a tracker key.
-func registerProbeListenerRoute(method, path string, reg RouteRegistrant) {
+// probeListenerDescriptor describes a probe served on the probe listener, at its unprefixed
+// path. The application listener's reservation of <base><path> is the admission key and
+// carries no descriptor. The HandlerID carries the "probes:" prefix (probes:GET:/ready), so
+// it stays unique across listeners and never equals an admission key.
+func probeListenerDescriptor(method, path string, reg RouteRegistrant) *RouteDescriptor {
 	d := modellessDescriptor(method, path, reg)
 	d.Listener = ListenerProbes
 	d.HandlerID = formatListenerHandlerID(ListenerProbes, method, path)
-	DefaultRouteRegistry.Register(d)
+	return d
 }
 
 func modellessDescriptor(method, path string, reg RouteRegistrant) *RouteDescriptor {
@@ -101,10 +91,10 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
 
 	return &routeGroup{
-		group:   newGroup,
-		prefix:  rg.combinePrefix(normalized),
-		cfg:     rg.cfg,
-		tracker: rg.tracker,
+		group:     newGroup,
+		prefix:    rg.combinePrefix(normalized),
+		cfg:       rg.cfg,
+		admission: rg.admission,
 	}
 }
 

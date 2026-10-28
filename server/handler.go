@@ -777,10 +777,9 @@ func wrapHandlerWithJOSE[T any, R any](
 // avoiding per-request struct-tag reflection. When plan is empty — the common case, e.g. a
 // JSON-body-only struct — only bindJSONBody runs.
 //
-// Source precedence is load-bearing and tested (TestRequestBinderPrecedence*): the JSON body
-// binds first, then param/query/header overlay on top, so a non-empty URL value wins over a
-// conflicting body value for a dual-tagged field. This overlay is deliberate — echo's own
-// binder binds the body last and would otherwise let the body win. Do not reorder or drop it.
+// Source precedence is load-bearing and tested (TestRequestBinderPrecedence*): the
+// param/query/header overlay runs after the JSON step, so a non-empty URL value wins over a
+// conflicting body value for a dual-tagged field. Do not reorder or drop the overlay.
 func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []boundField, fieldPathIsSchema bool) error {
 	if err := rb.bindJSONBody(c, target, fieldPathIsSchema); err != nil {
 		return err
@@ -810,20 +809,44 @@ func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []
 	return nil
 }
 
-// bindJSONBody binds JSON request body if Content-Type indicates JSON.
+// bindJSONBody is the one JSON body decoder for typed handlers. Its invariants:
+//   - An empty Content-Type returns nil without reading the body.
+//   - One predicate admits a body as JSON: the parsed media type (lowercased, parameters
+//     dropped) is application/json or ends in +json. Any other type returns nil unread.
+//   - An admitted request binds path values, then query params on GET, DELETE, HEAD and
+//     QUERY, then decodes the body through the engine's JSON serializer unless
+//     Content-Length is 0.
+//   - Each failure is wrapped once by newJSONBindError, so a body-limit 413 stays
+//     reachable for isRequestTooLarge.
+//   - The Content-Type header is never rewritten.
+//
 // fieldPathIsSchema is the decode-summary gate for the request type, decided once
 // per route by newRequestProcessor.
 func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSchema bool) error {
-	ct := c.Request().Header.Get(echo.HeaderContentType)
+	req := c.Request()
+	ct := req.Header.Get(echo.HeaderContentType)
 	if ct == "" {
 		return nil
 	}
 
 	mt, _, _ := mime.ParseMediaType(ct)
-	if mt == echo.MIMEApplicationJSON || strings.HasSuffix(mt, "+json") {
-		if err := c.Bind(target); err != nil {
+	if mt != echo.MIMEApplicationJSON && !strings.HasSuffix(mt, "+json") {
+		return nil
+	}
+
+	if err := echo.BindPathValues(c, target); err != nil {
+		return newJSONBindError(err, fieldPathIsSchema)
+	}
+	if req.Method == http.MethodGet || req.Method == http.MethodDelete || req.Method == http.MethodHead || req.Method == echo.QUERY {
+		if err := echo.BindQueryParams(c, target); err != nil {
 			return newJSONBindError(err, fieldPathIsSchema)
 		}
+	}
+	if req.ContentLength == 0 {
+		return nil
+	}
+	if err := c.Echo().JSONSerializer.Deserialize(c, target); err != nil {
+		return newJSONBindError(err, fieldPathIsSchema)
 	}
 	return nil
 }
@@ -1471,8 +1494,6 @@ func RegisterHandler[T any, R any](
 	// registry's resolver. Panics at startup on any failure (Fail Fast principle).
 	scanRouteJOSE(&descriptor, hr.joseResolver)
 
-	DefaultRouteRegistry.Register(&descriptor)
-
 	// Lazy-init observability bundle on the first JOSE-tagged route registration so
 	// non-JOSE deployments pay zero cost for instrument creation. Subsequent JOSE
 	// registrations reuse the same bundle (counters and histograms are process-global).
@@ -1492,15 +1513,14 @@ func RegisterHandler[T any, R any](
 	}
 	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, hr.log, descriptor.RawResponse, joseCfg)
 	// Hot path: register the echo handler directly through routeGroup.addEcho so the typed
-	// handler path adds zero per-request adapter overhead (ADR-026). The fallback adapts for
-	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
-	// hatch and never executes on the framework's real registrar.
+	// handler path adds zero per-request adapter overhead (ADR-026); see routeAdmission.admit.
+	// The fallback adapts for non-routeGroup registrars (test fakes) and describes the route
+	// itself; it round-trips through the unexported escape hatch and never executes on the
+	// framework's real registrar.
 	if rg, ok := r.(*routeGroup); ok {
-		rg.addEcho(method, path, wrappedHandler, RouteRegistrant{
-			HandlerName: descriptor.HandlerName,
-			Package:     descriptor.Package,
-		})
+		rg.addEcho(method, path, wrappedHandler, &descriptor)
 	} else {
+		DefaultRouteRegistry.Register(&descriptor)
 		r.Add(method, path, func(c HandlerContext) error {
 			ec := c.echoContext()
 			if ec == nil {

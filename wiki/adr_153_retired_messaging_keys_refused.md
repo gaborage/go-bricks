@@ -4,6 +4,11 @@
 **Date:** 2026-10-25
 **Related:** [ADR-024](adr_024_config_key_flatsmush.md) · [ADR-064](adr_064_app_validates_every_config.md) · [ADR-091](adr_091_streams_opt_in_registration.md) · [ADR-104](adr_104_key_presence_recorded_at_merge_seam.md) · [ADR-144](adr_144_dotted_keystore_entry_names.md)
 
+> **Amended (2026-10-28, [ADR-156](adr_156_delivered_empty_checks_match_every_spelling.md), #2210):**
+> paths are matched through the shared key lookup, segment by segment with `strings.EqualFold`
+> instead of `strings.ToLower`, so a segment spelled with a Unicode simple fold such as U+017F for
+> `s`, which mapstructure decodes, is refused too.
+
 ## Context
 
 `MessagingConfig` carried four fields that no framework code ever read:

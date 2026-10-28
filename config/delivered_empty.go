@@ -39,10 +39,11 @@ var deliveredEmptyRejectingKeys = []deliveredEmptyRejection{
 }
 
 // validateNoDeliveredEmptyKeys fails startup when one of those keys was delivered as an
-// empty STRING (or a YAML null). It is a composite of two questions. PRESENCE is the
-// recorded delivery of the key by an operator layer (ADR-104) — these keys carry defaults,
-// so the framework's own preload must not answer it. EMPTINESS is then read from the raw
-// koanf value, which keeps the shape the source actually delivered —
+// empty STRING (or a YAML null) under any spelling decode accepts. It is a composite of two
+// questions. PRESENCE is the recorded delivery of the key by an operator layer (ADR-104) —
+// these keys carry defaults, so the framework's own preload must not answer it. EMPTINESS is
+// then read from the raw koanf value at each delivered spelling (ADR-156), any one of them
+// empty refusing the key, which keeps the shape the source actually delivered —
 //
 //	unset                  -> []string{"127.0.0.1", "::1"}   (the default; not delivered)
 //	DEBUG_ALLOWEDIPS=      -> ""                             (delivered empty; rejected)
@@ -59,9 +60,7 @@ var deliveredEmptyRejectingKeys = []deliveredEmptyRejection{
 // app-layer ADR-049 gate remains the second seam.
 func validateNoDeliveredEmptyKeys(cfg *Config) error {
 	for _, r := range deliveredEmptyRejectingKeys {
-		// Delivery now means "recorded AND still in the final tree" by definition, so one
-		// Get suffices; it returns nil for a YAML null, which is a delivered empty.
-		if !cfg.delivered(r.key) || !deliveredEmptyValue(cfg.koanfTree().Get(r.key)) {
+		if !anyDeliveredEmpty(cfg.deliveries(r.key, false)) {
 			continue
 		}
 		return &ConfigError{
