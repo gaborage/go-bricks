@@ -135,6 +135,7 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 // Eq creates an equality condition (column = value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
+// A list operand renders IN, each element resolved and judged as In judges it.
 //
 // Examples:
 //
@@ -148,6 +149,7 @@ func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
 // NotEq creates an inequality condition (column <> value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
+// A list operand renders NOT IN, each element resolved and judged as NotIn judges it.
 func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter {
 	return comparePredicate(jff.qb, column, opNotEqual, value, joinFilterFamily, wrapJoinFilter)
 }
@@ -183,7 +185,9 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 // In creates an IN condition (column IN (values...)).
 // Accepts both slices and scalar values. A scalar other than a map or chan is resolved
 // and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
-// spliced as `column IN (<sql>)`, with no placeholder and no argument.
+// spliced as `column IN (<sql>)`, with no placeholder and no argument; as a list element it
+// is spliced in place, the other elements bound. A nil pointer to a slice or array is the
+// empty set, (1=0).
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -198,7 +202,9 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 // NotIn creates a NOT IN condition (column NOT IN (values...)).
 // Accepts both slices and scalar values. A scalar other than a map or chan is resolved
 // and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
-// spliced as `column NOT IN (<sql>)`.
+// spliced as `column NOT IN (<sql>)`; as a list element it is spliced in place, the other
+// elements bound. A nil pointer to a slice or array is the empty set, (1=1): it matches
+// every row.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:

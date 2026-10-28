@@ -519,6 +519,13 @@ func expressionOperand(op string, resolved any, family doorFamily) (sql string, 
 // to it: a Valuer failure says nothing about comparability, and reporting it as
 // ErrOrderingOperandNotComparable is what discarded the cause before.
 func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
+	return walkOperand(operandWalk{}, value)
+}
+
+// walkOperand is resolveOperand's walk, started from walk. A walk that begins
+// with its Valuer question already spent follows pointers only, which is how a
+// JSONContains payload is resolved.
+func walkOperand(walk operandWalk, value any) (resolved any, nullOrList bool, err error) {
 	// One level at a time, and the ORDER within a level is the whole contract:
 	// test for nil, THEN ask whether this level is a driver.Valuer, and only then
 	// dereference. Each step is load-bearing.
@@ -548,7 +555,6 @@ func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
 	//
 	// Value() is asked at most ONCE across the whole walk, so a Valuer answering
 	// with another Valuer cannot spin the door.
-	walk := operandWalk{}
 	r := reflect.ValueOf(value)
 	for {
 		isNil, settleErr := walk.settlePointer(r)
@@ -611,6 +617,10 @@ const (
 	opNotIn = "NOT IN"
 )
 
+// opJSONContains names the JSONContains payload position: a payload is
+// marshaled, never compared, so only an expression is judged there.
+const opJSONContains = "JSONContains"
+
 // operandKind is the judge's answer for one operand: how the door renders it.
 type operandKind uint8
 
@@ -632,6 +642,9 @@ const (
 	// operandEmptySet renders a list operator's constant for a set holding
 	// nothing: "(1=0)" for IN, always false, "(1=1)" for NOT IN, always true.
 	operandEmptySet
+	// operandSplicedList renders a list holding a spliced expression: sql is the
+	// parenthesized list, args bind its other elements as written.
+	operandSplicedList
 )
 
 // operand is the judge's verdict on one operand at one door.
@@ -639,23 +652,28 @@ type operand struct {
 	kind  operandKind
 	value any
 	sql   string
+	args  []any
 }
 
 // judgeOperand is the one place an operand becomes an answer, at every value
 // door. A SET / VALUES cell (valueFamily) is judged on its surface by
-// judgeCell, and IN / NOT IN by judgeList. Every other operator is a compare:
+// judgeCell, IN / NOT IN by judgeList and a JSONContains payload by
+// judgePayload. Every other operator is a compare:
 // resolve it ONCE (resolveOperand), judge a RawExpression by the door's family
 // (expressionOperand), then classify what resolution produced. An ordering
 // operator has no rendering for a nil or a set, so it fails closed with
 // ErrOrderingOperandNotComparable at `f` and `jf` alike (#1167, #1205); an
 // equality operator renders nil as IS [NOT] NULL and a set as IN / NOT IN, its
-// elements bound as the caller wrote them.
+// elements judged the way an In door judges them (judgeElements).
 func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 	if family == valueFamily {
 		return judgeCell(value)
 	}
 	if op == opIn || op == opNotIn {
 		return judgeList(op, value, family)
+	}
+	if op == opJSONContains {
+		return judgePayload(value, family)
 	}
 	resolved, nullOrList, err := resolveOperand(value)
 	if err != nil {
@@ -677,7 +695,25 @@ func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 	if op != opEqual && op != opNotEqual {
 		return operand{}, orderingOperandErr(op)
 	}
-	return operand{kind: operandNullOrSet, value: resolved}, nil
+	if resolved == nil {
+		return operand{kind: operandNullOrSet}, nil
+	}
+	return judgeElements(op, reflect.ValueOf(resolved), resolved, family)
+}
+
+// judgePayload judges a JSONContains payload. It is marshaled, never bound, so
+// only pointers are followed — asking a Valuer would change what its type
+// marshals to — and an expression found at the end is judged by family. Any
+// other payload is answered as the caller wrote it.
+func judgePayload(value any, family doorFamily) (operand, error) {
+	resolved, _, err := walkOperand(operandWalk{valuerAsked: true}, value)
+	if err != nil {
+		return operand{}, wrapOperandErr(opJSONContains, err)
+	}
+	if _, _, err := expressionOperand(opJSONContains, resolved, family); err != nil {
+		return operand{}, err
+	}
+	return operand{kind: operandBound, value: value}, nil
 }
 
 // renderPredicate renders a judged operand against quotedColumn, the one
@@ -696,7 +732,37 @@ func renderPredicate(quotedColumn, op string, judged operand) squirrel.Sqlizer {
 	if judged.kind == operandEmptySet {
 		return squirrel.Expr(judged.sql)
 	}
+	if judged.kind == operandSplicedList {
+		return boundSQL{sql: quotedColumn + " " + listOperator(op) + " " + judged.sql, args: judged.args}
+	}
 	return comparison(quotedColumn, op, judged.value)
+}
+
+// listOperator spells op's list form: an equality door's list renders as
+// IN / NOT IN, the way squirrel spells it.
+func listOperator(op string) string {
+	if op == opEqual {
+		return opIn
+	}
+	if op == opNotEqual {
+		return opNotIn
+	}
+	return op
+}
+
+// boundSQL is SQL whose arguments are bound as written. Unlike squirrel.Expr it
+// never expands an argument that is itself a squirrel.Sqlizer, so an element
+// beside a spliced expression binds exactly as it would in a plain list.
+type boundSQL struct {
+	sql  string
+	args []any
+}
+
+// ToSql returns the SQL and its arguments unchanged.
+//
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (b boundSQL) ToSql() (sql string, args []any, err error) {
+	return b.sql, b.args, nil
 }
 
 // comparison renders `<column> <op> <value>` through squirrel's construct for
@@ -743,6 +809,9 @@ func orderingOperandErr(op string) error {
 // TYPE, so a list whose elements cannot need resolution is not walked at all.
 var valuerType = reflect.TypeOf((*driver.Valuer)(nil)).Elem()
 
+// rawExpressionType is the element type a list of expressions is walked for.
+var rawExpressionType = reflect.TypeOf(dbtypes.RawExpression{})
+
 // judgeList answers an IN / NOT IN operand with the list squirrel renders,
 // resolving EVERY element that could need it the way the compare doors
 // resolve a single one: a nil pointer — typed, or pointing at a driver.Valuer —
@@ -761,16 +830,21 @@ var valuerType = reflect.TypeOf((*driver.Valuer)(nil)).Elem()
 // []byte, which is a driver.Value and therefore ONE operand, not N.
 //
 // A set holding nothing answers operandEmptySet, which the pass-through path
-// could not tell from a []any length, and a RawExpression the family splices
-// answers its SQL in parentheses, in place of a list.
+// could not tell from a []any length — and so does a nil pointer to a list, a
+// list the caller did not fill, as an untyped nil is. A RawExpression the family
+// splices answers its SQL in parentheses, in place of a list, and each element
+// of a list is judged as its own operand (judgeElements).
 func judgeList(op string, values any, family doorFamily) (operand, error) {
 	if values == nil {
+		return emptySet(op), nil
+	}
+	if nilListPointer(values) {
 		return emptySet(op), nil
 	}
 
 	v := reflect.ValueOf(values)
 	if isListKind(v.Kind()) {
-		return listOperand(op, v, values)
+		return listOperand(op, v, values, family)
 	}
 
 	element, _, resolveErr := resolveOperand(values)
@@ -792,7 +866,7 @@ func judgeList(op string, values any, family doorFamily) (operand, error) {
 	resolved := reflect.ValueOf(element)
 	kind := resolved.Kind()
 	if isListKind(kind) {
-		return listOperand(op, resolved, element)
+		return listOperand(op, resolved, element, family)
 	}
 	if kind == reflect.Map || kind == reflect.Chan {
 		if resolved.Len() == 0 {
@@ -803,11 +877,32 @@ func judgeList(op string, values any, family doorFamily) (operand, error) {
 	return operand{kind: operandNullOrSet, value: []any{element}}, nil
 }
 
-// listOperand answers an already-classified list operand, resolving its
-// elements. It takes both the reflect.Value and the original interface because
-// the two answer different questions: driver.IsValue judges the interface,
-// while the element type and length come from the reflected value.
-func listOperand(op string, v reflect.Value, values any) (operand, error) {
+// nilListPointer reports a nil pointer whose pointee, through every pointer
+// level, is a slice or array. A nil pointer to anything else is a scalar NULL.
+func nilListPointer(value any) bool {
+	r := reflect.ValueOf(value)
+	for r.Kind() == reflect.Pointer {
+		if r.IsNil() {
+			return pointsToList(r.Type())
+		}
+		r = r.Elem()
+	}
+	return false
+}
+
+// pointsToList reports whether t, under every pointer level, is a slice or array.
+func pointsToList(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return isListKind(t.Kind())
+}
+
+// listOperand answers an already-classified list operand at an In / NotIn door.
+// It takes both the reflect.Value and the original interface because the two
+// answer different questions: driver.IsValue judges the interface, while the
+// element type and length come from the reflected value.
+func listOperand(op string, v reflect.Value, values any, family doorFamily) (operand, error) {
 	// A []byte is a driver.Value, not a list — squirrel's own rule, which the
 	// compare doors follow through driver.IsValue. Splitting it into a list of
 	// bytes would turn one operand into N.
@@ -817,28 +912,71 @@ func listOperand(op string, v reflect.Value, values any) (operand, error) {
 	if v.Len() == 0 {
 		return emptySet(op), nil
 	}
+	return judgeElements(op, v, values, family)
+}
 
+// judgeElements judges every element of a list the way a compare door judges
+// one operand: resolved once, then an expression judged by the door's family.
+// Without an expression it answers the resolved list for squirrel to render;
+// with one, the parenthesized list with each expression's SQL in place and every
+// other element bound as a `?`. An empty list is the caller's to answer.
+func judgeElements(op string, v reflect.Value, values any, family doorFamily) (operand, error) {
 	// The ELEMENT TYPE decides whether the list has to be walked. Resolution can
 	// only change an element that is a pointer, an interface (which may hold
-	// one), or a driver.Valuer; for any other element type resolveOperand is the
-	// identity, so walking a []int of a thousand ids would allocate a second
-	// thousand-entry list and box every element to return exactly what came in.
-	// squirrel then makes its own O(N) pass regardless, so the skipped pass is
-	// pure duplication, not a shortcut.
+	// one), or a driver.Valuer, and only a RawExpression element is judged as
+	// one; for any other element type the walk is the identity, so walking a
+	// []int of a thousand ids would allocate a second thousand-entry list and box
+	// every element to return exactly what came in. squirrel then makes its own
+	// O(N) pass regardless, so the skipped pass is pure duplication, not a
+	// shortcut.
 	elem := v.Type().Elem()
-	if elem.Kind() != reflect.Pointer && elem.Kind() != reflect.Interface && !elem.Implements(valuerType) {
+	if elem.Kind() != reflect.Pointer && elem.Kind() != reflect.Interface && !elem.Implements(valuerType) && elem != rawExpressionType {
 		return operand{kind: operandNullOrSet, value: values}, nil
 	}
 
 	resolved := make([]any, v.Len())
+	var exprs []string
 	for i := range resolved {
 		element, _, resolveErr := resolveOperand(v.Index(i).Interface())
 		if resolveErr != nil {
-			return operand{}, fmt.Errorf("resolving element %d of the %s operand: %w", i, op, resolveErr)
+			return operand{}, elementErr(i, op, resolveErr)
+		}
+		exprSQL, isExpr, exprErr := expressionOperand(op, element, family)
+		if exprErr != nil {
+			return operand{}, elementErr(i, op, exprErr)
+		}
+		if isExpr {
+			if exprs == nil {
+				exprs = make([]string, len(resolved))
+			}
+			exprs[i] = exprSQL
 		}
 		resolved[i] = element
 	}
+	if exprs != nil {
+		return splicedList(resolved, exprs), nil
+	}
 	return operand{kind: operandNullOrSet, value: resolved}, nil
+}
+
+// splicedList answers a list holding a spliced expression: each expression's SQL
+// in place, every other element a bound `?`.
+func splicedList(resolved []any, exprs []string) operand {
+	parts := make([]string, len(resolved))
+	var args []any
+	for i, element := range resolved {
+		if exprs[i] != "" {
+			parts[i] = exprs[i]
+			continue
+		}
+		parts[i] = "?"
+		args = append(args, element)
+	}
+	return operand{kind: operandSplicedList, sql: "(" + strings.Join(parts, ",") + ")", args: args}
+}
+
+func elementErr(i int, op string, err error) error {
+	return fmt.Errorf("resolving element %d of the %s operand: %w", i, op, err)
 }
 
 // emptySet answers a set holding nothing with op's constant.
