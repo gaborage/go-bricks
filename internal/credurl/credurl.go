@@ -58,7 +58,7 @@ func RedactError(err error, raw, reason string) error {
 
 // maskRawIn replaces every rendering of raw in msg with its masked form.
 func maskRawIn(msg, raw string) string {
-	masked := maskPassword(raw, false, "")
+	masked := maskPassword(raw, false)
 	if masked == raw {
 		return msg
 	}
@@ -71,15 +71,17 @@ func maskRawIn(msg, raw string) string {
 // rejected, and an unescaped '/', '?' or '#' in the password lands part of the password
 // where a port belongs ("invalid port \":pa\" after host"). Masking the URL alone leaves
 // that copy behind, so rebuild the whole rendering instead of scrubbing it. urlErr.URL
-// is what url.Parse actually saw — the raw URL with any '#' fragment already stripped —
-// so it, not the raw URL the caller dialed, is the string that reached the message; what
-// was stripped is read only for an '@' that marks the authority as userinfo.
+// is what url.Parse actually saw — raw with any '#' fragment already cut — so it, not
+// raw, is the string that reached the message. raw is read only for an '@' that marks
+// the authority as userinfo, and only when it extends urlErr.URL: a *url.Error naming
+// another URL, such as a dialer's own, is judged alone.
 func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
-	var cut string
-	if strings.HasPrefix(raw, urlErr.URL) {
-		cut = raw[len(urlErr.URL):]
+	src := urlErr.URL
+	if strings.HasPrefix(raw, src) {
+		src = raw // url.Parse cut raw's '#' tail before reporting
 	}
-	masked := maskPassword(urlErr.URL, true, cut)
+	_, after, _ := strings.Cut(src, "://")
+	masked := maskPassword(urlErr.URL, strings.Contains(after, "@"))
 	if masked == urlErr.URL {
 		return msg
 	}
@@ -95,9 +97,9 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 // parsing it — the URLs that leak are precisely the ones url.Parse rejects.
 // Non-URL strings (no "://") and URLs without a password pass through unchanged:
 // the leak is url.Parse's %q rendering of what it was handed, which only fires for
-// the URL form. rejected reports that url.Parse rejected raw, and cut is what it
-// stripped from raw's end before reporting.
-func maskPassword(raw string, rejected bool, cut string) string {
+// the URL form. userinfo reports that an '@' follows the authority, so a segment
+// that reads as host:port is still userinfo.
+func maskPassword(raw string, userinfo bool) string {
 	const schemeSep = "://"
 	sep := strings.Index(raw, schemeSep)
 	if sep == -1 {
@@ -115,17 +117,13 @@ func maskPassword(raw string, rejected bool, cut string) string {
 	at := strings.LastIndex(rest[:end], "@")
 	if at == -1 {
 		// An unescaped '/', '?' or '#' in the password hides the '@' behind the
-		// authority terminator, and url.Parse drops everything from '#' on before it
-		// reports, so the '@' can be missing from the string entirely. Read the segment
-		// as userinfo when it cannot be a host[:port]. A digit-led password passes for a
-		// port, so once url.Parse rejected the URL, and so echoes it, an '@' after the
-		// segment, here or in what it cut, makes the segment userinfo too.
-		at = strings.LastIndex(rest, "@")
-		atFollows := at != -1 || strings.Contains(cut, "@")
-		if (!rejected || !atFollows) && looksLikeHostPort(rest[:end]) {
+		// authority terminator, if raw holds it at all. A segment that cannot be a
+		// host[:port] is userinfo; one that can, as a digit-led password does, is
+		// userinfo only when an '@' follows.
+		if !userinfo && looksLikeHostPort(rest[:end]) {
 			return raw
 		}
-		if at == -1 {
+		if at = strings.LastIndex(rest, "@"); at == -1 {
 			at = len(rest)
 		}
 	}
@@ -144,7 +142,6 @@ func maskPassword(raw string, rejected bool, cut string) string {
 // "amqps://user:1234/secret@broker" as written, and an accepted URL is never rendered
 // into an error, so the raw-URL pass leaves it alone on purpose: masking it would buy
 // nothing and would mangle its mirror image, a passwordless URL whose path holds an '@'.
-// Only a rejection for some other reason renders it, and then maskPassword masks it.
 func looksLikeHostPort(authority string) bool {
 	if strings.HasPrefix(authority, "[") {
 		// Skip an IPv6 literal so only a trailing ":port" is examined; an unterminated

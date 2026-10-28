@@ -266,6 +266,8 @@ func digitPasswordCases() []redactErrorCase {
 		redactErrorCase{name: "credential_free_ipv6_url_with_trailing_newline", raw: "amqp://[::1]:5672/vh\n", parse: parseRejects, same: true},
 		// What url.Parse cut counts only for an '@' in it.
 		redactErrorCase{name: "credential_free_url_with_cut_fragment", raw: " amqp://broker:5672/vh#frag", parse: parseRejects, same: true},
+		// Only an '@' after the scheme separator can follow the authority.
+		redactErrorCase{name: "at_sign_before_scheme_is_not_userinfo", raw: "user@amqp://broker:5672/vh", parse: parseRejects, same: true},
 		// The mirror image: no credentials, an '@' in the path, rejected for another
 		// reason. It reads as userinfo and is over-masked, which is the safe direction.
 		redactErrorCase{
