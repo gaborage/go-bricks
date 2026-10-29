@@ -42,8 +42,8 @@ var deliveredEmptyRejectingKeys = []deliveredEmptyRejection{
 // empty STRING (or a YAML null) under any spelling decode accepts. It is a composite of two
 // questions. PRESENCE is the recorded delivery of the key by an operator layer (ADR-104) —
 // these keys carry defaults, so the framework's own preload must not answer it. EMPTINESS is
-// then read from the raw koanf value at each delivered spelling (ADR-156), any one of them
-// empty refusing the key, which keeps the shape the source actually delivered —
+// then read from the raw koanf value at the delivered spelling (ADR-156), which keeps the
+// shape the source actually delivered —
 //
 //	unset                  -> []string{"127.0.0.1", "::1"}   (the default; not delivered)
 //	DEBUG_ALLOWEDIPS=      -> ""                             (delivered empty; rejected)
@@ -60,7 +60,7 @@ var deliveredEmptyRejectingKeys = []deliveredEmptyRejection{
 // app-layer ADR-049 gate remains the second seam.
 func validateNoDeliveredEmptyKeys(cfg *Config) error {
 	for _, r := range deliveredEmptyRejectingKeys {
-		if !anyDeliveredEmpty(cfg.deliveries(r.key, false)) {
+		if raw, ok := cfg.deliveredValue(r.key); !ok || !deliveredEmptyValue(raw) {
 			continue
 		}
 		return &ConfigError{
