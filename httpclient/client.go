@@ -26,6 +26,7 @@ import (
 
 	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
 	"github.com/gaborage/go-bricks/internal/backoff"
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -46,6 +47,10 @@ const (
 	// errMsgRequestExecutionFailed is the NewNetworkError message executionError gives
 	// every terminal transport error that does not already carry a ClientError.
 	errMsgRequestExecutionFailed = "request execution failed"
+
+	// Reasons that stand in for a *url.Error's own when it quotes part of a URL or a response.
+	invalidURLReason        = "invalid URL"
+	withheldTransportReason = "transport error detail withheld"
 )
 
 // client implements the Client interface
@@ -965,8 +970,7 @@ func executionError(err error) error {
 	if errors.As(err, &clientErr) {
 		return clientErr
 	}
-	stripURLUserinfo(err)
-	return NewNetworkError(errMsgRequestExecutionFailed, err)
+	return NewNetworkError(errMsgRequestExecutionFailed, credurl.RedactURLErrorIn(err, withheldTransportReason))
 }
 
 func (c *client) processHTTPResponse(
@@ -1315,7 +1319,7 @@ func (c *client) buildRequest(ctx context.Context, method string, req *Request) 
 
 	httpReq, err := nethttp.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
-		return nil, NewNetworkError("failed to create HTTP request", err)
+		return nil, NewNetworkError("failed to create HTTP request", credurl.RedactURLErrorIn(err, invalidURLReason))
 	}
 
 	c.applyHeaders(httpReq, req)

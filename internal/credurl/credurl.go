@@ -250,6 +250,64 @@ func RedactForLog(raw string) string {
 	return Redact(raw)
 }
 
+// RedactURLError returns a copy of e whose URL renders as Redact renders it. A net/http reason
+// that quotes a redirect's Location or a response header line keeps its words with every quoted
+// value masked; any other Err that quotes input — a URL, or text of e.URL that Redact drops —
+// becomes reason. The original stays reachable through Unwrap; any other Err is kept as the same
+// value, so Timeout() still reaches it. e is never mutated.
+func RedactURLError(e *url.Error, reason string) *url.Error {
+	redacted := *e
+	redacted.URL = Redact(e.URL)
+	if e.Err == nil {
+		return &redacted
+	}
+	msg := e.Err.Error()
+	if quotesResponse(msg) {
+		redacted.Err = &redactedError{err: e.Err, msg: maskQuoted(msg, func(string) bool { return true })}
+	} else if quotesInput(msg, e.URL) {
+		redacted.Err = &redactedError{err: e.Err, msg: reason}
+	}
+	return &redacted
+}
+
+// RedactURLErrorIn returns err unchanged unless it holds a *url.Error. Then the result is
+// RedactURLError's copy with the whole userinfo dropped. net/url and net/http return the
+// *url.Error outermost, so the copy replaces err. On a refused redirect its URL is the raw
+// Location, which net/http does not strip.
+func RedactURLErrorIn(err error, reason string) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	redacted := RedactURLError(urlErr, reason)
+	redacted.URL = StripUserinfo(redacted.URL)
+	return redacted
+}
+
+// quotesResponse reports net/http's reasons that quote a redirect's Location or a response
+// header line: response text, which Redact cannot judge against the request URL.
+func quotesResponse(msg string) bool {
+	return strings.Contains(msg, "failed to parse Location header ") || strings.Contains(msg, "malformed MIME header line: ")
+}
+
+// quotesInput reports a quoted URL in msg, or quoted text of raw that Redact drops.
+func quotesInput(msg, raw string) bool {
+	drops := dropsRawText(raw, strings.Contains)
+	return maskQuoted(msg, func(text string) bool { return strings.Contains(text, "://") || drops(text) }) != msg
+}
+
+// StripUserinfo drops the whole userinfo from rendered, which must be Redact's output:
+// there the last '@' ends the userinfo, since Redact leaves no '@' after it and its scheme
+// guard leaves none before "://". Without an '@', rendered is returned unchanged.
+func StripUserinfo(rendered string) string {
+	at := strings.LastIndex(rendered, "@")
+	if at == -1 {
+		return rendered
+	}
+	authority := strings.Index(rendered, "://") + len("://")
+	return rendered[:authority] + rendered[at+1:]
+}
+
 // maskRejectedAuthority masks an authority with no '@' from its first ':' outside an
 // IPv6 literal: an unescaped '/', '?' or '#' in a password can hide or cut away the
 // '@', so a rejected host:port may be userinfo.

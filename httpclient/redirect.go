@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	nethttp "net/http"
-	"net/url"
 	"strings"
 )
 
@@ -72,20 +71,4 @@ func hasNonEmpty(values []string) bool {
 		}
 	}
 	return false
-}
-
-// stripURLUserinfo drops userinfo from the *url.Error net/http returns. On a refused
-// redirect it carries the raw Location, which net/http does not strip of its password
-// the way it strips the request's own URL.
-func stripURLUserinfo(err error) {
-	var urlErr *url.Error
-	if !errors.As(err, &urlErr) {
-		return
-	}
-	u, parseErr := url.Parse(urlErr.URL)
-	if parseErr != nil || u.User == nil {
-		return
-	}
-	u.User = nil
-	urlErr.URL = u.String()
 }

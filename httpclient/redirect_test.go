@@ -2,7 +2,7 @@ package httpclient
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	nethttp "net/http"
 	"net/http/httptest"
 	"net/url"
@@ -320,21 +320,108 @@ func TestClientRefusesADowngradeAfterAnUpgradeHop(t *testing.T) {
 	assert.Equal(t, int64(1), hits.Load())
 }
 
-func TestStripURLUserinfo(t *testing.T) {
+// locationSecrets are the parts of a credentialed URL no error may render.
+var locationSecrets = []string{"zq9x", "u:", "token", "frag"}
+
+func assertNoLocationSecret(t *testing.T, err error) {
+	t.Helper()
+	for _, secret := range locationSecrets {
+		assert.NotContains(t, err.Error(), secret)
+	}
+}
+
+func TestClientRedirectErrorDropsLocationCredentials(t *testing.T) {
+	plain, seen := authServer(t)
+	secure, _ := redirectTo(t, strings.Replace(plain.URL, "http://", "http://u:zq9x@", 1)+"/landing?token=zq9x#frag")
+	c, err := NewBuilder(quietLogger()).WithTransport(secure.Client().Transport).Build()
+	require.NoError(t, err)
+
+	_, err = c.Get(context.Background(), &Request{URL: secure.URL})
+	require.ErrorIs(t, err, ErrRedirectDowngrade)
+	assert.Equal(t, `network error: request execution failed: Get "`+plain.URL+`/landing?xxxxx": `+ErrRedirectDowngrade.Error(), err.Error())
+	assertNoLocationSecret(t, err)
+	assert.Empty(t, seen())
+}
+
+// net/http quotes a Location it cannot parse, or a header line it cannot read, in the
+// *url.Error's reason. The response is written raw so a control byte reaches the client.
+func TestClientLocationParseErrorWithholdsTheLocation(t *testing.T) {
+	const parseReason = `failed to parse Location header "xxxxx": parse "xxxxx": `
+	tests := []struct{ name, location, want string }{
+		{name: "absolute_password_location", location: "https://u:zq9x%zz@api.example/x?token=zq9x#frag", want: parseReason + `invalid URL escape "xxxxx"`},
+		{name: "scheme_relative_userinfo", location: "//u:zq9x%zz@api.example/x", want: parseReason + `invalid URL escape "xxxxx"`},
+		{name: "scheme_less_userinfo", location: ":zq9x@api.example/x", want: parseReason + "missing protocol scheme"},
+		{name: "relative_query_only", location: "/x%zz?token=zq9x", want: parseReason + `invalid URL escape "xxxxx"`},
+		{name: "control_byte_header_line", location: "/x\x01?token=zq9x", want: `net/http: HTTP/1.x transport connection broken: malformed MIME header line: "xxxxx"`},
+	}
+	c, err := NewBuilder(quietLogger()).Build()
+	require.NoError(t, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+				conn, buf, _ := w.(nethttp.Hijacker).Hijack()
+				buf.WriteString("HTTP/1.1 302 Found\r\nLocation: " + tc.location + "\r\nContent-Length: 0\r\n\r\n")
+				buf.Flush()
+				conn.Close()
+			}))
+			t.Cleanup(srv.Close)
+
+			_, err := c.Get(context.Background(), &Request{URL: srv.URL})
+			require.Error(t, err)
+			assert.Equal(t, `network error: request execution failed: Get "`+srv.URL+`": `+tc.want, err.Error())
+			assertNoLocationSecret(t, err)
+		})
+	}
+}
+
+func TestClientRequestBuildErrorWithholdsTheURL(t *testing.T) {
+	tests := []struct{ name, url, want string }{
+		{name: "password_escape_withheld", url: "https://u:zq9x%zz@api.example/x?token=zq9x#frag", want: `parse "https://api.example/x?xxxxx": invalid URL`},
+		{name: "path_escape_keeps_reason", url: "https://api.example/x%zz?token=zq9x#frag", want: `parse "https://api.example/x%zz?xxxxx": invalid URL escape "%zz"`},
+	}
+	c, err := NewBuilder(quietLogger()).Build()
+	require.NoError(t, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := c.Get(context.Background(), &Request{URL: tc.url})
+			require.Error(t, err)
+			assert.Equal(t, "network error: failed to create HTTP request: "+tc.want, err.Error())
+			assertNoLocationSecret(t, err)
+		})
+	}
+}
+
+func TestExecutionErrorRedactsTheURLError(t *testing.T) {
 	tests := []struct {
 		name string
 		url  string
+		err  error
 		want string
 	}{
-		{name: "userinfo_dropped", url: "http://user:" + redirectSecret + "@host/landing", want: "http://host/landing"},
-		{name: "no_userinfo_unchanged", url: "http://host/landing", want: "http://host/landing"},
-		{name: "unparseable_unchanged", url: "http://[::1%zz]/", want: "http://[::1%zz]/"},
+		{name: "userinfo_dropped", url: "http://user:" + redirectSecret + "@host/landing", want: `"http://host/landing": ` + ErrRedirectDowngrade.Error()},
+		{name: "lone_userinfo_dropped", url: "http://" + redirectSecret + "@host/landing", want: `"http://host/landing": ` + ErrRedirectDowngrade.Error()},
+		{name: "query_masked_fragment_dropped", url: "http://host/landing?token=zq9x#frag", want: `"http://host/landing?xxxxx": ` + ErrRedirectDowngrade.Error()},
+		{name: "no_userinfo_unchanged", url: "http://host/landing", want: `"http://host/landing": ` + ErrRedirectDowngrade.Error()},
+		{
+			name: "quoting_reason_withheld",
+			url:  "http://host/landing",
+			err:  errors.New(`refusing "https://u:zq9x@h"`),
+			want: `"http://host/landing": transport error detail withheld`,
+		},
+		{name: "unparseable_host_userinfo_dropped", url: "http://user:" + redirectSecret + "@[::1%zz]/", want: `"http://[::1%zz]/": ` + ErrRedirectDowngrade.Error()},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			urlErr := &url.Error{Op: "Get", URL: tc.url, Err: ErrRedirectDowngrade}
-			stripURLUserinfo(fmt.Errorf("wrapped: %w", urlErr))
-			assert.Equal(t, tc.want, urlErr.URL)
+			cause := tc.err
+			if cause == nil {
+				cause = ErrRedirectDowngrade
+			}
+			urlErr := &url.Error{Op: "Get", URL: tc.url, Err: cause}
+			got := executionError(urlErr)
+			assert.Equal(t, "network error: request execution failed: Get "+tc.want, got.Error())
+			assertNoLocationSecret(t, got)
+			assert.Equal(t, tc.url, urlErr.URL, "the transport's error is never mutated")
+			assert.ErrorIs(t, got, cause)
 		})
 	}
 }

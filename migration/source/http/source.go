@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gaborage/go-bricks/internal/credurl"
 )
 
 // DefaultPageLimit is the default page size requested from the control-plane.
@@ -107,10 +109,10 @@ func New(baseURL string, opts Options) (*TenantSource, error) {
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("migration/source/http: parse baseURL: %w", err)
+		return nil, fmt.Errorf("migration/source/http: parse baseURL: %w", credurl.RedactURLErrorIn(err, invalidURLReason))
 	}
 	if u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("migration/source/http: baseURL must include scheme and host: %q", baseURL)
+		return nil, fmt.Errorf("migration/source/http: baseURL must include scheme and host: %q", redactedURL(baseURL))
 	}
 	// url.Parse lowercases the scheme per RFC 3986, so a direct equality check
 	// is sufficient here.
@@ -165,14 +167,25 @@ func redirectGuard(client *stdhttp.Client, baseHost string, allowInsecure bool) 
 			return errors.New("stopped after 10 redirects")
 		}
 		if req.URL.Scheme == "http" && !allowInsecure {
-			return fmt.Errorf("%w: redirect to %q downgrades to http", ErrInsecureScheme, req.URL.Redacted())
+			return fmt.Errorf("%w: redirect to %s downgrades to http", ErrInsecureScheme, redactedURL(req.URL.String()))
 		}
 		if req.URL.Host != baseHost {
-			return fmt.Errorf("control-plane redirected off-host to %q; refusing to follow", req.URL.Redacted())
+			return fmt.Errorf("control-plane redirected off-host to %s; refusing to follow", redactedURL(req.URL.String()))
 		}
 		return nil
 	}
 	return &c
+}
+
+// Reasons that stand in for a *url.Error's own when it quotes part of a URL or a response.
+const (
+	invalidURLReason        = "invalid URL"
+	withheldTransportReason = "transport error detail withheld"
+)
+
+// redactedURL renders raw under the credential-URL posture with its whole userinfo dropped.
+func redactedURL(raw string) string {
+	return credurl.StripUserinfo(credurl.Redact(raw))
 }
 
 // envelope mirrors the go-bricks server.APIResponse shape (see server/handler.go).
@@ -266,7 +279,7 @@ func (s *TenantSource) fetchPage(ctx context.Context, cursor string) (*envelopeD
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request control-plane: %w", err)
+		return nil, fmt.Errorf("request control-plane: %w", credurl.RedactURLErrorIn(err, withheldTransportReason))
 	}
 	defer resp.Body.Close()
 

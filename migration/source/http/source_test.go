@@ -8,6 +8,7 @@ import (
 	stdhttp "net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -289,6 +290,76 @@ func TestHTTPTenantSourceRefusesOffHostRedirect(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "off-host")
 	assert.NotErrorIs(t, err, ErrInsecureScheme)
+}
+
+// locationSecrets are the parts of a credentialed URL no error may render; "token="
+// because ErrInsecureScheme's own text names the bearer token.
+var locationSecrets = []string{"zq9x", "u:", "token=", "frag"}
+
+// TestHTTPTenantSourceRedirectErrorDropsLocationCredentials pins both refusals: net/http
+// renders the raw Location in its *url.Error, around the guard's own rendering. It quotes
+// a Location it cannot parse in its reason.
+func TestHTTPTenantSourceRedirectErrorDropsLocationCredentials(t *testing.T) {
+	const hostSlot = "{host}"
+	tests := []struct {
+		name     string
+		location string
+		want     string
+	}{
+		{
+			name:     "off_host",
+			location: "https://u:zq9x@other-host.invalid/tenants?token=zq9x#frag",
+			want:     `request control-plane: Get "https://other-host.invalid/tenants?xxxxx": control-plane redirected off-host to https://other-host.invalid/tenants?xxxxx; refusing to follow`,
+		},
+		{
+			name:     "scheme_downgrade",
+			location: "http://u:zq9x@{host}/tenants?token=zq9x#frag",
+			want:     `request control-plane: Get "http://{host}/tenants?xxxxx": ` + ErrInsecureScheme.Error() + `: redirect to http://{host}/tenants?xxxxx downgrades to http`,
+		},
+		{
+			name:     "unparseable_scheme_relative_location",
+			location: "//u:zq9x%zz@api.example/x",
+			want:     `request control-plane: Get "https://{host}/tenants?xxxxx": failed to parse Location header "xxxxx": parse "xxxxx": invalid URL escape "xxxxx"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+				stdhttp.Redirect(w, r, strings.ReplaceAll(tc.location, hostSlot, r.Host), stdhttp.StatusFound)
+			}))
+			defer srv.Close()
+			src, err := New(srv.URL, Options{Client: srv.Client()})
+			require.NoError(t, err)
+
+			_, err = src.ListTenants(context.Background())
+			require.Error(t, err)
+			assert.Equal(t, strings.ReplaceAll(tc.want, hostSlot, srv.Listener.Addr().String()), err.Error())
+			for _, secret := range locationSecrets {
+				assert.NotContains(t, err.Error(), secret)
+			}
+		})
+	}
+}
+
+func TestHTTPTenantSourceNewErrorsWithholdCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		base string
+		want string
+	}{
+		{name: "invalid_escape_after_password", base: "https://u:zq9x%zz@api.example/x?token=zq9x#frag", want: `migration/source/http: parse baseURL: parse "https://api.example/x?xxxxx": invalid URL`},
+		{name: "missing_host", base: "https://u:zq9x@/x?token=zq9x#frag", want: `migration/source/http: baseURL must include scheme and host: "https:///x?xxxxx"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.base, Options{})
+			require.Error(t, err)
+			assert.Equal(t, tc.want, err.Error())
+			for _, secret := range locationSecrets {
+				assert.NotContains(t, err.Error(), secret)
+			}
+		})
+	}
 }
 
 func TestHTTPTenantSourceHonorsCallerCheckRedirect(t *testing.T) {

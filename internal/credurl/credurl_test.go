@@ -792,3 +792,112 @@ func seamCases() []redactErrorCase {
 		},
 	}
 }
+
+// TestRedactURLError pins each condition: every row fails when only its condition is dropped.
+func TestRedactURLError(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		err     error
+		wantURL string
+		wantErr string
+	}{
+		{name: "nil_err_kept", url: "https://u:zq9x@h/x?token=zq9x", wantURL: "https://u:xxxxx@h/x?xxxxx"},
+		{name: "unquoted_err_kept", url: "https://u:zq9x@h/x", err: errors.New("connection refused"), wantURL: "https://u:xxxxx@h/x"},
+		{name: "quoted_url_withheld", url: "https://h/x", err: errors.New(`refusing "https://u:zq9x@other.example/y"`), wantURL: "https://h/x", wantErr: testReason},
+		{name: "quoted_dropped_text_withheld", url: "https://u:zq9x%zz@h/x", err: errors.New(`invalid URL escape "%zz"`), wantURL: "https://u:xxxxx@h/x", wantErr: testReason},
+		{name: "quoted_kept_text_kept", url: "https://h/x%zz", err: errors.New(`invalid URL escape "%zz"`), wantURL: "https://h/x%zz"},
+		{
+			name:    "location_reason_quotes_masked",
+			url:     "https://h/x",
+			err:     errors.New(`failed to parse Location header "//u:zq9x@h/%zz": parse "//u:zq9x@h/%zz": invalid URL escape "%zz"`),
+			wantURL: "https://h/x",
+			wantErr: `failed to parse Location header "xxxxx": parse "xxxxx": invalid URL escape "xxxxx"`,
+		},
+		{
+			name:    "response_header_line_masked",
+			url:     "https://h/x",
+			err:     errors.New(`net/http: HTTP/1.x transport connection broken: malformed MIME header line: "Location: /x\x01?token=zq9x"`),
+			wantURL: "https://h/x",
+			wantErr: `net/http: HTTP/1.x transport connection broken: malformed MIME header line: "xxxxx"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &url.Error{Op: "Get", URL: tc.url, Err: tc.err}
+			got := RedactURLError(e, testReason)
+			assert.Equal(t, &url.Error{Op: "Get", URL: tc.url, Err: tc.err}, e, "e is never mutated")
+			assert.Equal(t, "Get", got.Op)
+			assert.Equal(t, tc.wantURL, got.URL)
+			assert.NotContains(t, got.Error(), "zq9x")
+			if tc.wantErr == "" {
+				assert.Equal(t, tc.err, got.Err)
+				return
+			}
+			require.EqualError(t, got.Err, tc.wantErr)
+			assert.ErrorIs(t, got.Err, tc.err)
+		})
+	}
+}
+
+func TestRedactURLErrorIn(t *testing.T) {
+	const reason = "detail withheld"
+	refused := errors.New("connection refused")
+	tests := []struct {
+		name   string
+		err    error
+		want   string
+		absent string
+	}{
+		{name: "not_url_error_unchanged", err: refused, want: "connection refused", absent: "zq9x"},
+		{
+			name:   "userinfo_dropped",
+			err:    &url.Error{Op: "Get", URL: "https://usr7k:zq9x@h/x?token=zq9x", Err: refused},
+			want:   `Get "https://h/x?xxxxx": connection refused`,
+			absent: "usr7k",
+		},
+		{
+			name:   "wrapped_url_error_replaces_err",
+			err:    fmt.Errorf("outer: %w", &url.Error{Op: "Get", URL: "https://h/x?token=zq9x", Err: refused}),
+			want:   `Get "https://h/x?xxxxx": connection refused`,
+			absent: "outer",
+		},
+		{
+			name:   "reason_threaded",
+			err:    &url.Error{Op: "Get", URL: "https://h/x", Err: errors.New(`refusing "https://u:zq9x@other.example/y"`)},
+			want:   `Get "https://h/x": ` + reason,
+			absent: "zq9x",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactURLErrorIn(tc.err, reason)
+			require.EqualError(t, got, tc.want)
+			assert.NotContains(t, got.Error(), tc.absent)
+			var urlErr *url.Error
+			if !errors.As(tc.err, &urlErr) {
+				assert.Same(t, tc.err, got)
+				return
+			}
+			assert.ErrorIs(t, got, urlErr.Err)
+		})
+	}
+}
+
+func TestStripUserinfo(t *testing.T) {
+	tests := []struct {
+		name     string
+		rendered string
+		want     string
+	}{
+		{name: "userinfo_dropped", rendered: "https://u:xxxxx@h/x?xxxxx", want: "https://h/x?xxxxx"},
+		{name: "masked_userinfo_dropped", rendered: "https://xxxxx@h", want: "https://h"},
+		{name: "no_userinfo_unchanged", rendered: "https://h/x?xxxxx", want: "https://h/x?xxxxx"},
+		{name: "placeholder_unchanged", rendered: "xxxxx", want: "xxxxx"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, StripUserinfo(tc.rendered))
+		})
+	}
+}

@@ -2692,6 +2692,8 @@ and only when it holds no `@`, `/`, `?` or `#`,
 a non-empty query `?xxxxx`, the fragment dropped. `RedactError`, behind the AMQP `connect()` dial
 error, the streams environment and start errors and the Oracle DSN error, renders through the same
 rules, where it kept the query and a lone username and trusted url.Parse once it accepted the URL.
+`RedactURLError` does the same, with the userinfo dropped, behind the httpclient transport and
+request-build errors and the migration control-plane source's errors.
 An unencoded `/`, `?` or `#` in a password makes url.Parse end the authority early, so the userinfo
 now runs to the last `@` after `://`, across the `#` url.Parse cut on the `*url.Error` path, with
 all after it masked when a `?` precedes it, and a rejected URL with no `@` is masked from its first
