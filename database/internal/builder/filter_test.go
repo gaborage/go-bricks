@@ -380,31 +380,36 @@ func TestFilterOrWithSelectQueryBuilder(t *testing.T) {
 
 // ========== Oracle-Specific Tests ==========
 
-func TestFilterOracleReservedWords(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.Oracle)
-	f := qb.Filter()
-
+// TestFilterComparisonsQuoteReservedWords pins the column each f compare door
+// renders: Oracle quotes a reserved word, PostgreSQL leaves it as written.
+func TestFilterComparisonsQuoteReservedWords(t *testing.T) {
 	tests := []struct {
 		name   string
+		vendor dbtypes.Vendor
 		column string
+		quoted string
 	}{
-		{"number", "number"},
-		{"level", "level"},
-		{"size", "size"},
-		{"access", "access"},
-		{"order", "order"},
+		{"oracle_number", dbtypes.Oracle, "number", `"number"`},
+		{"oracle_level", dbtypes.Oracle, "level", `"level"`},
+		{"oracle_size", dbtypes.Oracle, "size", `"size"`},
+		{"oracle_access", dbtypes.Oracle, "access", `"access"`},
+		{"oracle_order", dbtypes.Oracle, "order", `"order"`},
+		{"postgresql_number", dbtypes.PostgreSQL, "number", "number"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			filter := f.Eq(tt.column, "value")
-			sql, args, err := filter.ToSQL()
-
-			require.NoError(t, err)
-			// Verify quoting
-			assert.Contains(t, sql, `"`+tt.column+`"`)
-			assert.Equal(t, []any{"value"}, args)
-		})
+		f := NewQueryBuilder(tt.vendor).Filter()
+		for _, d := range compareDoors {
+			if d.f == nil {
+				continue
+			}
+			t.Run(tt.name+"/"+d.name, func(t *testing.T) {
+				sql, args, err := d.f(f, tt.column, "value").ToSQL()
+				require.NoError(t, err)
+				assert.Equal(t, tt.quoted+" "+d.op+" ?", sql)
+				assert.Equal(t, []any{"value"}, args)
+			})
+		}
 	}
 }
 
@@ -1791,8 +1796,9 @@ func TestFilterCompareDoorsBindTheResolvedValue(t *testing.T) {
 }
 
 // TestInResolvesTypedPointerSliceElements guards the fast path added for large
-// lists: a slice whose ELEMENT TYPE can never be a nil pointer or a Valuer is
-// passed through unresolved, because resolving it could not change any element.
+// lists: a slice whose ELEMENT TYPE can never be a nil pointer, a Valuer or a
+// RawExpression is passed through unresolved, because judging it could not
+// change any element.
 // A []*int can, so it must still take the per-element path — this is the case
 // that fails if the fast path's type test is widened by mistake.
 func TestInResolvesTypedPointerSliceElements(t *testing.T) {
@@ -2109,8 +2115,8 @@ type inScalarStatus string
 
 type inScalarPoint struct{ X int }
 
-// inValuerList is a slice that is also a driver.Valuer: squirrel asks it for
-// its value and binds the answer as one operand.
+// inValuerList is a slice that is also a driver.Valuer: the door asks it for
+// its value, whatever its length, and binds the answer as one operand.
 type inValuerList []int
 
 func (inValuerList) Value() (driver.Value, error) { return "asked", nil }
@@ -2250,9 +2256,10 @@ func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 	}
 }
 
-// TestInDoorsKeepTheWholeOperandRendering pins the pre-#2119 rendering of a map,
-// a chan, or a slice that is a driver.Valuer: bound as one `=` / `<>` argument,
-// or the empty-set constant when it holds nothing.
+// TestInDoorsKeepTheWholeOperandRendering pins the pre-#2119 rendering of a map
+// or a chan: bound as one `=` / `<>` argument, or the empty-set constant when it
+// holds nothing. A slice that is a driver.Valuer is not one of them: it is
+// resolved first and its answer judged in its place (TestOperandJudgeAtTheListDoors).
 func TestInDoorsKeepTheWholeOperandRendering(t *testing.T) {
 	var nilMap map[string]int
 	values := map[string]int{"a": 1}
@@ -2266,7 +2273,6 @@ func TestInDoorsKeepTheWholeOperandRendering(t *testing.T) {
 		{name: "empty_map", value: map[string]int{}, bound: false, wantArgs: nil},
 		{name: "nil_map", value: nilMap, bound: false, wantArgs: nil},
 		{name: "empty_chan", value: make(chan int), bound: false, wantArgs: nil},
-		{name: "valuer_slice", value: inValuerList{1, 2}, bound: true, wantArgs: []any{"asked"}},
 	}
 
 	for _, v := range inListVendors {

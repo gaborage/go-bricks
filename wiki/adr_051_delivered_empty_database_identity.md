@@ -6,9 +6,10 @@
 > **Amended (2026-10-28, [ADR-156](adr_156_delivered_empty_checks_match_every_spelling.md), #2210):**
 > the door finds an identity key under any spelling decode accepts (`Host:`, `Database:`),
 > segment by segment with `strings.EqualFold`, in root, named and tenant sections, and a named
-> section reports this ADR's message instead of the generic "incomplete" one. A configured
-> section is also refused when one identity key arrives in two spellings and either is empty
-> or null. Offending keys are still named by their lowercase path.
+> section reports this ADR's message instead of the generic "incomplete" one. Two spellings of
+> one identity key are refused earlier, at decode, as
+> [ADR-157](adr_157_config_key_spelling_refused.md) twins. Offending keys are still named by
+> their lowercase path.
 >
 > **Amended (2026-09-06, [ADR-104](adr_104_key_presence_recorded_at_merge_seam.md)):**
 > the identity door asks Presence — the key set recorded at the merge seam when each

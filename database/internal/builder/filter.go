@@ -73,6 +73,7 @@ func newFilterFactory(qb *QueryBuilder) *FilterFactory {
 // renders IS NULL.
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
+// A list operand renders IN, each element resolved and judged as In judges it.
 func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
 	return comparePredicate(ff.qb, column, opEqual, value, filterFamily, wrapFilter)
 }
@@ -82,6 +83,7 @@ func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
 // A nil operand renders IS NOT NULL.
 // A RawExpression, or a non-nil pointer to one, is refused with
 // dbtypes.ErrExpressionInFilter at ToSQL().
+// A list operand renders NOT IN, each element resolved and judged as NotIn judges it.
 func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
 	return comparePredicate(ff.qb, column, opNotEqual, value, filterFamily, wrapFilter)
 }
@@ -125,7 +127,9 @@ func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 // In creates an IN filter (column IN (values...)).
 // Accepts both slices and scalar values. A scalar other than a map or chan is resolved
 // and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
-// refused with dbtypes.ErrExpressionInFilter at ToSQL(); use JoinFilterFactory.In or f.Raw.
+// refused with dbtypes.ErrExpressionInFilter at ToSQL(), as an operand or as a list
+// element; use JoinFilterFactory.In or f.Raw. A nil pointer to a slice or array is the
+// empty set, (1=0).
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -139,7 +143,8 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 // NotIn creates a NOT IN filter (column NOT IN (values...)).
 // Accepts both slices and scalar values. A scalar other than a map or chan is resolved
 // and wrapped in a one-element list. A RawExpression, or a non-nil pointer to one, is
-// refused with dbtypes.ErrExpressionInFilter at ToSQL().
+// refused with dbtypes.ErrExpressionInFilter at ToSQL(), as an operand or as a list
+// element. A nil pointer to a slice or array is the empty set, (1=1): it matches every row.
 // Column names are automatically quoted according to database vendor rules.
 //
 // Examples:
@@ -190,7 +195,9 @@ func (ff *FilterFactory) NotRegexI(column, pattern string) dbtypes.Filter {
 // On PostgreSQL emits "column @> ?::jsonb" with the value JSON-encoded.
 // Strings, []byte, and json.RawMessage are passed through as-is (assumed
 // already-valid JSON); everything else is marshaled via encoding/json so
-// callers can pass structs, maps, or slices directly.
+// callers can pass structs, maps, or slices directly. A driver.Valuer is marshaled,
+// not asked. A RawExpression, or a pointer to one, is refused with
+// dbtypes.ErrExpressionInFilter on every vendor.
 //
 // Oracle is not yet supported and returns a filter that surfaces an error
 // at ToSQL() time. See https://github.com/gaborage/go-bricks/issues/341.
