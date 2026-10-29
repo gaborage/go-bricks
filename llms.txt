@@ -93,6 +93,7 @@ log:
 
 `Highest precedence first: env vars > config.<env>.yaml > config.yaml > struct defaults.`
 **Duration values must be unit-suffixed** (`5s`, `72h`, `500ms`, `300s` — never a bare `300`): env-var and quoted forms without a unit fail startup with a `missing unit` error, and as of v0.49.0 a bare YAML/JSON/TOML numeric on a duration key fails config decode too (`unit-less numeric duration …`) instead of being silently misread as nanoseconds. An explicit `0` still means "use the default".
+**Framework section names at the root are lowercase** (`app`, `server`, `database`, `observability`, …): a root key spelled any other way (`App:`, `Observability:`) fails `config.Load` and `config.LoadFromMap` (ADR-157). Environment variables are lowercased, so they are unaffected.
 Add observability settings as needed (see Observability & Logging).
 
 Reading a key without a struct: `cfg.String`/`Int`/`Int64`/`Float64`/`Bool`/`Strings(key, defaults...)` return the default for an absent key, and each `Required*` twin (`RequiredStrings` included) returns an error instead. `Strings` converts exactly as `InjectInto` does for a `[]string` field — a YAML sequence yields its elements, an env scalar splits on commas (trimmed, empties dropped) — and a key delivered empty returns `[]string{}`, not the defaults. `cfg.Unmarshal` into a `[]string` does not split: it wraps the scalar as one element.

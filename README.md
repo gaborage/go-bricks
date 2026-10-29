@@ -192,7 +192,7 @@ GoBricks loads defaults → `config.yaml` → `config.<env>.yaml` → environmen
 
 ## Configuration
 
-GoBricks uses Koanf for configuration management with layered loading: defaults → `config.yaml` → `config.<env>.yaml` → environment variables.
+GoBricks uses Koanf for configuration management with layered loading: defaults → `config.yaml` → `config.<env>.yaml` → environment variables. Framework section names at the root are lowercase: a root key spelled any other way (`App:`, `Observability:`) is refused at startup ([ADR-157](wiki/adr_157_config_key_spelling_refused.md)).
 
 ### Access Patterns
 

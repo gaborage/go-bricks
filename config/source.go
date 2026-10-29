@@ -159,8 +159,8 @@ func isKeyEntry(node any) bool {
 }
 
 // eachSubtree calls visit with every node of src at the dotted path, each segment matched as
-// mapstructure matches a field name, case-insensitively, so a layer that writes Keystore: is
-// read where decode reads it.
+// mapstructure matches a field name, case-insensitively, so a layer that writes
+// keystore: {Keys: …} is read where decode reads it.
 func eachSubtree(src map[string]any, path string, visit func(node any)) {
 	visitSubtree(src, strings.Split(path, koanfDelim), visit)
 }
@@ -175,7 +175,7 @@ func visitSubtree(node any, path []string, visit func(node any)) {
 		return
 	}
 	for key, value := range section {
-		if strings.EqualFold(key, path[0]) {
+		if sameSegment(key, path[0]) {
 			visitSubtree(value, path[1:], visit)
 		}
 	}
@@ -255,19 +255,25 @@ func (c *Config) deliveries(key string, under bool) []keyDelivery {
 }
 
 // pathMatches reports whether path names key — or, with under set, a node below it —
-// comparing segment by segment with strings.EqualFold, the rule mapstructure applies to a
-// field name and the one visitSubtree and the keystore tree walk apply. EqualFold matches
-// Unicode simple folds (U+017F for s), which strings.ToLower misses.
+// comparing segment by segment with sameSegment, the rule mapstructure applies to a field
+// name.
 func pathMatches(key, path []string, under bool) bool {
 	if len(path) < len(key) || (len(path) > len(key) && !under) {
 		return false
 	}
 	for i, segment := range key {
-		if !strings.EqualFold(segment, path[i]) {
+		if !sameSegment(segment, path[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+// sameSegment reports whether two key segments name one field as mapstructure matches it:
+// strings.EqualFold, the package's one case fold for keys. EqualFold matches Unicode simple
+// folds (U+017F for s), which strings.ToLower misses.
+func sameSegment(a, b string) bool {
+	return strings.EqualFold(a, b)
 }
 
 // anyDeliveredEmpty reports whether any delivery holds a value deliveredEmptyValue rejects.

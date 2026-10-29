@@ -153,7 +153,7 @@ func replaceSelectorTree(data any) (any, error) {
 	}
 	var out map[string]any
 	for _, key := range slices.Sorted(maps.Keys(section)) {
-		if !strings.EqualFold(key, sealActiveChild) {
+		if !sameSegment(key, sealActiveChild) {
 			continue
 		}
 		if isSequence(section[key]) {
@@ -553,7 +553,7 @@ func (s *treeSchema) typed(node any) bool {
 // name (case-insensitively), or nil when the struct has no such field.
 func (s *treeSchema) child(key string) *treeSchema {
 	for _, f := range s.fields {
-		if strings.EqualFold(f.name, key) {
+		if sameSegment(f.name, key) {
 			return f.schema
 		}
 	}
