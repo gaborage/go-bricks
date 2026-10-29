@@ -270,6 +270,20 @@ func RedactURLError(e *url.Error, reason string) *url.Error {
 	return &redacted
 }
 
+// RedactURLErrorIn returns err unchanged unless it holds a *url.Error. Then the result is
+// RedactURLError's copy with the whole userinfo dropped. net/url and net/http return the
+// *url.Error outermost, so the copy replaces err. On a refused redirect its URL is the raw
+// Location, which net/http does not strip.
+func RedactURLErrorIn(err error, reason string) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	redacted := RedactURLError(urlErr, reason)
+	redacted.URL = StripUserinfo(redacted.URL)
+	return redacted
+}
+
 // quotesResponse reports net/http's reasons that quote a redirect's Location or a response
 // header line: response text, which Redact cannot judge against the request URL.
 func quotesResponse(msg string) bool {

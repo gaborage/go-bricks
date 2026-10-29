@@ -194,8 +194,8 @@ the same rules.
 - The migration redirect guard renders the Location unquoted, so its refusal is kept inside
   net/http's `*url.Error` rather than withheld for a quote.
 - Tests, log queries and alerts that match the old error text stop matching. See `[C73.18]`.
-- No public API changes (`credurl` is internal; `Redact`, `RedactForLog`, `RedactURLError` and
-  `StripUserinfo` are new there), and no configuration key changes.
+- No public API changes (`credurl` is internal; `Redact`, `RedactForLog`, `RedactURLError`,
+  `RedactURLErrorIn` and `StripUserinfo` are new there), and no configuration key changes.
 
 ## Open question: refuse a misparsed URL before dialing
 
@@ -211,12 +211,10 @@ each either refuse a valid vhost or miss a misparse. Left open.
 ## References
 
 - `internal/credurl/credurl.go`: `Redact`, `RedactForLog`, `RedactError`, `RedactURLError`,
-  `StripUserinfo`, `maskURLError`, `maskRejectedAuthority`, `maskQuoted`, `maskRawTokens`,
-  `rebuiltFrom`
-- `httpclient/redirect.go`: `redactURLError`; `httpclient/client.go`: `executionError`,
-  `buildRequest`
-- `migration/source/http/source.go`: `New`, `redirectGuard`, `fetchPage`, `redactedURL`,
-  `redactURLError`
+  `RedactURLErrorIn`, `StripUserinfo`, `maskURLError`, `maskRejectedAuthority`, `maskQuoted`,
+  `maskRawTokens`, `rebuiltFrom`
+- `httpclient/client.go`: `executionError`, `buildRequest`
+- `migration/source/http/source.go`: `New`, `redirectGuard`, `fetchPage`, `redactedURL`
 - `messaging/amqp_client.go`: `connect`
 - `messaging/streams/manager.go`: `safeEnvError`, `safeStartError`
 - `database/oracle/connection.go`: `redactDSNError`

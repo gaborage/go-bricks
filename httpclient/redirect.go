@@ -4,10 +4,7 @@ import (
 	"errors"
 	"fmt"
 	nethttp "net/http"
-	"net/url"
 	"strings"
-
-	"github.com/gaborage/go-bricks/internal/credurl"
 )
 
 // maxRedirects restates net/http's default cap, which a CheckRedirect replaces.
@@ -74,24 +71,4 @@ func hasNonEmpty(values []string) bool {
 		}
 	}
 	return false
-}
-
-// Reasons that stand in for a *url.Error's own when it quotes part of a URL or a response.
-const (
-	invalidURLReason        = "invalid URL"
-	withheldTransportReason = "transport error detail withheld"
-)
-
-// redactURLError renders the *url.Error in err under the credential-URL posture and drops
-// its whole userinfo: on a refused redirect it is the raw Location, which net/http does not
-// strip the way it strips the request's own URL. net/http and net/url return the *url.Error
-// outermost, so the sanitized copy replaces err.
-func redactURLError(err error, reason string) error {
-	var urlErr *url.Error
-	if !errors.As(err, &urlErr) {
-		return err
-	}
-	redacted := credurl.RedactURLError(urlErr, reason)
-	redacted.URL = credurl.StripUserinfo(redacted.URL)
-	return redacted
 }

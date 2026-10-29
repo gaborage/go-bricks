@@ -840,6 +840,50 @@ func TestRedactURLError(t *testing.T) {
 	}
 }
 
+func TestRedactURLErrorIn(t *testing.T) {
+	const reason = "detail withheld"
+	refused := errors.New("connection refused")
+	tests := []struct {
+		name   string
+		err    error
+		want   string
+		absent string
+	}{
+		{name: "not_url_error_unchanged", err: refused, want: "connection refused", absent: "zq9x"},
+		{
+			name:   "userinfo_dropped",
+			err:    &url.Error{Op: "Get", URL: "https://usr7k:zq9x@h/x?token=zq9x", Err: refused},
+			want:   `Get "https://h/x?xxxxx": connection refused`,
+			absent: "usr7k",
+		},
+		{
+			name:   "wrapped_url_error_replaces_err",
+			err:    fmt.Errorf("outer: %w", &url.Error{Op: "Get", URL: "https://h/x?token=zq9x", Err: refused}),
+			want:   `Get "https://h/x?xxxxx": connection refused`,
+			absent: "outer",
+		},
+		{
+			name:   "reason_threaded",
+			err:    &url.Error{Op: "Get", URL: "https://h/x", Err: errors.New(`refusing "https://u:zq9x@other.example/y"`)},
+			want:   `Get "https://h/x": ` + reason,
+			absent: "zq9x",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactURLErrorIn(tc.err, reason)
+			require.EqualError(t, got, tc.want)
+			assert.NotContains(t, got.Error(), tc.absent)
+			var urlErr *url.Error
+			if !errors.As(tc.err, &urlErr) {
+				assert.Same(t, tc.err, got)
+				return
+			}
+			assert.ErrorIs(t, got, urlErr.Err)
+		})
+	}
+}
+
 func TestStripUserinfo(t *testing.T) {
 	tests := []struct {
 		name     string

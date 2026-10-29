@@ -109,7 +109,7 @@ func New(baseURL string, opts Options) (*TenantSource, error) {
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("migration/source/http: parse baseURL: %w", redactURLError(err, invalidURLReason))
+		return nil, fmt.Errorf("migration/source/http: parse baseURL: %w", credurl.RedactURLErrorIn(err, invalidURLReason))
 	}
 	if u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("migration/source/http: baseURL must include scheme and host: %q", redactedURL(baseURL))
@@ -186,19 +186,6 @@ const (
 // redactedURL renders raw under the credential-URL posture with its whole userinfo dropped.
 func redactedURL(raw string) string {
 	return credurl.StripUserinfo(credurl.Redact(raw))
-}
-
-// redactURLError renders the *url.Error in err the same way. net/url and net/http return
-// it outermost, so the sanitized copy replaces err; on a refused redirect its URL is the
-// raw Location, which net/http does not strip.
-func redactURLError(err error, reason string) error {
-	var urlErr *url.Error
-	if !errors.As(err, &urlErr) {
-		return err
-	}
-	redacted := credurl.RedactURLError(urlErr, reason)
-	redacted.URL = credurl.StripUserinfo(redacted.URL)
-	return redacted
 }
 
 // envelope mirrors the go-bricks server.APIResponse shape (see server/handler.go).
@@ -292,7 +279,7 @@ func (s *TenantSource) fetchPage(ctx context.Context, cursor string) (*envelopeD
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request control-plane: %w", redactURLError(err, withheldTransportReason))
+		return nil, fmt.Errorf("request control-plane: %w", credurl.RedactURLErrorIn(err, withheldTransportReason))
 	}
 	defer resp.Body.Close()
 
