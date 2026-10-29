@@ -5,9 +5,11 @@
 - **Related**: [ADR-049](adr_049_debug_endpoints_fail_closed.md) (the fail-closed gate this closes a hole in; its premises are amended in an addendum there) · [ADR-051](adr_051_delivered_empty_database_identity.md) (the presence-check shape this copies) · [ADR-074](adr_074_delivered_empty_numeric_config.md) / [ADR-077](adr_077_delivered_empty_bool_config.md) (the delivered-empty family, at the decode seam rather than this one)
 
 > **Amended (2026-10-28, [ADR-156](adr_156_delivered_empty_checks_match_every_spelling.md), #2210):**
-> the door finds the key under any spelling decode accepts (`allowedIPs:`) and reads the raw
-> value at each delivered spelling, never a `Get` of the lowercase key; any empty spelling
-> refuses it. The raw-value table and the error text are unchanged.
+> the door finds the key under any spelling decode accepts and reads the raw value at the
+> delivered spelling, never a `Get` of the lowercase key. A mixed-case `allowedIPs:` sits beside
+> the lowercase default, so decode refuses it as an
+> [ADR-157](adr_157_config_key_spelling_refused.md) twin before the door runs. The raw-value
+> table and the error text are unchanged.
 >
 > **Amended (2026-09-06, [ADR-104](adr_104_key_presence_recorded_at_merge_seam.md)):**
 > the door asks Presence — the key set recorded at the merge seam when each user layer

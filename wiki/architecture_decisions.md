@@ -2633,8 +2633,8 @@ mapstructure decodes a key whose segments differ only by case, falling back to
 ADR-104 presence record for the lowercase spelling only, and ADR-153's retired-key check folded
 with `strings.ToLower`. One key lookup, `Config.deliveries`, now matches every recorded path
 segment by segment with `EqualFold` and returns each match with its raw value. Emptiness is read
-at the matched path, any empty spelling refuses the key, and a configured database section is
-refused when an identity key arrives in two spellings with one empty. A named database section
+at the matched path; two spellings of one key are refused at decode as ADR-157 twins. A named
+database section
 reports ADR-051's message instead of "incomplete". See [migrations.md](migrations.md) `[C73.13]`.
 
 **Key Benefits:** the checks see what decode sees, so a template that renders `Host: ""` fails at
@@ -2642,7 +2642,7 @@ startup instead of widening a bind or emptying an allowlist.
 
 ### [ADR-157: A Config Key Decode Would Read Under Another Spelling Fails Startup](adr_157_config_key_spelling_refused.md)
 
-**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a root key that case-folds to a framework section name without being spelled as it (`App:`, `Observability:`) fails `config.Load` and `config.LoadFromMap`, and, once the follow-up ships, so do two keys of one map node that differ only by case
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a root key that case-folds to a framework section name without being spelled as it (`App:`, `Observability:`) fails `config.Load` and `config.LoadFromMap`, and so do two keys of one map node that differ only by case, a mixed-case override of a framework default included
 
 mapstructure decodes a key into a field by an exact match first and `strings.EqualFold` otherwise,
 while `Config.Exists`, the getters and the observability bootstrap name a key by its exact
@@ -2651,13 +2651,15 @@ lowercase `app` defaults, and of two twins such as `Port` and `port` one was dro
 different one per run. `configSource.decode` now refuses, before it unmarshals, a root key that
 folds to a `configSections` name without equaling it (`config_invalid: app is spelled App; …`),
 naming every spelling and never a value, so `go-bricks-migrate --source-config` refuses too. The
-fold-twin rule, at any map node and from any layer, framework defaults included, ships in a
-follow-up PR under #2219 (`[C73.19]`). Refuse, not normalize: lowercasing at load would break
-ADR-090's check and change keystore kids and header names. Environment variables and a lone
-mixed-case key below the root are unaffected. See [migrations.md](migrations.md) `[C73.14]`.
+fold-twin rule refuses two such keys at any map node, from any layer, framework defaults
+included, naming each spelling and the variable that reaches the lowercase one (`[C73.19]`).
+Refuse, not normalize: lowercasing at load would break ADR-090's check and change keystore kids
+and header names. Environment variables alone and a lone mixed-case key below the root with no
+twin are unaffected. See [migrations.md](migrations.md) `[C73.14]`, `[C73.19]`.
 
 **Key Benefits:** a framework section is read under one spelling by decode and by every exact-name
-lookup, and a misspelled section the framework would have ignored fails at startup instead.
+lookup, and a misspelled section, or a mixed-case override beside its default, that the framework
+would have ignored fails at startup instead.
 
 ---
 
