@@ -36,11 +36,6 @@ const (
 	// we wait on a broker that may be cold before giving up on something optional"
 	// budget.
 	shutdownFlushBudget = 5 * time.Second
-
-	// redactedStreamURI stands in for a URI that could not be parsed, so a
-	// malformed value can never reach a log line with its credentials attached.
-	// #nosec G101 -- placeholder text, not a credential
-	redactedStreamURI = "rabbitmq-stream://****:****@<host>:<port>/<vhost>"
 )
 
 // ManagerOptions configures the stream-protocol Manager. The zero value of every
@@ -232,19 +227,19 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	// the same rule the declare loops below apply between round trips: a caller
 	// that already gave up on startup must not pay for it.
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("startup canceled before dialing stream endpoint %s: %w", redactStreamURI(m.opts.URI), err)
+		return fmt.Errorf("startup canceled before dialing stream endpoint %s: %w", credurl.RedactForLog(m.opts.URI), err)
 	}
 
 	env, err := m.dialEnvironment(m.environmentOptions())
 	if err != nil {
-		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err, m.opts.URI))
+		return fmt.Errorf("failed to connect to stream endpoint %s: %w", credurl.RedactForLog(m.opts.URI), safeEnvError(err, m.opts.URI))
 	}
 	m.env = env
 
 	// Stats rather than len(decls.streams), which omits the super streams.
 	stats := decls.Stats()
 	m.log.Info().
-		Str("uri", redactStreamURI(m.opts.URI)).
+		Str("uri", credurl.RedactForLog(m.opts.URI)).
 		Int("streams", stats.Streams).
 		Int("super_streams", stats.SuperStreams).
 		Int("consumers", stats.Consumers).
@@ -670,7 +665,7 @@ func safeStartError(err error, uri string) error {
 // and whose reason can quote part of the password. Its own URI checks can echo
 // password text unquoted, such as a misparsed vhost. credurl.RedactError masks what
 // the configured URI or its decoded password holds; the endpoint is also reported
-// separately by redactStreamURI. This is reachable when a
+// separately by credurl.RedactForLog. This is reachable when a
 // caller hands ManagerOptions.URI straight to NewManager: that skips config.Validate,
 // the only place a stream URI is parsed before the dial. When no scheme leads the
 // URI's first "://" — a separator other than "://", or one that lost its ':' ahead
@@ -1028,27 +1023,4 @@ func (m *Manager) readyLocked() bool {
 		}
 	}
 	return true
-}
-
-// redactStreamURI masks the credentials in a stream URI so it can be logged.
-//
-// SECURITY: messaging.streams.uri carries a broker password. Everything that
-// logs the endpoint goes through this function, and an unparseable value degrades
-// to a fixed placeholder rather than echoing the raw input.
-func redactStreamURI(uri string) string {
-	u, err := url.Parse(uri)
-	if err != nil || u.Host == "" {
-		return redactedStreamURI
-	}
-
-	username := "****"
-	if u.User != nil && u.User.Username() != "" {
-		username = u.User.Username()
-	}
-
-	redacted := u.Scheme + "://" + username + ":****@" + u.Host + u.EscapedPath()
-	if u.RawQuery != "" {
-		redacted += "?<redacted>"
-	}
-	return redacted
 }

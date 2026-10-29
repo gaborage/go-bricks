@@ -1843,6 +1843,22 @@ func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
 	}
 }
 
+// TestHandleReconnectLogsBrokerURLRedacted pins broker_url to credurl.RedactForLog, on a
+// URL url.Parse splits at the wrong '@'.
+func TestHandleReconnectLogsBrokerURLRedacted(t *testing.T) {
+	dial, entered, release := gatedDial(func() (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	swapDialFunc(t, dial)
+	log := newRecordingLogger()
+
+	c := NewAMQPClient("amqp://user:1234/Spr#ing@broker/vh", log)
+	waitSignal(t, entered, "dial to start")
+	closeNonBlocking(t, c)
+	close(release)
+	waitSignal(t, c.reconnectDone, "reconnect goroutine to exit")
+
+	assert.Equal(t, []string{"xxxxx"}, log.Line(t, "Attempting to connect to AMQP broker").Values("broker_url"))
+}
+
 // ===== Enhanced Publishing & Confirmation Tests =====
 
 func TestPublishBytesShutdownDuringPublish(t *testing.T) {

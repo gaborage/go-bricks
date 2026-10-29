@@ -145,16 +145,25 @@ the same rules.
   cannot tell it from a lone token stretched to a later `@`, and a masked username costs a
   debugging hint, never a secret.
 - A password that really starts with an unencoded `@` loses its username the same way.
-- With a `#` before the last `@`, the fragment text after that `@` renders as the host:
-  `oracle://tok@h:1521/XE#f@c` renders `oracle://xxxxx@c`. That text is path or fragment text,
-  never credential text, so this residual is accepted.
-- The `broker_url` and streams `uri` log fields, and the endpoint the streams start error names,
-  still render through their own renderers (`redactAMQPURL`, `redactStreamURI`), which keep a lone
-  username and render a misparsed password as written; the logger filter masks `broker_url` whole
-  by name.
+- At the error doors, with a `#` before the last `@`, the fragment text after that `@` renders as
+  the host: `oracle://tok@h:1521/XE#f@c` renders `oracle://xxxxx@c`. That text is path or
+  fragment text, never credential text, so this residual is accepted there.
+- The `broker_url` and streams `uri` log fields, and the endpoint the streams start errors name,
+  render through `RedactForLog`, so their own renderers (`redactAMQPURL`, `redactStreamURI`) are
+  gone. `RedactForLog` renders a URL url.Parse rejects, one it reads with no host, or one with a
+  `#` before its last `@` as `xxxxx`, and any other URL as `Redact` does. With no host to anchor
+  on, or with url.Parse's host cut at that `#` while the scan reads past it, password text cannot
+  be told from a host, port or path (`amqp://user:QZ/XJK`, `amqp://user:pa@ss:QZXJ`,
+  `amqp://u@ser:#Q@ZJV8/vh`). Logs fan out to more sinks than an error, so these doors keep the
+  old doors' whole mask for those shapes, and the `#` residual above is closed here:
+  `amqp://user:pw@broker/vh#f@QZXJ` renders `xxxxx`. A URL with no userinfo no longer gains a
+  fabricated `****:****@`. A misparsed password no longer shows:
+  `rabbitmq-stream://app:2024/Sp/ring@broker:5552` names endpoint
+  `rabbitmq-stream://app:xxxxx@broker:5552`. The logger filter still masks `broker_url` whole by
+  name.
 - Tests, log queries and alerts that match the old error text stop matching. See `[C73.18]`.
-- No public API changes (`credurl` is internal; `Redact` is new there), and no configuration key
-  changes.
+- No public API changes (`credurl` is internal; `Redact` and `RedactForLog` are new there), and no
+  configuration key changes.
 
 ## Open question: refuse a misparsed URL before dialing
 
@@ -169,8 +178,8 @@ each either refuse a valid vhost or miss a misparse. Left open.
 
 ## References
 
-- `internal/credurl/credurl.go`: `Redact`, `RedactError`, `maskURLError`, `maskRejectedAuthority`,
-  `maskQuoted`, `maskRawTokens`, `rebuiltFrom`
+- `internal/credurl/credurl.go`: `Redact`, `RedactForLog`, `RedactError`, `maskURLError`,
+  `maskRejectedAuthority`, `maskQuoted`, `maskRawTokens`, `rebuiltFrom`
 - `messaging/amqp_client.go`: `connect`
 - `messaging/streams/manager.go`: `safeEnvError`, `safeStartError`
 - `database/oracle/connection.go`: `redactDSNError`
