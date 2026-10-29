@@ -111,7 +111,7 @@ func Redact(raw string) string {
 	if at := strings.LastIndex(rest, "@"); at != -1 {
 		head += maskUserinfo(rest[:at])
 		// Past a '?', that '@' may sit in a query value, so the tail is masked whole.
-		if q := strings.IndexByte(rest[:at], '?'); q != -1 {
+		if strings.IndexByte(rest[:at], '?') != -1 {
 			return head + redactionPlaceholder
 		}
 		rest = rest[at+1:]
