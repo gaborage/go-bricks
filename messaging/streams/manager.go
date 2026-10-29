@@ -419,7 +419,7 @@ func (m *Manager) openStreamConsumer(env environment, decl *consumerDeclaration,
 
 	handle, err := env.NewConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
+		return nil, nil, fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, safeStartError(err, m.opts.URI))
 	}
 
 	// One stream, so one flush target: the reliable consumer itself. The assertion
@@ -451,7 +451,7 @@ func (m *Manager) openSuperStreamConsumer(env environment, decl *consumerDeclara
 
 	handle, err := env.NewSuperStreamConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
+		return nil, nil, fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, safeStartError(err, m.opts.URI))
 	}
 
 	// The shutdown flush goes through the Environment port, per partition:
@@ -539,7 +539,7 @@ func bindPublishers(ctx context.Context, decls []*publisherDeclaration, bind fun
 func (m *Manager) bindPublisher(env environment, decl *publisherDeclaration) error {
 	producer, err := m.constructProducer(env, decl)
 	if err != nil {
-		return fmt.Errorf("failed to start the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, err)
+		return fmt.Errorf("failed to start the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, safeStartError(err, m.opts.URI))
 	}
 
 	decl.Publisher.bind(producer)
@@ -651,6 +651,17 @@ func (m *Manager) reportOffsetQuery(err error, consumerName, streamName string, 
 
 // invalidStreamURIReason replaces a stream-URI parse failure reason that quotes the URI.
 const invalidStreamURIReason = "invalid URL"
+
+// safeStartError masks the URI's password in a consumer or producer start failure.
+//
+// SECURITY: the client rebuilds each leader or replica URI from the decoded
+// password, unescaped, and url.Parses it inside the constructor, so its *url.Error
+// can render that password. credurl judges that *url.Error by its own URL, which
+// always opens with the configured scheme and "://", so no scheme guard is needed,
+// unlike safeEnvError; uri masks any rendering of the configured URI itself.
+func safeStartError(err error, uri string) error {
+	return credurl.RedactError(err, uri, invalidStreamURIReason)
+}
 
 // safeEnvError masks the URI's password in an environment-construction failure.
 //
