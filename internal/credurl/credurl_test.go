@@ -109,6 +109,10 @@ func TestRedactRendersOnePosture(t *testing.T) {
 		{name: "lone_userinfo_before_at_in_path", raw: "oracle://APIKEY@host:1521/XE@vhost", parse: parseAccepts, want: "oracle://xxxxx@vhost", secrets: []string{"APIKEY"}},
 		{name: "empty_password_before_at_in_path", raw: "oracle://APIKEY:@host:1521/XE@vhost", parse: parseAccepts, want: "oracle://xxxxx@vhost", secrets: []string{"APIKEY"}},
 		{name: "lone_userinfo_before_at_in_query", raw: "oracle://APIKEY@host:1521/XE?a=b@c", parse: parseAccepts, want: "oracle://xxxxx@xxxxx", secrets: []string{"APIKEY"}},
+		// A scanned username crossing out of the authority is path, query or fragment text.
+		{name: "path_before_first_colon", raw: "oracle://host/XE/SECRET:abc@def", parse: parseAccepts, want: "oracle://xxxxx@def", secrets: []string{"SECRET"}},
+		{name: "query_before_first_colon", raw: "oracle://host?wallet=SECRET:abc@def", parse: parseAccepts, want: "oracle://xxxxx@xxxxx", secrets: []string{"SECRET"}},
+		{name: "fragment_before_first_colon", raw: "oracle://host#SECRET:abc@def", parse: parseAccepts, want: "oracle://xxxxx@def", secrets: []string{"SECRET"}},
 		// Username and path are kept as written, never decoded.
 		{name: "escaped_username_and_vhost", raw: "amqp://us%40er:zq9x@broker:5672/%2Fproduction", parse: parseAccepts, want: "amqp://us%40er:xxxxx@broker:5672/%2Fproduction"},
 		{name: "hostile_password_characters", raw: "amqp://user:zq9x?#/@:PW@broker:5672/vh", parse: parseRejects, want: "amqp://user:xxxxx@xxxxx"},
@@ -426,6 +430,9 @@ func scanCases() []redactErrorCase {
 		{name: "empty_password", raw: "oracle://appuser:@host:1521/XE", parse: parseAccepts, want: maskedLoneDSN, secrets: []string{"appuser"}},
 		{name: "password_with_at", raw: "oracle://appuser:pa@ss@host:1521/XE", parse: parseAccepts, want: maskedDialDSN, secrets: []string{"pa@ss"}},
 		{name: "password_with_colon", raw: "oracle://appuser:pa:ss@host:1521/XE", parse: parseAccepts, want: maskedDialDSN, secrets: []string{"pa:ss"}},
+		{name: "path_before_first_colon", raw: "oracle://host/XE/SECRET:abc@def", parse: parseAccepts, want: "dial oracle://xxxxx@def: connection refused", secrets: []string{"SECRET"}},
+		{name: "query_before_first_colon", raw: "oracle://host?wallet=SECRET:abc@def", parse: parseAccepts, want: "dial oracle://xxxxx@xxxxx: connection refused", secrets: []string{"SECRET"}},
+		{name: "fragment_before_first_colon", raw: "oracle://host#SECRET:abc@def", parse: parseAccepts, want: "dial oracle://xxxxx@def: connection refused", secrets: []string{"SECRET"}},
 		{
 			name:    "password_with_slash",
 			raw:     "oracle://appuser:pa/ss@host:1521/XE",
@@ -496,7 +503,7 @@ func scanCases() []redactErrorCase {
 			want:    `parse "://appuser:xxxxx@host:1521/XE": missing protocol scheme ` + hint,
 			secrets: []string{"s3cr3t"},
 		},
-		{name: "authority_terminator_at_index_zero", raw: "oracle:///user:pass@host", parse: parseAccepts, want: "dial oracle:///user:xxxxx@host: connection refused", secrets: []string{"pass"}},
+		{name: "authority_terminator_at_index_zero", raw: "oracle:///user:pass@host", parse: parseAccepts, want: "dial oracle://xxxxx@host: connection refused", secrets: []string{"pass"}},
 		{name: "rejected_authority_terminator_at_index_zero", raw: "oracle:///XE:1\n", parse: parseRejects, same: true},
 		{name: "at_sign_at_index_zero", raw: "oracle://@host:1521/XE", parse: parseAccepts, want: maskedLoneDSN, secrets: []string{"//@"}},
 		{

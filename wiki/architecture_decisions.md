@@ -2623,7 +2623,7 @@ startup instead of widening a bind or emptying an allowlist.
 
 `internal/credurl` is the one credential-URL renderer, and `Redact` gives its posture: scheme,
 host, port and path kept, the password `xxxxx`, the username kept only beside a non-empty password
-and only when it holds no `@`,
+and only when it holds no `@`, `/`, `?` or `#`,
 a non-empty query `?xxxxx`, the fragment dropped. `RedactError`, behind the AMQP `connect()` dial
 error, the streams environment and start errors and the Oracle DSN error, renders through the same
 rules, where it kept the query and a lone username and trusted url.Parse once it accepted the URL.

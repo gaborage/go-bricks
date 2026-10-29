@@ -28,12 +28,14 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
 
 - The scheme, host, port and path are kept.
 - The password becomes `xxxxx`. The username is kept only beside a non-empty password, and only
-  when it holds no `@`: a lone userinfo (`amqp://tok@h`, the API-key-as-username shape), an empty
-  password (`amqp://u:@h`) or a username holding an `@` becomes `xxxxx@`. A lone userinfo
-  followed by an `@` later in the path or query reads, under the last-`@` scan, as a username
-  holding an `@`, so `oracle://tok@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`. A password
-  that starts with `@` counts as empty, since the real password may end at that `@`:
-  `oracle://tok:@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`.
+  when it holds no `@`, `/`, `?` or `#`: a lone userinfo (`amqp://tok@h`, the API-key-as-username
+  shape), an empty password (`amqp://u:@h`) or a username holding one of those becomes `xxxxx@`.
+  A lone userinfo followed by an `@` later in the path or query reads, under the last-`@` scan, as
+  a username holding an `@`, so `oracle://tok@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`. A
+  password that starts with `@` counts as empty, since the real password may end at that `@`:
+  `oracle://tok:@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`. A username holding `/`, `?` or
+  `#` has crossed out of the authority into path, query or fragment text:
+  `oracle://host/XE?wallet=SECRET:abc@def` renders `oracle://xxxxx@xxxxx`.
 - A non-empty query becomes `?xxxxx`; an empty one is dropped with its `?`. The fragment is
   dropped.
 - The userinfo runs to the last `@` after `://`, wherever url.Parse would end it, whether it
