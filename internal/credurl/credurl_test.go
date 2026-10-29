@@ -692,6 +692,22 @@ func seamCases() []redactErrorCase {
 			secrets: []string{"3/3", "3%X", "PW"},
 		},
 		{
+			name:    "escaped_username_cut_renders_configured_uri",
+			raw:     "amqp://u%20v:%23pw@broker/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("amqp://u v:#pw@broker/vh") },
+			want:    `parse "amqp://u%20v:xxxxx@broker/vh": invalid URL`,
+			secrets: []string{"pw"},
+		},
+		{
+			name:    "other_url_error_judged_alone",
+			raw:     "amqp://u:amqp%3A%2F%2Fh%20x@broker/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("amqp://h x") },
+			want:    `parse "xxxxx": invalid character " " in host name`,
+			secrets: []string{"h x"},
+		},
+		{
 			name:    "vendor_word_not_in_raw_survives",
 			raw:     "amqp://user:zq9x@broker:5672/vh",
 			err:     fixedErr("Exception (403) Reason: ACCESS_REFUSED - Login was refused"),
@@ -707,6 +723,13 @@ func seamCases() []redactErrorCase {
 		},
 		{name: "one_character_token_survives", raw: "amqp://user:zq9x@broker:5672/vh", err: fixedErr("frame 9 rejected"), same: true, secrets: []string{"zq9x"}},
 		{name: "prose_word_inside_password_survives", raw: "amqp://user:Spring@broker:5672/vh", err: fixedErr("invalid control character in URL"), same: true, secrets: []string{"Spring"}},
+		{
+			name:  "word_inside_a_password_word_stays",
+			raw:   "amqp://user:2024/Spring@broker:5672/vh",
+			parse: parseAccepts,
+			err:   fixedErr("Spr and ing stay"),
+			same:  true,
+		},
 		{
 			name:    "prose_word_as_aligned_password_piece_masked",
 			raw:     "amqp://user:2024/in@broker:5672/vh",

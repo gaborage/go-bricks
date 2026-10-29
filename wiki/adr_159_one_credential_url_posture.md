@@ -51,8 +51,8 @@ the same rules.
   before reporting, whenever the raw URL extends it: the `@` that ends the userinfo can be in the
   cut.
 - A `*url.Error` naming the stream client's rebuild of the URI around the decoded password
-  (`<scheme>://<user>:` followed by a non-empty prefix of that password, cut at a `#` inside it)
-  is judged as the configured URI, so it renders from that URI.
+  (`<scheme>://<user>:` followed by a prefix of that password, cut at a `#` inside it, an empty
+  prefix included) is judged as the configured URI, so it renders from that URI.
 - Input without `://`, or with any of `:`, `/`, `?`, `#` or `@` before the first `://`, renders
   whole as `xxxxx`; empty input renders as the empty string.
 - A `*url.Error` reason that quotes anything is replaced, which is the rule `RedactError` already

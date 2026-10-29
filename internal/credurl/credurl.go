@@ -177,11 +177,12 @@ func dropsRawText(raw string, holds func(source, text string) bool) func(text st
 }
 
 // SECURITY: url.Parse cuts a client's rebuild around raw's decoded password at a '#' in it, and
-// the cut shows password text. rebuiltFrom reports raw's "scheme://username:" plus a password prefix.
+// the cut shows password text. rebuiltFrom reports raw's "scheme://username:" plus a password prefix,
+// possibly empty.
 func rebuiltFrom(raw, cut string) bool {
 	prefix, password := decodedUserinfo(raw)
 	rest, found := strings.CutPrefix(cut, prefix)
-	return found && rest != "" && strings.HasPrefix(password, rest)
+	return found && strings.HasPrefix(password, rest)
 }
 
 // decodedUserinfo returns raw's "scheme://username:" and the password url.Parse decodes.
