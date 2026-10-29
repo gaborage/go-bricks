@@ -395,8 +395,8 @@ func (s *Server) RootGroup() RouteRegistrar {
 	return newAdmittingRouteGroup(s.echo.Group(""), "", s.cfg, s.admission)
 }
 
-// RouteConflicts returns every duplicate method+path registration observed on
-// this server's registrars, in registration order. Empty when there are none.
+// RouteConflicts returns every registration this server's registrars refused (RouteConflict.Reason
+// says why), in registration order. Empty when there are none.
 func (s *Server) RouteConflicts() []RouteConflict {
 	return s.admission.snapshot()
 }
@@ -476,8 +476,8 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 // application-listener check cannot pin (no SAN) or verify against that pin (no serverAuth
 // use, outside its validity period) refuses Start before either bind.
 //
-// A duplicate method+path registration recorded on this server (RouteConflicts) refuses
-// Start before either bind with a *DuplicateRouteError, which matches ErrDuplicateRoute.
+// A refused route registration recorded on this server (RouteConflicts) refuses Start
+// before either bind with a *DuplicateRouteError, which matches ErrDuplicateRoute.
 //
 // With observability enabled, an app.name the HTTP instrumentation cannot use as its
 // host[:port] server name refuses Start before either bind (ADR-132).
