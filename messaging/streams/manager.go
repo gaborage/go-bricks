@@ -667,19 +667,20 @@ func safeStartError(err error, uri string) error {
 //
 // SECURITY: the client parses the endpoint with url.Parse and returns its
 // *url.Error verbatim, whose Error() renders the raw URI — credentials included —
-// and whose reason can quote part of the password. credurl.RedactError masks both;
-// the endpoint is also reported separately, redacted. This is reachable when a
+// and whose reason can quote part of the password. Its own URI checks can echo
+// password text unquoted, such as a misparsed vhost. credurl.RedactError masks what
+// the configured URI or its decoded password holds; the endpoint is also reported
+// separately by redactStreamURI. This is reachable when a
 // caller hands ManagerOptions.URI straight to NewManager: that skips config.Validate,
-// the only place a stream URI is parsed before the dial. credurl reads the userinfo
-// after the first "://", which is the scheme separator only when a scheme precedes
-// it. Otherwise — a separator other than "://", or one that lost its ':' ahead of a
-// password starting with "//" — credurl can leave the password showing, so the URI
-// is not rendered at all: only the reason is, and a reason that quotes part of the
-// URI is replaced.
+// the only place a stream URI is parsed before the dial. When no scheme leads the
+// URI's first "://" — a separator other than "://", or one that lost its ':' ahead
+// of a password starting with "//" — the *url.Error renders only its reason, and a
+// reason that quotes part of the URI is replaced. That is defense in depth: credurl
+// already masks such a URI whole.
 func safeEnvError(err error, uri string) error {
 	var urlErr *url.Error
 	if !errors.As(err, &urlErr) {
-		return err
+		return credurl.RedactError(err, uri, invalidStreamURIReason)
 	}
 	if schemeLeadsSeparator(uri) {
 		return fmt.Errorf("invalid stream URI: %w", credurl.RedactError(err, uri, invalidStreamURIReason))

@@ -1809,6 +1809,40 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 	}
 }
 
+// TestConnectRedactsQuotedBrokerURLText drives amqp091's own URI checks: no *url.Error,
+// but strconv quotes the port or query value it rejected.
+func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
+	tests := []struct {
+		name, raw, want string
+		secrets         []string
+	}{
+		{name: "port_out_of_range", raw: "amqp://user:12345678901/zq9x@broker/vh", want: `strconv.ParseInt: parsing "xxxxx": value out of range`, secrets: []string{"12345678901"}},
+		// Redact drops the query whole, so an echo of its key goes too.
+		{name: "heartbeat", raw: "amqp://app:zq9x@broker/vh?heartbeat=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
+		{name: "connection_timeout", raw: "amqp://app:zq9x@broker/vh?connection_timeout=k3y7", want: `xxxxx is not an integer: strconv.Atoi: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
+		{name: "channel_max", raw: "amqp://app:zq9x@broker/vh?channel_max=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
+		// The port is kept in the redacted URL, so its quote is too.
+		{name: "kept_port_quote_survives", raw: "amqp://app:zq9x@broker:99999999999/vh", want: `strconv.ParseInt: parsing "99999999999": value out of range`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, dialErr := amqp.Dial(tt.raw)
+			var premise *url.Error
+			require.Error(t, dialErr)
+			require.NotErrorAs(t, dialErr, &premise, "premise: amqp091 fails its own check, after url.Parse")
+			c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: tt.raw}
+
+			_, err := c.connect()
+
+			require.EqualError(t, err, tt.want)
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, err.Error(), secret)
+			}
+		})
+	}
+}
+
 // ===== Enhanced Publishing & Confirmation Tests =====
 
 func TestPublishBytesShutdownDuringPublish(t *testing.T) {

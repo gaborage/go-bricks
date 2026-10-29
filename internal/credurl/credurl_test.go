@@ -16,9 +16,10 @@ import (
 // testReason is the stand-in every row passes; the oracle package pins its own.
 const testReason = "invalid URL"
 
-// hint stands in for advice a driver appends after a url.Parse failure. Its quoted
+// hint is the advice amqp091 appends after a url.Parse failure, verbatim. Its quoted
 // tokens prove that quote-bearing text outside the *url.Error survives.
-const hint = `(hint: a reserved character such as "?" or "#" must be percent-encoded)`
+const hint = `(if the username or password contains a reserved character such as "?", "#", "@", ":", or "/", ` +
+	`it must be percent-encoded per RFC 3986 §3.2.1 -- see ParseURI's doc comment and net/url.UserPassword)`
 
 // maskedRejection is the amqp rendering once a rejected password is masked and its
 // quoting reason replaced; maskedTailRejection is that rendering when a '?' before the
@@ -67,6 +68,11 @@ func hintedErr(raw string) error {
 func bareParseErr(raw string) error {
 	_, err := url.Parse(raw)
 	return err
+}
+
+// fixedErr builds an error whose text ignores raw.
+func fixedErr(text string) func(string) error {
+	return func(string) error { return errors.New(text) }
 }
 
 // verbatimDialErr renders raw verbatim whether or not url.Parse accepts it.
@@ -613,6 +619,134 @@ func seamCases() []redactErrorCase {
 			want:    "parse " + strconv.Quote("amqp://app:xxxxx@broker:5672/vh\n") + ": net/url: invalid control character in URL",
 			secrets: []string{"2024", "Spring"},
 		},
+		// A vendor reason can quote raw text outside any *url.Error, such as amqp091's
+		// port and query checks; quoted text Redact keeps, or that is not raw's, stays.
+		{
+			name:    "vendor_quote_of_raw_text_masked",
+			raw:     "amqp://user:12345678901/zq9x@broker/vh",
+			err:     fixedErr(`strconv.ParseInt: parsing "12345678901": value out of range`),
+			want:    `strconv.ParseInt: parsing "xxxxx": value out of range`,
+			secrets: []string{"12345678901"},
+		},
+		{
+			name:    "stray_quotes_do_not_hide_a_quoted_secret",
+			raw:     "amqp://user:12345678901/zq9x@broker/vh",
+			err:     fixedErr(`say "hi parsing "12345678901": out of range "`),
+			want:    `say "hi parsing "xxxxx": out of range "`,
+			secrets: []string{"12345678901"},
+		},
+		// Pieces not aligned in raw, which only the quoted pass masks, behind a stray quote and back to back.
+		{
+			name:    "unaligned_quoted_secrets_masked",
+			raw:     "amqp://user:s3cr3tPW@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr(`say "hi parsing "cr3t""s3cr": out of range "`),
+			want:    `say "hi parsing "xxxxx""xxxxx": out of range "`,
+			secrets: []string{"cr3t", "s3cr"},
+		},
+		// A one-byte quote reveals at most that byte, so the vendor's hint
+		// survives a password holding the characters it quotes.
+		{name: "reserved_character_hint_survives", raw: "amqp://user:s3cr?et#PW@broker/vh", parse: parseRejects, want: `parse "amqp://user:xxxxx@xxxxx": invalid URL ` + hint, secrets: []string{"s3cr", "et#PW", "PW"}},
+		{name: "broker_reason_quote_survives", raw: "amqp://user:zq9x@broker/vh", err: fixedErr(`Reason: "ACCESS_REFUSED - Login was refused"`), same: true, secrets: []string{"zq9x"}},
+		{name: "quoted_kept_path_survives", raw: "amqp://user:zq9x@broker/vh", err: fixedErr(`no access to vhost "/vh"`), same: true, secrets: []string{"zq9x"}},
+		// Vendor text can echo raw unquoted, as a misparsed vhost or a dial host.
+		{
+			name:    "unquoted_vhost_echo_masked",
+			raw:     "rabbitmq-stream://app:2024/Sp/ring@broker:5552",
+			parse:   parseAccepts,
+			err:     fixedErr("multiple segments in URI path: /Sp/ring@broker:5552"),
+			want:    "multiple segments in URI path: xxxxx:5552",
+			secrets: []string{"2024", "Sp", "ring"},
+		},
+		{
+			name:    "unquoted_dial_host_masked",
+			raw:     "amqp://user:s3cr@zq9x?PW@broker:5672/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("dial tcp: lookup zq9x: no such host"),
+			want:    "dial tcp: lookup xxxxx: no such host",
+			secrets: []string{"s3cr", "zq9x", "PW"},
+		},
+		{
+			name:    "decoded_password_echo_masked",
+			raw:     "amqp://user:pa%23ss@broker:5672/vh?token=zq9x",
+			parse:   parseAccepts,
+			err:     fixedErr("login refused for user:pa#ss (token=zq9x)"),
+			want:    "login refused for user:xxxxx (xxxxx)",
+			secrets: []string{"pa#ss", "pa%23ss", "pa", "ss", "zq9x"},
+		},
+		// A client rebuilds the URL around the decoded password; url.Parse cuts it at the '#'.
+		{
+			name:    "rebuilt_uri_cut_in_host",
+			raw:     "rabbitmq-stream://user:s3cr%40%20zq9x%23PW@broker:5552/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("rabbitmq-stream://user:s3cr@ zq9x#PW@broker:5552/vh") },
+			want:    `parse "rabbitmq-stream://user:xxxxx@broker:5552/vh": invalid URL`,
+			secrets: []string{"s3cr", "zq9x", "PW"},
+		},
+		{
+			name:    "rebuilt_uri_cut_in_path",
+			raw:     "rabbitmq-stream://app:3%2F3%25X%23PW@broker:5552/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("rabbitmq-stream://app:3/3%X#PW@broker:5552/vh") },
+			want:    `parse "rabbitmq-stream://app:xxxxx@broker:5552/vh": invalid URL`,
+			secrets: []string{"3/3", "3%X", "PW"},
+		},
+		{
+			name:    "escaped_username_cut_renders_configured_uri",
+			raw:     "amqp://u%20v:%23pw@broker/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("amqp://u v:#pw@broker/vh") },
+			want:    `parse "amqp://u%20v:xxxxx@broker/vh": invalid URL`,
+			secrets: []string{"pw"},
+		},
+		{
+			name:    "other_url_error_judged_alone",
+			raw:     "amqp://u:amqp%3A%2F%2Fh%20x@broker/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("amqp://h x") },
+			want:    `parse "xxxxx": invalid character " " in host name`,
+			secrets: []string{"h x"},
+		},
+		{
+			name:    "vendor_word_not_in_raw_survives",
+			raw:     "amqp://user:zq9x@broker:5672/vh",
+			err:     fixedErr("Exception (403) Reason: ACCESS_REFUSED - Login was refused"),
+			same:    true,
+			secrets: []string{"zq9x"},
+		},
+		{
+			name:    "host_and_port_tokens_survive",
+			raw:     "amqp://user:zq9x@broker:5672/vh",
+			err:     fixedErr("dial tcp broker:5672: connect: connection refused"),
+			same:    true,
+			secrets: []string{"zq9x"},
+		},
+		{name: "one_character_token_survives", raw: "amqp://user:zq9x@broker:5672/vh", err: fixedErr("frame 9 rejected"), same: true, secrets: []string{"zq9x"}},
+		{name: "prose_word_inside_password_survives", raw: "amqp://user:Spring@broker:5672/vh", err: fixedErr("invalid control character in URL"), same: true, secrets: []string{"Spring"}},
+		{
+			name:  "word_inside_a_password_word_stays",
+			raw:   "amqp://user:2024/Spring@broker:5672/vh",
+			parse: parseAccepts,
+			err:   fixedErr("Spr and ing stay"),
+			same:  true,
+		},
+		{
+			name:    "prose_word_as_aligned_password_piece_masked",
+			raw:     "amqp://user:2024/in@broker:5672/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("invalid control character in URL"),
+			want:    "invalid control character xxxxx URL",
+			secrets: []string{" in ", "2024"},
+		},
+		{
+			name:    "password_holding_the_placeholder_masked",
+			raw:     "amqp://u:xxxxxyy@broker:5672/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("login xxxxxyy refused"),
+			want:    "login xxxxx refused",
+			secrets: []string{"xxxxxyy"},
+		},
+		{name: "credential_free_url_leaves_vendor_text_alone", raw: "amqp://broker:5672/vh", err: fixedErr("dial tcp: lookup broker: no such host"), same: true},
 		{
 			name: "url_error_without_password",
 			raw:  "amqp://broker:5672/vh",

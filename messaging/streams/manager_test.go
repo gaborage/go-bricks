@@ -1218,7 +1218,22 @@ func TestSafeEnvError(t *testing.T) {
 	}
 
 	other := errors.New("connection refused")
-	assert.Same(t, other, safeEnvError(other, "rabbitmq-stream://svc:fixture-pw@broker:5552/"), "non-URL errors pass through untouched")
+	assert.Same(t, other, safeEnvError(other, "rabbitmq-stream://svc:fixture-pw@broker:5552/"), "a non-URL error with nothing to mask passes through untouched")
+}
+
+// TestManagerStartMasksAnUnquotedVendorEcho: the client's pre-dial URI check echoes password
+// text. Only safeEnvError's cause is pinned: the endpoint ahead of it is redactStreamURI's.
+func TestManagerStartMasksAnUnquotedVendorEcho(t *testing.T) {
+	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://app:2024/Sp/ring@broker:5552", Logger: logger.New("error", false)})
+
+	err := m.Start(t.Context(), oneConsumerDecls())
+
+	require.Error(t, err)
+	cause := errors.Unwrap(err)
+	require.EqualError(t, cause, "multiple segments in URI path: xxxxx:5552")
+	for _, secret := range []string{"2024", "Sp", "ring"} {
+		assert.NotContains(t, cause.Error(), secret)
+	}
 }
 
 // TestSafeEnvErrorRendersReasonOnlyForAMisreadURI covers the URIs whose first "://"
