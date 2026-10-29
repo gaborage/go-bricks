@@ -107,6 +107,7 @@ func TestRedactRendersOnePosture(t *testing.T) {
 		{name: "empty_password", raw: "amqp://zq9x:@broker:5672/vh", parse: parseAccepts, want: "amqp://xxxxx@broker:5672/vh"},
 		// A later '@' stretches the userinfo past the host, so the key sits in a username holding an '@'.
 		{name: "lone_userinfo_before_at_in_path", raw: "oracle://APIKEY@host:1521/XE@vhost", parse: parseAccepts, want: "oracle://xxxxx@vhost", secrets: []string{"APIKEY"}},
+		{name: "empty_password_before_at_in_path", raw: "oracle://APIKEY:@host:1521/XE@vhost", parse: parseAccepts, want: "oracle://xxxxx@vhost", secrets: []string{"APIKEY"}},
 		{name: "lone_userinfo_before_at_in_query", raw: "oracle://APIKEY@host:1521/XE?a=b@c", parse: parseAccepts, want: "oracle://xxxxx@xxxxx", secrets: []string{"APIKEY"}},
 		// Username and path are kept as written, never decoded.
 		{name: "escaped_username_and_vhost", raw: "amqp://us%40er:zq9x@broker:5672/%2Fproduction", parse: parseAccepts, want: "amqp://us%40er:xxxxx@broker:5672/%2Fproduction"},

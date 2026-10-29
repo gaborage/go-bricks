@@ -31,7 +31,9 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   when it holds no `@`: a lone userinfo (`amqp://tok@h`, the API-key-as-username shape), an empty
   password (`amqp://u:@h`) or a username holding an `@` becomes `xxxxx@`. A lone userinfo
   followed by an `@` later in the path or query reads, under the last-`@` scan, as a username
-  holding an `@`, so `oracle://tok@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`.
+  holding an `@`, so `oracle://tok@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`. A password
+  that starts with `@` counts as empty, since the real password may end at that `@`:
+  `oracle://tok:@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`.
 - A non-empty query becomes `?xxxxx`; an empty one is dropped with its `?`. The fragment is
   dropped.
 - The userinfo runs to the last `@` after `://`, wherever url.Parse would end it, whether it
@@ -101,6 +103,7 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   userinfo: `amqp://svc@corp:pw@h/vh` renders `amqp://xxxxx@h/vh`. That is accepted: the scan
   cannot tell it from a lone token stretched to a later `@`, and a masked username costs a
   debugging hint, never a secret.
+- A password that really starts with an unencoded `@` loses its username the same way.
 - With a `#` before the last `@`, the fragment text after that `@` renders as the host:
   `oracle://tok@h:1521/XE#f@c` renders `oracle://xxxxx@c`. That text is path or fragment text,
   never credential text, so this residual is accepted.

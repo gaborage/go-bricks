@@ -13949,8 +13949,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     EZ Connect DSN verbatim, and, wherever the error echoed a misparsed URL url.Parse accepts, left
     it as written: `oracle://user:1234/secret@db`, password `1234/secret`.
 - after: one posture (ADR-159). The password becomes `xxxxx`. The username is kept only beside a
-  non-empty password and only when it holds no `@`, else the userinfo becomes `xxxxx@`, so a
-  username holding an `@` (Azure-style `user@server`) is now masked whole:
+  non-empty password and only when it holds no `@`, else the userinfo becomes `xxxxx@` (a password
+  starting with `@` counts as empty), so a username holding an `@` (Azure-style `user@server`), or
+  a password that really starts with an unencoded `@`, is now masked whole:
   `amqp://svc@corp:pw@h/vh` renders `amqp://xxxxx@h/vh`. A non-empty query becomes `?xxxxx`, and
   the fragment is dropped. Rejected or misparsed input is scan-masked to the last `@`, and input
   without `://` renders `xxxxx`. `oracle://user:1234/secret@db` renders `oracle://user:xxxxx@db`.
