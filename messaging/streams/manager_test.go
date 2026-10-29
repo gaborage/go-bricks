@@ -1101,55 +1101,54 @@ func TestManagerEnvironmentOptions(t *testing.T) {
 	})
 }
 
-func TestRedactStreamURI(t *testing.T) {
-	// Fixture value only — no real credential appears in this repository.
-	const fixturePassword = "fixture-pw"
-
+// TestManagerStartRendersEndpointInOnePosture pins the endpoint a start error names to
+// credurl.RedactForLog.
+func TestManagerStartRendersEndpointInOnePosture(t *testing.T) {
 	tests := []struct {
-		name string
-		uri  string
-		want string
+		name    string
+		uri     string
+		want    string
+		secrets []string
 	}{
-		{
-			name: "masks_password_keeps_username",
-			uri:  "rabbitmq-stream://svc:" + fixturePassword + "@broker:5552/%2f",
-			want: "rabbitmq-stream://svc:****@broker:5552/%2f",
-		},
-		{
-			name: "masks_both_when_no_userinfo",
-			uri:  "rabbitmq-stream://broker:5552/vhost",
-			want: "rabbitmq-stream://****:****@broker:5552/vhost",
-		},
-		{
-			name: "masks_query_string",
-			uri:  "rabbitmq-stream://svc:" + fixturePassword + "@broker:5552/?token=abc",
-			want: "rabbitmq-stream://svc:****@broker:5552/?<redacted>",
-		},
-		{
-			name: "unparseable_uri_degrades_to_placeholder",
-			uri:  "rabbitmq-stream://svc:" + fixturePassword + "@broker:55 52/%2f",
-			want: redactedStreamURI,
-		},
-		{
-			name: "empty_uri_degrades_to_placeholder",
-			uri:  "",
-			want: redactedStreamURI,
-		},
-		{
-			name: "tls_scheme_is_preserved",
-			uri:  "rabbitmq-stream+tls://svc:" + fixturePassword + "@broker:5551/%2f",
-			want: "rabbitmq-stream+tls://svc:****@broker:5551/%2f",
-		},
+		{name: "masks_password_keeps_username", uri: "rabbitmq-stream://svc:fixture-pw@broker:5552/%2f", want: "rabbitmq-stream://svc:xxxxx@broker:5552/%2f", secrets: []string{"fixture-pw"}},
+		{name: "no_userinfo_renders_none", uri: "rabbitmq-stream://broker:5552/vhost", want: "rabbitmq-stream://broker:5552/vhost"},
+		{name: "masks_query_string", uri: "rabbitmq-stream://svc:fixture-pw@broker:5552/?token=abc", want: "rabbitmq-stream://svc:xxxxx@broker:5552/?xxxxx", secrets: []string{"fixture-pw", "token", "abc"}},
+		{name: "unparseable_uri_masked_whole", uri: "rabbitmq-stream://svc:fixture-pw@broker:55 52/%2f", want: "xxxxx", secrets: []string{"fixture-pw"}},
+		{name: "empty_uri", uri: "", want: "xxxxx"},
+		{name: "tls_scheme_is_preserved", uri: "rabbitmq-stream+tls://svc:fixture-pw@broker:5551/%2f", want: "rabbitmq-stream+tls://svc:xxxxx@broker:5551/%2f", secrets: []string{"fixture-pw"}},
+		// url.Parse reads "app:2024" as host:port, so a renderer that trusts it shows the password.
+		{name: "misparsed_password_endpoint_prefix_masked", uri: "rabbitmq-stream://app:2024/Sp/ring@broker:5552", want: "rabbitmq-stream://app:xxxxx@broker:5552", secrets: []string{"2024", "Sp/ring", "Sp", "ring"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := redactStreamURI(tt.uri)
+			m := NewManager(ManagerOptions{URI: tt.uri, Logger: logger.New("error", false)})
+			m.dialEnvironment = func(*stream.EnvironmentOptions) (environment, error) { return nil, errors.New("connection refused") }
 
-			assert.Equal(t, tt.want, got)
-			assert.NotContains(t, got, fixturePassword, "the password must never survive redaction")
+			err := m.Start(context.Background(), oneConsumerDecls())
+
+			require.EqualError(t, err, "failed to connect to stream endpoint "+tt.want+": connection refused")
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, err.Error(), secret)
+			}
 		})
 	}
+}
+
+// TestManagerStartMasksAHashBeforeTheLastAtAtEveryDoor pins the canceled-start endpoint
+// and the connected uri field to RedactForLog: Redact would show ZJV8 here.
+func TestManagerStartMasksAHashBeforeTheLastAtAtEveryDoor(t *testing.T) {
+	const uri = "rabbitmq-stream://u@ser:#Q@ZJV8/vh"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := NewManager(ManagerOptions{URI: uri, Logger: logger.New("error", false)}).Start(ctx, oneConsumerDecls())
+	require.EqualError(t, err, "startup canceled before dialing stream endpoint xxxxx: context canceled")
+
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: uri, Logger: log})
+	startOnFake(t, m, newFakeEnvironment(), oneConsumerDecls())
+	t.Cleanup(func() { _ = m.Close() })
+	assert.Equal(t, "xxxxx", log.fieldAt("info", "Connected to RabbitMQ stream endpoint", "uri"))
 }
 
 // TestManagerStartDoesNotLeakURIOnParseFailure covers the path reachable when a URI
@@ -1170,8 +1169,8 @@ func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), fixturePassword, "the credential must not survive into the error")
 	assert.Contains(t, err.Error(), "invalid stream URI")
-	assert.Contains(t, err.Error(), redactedStreamURI,
-		"an unparseable endpoint degrades to the fixed placeholder rather than echoing the input")
+	assert.Contains(t, err.Error(), "stream endpoint xxxxx:",
+		"an unparseable endpoint is masked whole rather than echoing the input")
 	assert.False(t, m.started)
 }
 
@@ -1222,17 +1221,15 @@ func TestSafeEnvError(t *testing.T) {
 }
 
 // TestManagerStartMasksAnUnquotedVendorEcho: the client's pre-dial URI check echoes password
-// text. Only safeEnvError's cause is pinned: the endpoint ahead of it is redactStreamURI's.
+// text, and url.Parse misreads the endpoint the error names ahead of it.
 func TestManagerStartMasksAnUnquotedVendorEcho(t *testing.T) {
 	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://app:2024/Sp/ring@broker:5552", Logger: logger.New("error", false)})
 
 	err := m.Start(t.Context(), oneConsumerDecls())
 
-	require.Error(t, err)
-	cause := errors.Unwrap(err)
-	require.EqualError(t, cause, "multiple segments in URI path: xxxxx:5552")
+	require.EqualError(t, err, "failed to connect to stream endpoint rabbitmq-stream://app:xxxxx@broker:5552: multiple segments in URI path: xxxxx:5552")
 	for _, secret := range []string{"2024", "Sp", "ring"} {
-		assert.NotContains(t, cause.Error(), secret)
+		assert.NotContains(t, err.Error(), secret)
 	}
 }
 

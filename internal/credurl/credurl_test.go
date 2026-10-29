@@ -157,6 +157,19 @@ func TestRedactRendersOnePosture(t *testing.T) {
 	}
 }
 
+func TestRedactForLogMasksHostlessURLsWhole(t *testing.T) {
+	cases := []struct{ name, raw, want string }{
+		{name: "rejected_forgot_host", raw: "amqp://user:QZ/XJK", want: redactionPlaceholder},
+		{name: "accepted_empty_host", raw: "amqps://user:@/ZYXXWYV/vh", want: redactionPlaceholder},
+		{name: "hash_before_last_at", raw: "amqp://u@ser:#Q@ZJV8/vh", want: redactionPlaceholder},
+		{name: "with_host_renders_as_redact", raw: "amqp://user:pw@broker/vh", want: "amqp://user:xxxxx@broker/vh"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, RedactForLog(tc.raw)) })
+	}
+}
+
 func TestRedactError(t *testing.T) {
 	cases := slices.Concat(hostilePasswordCases(), digitPasswordCases(), atSignUserinfoCases(), scanCases(), seamCases())
 

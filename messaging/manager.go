@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/internal/resourcepool"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -544,7 +545,7 @@ func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient,
 
 	m.logger.Info().
 		Str("key", key).
-		Str("broker_url", redactAMQPURL(amqpURL)).
+		Str("broker_url", credurl.RedactForLog(amqpURL)).
 		Msg("Created AMQP client for key")
 
 	return client, nil

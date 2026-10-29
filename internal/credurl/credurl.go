@@ -239,6 +239,17 @@ func maskUserinfo(userinfo string) string {
 	return redactionPlaceholder + "@"
 }
 
+// RedactForLog renders raw for a log field. A URL url.Parse rejects, one it reads with no
+// host, or one with a '#' before its last '@' renders as xxxxx: with no host to anchor on,
+// or with url.Parse's host cut at that '#' while the scan reads past it, password text
+// cannot be told from a host, port or path. Any other URL renders as Redact renders it.
+func RedactForLog(raw string) string {
+	if u, err := url.Parse(raw); err != nil || u.Host == "" || strings.Contains(raw[:max(strings.LastIndex(raw, "@"), 0)], "#") {
+		return redactionPlaceholder
+	}
+	return Redact(raw)
+}
+
 // maskRejectedAuthority masks an authority with no '@' from its first ':' outside an
 // IPv6 literal: an unescaped '/', '?' or '#' in a password can hide or cut away the
 // '@', so a rejected host:port may be userinfo.
