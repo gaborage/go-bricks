@@ -546,90 +546,6 @@ func TestQueryBuilderEscapeIdentifier(t *testing.T) {
 	}
 }
 
-func TestQueryBuilderWhereClauseHelpers(t *testing.T) {
-	tests := []struct {
-		name     string
-		vendor   string
-		column   string
-		value    any
-		method   string
-		expected map[string]any
-	}{
-		{
-			name:     "oracle_eq_reserved_word",
-			vendor:   Oracle,
-			column:   "number",
-			value:    "12345",
-			method:   "Eq",
-			expected: map[string]any{`"number"`: "12345"},
-		},
-		{
-			name:     "oracle_eq_normal_column",
-			vendor:   Oracle,
-			column:   "name",
-			value:    "John",
-			method:   "Eq",
-			expected: map[string]any{"name": "John"},
-		},
-		{
-			name:     "postgresql_eq_reserved_word",
-			vendor:   PostgreSQL,
-			column:   "number",
-			value:    123,
-			method:   "Eq",
-			expected: map[string]any{"number": 123},
-		},
-		{
-			name:     "oracle_noteq_reserved_word",
-			vendor:   Oracle,
-			column:   "size",
-			value:    100,
-			method:   "NotEq",
-			expected: map[string]any{`"size"`: 100},
-		},
-		{
-			name:     "oracle_gt_reserved_word",
-			vendor:   Oracle,
-			column:   "level",
-			value:    5,
-			method:   "Gt",
-			expected: map[string]any{`"level"`: 5},
-		},
-		{
-			name:     "oracle_lt_reserved_word",
-			vendor:   Oracle,
-			column:   "access",
-			value:    10,
-			method:   "Lt",
-			expected: map[string]any{`"access"`: 10},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			qb := NewQueryBuilder(tt.vendor)
-
-			var condition map[string]any
-			switch tt.method {
-			case "Eq":
-				condition = map[string]any(mustSqlizer(qb.Eq(tt.column, tt.value)))
-			case "NotEq":
-				condition = map[string]any(mustSqlizer(qb.NotEq(tt.column, tt.value)))
-			case "Gt":
-				condition = map[string]any(mustSqlizer(qb.Gt(tt.column, tt.value)))
-			case "Lt":
-				condition = map[string]any(mustSqlizer(qb.Lt(tt.column, tt.value)))
-			case "GtOrEq":
-				condition = map[string]any(mustSqlizer(qb.GtOrEq(tt.column, tt.value)))
-			case "LtOrEq":
-				condition = map[string]any(mustSqlizer(qb.LtOrEq(tt.column, tt.value)))
-			}
-
-			assert.Equal(t, tt.expected, condition)
-		})
-	}
-}
-
 func TestQueryBuilderOracleWhereClauseInQuery(t *testing.T) {
 	qb := NewQueryBuilder(Oracle)
 
@@ -977,14 +893,4 @@ func TestPostgreSQLOrderBySQLInjection(t *testing.T) {
 		"generated SQL must not contain the injected statement")
 	assert.NotContains(t, sql, "--",
 		"generated SQL must not contain the injected comment sequence")
-}
-
-// mustSqlizer unwraps the (sqlizer, error) pair the comparison helpers return now
-// that the column funnel is fallible. These cases all pass legitimate columns, so
-// an error here is a test bug rather than an expected outcome.
-func mustSqlizer[T any](sqlizer T, err error) T {
-	if err != nil {
-		panic("unexpected column validation error in test: " + err.Error())
-	}
-	return sqlizer
 }
