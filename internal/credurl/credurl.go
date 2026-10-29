@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // redactionPlaceholder is the placeholder substituted for a URL password, matching
@@ -28,8 +30,8 @@ func (e *redactedError) Error() string { return e.msg }
 func (e *redactedError) Unwrap() error { return e.err }
 
 // RedactError returns err with every rendering of raw masked as Redact renders it.
-// Shapes url.Parse accepts never yield a *url.Error, so they are masked
-// only where raw itself is rendered in the message. A *url.Error's rendering is
+// Shapes url.Parse accepts never yield a *url.Error, so they are masked only where
+// raw, or text of it Redact drops, is in the message. A *url.Error's rendering is
 // rebuilt rather than scrubbed, and a failure reason that quotes part of the URL is
 // replaced by reason. The result unwraps to err; when
 // nothing needs masking, err itself is returned.
@@ -46,7 +48,7 @@ func RedactError(err error, raw, reason string) error {
 	if errors.As(err, &urlErr) {
 		redacted = maskURLError(redacted, urlErr, raw, reason)
 	}
-	redacted = maskRawIn(redacted, raw)
+	redacted = maskRawTokens(maskQuotedRaw(maskRawIn(redacted, raw), raw), raw)
 	if redacted == msg {
 		return err
 	}
@@ -69,13 +71,14 @@ func maskRawIn(msg, raw string) string {
 // where a port belongs ("invalid port \":pa\" after host"). Masking the URL alone leaves
 // that copy behind, so rebuild the whole rendering instead of scrubbing it. urlErr.URL
 // is what url.Parse actually saw — raw with any '#' fragment already cut — so it, not
-// raw, is the string that reached the message. When raw extends it, the rebuild renders
-// raw, since the '@' ending the userinfo can sit in the cut. A *url.Error naming
-// another URL, such as a dialer's own, is judged alone.
+// raw, is the string that reached the message. When raw extends it, or it is a client's
+// rebuild of raw cut inside the decoded password (rebuiltFrom), the rebuild renders raw,
+// since the '@' ending the userinfo can sit in the cut. A *url.Error naming another URL,
+// such as a dialer's own, is judged alone.
 func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 	src := urlErr.URL
-	if strings.HasPrefix(raw, src) {
-		src = raw // url.Parse cut raw's '#' tail before reporting
+	if strings.HasPrefix(raw, src) || rebuiltFrom(raw, src) {
+		src = raw // url.Parse cut raw's '#' tail, or the rebuild's, before reporting
 	}
 	masked := Redact(src)
 	if masked == urlErr.URL {
@@ -87,6 +90,108 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 		reason = urlErr.Err.Error()
 	}
 	return strings.ReplaceAll(msg, urlErr.Error(), fmt.Sprintf("%s %q: %s", urlErr.Op, masked, reason))
+}
+
+// SECURITY: a vendor reason can quote raw text outside any *url.Error, such as a port or
+// query value it failed to parse. Mask every quoted segment longer than one character
+// that dropsRawText reports: one character reveals at most itself, and a vendor
+// hint quotes reserved characters one by one. A later '"' is tried even when an
+// earlier one opened a segment, so a stray quote cannot hide one.
+func maskQuotedRaw(msg, raw string) string {
+	if masked, ok := maskQuoted(msg, dropsRawText(raw, strings.Contains)); ok {
+		return masked
+	}
+	return msg
+}
+
+// maskQuoted replaces with "xxxxx" every quoted segment of msg longer than one character
+// whose text masks reports, and reports whether it replaced any.
+func maskQuoted(msg string, masks func(text string) bool) (string, bool) {
+	masked := false
+	for i := 0; i < len(msg); i++ {
+		if msg[i] != '"' {
+			continue
+		}
+		quoted, err := strconv.QuotedPrefix(msg[i:])
+		if err != nil {
+			continue
+		}
+		if text, _ := strconv.Unquote(quoted); len(text) > 1 && masks(text) {
+			placeholder := strconv.Quote(redactionPlaceholder)
+			msg = msg[:i] + placeholder + msg[i+len(quoted):]
+			i += len(placeholder) - 1
+			masked = true
+		}
+	}
+	return msg, masked
+}
+
+// SECURITY: vendor text can also echo raw unquoted, as a misparsed vhost or a dial host.
+// Mask every token longer than one character, a maximal run between value delimiters, that
+// a source holds aligned and Redact drops; a vendor word inside a password word stays. The
+// cost: a vendor word equal to an aligned piece of dropped text, a query key too, is masked.
+func maskRawTokens(msg, raw string) string {
+	masks := dropsRawText(raw, holdsAligned)
+	var b strings.Builder
+	for _, token := range strings.FieldsFunc(msg, isValueDelimiter) {
+		i := strings.Index(msg, token) // only delimiters precede token
+		b.WriteString(msg[:i])
+		msg = msg[i+len(token):]
+		if len(token) > 1 && !strings.Contains(token, redactionPlaceholder) && masks(token) {
+			token = redactionPlaceholder
+		}
+		b.WriteString(token)
+	}
+	b.WriteString(msg)
+	return b.String()
+}
+
+// isValueDelimiter reports whitespace or the punctuation vendor text sets around a value.
+func isValueDelimiter(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'`:,;()<>", r)
+}
+
+// holdsAligned reports text in source whose each end is an edge or touches a value or URL delimiter.
+func holdsAligned(source, text string) bool {
+	aligned := func(i int) bool {
+		before, _ := utf8.DecodeLastRuneInString(source[:i])
+		after, _ := utf8.DecodeRuneInString(source[i:])
+		return i == 0 || i == len(source) || strings.ContainsFunc(string(before)+string(after), func(r rune) bool {
+			return isValueDelimiter(r) || strings.ContainsRune("/@?#&=", r)
+		})
+	}
+	for from := range len(source) {
+		if strings.HasPrefix(source[from:], text) && aligned(from) && aligned(from+len(text)) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropsRawText reports text that holds finds in raw or its decoded password, and Redact drops.
+func dropsRawText(raw string, holds func(source, text string) bool) func(text string) bool {
+	kept := Redact(raw)
+	_, password, _ := decodedUserinfo(raw)
+	return func(text string) bool {
+		return !strings.Contains(kept, text) && (holds(raw, text) || holds(password, text))
+	}
+}
+
+// SECURITY: url.Parse cuts a client's rebuild around raw's decoded password at a '#' in it, and
+// the cut shows password text. rebuiltFrom reports raw's "scheme://username:" plus a password prefix.
+func rebuiltFrom(raw, cut string) bool {
+	prefix, password, ok := decodedUserinfo(raw)
+	rest, found := strings.CutPrefix(cut, prefix)
+	return ok && found && rest != "" && strings.HasPrefix(password, rest)
+}
+
+// decodedUserinfo returns raw's "scheme://username:" and the password url.Parse decodes, if set.
+func decodedUserinfo(raw string) (prefix, password string, ok bool) {
+	if u, err := url.Parse(raw); err == nil {
+		prefix = u.Scheme + "://" + u.User.Username() + ":"
+		password, ok = u.User.Password()
+	}
+	return prefix, password, ok
 }
 
 // Redact renders raw with its credentials masked. Scheme, host, port and path are

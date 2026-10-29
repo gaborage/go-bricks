@@ -13928,17 +13928,18 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: tests, log queries and alerts that pin the URL text of an AMQP dial error (the
   `Failed to connect to AMQP broker` log line), a streams environment or start error, or an Oracle
-  DSN error. Candidates:
-  `git grep -nE 'xxxxx|(amqps?|rabbitmq-stream(\+tls)?|oracle)://' -- '*_test.go' '*.yaml' '*.yml' '*.json'`,
+  DSN error, or vendor text in those errors that quotes or echoes part of the URL. Candidates:
+  `git grep -nE 'xxxxx|(amqps?|rabbitmq-stream(\+tls)?|oracle)://|is not an (uint16|integer)|multiple segments in URI path|no such host' -- '*_test.go' '*.yaml' '*.yml' '*.json'`,
   plus saved log queries outside the repo on those messages. A candidate counts only once you
   confirm it pins one of the renders listed under before.
 - gate: match = a confirmed candidate. no-match = none: which URL is dialed does not change, so
   only a service that matches the old text is affected.
 - scope: the URL text in AMQP `connect()` dial errors and the reconnect log line that carries
   them, the streams environment error, the stream consumer and publisher start errors, and Oracle
-  DSN errors. **Unchanged**: which URL is dialed, every configuration key, the httpclient request
-  log (`redactURLForLog`), the `broker_url` log field (`redactAMQPURL`), the PostgreSQL
-  connector's fixed message.
+  DSN errors, and vendor text in those errors that quotes or echoes URL text the posture drops.
+  **Unchanged**: which URL is dialed, every configuration key, the httpclient request log
+  (`redactURLForLog`), the `broker_url` log field (`redactAMQPURL`), the PostgreSQL connector's
+  fixed message.
 - before: on v0.72.0,
   - an AMQP dial error carried the URL as url.Parse rendered it, password and rejected component
     included, and the streams environment error kept url.Parse's reason, which can quote the
@@ -13946,7 +13947,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   - a stream consumer or publisher start error wrapped the client's error unmasked;
   - an Oracle DSN error masked the password but kept the query and a lone username, rendered an
     EZ Connect DSN verbatim, and, wherever the error echoed a misparsed URL url.Parse accepts, left
-    it as written: `oracle://user:1234/secret@db`, password `1234/secret`.
+    it as written: `oracle://user:1234/secret@db`, password `1234/secret`;
+  - vendor text outside any `*url.Error` showed the URL text it quoted or echoed: amqp091's port
+    and query checks (`strconv.ParseInt: parsing "12345678901": value out of range`,
+    `heartbeat is not an uint16: strconv.ParseUint: parsing "k3y7": invalid syntax`), the stream
+    client's `multiple segments in URI path: /Sp/ring@broker:5552`, which the streams environment
+    error passed through, and a dial error naming a host url.Parse read from the password
+    (`lookup zq9x: no such host`).
 - after: one posture (ADR-159). The password becomes `xxxxx`. The username is kept only beside a
   non-empty password and only when it holds no `@`, `/`, `?` or `#`, else the userinfo becomes
   `xxxxx@` (a password starting with `@` counts as empty), so a username holding an `@`
@@ -13963,9 +13970,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `amqp://u:xxxxx@xxxxx`. A rejected URL with no credentials loses its port and its quoted reason:
   `amqp://broker:5672/vh%zz` renders `amqp://broker:xxxxx/vh%zz: invalid URL`. A vendor reason
   that quotes the input is replaced by `invalid URL` (`invalid DSN` for Oracle). An Oracle EZ
-  Connect DSN in error text renders `xxxxx`.
+  Connect DSN in error text renders `xxxxx`. Other vendor text that quotes or echoes URL text the
+  posture drops, two or more characters long, renders `xxxxx`: `parsing "xxxxx"`, the query key
+  too (`xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, and
+  `xxxxx is not an integer` for `connection_timeout`), `multiple segments in URI path: xxxxx:5552`
+  and `lookup xxxxx: no such host`. A one-character quote, such as those in amqp091's
+  reserved-character hint, stays.
 - apply: re-point matches at the new render. A query value such as `connection_name` no longer
-  shows in these errors; read it from the configuration instead.
+  shows in these errors, and an amqp091 query-check error no longer names its parameter; read
+  both from the configuration instead.
 - verify: start a service with
   `messaging.broker.url: amqp://app:zq9x/k3y@broker:5672/vh?heartbeat=10`; the error on the
   `Failed to connect to AMQP broker` log line reads

@@ -24,7 +24,8 @@ so the host never showed.
 
 **`internal/credurl` is the one renderer for a credential-bearing URL in error text, and it
 renders one posture.** `Redact(raw) string` gives the posture for a raw URL. `RedactError`
-rebuilds a buried `*url.Error`, and masks every other rendering of raw, through the same rules.
+rebuilds a buried `*url.Error`, and masks every other rendering of raw and every vendor echo of
+text the posture drops, through the same rules.
 
 - The scheme, host, port and path are kept.
 - The password becomes `xxxxx`. The username is kept only beside a non-empty password, and only
@@ -48,10 +49,23 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
 - On the `*url.Error` path, the URL url.Parse reported is judged with the `#` fragment it cut
   before reporting, whenever the raw URL extends it: the `@` that ends the userinfo can be in the
   cut.
+- A `*url.Error` naming the stream client's rebuild of the URI around the decoded password
+  (`<scheme>://<user>:` followed by a non-empty prefix of that password, cut at a `#` inside it)
+  is judged as the configured URI, so it renders from that URI.
 - Input without `://`, or with any of `:`, `/`, `?`, `#` or `@` before the first `://`, renders
   whole as `xxxxx`; empty input renders as the empty string.
 - A `*url.Error` reason that quotes anything is replaced, which is the rule `RedactError` already
   applied.
+- Any other double-quoted segment of the message, two or more characters long, whose text the
+  input or its decoded password holds and the rendering drops, becomes `"xxxxx"`. That covers
+  amqp091's port and query checks, which quote a digit-led password or a query value outside any
+  `*url.Error` (`strconv.ParseInt: parsing "xxxxx": value out of range`). Unquoted vendor text gets
+  the same test word by word, as the last pass: a word is a run between whitespace and
+  ``"'`:,;()<>``, and one of two or more characters is masked when the input or its decoded
+  password holds it aligned, each end at an edge or touching one of those delimiters or
+  `/ @ ? # & =`, and the rendering drops it. That covers the stream client's
+  `multiple segments in URI path: /<password tail>@host` and a dial error naming a host made of
+  password text.
 
 **A door may render stricter, never looser:**
 
@@ -62,7 +76,7 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
 | Door | Text | Renderer |
 | --- | --- | --- |
 | AMQP `connect()` | dial error, and the `Failed to connect to AMQP broker` log line carrying it | `RedactError` |
-| Streams `safeEnvError` | environment error | `RedactError` |
+| Streams `safeEnvError` | environment error, the client's own URI-check text included | `RedactError` |
 | Streams `safeStartError` | consumer and publisher start errors | `RedactError` |
 | Oracle connector (`redactDSNError`) | DSN error | `RedactError` |
 
@@ -92,6 +106,19 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   vendor text, since every occurrence of it is replaced; the mangling never reveals anything.
 - On the `*url.Error` path the host and path after the last `@` now show, read from raw across the
   cut fragment, where the cut URL used to end the render early. They are parts the posture keeps.
+  The same holds for the stream client's rebuild cut inside the password: the start error renders
+  the configured URI, so it names the configured host, not the leader or replica host the client
+  rebuilt the URI around.
+- The quoted and unquoted passes mask only text of two or more characters, so a one-character
+  quote (the `"?"`, `"#"`, `"@"`, `":"` and `"/"` of amqp091's reserved-character hint) stays
+  readable. Such a quote or word discloses at most one character.
+- A vendor word equal to an aligned piece of dropped text is masked, which tells a reader that
+  piece was in the input. Query keys count, because the query is dropped whole and a bare query
+  token (`?<token>`) sits where a key does. So amqp091's checks lose the parameter name:
+  `heartbeat` and `channel_max` render `xxxxx is not an uint16`, and `connection_timeout` renders
+  `xxxxx is not an integer`. When a `?` before the last `@` masks the whole tail, the host and path
+  are dropped text too, and an echo of them is masked. A word that only occurs inside a longer
+  word of the input (`in` in `Spring`) is not aligned and stays.
 - A URL with no host after its password has no host delimiter, so it is indistinguishable from a
   URL that has one, and password text renders as host, port or path. `amqp://user:1234/broker`
   (a forgotten `@` and an all-digit password) is a valid host and port, the same shape as
@@ -121,7 +148,8 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
 
 The posture fixes the render only. A misparsed AMQP URL still dials the host url.Parse read, which
 is password text (`zq9x` from `amqp://user:s3cr@zq9x?PW@broker:5672/vh`). The DNS lookup sends that
-text to the resolver, and the dial error names that host as the vendor wrote it. Refusing before
+text to the resolver. The unquoted pass masks the host in the dial error
+(`lookup xxxxx: no such host`), but that is render-only: the lookup still happens. Refusing before
 the dial would close that, but it is a breaking change (a URL that dials today would refuse to
 start), and it has no exact trigger. `amqp://user:1234/Spring@broker/vh` (misparsed password) and
 `amqp://h:5672/my@vhost` (host, port, `@` vhost) have the same shape, and the candidate heuristics
@@ -129,7 +157,8 @@ each either refuse a valid vhost or miss a misparse. Left open.
 
 ## References
 
-- `internal/credurl/credurl.go`: `Redact`, `RedactError`, `maskURLError`, `maskRejectedAuthority`
+- `internal/credurl/credurl.go`: `Redact`, `RedactError`, `maskURLError`, `maskRejectedAuthority`,
+  `maskQuotedRaw`, `maskRawTokens`, `rebuiltFrom`
 - `messaging/amqp_client.go`: `connect`
 - `messaging/streams/manager.go`: `safeEnvError`, `safeStartError`
 - `database/oracle/connection.go`: `redactDSNError`
