@@ -34,7 +34,8 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   dropped.
 - The userinfo runs to the last `@` after `://`, wherever url.Parse would end it, whether it
   accepts the input or rejects it: `amqp://user:1234/Spring@broker/vh` renders
-  `amqp://user:xxxxx@broker/vh`.
+  `amqp://user:xxxxx@broker/vh`. When a `?` comes before that `@`, everything after the `@`
+  renders as one `xxxxx`, since it may be query text.
 - When url.Parse rejects input with no `@`, the mask runs from the first `:` after `//`, outside
   an IPv6 literal, to the next `/`, `?`, `#` or the end. So `amqp://user:pass/broker` (rejected as
   `invalid port ":pass" after host`) renders `amqp://user:xxxxx/broker`.
@@ -70,10 +71,13 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
 
 ## Consequences
 
-- An `@` that is legal unencoded in a path or query (`amqp://u:p@h/my@vhost`,
-  `?connection_name=app@host`) over-masks, since the scan cannot tell it from a misparsed
-  password. `amqp://u:p@h/my@vhost` renders `amqp://u:xxxxx@vhost`. That is accepted: a masked
-  vhost costs a debugging hint, never a secret.
+- An `@` that is legal unencoded in a path over-masks the host, since the scan cannot tell it from
+  a misparsed password: `amqp://u:p@h/my@vhost` renders `amqp://u:xxxxx@vhost`. That is
+  accepted: a masked host costs a debugging hint, never a secret. An `@` after the first `?` masks
+  the whole tail instead, because a query value can hold credentials (go-ora's `WALLET PASSWORD`):
+  `amqp://u:p@h/vh?connection_name=app@x` renders `amqp://u:xxxxx@xxxxx`. A password holding an
+  unencoded `?` loses its host and path the same way. A `#` does not count: a password holding
+  one keeps its host, and a fragment carries no credentials.
 - A rejected URL with no credentials also loses its port, and with it the vendor's quoted reason:
   `amqp://broker:5672/vh%zz` renders `amqp://broker:xxxxx/vh%zz: invalid URL`. A port-shaped
   segment of a rejected URL may be password text, so the scan cannot keep it.
@@ -82,8 +86,12 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   vendor text, since every occurrence of it is replaced; the mangling never reveals anything.
 - On the `*url.Error` path the host and path after the last `@` now show, read from raw across the
   cut fragment, where the cut URL used to end the render early. They are parts the posture keeps.
-- `amqp://user:1234/broker` (a forgotten `@` and an all-digit password) is a valid host and port,
-  the same shape as `amqp://h:5672/vh`, so it renders verbatim, as it did before.
+- A URL with no host after its password has no host delimiter, so it is indistinguishable from a
+  URL that has one, and password text renders as host, port or path. `amqp://user:1234/broker`
+  (a forgotten `@` and an all-digit password) is a valid host and port, the same shape as
+  `amqp://h:5672/vh`, so it renders verbatim, as it did before. `amqp://user:QZ/XJK` renders
+  `amqp://user:xxxxx/XJK`, and `amqp://user:pa@ss:QZXJ` renders `amqp://user:xxxxx@ss:QZXJ`. This
+  class is accepted.
 - A query value, such as an Oracle `WALLET PASSWORD` or an AMQP `connection_name`, no longer shows
   in these errors.
 - The `broker_url` and streams `uri` log fields, and the endpoint the streams start error names,

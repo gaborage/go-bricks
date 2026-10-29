@@ -13951,8 +13951,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   non-empty password, else the userinfo becomes `xxxxx@`. A non-empty query becomes `?xxxxx`, and
   the fragment is dropped. Rejected or misparsed input is scan-masked to the last `@`, and input
   without `://` renders `xxxxx`. `oracle://user:1234/secret@db` renders `oracle://user:xxxxx@db`.
-  An `@` that is legal in a path or query over-masks: `amqp://u:p@h/my@vhost` renders
-  `amqp://u:xxxxx@vhost`. A rejected URL with no credentials loses its port and its quoted reason:
+  An `@` that is legal in a path over-masks the host: `amqp://u:p@h/my@vhost` renders
+  `amqp://u:xxxxx@vhost`. When a `?` comes before the last `@`, everything after that `@` renders
+  as `xxxxx`, since it may be query text: `amqp://u:p@h/vh?connection_name=app@x` renders
+  `amqp://u:xxxxx@xxxxx`. A rejected URL with no credentials loses its port and its quoted reason:
   `amqp://broker:5672/vh%zz` renders `amqp://broker:xxxxx/vh%zz: invalid URL`. A vendor reason
   that quotes the input is replaced by `invalid URL` (`invalid DSN` for Oracle). An Oracle EZ
   Connect DSN in error text renders `xxxxx`.

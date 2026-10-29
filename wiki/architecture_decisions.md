@@ -2627,8 +2627,9 @@ a non-empty query `?xxxxx`, the fragment dropped. `RedactError`, behind the AMQP
 error, the streams environment and start errors and the Oracle DSN error, renders through the same
 rules, where it kept the query and a lone username and trusted url.Parse once it accepted the URL.
 An unencoded `/`, `?` or `#` in a password makes url.Parse end the authority early, so the userinfo
-now runs to the last `@` after `://`, across the `#` url.Parse cut on the `*url.Error` path, and a
-rejected URL with no `@` is masked from its first `:` to the end of its authority. Input without a
+now runs to the last `@` after `://`, across the `#` url.Parse cut on the `*url.Error` path, with
+all after it masked when a `?` precedes it, and a rejected URL with no `@` is masked from its first
+`:` to the end of its authority. Input without a
 scheme separator renders `xxxxx`. Refusing a misparsed URL before the dial is left open. See
 [migrations.md](migrations.md) `[C73.18]`.
 

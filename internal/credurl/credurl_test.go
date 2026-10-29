@@ -21,8 +21,12 @@ const testReason = "invalid URL"
 const hint = `(hint: a reserved character such as "?" or "#" must be percent-encoded)`
 
 // maskedRejection is the amqp rendering once a rejected password is masked and its
-// quoting reason replaced.
-const maskedRejection = `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + hint
+// quoting reason replaced; maskedTailRejection is that rendering when a '?' before the
+// last '@' masks the whole tail.
+const (
+	maskedRejection     = `parse "amqp://user:xxxxx@{host}/vh": invalid URL ` + hint
+	maskedTailRejection = `parse "amqp://user:xxxxx@xxxxx": invalid URL ` + hint
+)
 
 // hostSlot marks where a hostile-password template takes its host.
 const hostSlot = "{host}"
@@ -84,10 +88,11 @@ func TestNetURLErrorFormatUnchanged(t *testing.T) {
 
 func TestRedactRendersOnePosture(t *testing.T) {
 	cases := []struct {
-		name  string
-		raw   string
-		parse parseVerdict
-		want  string
+		name    string
+		raw     string
+		parse   parseVerdict
+		want    string
+		secrets []string // substrings that must not survive in the result
 	}{
 		{name: "password_without_query", raw: "amqp://user:zq9x@broker:5672/vh", parse: parseAccepts, want: "amqp://user:xxxxx@broker:5672/vh"},
 		{name: "password_with_query", raw: "amqp://user:zq9x@broker:5672/vh?heartbeat=30&token=zq9x", parse: parseAccepts, want: "amqp://user:xxxxx@broker:5672/vh?xxxxx"},
@@ -102,19 +107,20 @@ func TestRedactRendersOnePosture(t *testing.T) {
 		{name: "empty_password", raw: "amqp://zq9x:@broker:5672/vh", parse: parseAccepts, want: "amqp://xxxxx@broker:5672/vh"},
 		// Username and path are kept as written, never decoded.
 		{name: "escaped_username_and_vhost", raw: "amqp://us%40er:zq9x@broker:5672/%2Fproduction", parse: parseAccepts, want: "amqp://us%40er:xxxxx@broker:5672/%2Fproduction"},
-		{name: "hostile_password_characters", raw: "amqp://user:zq9x?#/@:PW@broker:5672/vh", parse: parseRejects, want: "amqp://user:xxxxx@broker:5672/vh"},
+		{name: "hostile_password_characters", raw: "amqp://user:zq9x?#/@:PW@broker:5672/vh", parse: parseRejects, want: "amqp://user:xxxxx@xxxxx"},
 		{name: "password_with_invalid_escape", raw: "amqp://user:s3cr%etPW@broker:5672/vh", parse: parseRejects, want: "amqp://user:xxxxx@broker:5672/vh"},
 		{name: "rejected_without_at", raw: "amqp://user:pass/broker", parse: parseRejects, want: "amqp://user:xxxxx/broker"},
 		{name: "rejected_without_at_with_query", raw: "amqp://user:zq9x?token=zq9x", parse: parseRejects, want: "amqp://user:xxxxx?xxxxx"},
 		{name: "rejected_ipv6_without_at", raw: "amqp://[::1]:5672/vh\n", parse: parseRejects, want: "amqp://[::1]:xxxxx/vh\n"},
 		// url.Parse accepts these but splits the userinfo at the wrong '@'.
 		{name: "misparse_digit_password", raw: "amqp://user:1234/Spring@broker/vh", parse: parseAccepts, want: "amqp://user:xxxxx@broker/vh"},
-		{name: "misparse_at_then_question_mark", raw: "amqp://user:s3cr@zq9x?PW@broker:5672/vh", parse: parseAccepts, want: "amqp://user:xxxxx@broker:5672/vh"},
+		{name: "misparse_at_then_question_mark", raw: "amqp://user:s3cr@zq9x?PW@broker:5672/vh", parse: parseAccepts, want: "amqp://user:xxxxx@xxxxx"},
 		{name: "stream_misparse_digit_password", raw: "rabbitmq-stream://app:2024/Sp/ring@broker:5552", parse: parseAccepts, want: "rabbitmq-stream://app:xxxxx@broker:5552"},
-		// The accepted cost of reading to the last '@': one in a vhost or a query value
-		// over-masks everything before it.
+		// The accepted cost of reading to the last '@': one in a vhost over-masks everything
+		// before it, and one after a '?' masks the whole tail, which may be query text.
 		{name: "at_in_path_over_masks", raw: "amqp://u:p@h/my@vhost", parse: parseAccepts, want: "amqp://u:xxxxx@vhost"},
-		{name: "at_in_query_over_masks", raw: "amqp://user:zq9x@broker:5672/vh?connection_name=app@host", parse: parseAccepts, want: "amqp://user:xxxxx@host"},
+		{name: "at_in_query_over_masks", raw: "amqp://user:zq9x@broker:5672/vh?connection_name=app@QZXJ", parse: parseAccepts, want: "amqp://user:xxxxx@xxxxx", secrets: []string{"zq9x", "connection_name", "QZXJ"}},
+		{name: "oracle_wallet_password_with_at", raw: "oracle://scott:tiger@db:1521/svc?WALLET%20PASSWORD=ab@QZXJKV", parse: parseAccepts, want: "oracle://scott:xxxxx@xxxxx", secrets: []string{"QZXJKV", "tiger"}},
 		{name: "ipv6_with_port", raw: "amqp://user:zq9x@[::1]:5672/vh", parse: parseAccepts, want: "amqp://user:xxxxx@[::1]:5672/vh"},
 		{name: "ipv6_without_port", raw: "amqp://user:zq9x@[2001:db8::1]/vh", parse: parseAccepts, want: "amqp://user:xxxxx@[2001:db8::1]/vh"},
 		{name: "amqps_scheme", raw: "amqps://admin:zq9x@rabbitmq.prod:5671/production", parse: parseAccepts, want: "amqps://admin:xxxxx@rabbitmq.prod:5671/production"},
@@ -130,6 +136,9 @@ func TestRedactRendersOnePosture(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			requireParseVerdict(t, tc.raw, tc.parse)
 			assert.Equal(t, tc.want, Redact(tc.raw))
+			for _, secret := range tc.secrets {
+				assert.NotContains(t, Redact(tc.raw), secret)
+			}
 		})
 	}
 }
@@ -204,7 +213,7 @@ func hostilePasswordCases() []redactErrorCase {
 	templates := []redactErrorCase{
 		// url.Parse rejects these with a reason that quotes part of the password — an
 		// "invalid port" echo or an "invalid URL escape" — so the reason is replaced.
-		{name: "password_with_question_mark", raw: "amqp://user:s3cr?etPW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: rejectedSecrets},
+		{name: "password_with_question_mark", raw: "amqp://user:s3cr?etPW@{host}/vh", parse: parseRejects, want: maskedTailRejection, secrets: rejectedSecrets},
 		{name: "password_with_slash", raw: "amqp://user:s3cr/etPW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: rejectedSecrets},
 		{name: "password_with_invalid_escape", raw: "amqp://user:s3cr%etPW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: rejectedSecrets},
 		// url.Parse cuts the fragment before it parses, so the URL it rejects stops at
@@ -247,12 +256,12 @@ func hostilePasswordCases() []redactErrorCase {
 		// host; the '@' after that authority sends the scan to the last '@'.
 		{name: "digit_password_reads_as_port", raw: "amqp://user:1234/etPW@{host}/vh", parse: parseAccepts, want: maskedDial, secrets: []string{"1234", "etPW"}},
 		// url.Parse reads "et" as the host and the rest as the query; the scan still
-		// reads to the last '@', so the whole password is masked.
+		// reads to the last '@', and the '?' before it masks the whole tail.
 		{
 			name:    "password_with_at_then_question_mark",
 			raw:     "amqp://user:s3cr@et?PW@{host}/vh",
 			parse:   parseAccepts,
-			want:    maskedDial,
+			want:    "dial amqp://user:xxxxx@xxxxx: connection refused",
 			secrets: []string{"s3cr", "et?PW", "PW"},
 		},
 	}
@@ -298,16 +307,17 @@ func digitPasswordCases() []redactErrorCase {
 	maskedDEL := "parse " + strconv.Quote("amqp://app:xxxxx@{host}/vh\x7f") + controlChar
 	maskedSpace := `parse " amqp://app:xxxxx@{host}/vh"` + colonInFirstSegment
 	maskedEscape := `parse "amqp://app:xxxxx@{host}/vh%zz": invalid URL ` + hint
+	maskedTail := `parse "amqp://app:xxxxx@xxxxx"` + controlChar
 	slashSecrets := []string{"2024", "Spring"}
 	digitSecrets := []string{"2024"}
 
 	templates := []redactErrorCase{
 		{name: "slash_password_with_trailing_newline", raw: "amqp://app:2024/Spring@{host}/vh\n", parse: parseRejects, want: maskedNewline, secrets: slashSecrets},
-		{name: "question_mark_password_with_trailing_newline", raw: "amqp://app:2024?x@{host}/vh\n", parse: parseRejects, want: maskedNewline, secrets: digitSecrets},
+		{name: "question_mark_password_with_trailing_newline", raw: "amqp://app:2024?x@{host}/vh\n", parse: parseRejects, want: maskedTail, secrets: digitSecrets},
 		{name: "slash_password_with_trailing_del", raw: "amqp://app:2024/Spring@{host}/vh\x7f", parse: parseRejects, want: maskedDEL, secrets: slashSecrets},
-		{name: "question_mark_password_with_trailing_del", raw: "amqp://app:2024?x@{host}/vh\x7f", parse: parseRejects, want: maskedDEL, secrets: digitSecrets},
+		{name: "question_mark_password_with_trailing_del", raw: "amqp://app:2024?x@{host}/vh\x7f", parse: parseRejects, want: maskedTail, secrets: digitSecrets},
 		{name: "slash_password_with_leading_space", raw: " amqp://app:2024/Spring@{host}/vh", parse: parseRejects, want: maskedSpace, secrets: slashSecrets},
-		{name: "question_mark_password_with_leading_space", raw: " amqp://app:2024?x@{host}/vh", parse: parseRejects, want: maskedSpace, secrets: digitSecrets},
+		{name: "question_mark_password_with_leading_space", raw: " amqp://app:2024?x@{host}/vh", parse: parseRejects, want: `parse " amqp://app:xxxxx@xxxxx"` + colonInFirstSegment, secrets: digitSecrets},
 		// url.Parse reports the URL cut at the '#'; the '@' past it is in raw.
 		{
 			name:    "hash_password_with_leading_space",
@@ -352,7 +362,7 @@ func atSignUserinfoCases() []redactErrorCase {
 
 	templates := []redactErrorCase{
 		{name: "at_sign_username_password_with_slash", raw: "amqp://svc@corp:Se/cretPW@{host}/vh", parse: parseRejects, want: maskedUsername, secrets: usernameSecrets},
-		{name: "at_sign_username_password_with_question_mark", raw: "amqp://svc@corp:Se?cretPW@{host}/vh", parse: parseRejects, want: maskedUsername, secrets: usernameSecrets},
+		{name: "at_sign_username_password_with_question_mark", raw: "amqp://svc@corp:Se?cretPW@{host}/vh", parse: parseRejects, want: `parse "amqp://svc@corp:xxxxx@xxxxx": invalid URL ` + hint, secrets: usernameSecrets},
 		{
 			name:    "at_sign_username_password_with_hash",
 			raw:     "amqp://svc@corp:Se#cretPW@{host}/vh",
@@ -361,7 +371,7 @@ func atSignUserinfoCases() []redactErrorCase {
 			secrets: usernameSecrets,
 		},
 		{name: "password_with_at_before_slash", raw: "amqp://user:Sec@re:t/PW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: passwordSecrets},
-		{name: "password_with_at_before_question_mark", raw: "amqp://user:Sec@re:t?PW@{host}/vh", parse: parseRejects, want: maskedRejection, secrets: passwordSecrets},
+		{name: "password_with_at_before_question_mark", raw: "amqp://user:Sec@re:t?PW@{host}/vh", parse: parseRejects, want: maskedTailRejection, secrets: passwordSecrets},
 		{
 			name:    "password_with_at_before_hash",
 			raw:     "amqp://user:Sec@re:t#PW@{host}/vh",
@@ -422,7 +432,7 @@ func scanCases() []redactErrorCase {
 			name:    "password_with_question_mark",
 			raw:     "oracle://appuser:pa?ss@host:1521/XE",
 			parse:   parseRejects,
-			want:    rejectedDSN,
+			want:    `parse "oracle://appuser:xxxxx@xxxxx": invalid URL ` + hint,
 			secrets: []string{"pa?ss", invalidPortEcho},
 		},
 		{

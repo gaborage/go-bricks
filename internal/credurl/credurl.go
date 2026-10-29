@@ -93,9 +93,10 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 // kept; the password becomes xxxxx, a non-empty query ?xxxxx, and a fragment is
 // dropped. The username is kept only beside a non-empty password; any other userinfo
 // is masked whole. The userinfo runs to the last '@', wherever url.Parse would end it;
-// with no '@', a URL url.Parse rejects is masked from the first ':' to the end of its
-// authority. Input with no "://", or with a ':', '/', '?', '#' or '@' before its first
-// "://", renders as xxxxx, and empty input as "".
+// when a '?' precedes that '@', all after the '@' renders as one xxxxx. With no '@',
+// a URL url.Parse rejects is masked from the first ':' to the end of its authority.
+// Input with no "://", or with a ':', '/', '?', '#' or '@' before its first "://",
+// renders as xxxxx, and empty input as "".
 func Redact(raw string) string {
 	if raw == "" {
 		return ""
@@ -109,6 +110,10 @@ func Redact(raw string) string {
 	head, rest := raw[:authority], raw[authority:]
 	if at := strings.LastIndex(rest, "@"); at != -1 {
 		head += maskUserinfo(rest[:at])
+		// Past a '?', that '@' may sit in a query value, so the tail is masked whole.
+		if q := strings.IndexByte(rest[:at], '?'); q != -1 {
+			return head + redactionPlaceholder
+		}
 		rest = rest[at+1:]
 	} else if _, err := url.Parse(raw); err != nil {
 		rest = maskRejectedAuthority(rest)
