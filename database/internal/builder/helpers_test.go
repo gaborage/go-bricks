@@ -1128,6 +1128,9 @@ func splicedVerdict(d compareDoor) operandVerdict {
 	return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " UPPER(x)"})
 }
 
+// selfPointer is a pointer type that names itself.
+type selfPointer *selfPointer
+
 // operandRow is one operand shape and what it renders to at each door.
 type operandRow struct {
 	name    string
@@ -1174,10 +1177,15 @@ func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
 		{"empty_list", []int{}, func(d compareDoor) operandVerdict {
 			return d.equalityOnly(operandVerdict{pred: d.negated("(1=0)", "(1=1)")})
 		}},
-		// Known Eq-vs-In difference: In resolves list elements, Eq binds them as
-		// written. Pinned as it is today, so a change to it is deliberate.
-		{"list_elements_bind_raw", []any{typedNil}, func(d compareDoor) operandVerdict {
-			return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IN", "NOT IN") + " (?1)", args: []any{typedNil}})
+		// An equality door judges list elements the way In does.
+		{"list_elements_resolve", []any{typedNil, &seven}, func(d compareDoor) operandVerdict {
+			return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IN", "NOT IN") + " (?1,?2)", args: []any{nil, 7}})
+		}},
+		{"list_expression_element", []any{1, judgeExpr}, func(d compareDoor) operandVerdict {
+			return d.equalityOnly(inElement(1, d.op, d.joinOnly(d.op, operandVerdict{pred: "c " + d.negated("IN", "NOT IN") + " (?1,UPPER(x))", args: []any{1}})))
+		}},
+		{"list_aliased_element", []any{judgeAliased}, func(d compareDoor) operandVerdict {
+			return d.equalityOnly(inElement(0, d.op, aliasedVerdict(d)))
 		}},
 		// Known family difference: an f door binds a Sqlizer operand whole, a jf
 		// door expands it in place. Pinned as it is today.
@@ -1329,6 +1337,9 @@ func listOf(args ...any) func(compareDoor) operandVerdict {
 func TestOperandJudgeAtTheListDoors(t *testing.T) {
 	var typedNil *int
 	var nilSlice *[]int
+	var anyNilSlice any = nilSlice
+	var nilSelf, cyclicSelf selfPointer
+	cyclicSelf = &cyclicSelf
 	var cyclic any
 	cyclic = &cyclic
 	payload := map[string]any{"k": 1}
@@ -1338,9 +1349,19 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 		{"pointer_to_slice", &[]int{1, 2}, listOf(1, 2)},
 		{"empty_slice", []int{}, compareDoor.emptySet},
 		{"untyped_nil", nil, compareDoor.emptySet},
-		// Probe 05, pinned as it is today: a nil pointer to a slice is one NULL
-		// element, where an untyped nil is the empty set.
-		{"nil_pointer_to_slice", nilSlice, listOf(nil)},
+		// A nil pointer to a list is a list the caller did not fill: the empty
+		// set, as an untyped nil is. A scalar NULL stays one element.
+		{"nil_pointer_to_slice", nilSlice, compareDoor.emptySet},
+		{"nil_pointer_to_pointer_to_slice", &nilSlice, compareDoor.emptySet},
+		{"nil_pointer_to_array", (*[2]int)(nil), compareDoor.emptySet},
+		{"interface_holding_nil_pointer_to_slice", &anyNilSlice, compareDoor.emptySet},
+		{"nil_pointer_to_scalar", typedNil, listOf(nil)},
+		{"nil_pointer_to_valuer", (*dbsql.NullString)(nil), listOf(nil)},
+		{"nil_pointer_to_byte_slice", (*[]byte)(nil), listOf(nil)},
+		{"nil_pointer_to_valuer_slice", (*inValuerList)(nil), listOf(nil)},
+		{"nil_self_pointer", nilSelf, listOf(nil)},
+		{"cyclic_self_pointer", cyclicSelf, cyclicVerdict},
+		{"valuer_null", dbsql.NullString{}, listOf(nil)},
 		{"scalar_is_one_element", 5, listOf(5)},
 		{"byte_slice_is_one_element", []byte("ab"), listOf([]byte("ab"))},
 		{"map_binds_whole", payload, boundWhole(payload)},
@@ -1357,10 +1378,20 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 		{"pointer_to_expression", &judgeExpr, listSpliced},
 		{"aliased_expression", judgeAliased, aliasedVerdict},
 		{"blank_expression", judgeBlank, blankVerdict},
-		// Probe 02, pinned as it is today: an expression INSIDE a list binds the
-		// struct at both families.
-		{"expression_element", []any{judgeExpr}, listOf(judgeExpr)},
-		{"expression_slice", []dbtypes.RawExpression{judgeExpr}, listOf(judgeExpr)},
+		// An expression INSIDE a list is judged as each element's own operand: an
+		// f door refuses it, a jf door splices it beside the bound elements.
+		{"expression_element", []any{judgeExpr}, atElement(0, listSpliced)},
+		{"expression_slice", []dbtypes.RawExpression{judgeExpr}, atElement(0, listSpliced)},
+		{"pointer_to_expression_element", []any{&judgeExpr}, atElement(0, listSpliced)},
+		{"expression_beside_values", []any{1, judgeExpr, nil}, atElement(1, func(d compareDoor) operandVerdict {
+			return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (?1,UPPER(x),?2)", args: []any{1, nil}})
+		})},
+		{"aliased_element", []any{judgeAliased}, atElement(0, aliasedVerdict)},
+		{"blank_element", []dbtypes.RawExpression{judgeBlank}, atElement(0, blankVerdict)},
+		// A Sqlizer element beside a spliced one stays one bound argument.
+		{"sqlizer_beside_expression", []any{judgeStructSqlizer, judgeExpr}, atElement(1, func(d compareDoor) operandVerdict {
+			return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (?1,UPPER(x))", args: []any{judgeStructSqlizer}})
+		})},
 		// judgeNested is a squirrel.Eq, a map: bound whole, as any map is.
 		{"sqlizer_operand", judgeNested, boundWhole(judgeNested)},
 		{"struct_sqlizer_is_one_element", judgeStructSqlizer, listOf(judgeStructSqlizer)},
@@ -1369,6 +1400,62 @@ func TestOperandJudgeAtTheListDoors(t *testing.T) {
 
 func listSpliced(d compareDoor) operandVerdict {
 	return d.joinOnly(d.op, operandVerdict{pred: "c " + d.op + " (UPPER(x))"})
+}
+
+// TestOperandJudgeAtTheJSONPayload pins the JSONContains payload position on
+// both vendors: an expression is refused before the vendor renders anything,
+// and every other payload is marshaled as written — a Valuer is not asked, a
+// nil pointer marshals to null.
+func TestOperandJudgeAtTheJSONPayload(t *testing.T) {
+	var cyclic any
+	cyclic = &cyclic
+	door := compareDoor{name: "f_json_contains", f: dbtypes.FilterFactory.JSONContains}
+	refused := operandVerdict{errText: dbtypes.ErrExpressionInFilter.Error() + ": JSONContains", is: dbtypes.ErrExpressionInFilter}
+	cyclicPayload := operandVerdict{errText: "resolving the JSONContains operand: operand pointer chain is cyclic"}
+	notImplemented := operandVerdict{errText: "JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341"}
+	marshaled := func(payload string) operandVerdict {
+		return operandVerdict{pred: "c @> ?1::jsonb", args: []any{payload}}
+	}
+
+	rows := []struct {
+		name             string
+		operand          any
+		postgres, oracle operandVerdict
+	}{
+		{"expression", judgeExpr, refused, refused},
+		{"pointer_to_expression", &judgeExpr, refused, refused},
+		{"aliased_expression", judgeAliased, refused, refused},
+		{"cyclic_pointer", cyclic, cyclicPayload, cyclicPayload},
+		{"valuer_is_not_asked", dbsql.NullString{String: "s", Valid: true}, marshaled(`{"String":"s","Valid":true}`), notImplemented},
+		{"nil_pointer", (*map[string]any)(nil), marshaled(jsonLiteralNull), notImplemented},
+		{"map", map[string]any{"k": 1}, marshaled(`{"k":1}`), notImplemented},
+	}
+
+	for _, v := range inListVendors {
+		placeholders := strings.NewReplacer("?1", v.placeholder)
+		for _, row := range rows {
+			want := row.postgres
+			if v.vendor == dbtypes.Oracle {
+				want = row.oracle
+			}
+			t.Run(v.vendor+"_"+row.name, func(t *testing.T) {
+				assertOperandVerdict(t, NewQueryBuilder(v.vendor), placeholders, door, row.operand, want)
+			})
+		}
+	}
+}
+
+// atElement is verdict for the element at position i of a list operand.
+func atElement(i int, verdict func(compareDoor) operandVerdict) func(compareDoor) operandVerdict {
+	return func(d compareDoor) operandVerdict { return inElement(i, d.op, verdict(d)) }
+}
+
+// inElement places an element's error verdict under the element spelling.
+func inElement(i int, op string, v operandVerdict) operandVerdict {
+	if v.errText != "" {
+		v.errText = fmt.Sprintf("resolving element %d of the %s operand: %s", i, op, v.errText)
+	}
+	return v
 }
 
 // cellDoor is one SET / VALUES position. render builds a full statement with v

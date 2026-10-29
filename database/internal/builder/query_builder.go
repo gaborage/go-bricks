@@ -613,10 +613,16 @@ func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, nega
 // requires a path predicate) so it returns an error filter for now. See
 // https://github.com/gaborage/go-bricks/issues/341 for follow-up.
 func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sqlizer {
+	// The payload is judged before any vendor renders it, so an expression is
+	// refused the same way on every vendor.
+	judged, err := judgeOperand(opJSONContains, value, filterFamily)
+	if err != nil {
+		return errorSqlizer{err: err}
+	}
 	// The column is handed over as a deferred quoter, not a quoted string: a
 	// vendor that cannot render this predicate never quotes a column it will
 	// not name, which is what the Oracle and unknown-vendor arms did here.
-	return qb.renderer.JSONContains(value, func() (string, error) {
+	return qb.renderer.JSONContains(judged.value, func() (string, error) {
 		return qb.quoteColumnForQuery(column)
 	})
 }
