@@ -1,6 +1,7 @@
 package streams
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1151,9 +1152,9 @@ func TestRedactStreamURI(t *testing.T) {
 	}
 }
 
-// TestManagerStartDoesNotLeakURIOnParseFailure covers the path reachable when
-// config.Validate never ran (app.NewWithConfig): the client returns a *url.Error
-// whose Error() renders the raw URI, credentials included.
+// TestManagerStartDoesNotLeakURIOnParseFailure covers the path reachable when a URI
+// reaches NewManager without config.Validate: the client returns a *url.Error whose
+// Error() renders the raw URI, credentials included.
 func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
 	const fixturePassword = "fixture-pw"
 	m := NewManager(ManagerOptions{
@@ -1175,21 +1176,123 @@ func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
 }
 
 func TestSafeEnvError(t *testing.T) {
-	// Not const: a constant expression here lets staticcheck evaluate the
-	// deliberately-invalid URL and report SA1007 on the fixture itself.
-	fixturePassword := "fixture-pw"
-	raw := "rabbitmq-stream://svc:" + fixturePassword + "@broker:55 52/"
-	_, parseErr := url.Parse(raw)
-	require.Error(t, parseErr)
-	require.Contains(t, parseErr.Error(), fixturePassword, "the premise: the vendor's error carries the credential")
+	passwordSecrets := []string{"s3cr", "etPW", "%et"}
+	// Table fields, not consts: a constant URL lets staticcheck evaluate the
+	// deliberately-invalid fixture and report SA1007 on it.
+	tests := []struct {
+		name    string
+		raw     string
+		user    string // empty: "svc"
+		secrets []string
+	}{
+		{name: "space_in_port", raw: "rabbitmq-stream://svc:fixture-pw@broker:55 52/", secrets: []string{"fixture-pw"}},
+		// The reason quotes the password: `invalid port ":s3cr" after host`.
+		{name: "password_with_question_mark", raw: "rabbitmq-stream://svc:s3cr?etPW@broker:5552/", secrets: passwordSecrets},
+		// The reason quotes the password: `invalid URL escape "%et"`.
+		{name: "password_with_percent", raw: "rabbitmq-stream://svc:s3cr%etPW@broker:5552/", secrets: passwordSecrets},
+		// url.Parse reports the URI cut at the '#', so only the URI passed in shows the
+		// '@' that makes "svc:2024" userinfo rather than host:port.
+		{name: "digit_password_with_hash_and_leading_space", raw: " rabbitmq-stream://svc:2024#x@broker:5552/", secrets: []string{"2024"}},
+		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
+		{name: "username_with_at_password_with_slash", raw: "rabbitmq-stream://svc@corp:Se/cretPW@127.0.0.1:1/vh", user: "svc@corp", secrets: []string{"Se/", "cretPW"}},
+		// '+' and '.' are scheme characters too, so credurl still reads this URI.
+		{name: "scheme_with_plus_and_dot", raw: "rabbitmq+stream.tls://svc:s3cr?etPW@broker:5552/", secrets: passwordSecrets},
+	}
 
-	safe := safeEnvError(parseErr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, parseErr := url.Parse(tt.raw)
+			require.Error(t, parseErr)
+			require.Contains(t, parseErr.Error(), tt.secrets[0], "the premise: the vendor's error carries the credential")
 
-	assert.NotContains(t, safe.Error(), fixturePassword)
-	assert.Contains(t, safe.Error(), "invalid stream URI")
+			safe := safeEnvError(parseErr, tt.raw)
+
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, safe.Error(), secret)
+			}
+			assert.Contains(t, safe.Error(), "invalid stream URI")
+			assert.Contains(t, safe.Error(), "//"+cmp.Or(tt.user, "svc")+":", "the username identifies the failing endpoint")
+			var urlErr *url.Error
+			require.ErrorAs(t, safe, &urlErr)
+		})
+	}
 
 	other := errors.New("connection refused")
-	assert.Equal(t, other, safeEnvError(other), "non-URL errors pass through untouched")
+	assert.Same(t, other, safeEnvError(other, "rabbitmq-stream://svc:fixture-pw@broker:5552/"), "non-URL errors pass through untouched")
+}
+
+// TestSafeEnvErrorRendersReasonOnlyForAMisreadURI covers the URIs whose first "://"
+// is not the scheme separator, which credurl reads differently from url.Parse: the
+// URI must not be rendered, and a reason that quotes part of it is replaced.
+func TestSafeEnvErrorRendersReasonOnlyForAMisreadURI(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		secrets []string
+	}{
+		{
+			name:    "single_slash_scheme_separator",
+			raw:     "rabbitmq-stream:/svc:fixture-pw@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"fixture-pw"},
+		},
+		// The reason quotes the password: `invalid port ":Se" after host`.
+		{
+			name:    "missing_scheme_with_quoting_reason",
+			raw:     "//svc:Se/cretPW@broker:5552/",
+			want:    "invalid stream URI: " + invalidStreamURIReason,
+			secrets: []string{"Se", "cretPW"},
+		},
+		// A "://" inside the password is not the scheme separator.
+		{
+			name:    "scheme_separator_inside_password",
+			raw:     "rabbitmq-stream:/svc:Se://cretPW@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"Se:", "cretPW"},
+		},
+		// A ':' after that "://" gives credurl a password to mask, but not the real one.
+		{
+			name:    "scheme_separator_inside_password_before_colon",
+			raw:     "rabbitmq-stream:/svc:Se://cret:PW@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"Se:", "cret"},
+		},
+		// Here the first ':' begins the "://", but what precedes it is no scheme: the
+		// separator lost its ':', and the password starts with "//".
+		{
+			name:    "malformed_scheme_before_separator",
+			raw:     "rabbitmq-stream//svc://Se/cretPW@broker\n",
+			want:    "invalid stream URI: net/url: invalid control character in URL",
+			secrets: []string{"Se/", "cretPW"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, parseErr := url.Parse(tt.raw)
+			require.Error(t, parseErr)
+			require.Contains(t, parseErr.Error(), tt.secrets[0], "the premise: the vendor's error carries the credential")
+
+			safe := safeEnvError(parseErr, tt.raw)
+
+			assert.Equal(t, tt.want, safe.Error())
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, safe.Error(), secret)
+			}
+		})
+	}
+
+	nilReason := &url.Error{Op: "parse", URL: "rabbitmq-stream:/svc:fixture-pw@broker"}
+	assert.Equal(t, "invalid stream URI: "+invalidStreamURIReason, safeEnvError(nilReason, nilReason.URL).Error(), "a *url.Error without a reason")
+
+	// Assembled from a variable so staticcheck (SA1007) does not constant-fold the
+	// deliberately invalid URL away.
+	host := "broker"
+	noSeparator := "\n" + host
+	_, parseErr := url.Parse(noSeparator)
+	require.Error(t, parseErr)
+	assert.Equal(t, "invalid stream URI: net/url: invalid control character in URL", safeEnvError(parseErr, noSeparator).Error(), "a URI without \"://\"")
 }
 
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the

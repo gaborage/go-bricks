@@ -295,6 +295,29 @@ func TestConnectionNewConnectionRedactsDelimiterPasswords(t *testing.T) {
 	}
 }
 
+// TestConnectionNewConnectionRedactsAtSignUsername covers an '@' in the username:
+// url.Parse splits the authority on it, so the leading password segment lands where
+// the port belongs and the '@' that ends the userinfo lies past the authority.
+func TestConnectionNewConnectionRedactsAtSignUsername(t *testing.T) {
+	// Assembled from a variable so staticcheck (SA1007) does not constant-fold the
+	// deliberately invalid URL away.
+	leadingSegment := "zqxvwSe"
+	dsn := "oracle://svc@corp:" + leadingSegment + "/cretPW@host:1521/XE"
+	// Premise, checked before dialing: url.Parse rejects the authority, so
+	// NewConnection fails at parse and never resolves "host".
+	_, parseErr := url.Parse(dsn)
+	require.Error(t, parseErr, "premise: url.Parse must reject the DSN before any connect attempt")
+
+	cfg := createOracleConfig("connection_string", dsn)
+
+	_, err := NewConnection(cfg, dbtestlog.NewTestLogger())
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), leadingSegment, "password leaked into the startup error")
+	assert.NotContains(t, err.Error(), "cretPW", "password leaked into the startup error")
+	assert.Contains(t, err.Error(), "svc@corp", "username must stay visible so the failing connection is identifiable")
+}
+
 func TestRedactDSNErrorPreservesErrorChain(t *testing.T) {
 	// Assembled from a variable so staticcheck (SA1007) does not constant-fold the
 	// deliberately invalid URL away.

@@ -169,6 +169,28 @@ func TestAMQPClientDialFailingAfterCloseIsQuiet(t *testing.T) {
 	requireNoLoudLines(t, linesAfterClose(t, log))
 }
 
+// TestHandleReconnectRedactsDialErrorAfterClose pins that the DEBUG line of a dial
+// failing after Close carries the masked error, not the broker password.
+func TestHandleReconnectRedactsDialErrorAfterClose(t *testing.T) {
+	_, realErr := amqp.Dial(hostileBrokerURL)
+	require.ErrorContains(t, realErr, "s3cr", "premise: the vendor's error carries the password")
+	dial, entered, release := gatedDial(func() (amqpConnection, error) { return nil, realErr })
+	swapDialFunc(t, dial)
+	log := newRecordingLogger()
+
+	c := NewAMQPClient(amqpHost, log)
+	waitSignal(t, entered, "dial to start")
+	closeNonBlocking(t, c)
+	close(release)
+	waitSignal(t, c.reconnectDone, "reconnect goroutine to exit")
+
+	line := log.Line(t, "AMQP connect ended after client close")
+	assert.Equal(t, gobrickslogger.LevelDebug, line.Level)
+	require.Len(t, line.Values("error"), 1)
+	assert.Contains(t, line.Values("error")[0], "user", "the username identifies the failing connection")
+	assertNoBrokerPassword(t, log.Lines())
+}
+
 // TestAMQPClientDialSucceedingAfterCloseIsClosedNotInstalled pins that a
 // connection whose dial completes after Close is closed exactly once, never
 // installed, and never asked for a channel.
