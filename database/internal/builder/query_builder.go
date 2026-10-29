@@ -737,10 +737,10 @@ func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
 //
 // It returns an error rather than a bare string because it is the single point
 // every column argument reaches before becoming SQL — the Filter and JoinFilter
-// doors, the comparison helpers, and UPDATE's SET targets all funnel here. Making
-// the funnel fallible is what stops a door from forgetting: a new one cannot
-// interpolate a column without handling the failure, where a per-door guard is
-// something a reviewer has to notice is missing (ADR-082).
+// doors and UPDATE's SET targets all funnel here. Making the funnel fallible is
+// what stops a door from forgetting: a new one cannot interpolate a column
+// without handling the failure, where a per-door guard is something a reviewer
+// has to notice is missing (ADR-082).
 //
 // The check matters most on PostgreSQL, where the renderer returns the column
 // verbatim, so an unvalidated argument was interpolated as written.
@@ -835,60 +835,6 @@ func (qb *QueryBuilder) quoteTableReference(ref normalizedTableRef) string {
 // quoted identifier.
 func (qb *QueryBuilder) quoteIdentifierForClause(identifier string) string {
 	return qb.renderer.QuoteIdentifierForClause(identifier)
-}
-
-// Eq creates an equality condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) Eq(column string, value any) (squirrel.Eq, error) {
-	quotedColumn, err := qb.quoteColumnForQuery(column)
-	if err != nil {
-		return nil, err
-	}
-	return squirrel.Eq{quotedColumn: value}, nil
-}
-
-// NotEq creates a not-equal condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) NotEq(column string, value any) (squirrel.NotEq, error) {
-	quotedColumn, err := qb.quoteColumnForQuery(column)
-	if err != nil {
-		return nil, err
-	}
-	return squirrel.NotEq{quotedColumn: value}, nil
-}
-
-// Lt creates a less-than condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) Lt(column string, value any) (squirrel.Lt, error) {
-	quotedColumn, err := qb.quoteColumnForQuery(column)
-	if err != nil {
-		return nil, err
-	}
-	return squirrel.Lt{quotedColumn: value}, nil
-}
-
-// LtOrEq creates a less-than-or-equal condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) LtOrEq(column string, value any) (squirrel.LtOrEq, error) {
-	quotedColumn, err := qb.quoteColumnForQuery(column)
-	if err != nil {
-		return nil, err
-	}
-	return squirrel.LtOrEq{quotedColumn: value}, nil
-}
-
-// Gt creates a greater-than condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) Gt(column string, value any) (squirrel.Gt, error) {
-	quotedColumn, err := qb.quoteColumnForQuery(column)
-	if err != nil {
-		return nil, err
-	}
-	return squirrel.Gt{quotedColumn: value}, nil
-}
-
-// GtOrEq creates a greater-than-or-equal condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) GtOrEq(column string, value any) (squirrel.GtOrEq, error) {
-	quotedColumn, err := qb.quoteColumnForQuery(column)
-	if err != nil {
-		return nil, err
-	}
-	return squirrel.GtOrEq{quotedColumn: value}, nil
 }
 
 // ========== SelectQueryBuilder Methods ==========

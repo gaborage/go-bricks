@@ -2663,6 +2663,25 @@ would have ignored fails at startup instead.
 
 ---
 
+### [ADR-158: The Unjudged `QueryBuilder` Comparator Methods Are Deleted](adr_158_unjudged_qb_comparators_deleted.md)
+
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** `Eq`, `NotEq`, `Lt`, `LtOrEq`, `Gt` and `GtOrEq` on `*database.QueryBuilder` are removed, so a call fails to compile
+
+The six methods, promoted onto the exported builder by embedding and absent from
+`types.QueryBuilderInterface`, quoted their column through the ADR-082 funnel and returned the
+matching squirrel map with the value stored as written. The value skipped the operand judge every
+Filter value door runs: a `RawExpression` was bound as an argument the driver rejected, where `f`
+refuses it with `ErrExpressionInFilter`; a `driver.Valuer` was asked before a nil check; and a
+list's elements reached the driver unjudged. The maps could not reach the framework's `Where`, and
+nothing in the framework called them. They are deleted, as ADR-135 deletes dead surface, rather
+than routed through the judge or deprecated; `qb.Filter().Eq/NotEq/Lt/Lte/Gt/Gte` replace them.
+See [migrations.md](migrations.md) `[C73.17]`.
+
+**Key Benefits:** every comparison built through go-bricks passes the operand judge, and the
+exported builder loses six names that duplicated the Filter doors under weaker rules.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3472,7 +3491,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-157) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-158) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
