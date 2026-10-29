@@ -657,9 +657,8 @@ const invalidStreamURIReason = "invalid URL"
 // SECURITY: the client rebuilds each leader or replica URI from the decoded
 // password, unescaped, and url.Parses it inside the constructor, so its *url.Error
 // can render that password. credurl judges that *url.Error by its own URL, which
-// always opens with the configured scheme and "://", or by uri when the rebuild was cut
-// inside the decoded password, so no scheme guard is needed, unlike safeEnvError; uri
-// masks any rendering of the configured URI itself.
+// always opens with the configured scheme and "://", so no scheme guard is needed,
+// unlike safeEnvError; uri masks any rendering of the configured URI itself.
 func safeStartError(err error, uri string) error {
 	return credurl.RedactError(err, uri, invalidStreamURIReason)
 }

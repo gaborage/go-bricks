@@ -24,8 +24,9 @@ so the host never showed.
 
 **`internal/credurl` is the one renderer for a credential-bearing URL in error text, and it
 renders one posture.** `Redact(raw) string` gives the posture for a raw URL. `RedactError`
-rebuilds a buried `*url.Error`, and masks every other rendering of raw and every vendor echo of
-text the posture drops, through the same rules.
+rebuilds a buried `*url.Error`, and masks every other rendering of raw and every vendor quote, and
+every delimiter-aligned vendor word, of raw or decoded-password text the posture drops, through
+the same rules.
 
 - The scheme, host, port and path are kept.
 - The password becomes `xxxxx`. The username is kept only beside a non-empty password, and only
@@ -56,16 +57,16 @@ text the posture drops, through the same rules.
   whole as `xxxxx`; empty input renders as the empty string.
 - A `*url.Error` reason that quotes anything is replaced, which is the rule `RedactError` already
   applied.
-- Any other double-quoted segment of the message, two or more characters long, whose text the
-  input or its decoded password holds and the rendering drops, becomes `"xxxxx"`. That covers
-  amqp091's port and query checks, which quote a digit-led password or a query value outside any
+- Any other double-quoted segment of the message, two or more bytes long, whose text the input
+  or its decoded password holds and the rendering drops, becomes `"xxxxx"`. That covers amqp091's
+  port and query checks, which quote a digit-led password or a query value outside any
   `*url.Error` (`strconv.ParseInt: parsing "xxxxx": value out of range`). Unquoted vendor text gets
-  the same test word by word, as the last pass: a word is a run between whitespace and
-  ``"'`:,;()<>``, and one of two or more characters is masked when the input or its decoded
-  password holds it aligned, each end at an edge or touching one of those delimiters or
-  `/ @ ? # & =`, and the rendering drops it. That covers the stream client's
+  the same test word by word, as the last pass: a word is a run between value delimiters
+  (`isValueDelimiter`), and one of two or more bytes is masked when the input or its decoded
+  password holds it aligned, each end at an edge or touching an alignment delimiter
+  (`isAlignDelimiter`, `holdsAligned`), and the rendering drops it. That covers the stream client's
   `multiple segments in URI path: /<password tail>@host` and a dial error naming a host made of
-  password text.
+  password text. A percent-decoded query value is not checked.
 
 **A door may render stricter, never looser:**
 
@@ -103,15 +104,21 @@ text the posture drops, through the same rules.
   segment of a rejected URL may be password text, so the scan cannot keep it.
 - `RedactError` masks a non-URL DSN wherever the vendor message repeats it. EZ Connect
   `user/pw@host` is now masked, and a TNS descriptor is over-masked. A very short DSN mangles the
-  vendor text, since every occurrence of it is replaced; the mangling never reveals anything.
+  vendor text, since every occurrence of it is replaced; the mangling never reveals anything. The
+  token pass then masks every aligned piece of such a DSN, or of a `connStr` descriptor written
+  unencoded in a go-ora URL's query, wherever vendor text repeats it. go-ora refuses a non-URL DSN
+  before dialing (`missing port in address`), so only the descriptor reaches a dial: a ping error
+  loses its port, and its host where the error repeats it (`dial tcp xxxxx:xxxxx` for an
+  IP-address `HOST`, `lookup xxxxx` for a name), and a lowercase `PROTOCOL=tcp` masks the `tcp`
+  too. A descriptor percent-encoded, as `go_ora.BuildJDBC` writes it, is not checked.
 - On the `*url.Error` path the host and path after the last `@` now show, read from raw across the
   cut fragment, where the cut URL used to end the render early. They are parts the posture keeps.
   The same holds for the stream client's rebuild cut inside the password: the start error renders
   the configured URI, so it names the configured host, not the leader or replica host the client
   rebuilt the URI around.
-- The quoted and unquoted passes mask only text of two or more characters, so a one-character
-  quote (the `"?"`, `"#"`, `"@"`, `":"` and `"/"` of amqp091's reserved-character hint) stays
-  readable. Such a quote or word discloses at most one character.
+- The quoted and unquoted passes mask only text of two or more bytes, so a one-byte quote (the
+  `"?"`, `"#"`, `"@"`, `":"` and `"/"` of amqp091's reserved-character hint) stays readable. Such
+  a quote or word discloses at most one byte.
 - A vendor word equal to an aligned piece of dropped text is masked, which tells a reader that
   piece was in the input. Query keys count, because the query is dropped whole and a bare query
   token (`?<token>`) sits where a key does. So amqp091's checks lose the parameter name:
@@ -158,7 +165,7 @@ each either refuse a valid vhost or miss a misparse. Left open.
 ## References
 
 - `internal/credurl/credurl.go`: `Redact`, `RedactError`, `maskURLError`, `maskRejectedAuthority`,
-  `maskQuotedRaw`, `maskRawTokens`, `rebuiltFrom`
+  `maskQuoted`, `maskRawTokens`, `rebuiltFrom`
 - `messaging/amqp_client.go`: `connect`
 - `messaging/streams/manager.go`: `safeEnvError`, `safeStartError`
 - `database/oracle/connection.go`: `redactDSNError`
