@@ -107,7 +107,7 @@ Every line carries `listener`: `application`, or `probes` for the probes when `s
 
 ## Duplicate Route Detection
 
-Startup fails when two registrations claim the same **method + full path**, compared the way echo's router identifies a route: templates that differ only in a parameter or wildcard name (`/users/:id` vs `/users/:uid`, `/files/*` vs `/files/*rest`) are the same route. Echo v5's router refuses a duplicate only when `AllowOverwritingRoute` is off; `echo.New()` turns it on, and go-bricks builds its engines with `echo.New()`, so `Add` overwrites the handler while keeping the route template — and a service built on `server.New` without `app` used to boot with the later registration serving and the first handler dead on arrival. The check now lives in the server, at its registration seam (`server.RouteRegistrar`): a duplicate is recorded and **not** added, so the first registration keeps the route, and `server.Start` refuses to serve while any conflict is recorded — no listener binds. It holds without `app`; `app` still fails earlier, at registration time, before the route table hook runs. It covers typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes, plus anything registered through nested `Group()`s.
+Startup fails when two registrations claim the same **method + full path**, compared the way echo's router identifies a route: templates that differ only in a parameter or wildcard name (`/users/:id` vs `/users/:uid`, `/files/*` vs `/files/*rest`) are the same route. Echo v5's router refuses a duplicate only when `AllowOverwritingRoute` is off; `echo.New()` turns it on, and go-bricks builds its engines with `echo.New()`, so `Add` overwrites the handler while keeping the route template — and a service built on `server.New` without `app` used to boot with the later registration serving and the first handler dead on arrival. The check now lives in the server, at its registration seam (`server.RouteRegistrar`): a duplicate is recorded and **not** added, so the first registration keeps the route, and `server.Start` refuses to serve while any conflict is recorded — no listener binds. It holds without `app`; `app` still fails earlier, at registration time, before the route table hook runs, when its server reports `RouteConflicts()` (the framework's does; an injected `ServerRunner` without that method is left to its own `Start`). It covers typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes, plus anything registered through nested `Group()`s.
 
 **Coverage notes:**
 
@@ -115,15 +115,23 @@ Startup fails when two registrations claim the same **method + full path**, comp
 - `server.path.health` equal to `server.path.ready` is a duplicate too — nothing validates the pair, so readiness (`dispatchReady`) is the refused second registration and startup fails until the two paths differ.
 - Param-name-differing route templates (e.g. `/users/:id` vs `/users/:uid`) are detected: admission keys a route by echo's node identity, so the conflict line names the duplicate's template and, where it differs, the first one's (`first: getUser (pkg) at /users/:id`). A static segment and a parameter (`/users/me` vs `/users/:id`) are distinct routes and do not conflict.
 - An inline verb is its own route (echo v5.4.1): a `\:` directly after a parameter name ends the name when the name holds no `:` or `*` and the rest of the segment holds no `*` and no unescaped `:`, so `/v1/orders/:id\:cancel` matches only `<value>:cancel` and boots beside `/v1/orders/:id`, and `GET /v1/orders/42:cancel` reaches it with `id` = `42`. Two verbs on one parameter (`:id\:cancel`, `:id\:approve`) are distinct routes; verbs that differ only in the parameter name (`:id\:cancel`, `:uid\:cancel`) are one. Every other `\:` is a literal colon, or part of the name, as before. A percent-encoded colon is not a verb: `GET /v1/orders/42%3Acancel` reaches `/v1/orders/:id` with `id` = `42%3Acancel`, as on bare echo.
+- Echo's sentinel methods are refused before any keying ([ADR-155](adr_155_reserved_engine_methods_refused.md)). A route registered with `echo_route_not_found` or `echo_route_any` (echo's `RouteNotFound`/`RouteAny`) through any registrar the framework built (`ModuleGroup()`, `RootGroup()`, or a registrar returned by their `Group` method) is recorded, never added or described, and fails startup the same way; `RegisterHandler` given a test-fake registrar has no admission step. Echo's own catch-alls, which a middleware-bearing group registers at `<prefix>` and `<prefix>/*`, never pass through the check, so the group's middleware still runs on unmatched sub-paths. Per-module custom 404 handlers are unsupported, and no replacement is provided.
 
-**Error shape:** startup (`app` at registration, or `server.Start`) aborts with one aggregate error naming every collision and both registrants (`HandlerName` + caller `Package`; the module name is not reported):
+**Error shape:** `server.Start`, and `app` at registration when its server reports `RouteConflicts()`, abort with one aggregate error naming every refused registration: both registrants for a duplicate, and the refused registrant alone (`RouteConflict.Duplicate`, with `First` and `FirstPath` empty) for a reserved method. A registrant is its `HandlerName` plus caller `Package`; the module name is not reported:
 
 ```text
 duplicate route registration (1 conflict(s))
 GET /v1/events — first: createEvent (github.com/example/events), duplicate: legacyCreateEvent (github.com/example/legacy)
 ```
 
-The error is a `*server.DuplicateRouteError`: `errors.As` recovers it and its `Conflicts` field lists every collision structurally, and `errors.Is(err, server.ErrDuplicateRoute)` matches the sentinel. Its `Unwrap() []error` still exposes the children — the head line (which wraps the sentinel), then one error per conflict line.
+Each conflict carries `Reason`: `server.RouteConflictReasonDuplicate`, or `server.RouteConflictReasonReservedMethod` for a sentinel method, whose line names the method, the template and the refused registrant. When any conflict is not a duplicate, the head reads `route registration refused`:
+
+```text
+route registration refused (1 conflict(s))
+echo_route_not_found /partner/v2/* — reserved engine method, refused: notFound (github.com/example/partner)
+```
+
+The error is a `*server.DuplicateRouteError` whatever the reasons: `errors.As` recovers it and its `Conflicts` field lists every collision structurally, and `errors.Is(err, server.ErrDuplicateRoute)` matches the sentinel. Its `Unwrap() []error` still exposes the children — the head line (which matches the sentinel), then one error per conflict line.
 
 There is no disable knob — a colliding route is always a startup-blocking bug, never a warning. Fix by removing or renaming the colliding route.
 

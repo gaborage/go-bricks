@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/knadh/koanf/providers/confmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -140,12 +141,6 @@ func TestDeliveriesFindEverySpellingDecodeAccepts(t *testing.T) {
 			want: []keyDelivery{{path: "orders.Api.URL", raw: "https://a"}},
 		},
 		{
-			name: "every_spelling_sorted_with_its_value",
-			yaml: "orders:\n  url: https://b\n  URL: \"\"\n",
-			key:  "orders.url",
-			want: []keyDelivery{{path: "orders.URL", raw: ""}, {path: "orders.url", raw: "https://b"}},
-		},
-		{
 			name: "null_is_delivered",
 			yaml: "orders:\n  Url:\n",
 			key:  "orders.url",
@@ -196,6 +191,18 @@ func TestDeliveriesFindEverySpellingDecodeAccepts(t *testing.T) {
 			assert.Equal(t, tt.want, cfg.deliveries(tt.key, tt.under))
 		})
 	}
+
+	// Decode refuses two spellings of one key (ADR-157), so a tree that holds them is built
+	// here without decoding it: before decode, the lookup still sees every spelling.
+	t.Run("every_spelling_sorted_with_its_value", func(t *testing.T) {
+		src := newConfigSource()
+		require.NoError(t, src.loadRecording(confmap.Provider(map[string]any{
+			"orders": map[string]any{"url": "https://b", "URL": ""},
+		}, koanfDelim), nil, nil))
+
+		assert.Equal(t, []keyDelivery{{path: "orders.URL", raw: ""}, {path: "orders.url", raw: "https://b"}},
+			(&Config{src: src}).deliveries("orders.url", false))
+	})
 
 	t.Run("config_literal_has_none", func(t *testing.T) {
 		assert.Nil(t, (&Config{}).deliveries(fieldServerProbesHost, false))
