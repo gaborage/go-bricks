@@ -2110,8 +2110,8 @@ type inScalarStatus string
 
 type inScalarPoint struct{ X int }
 
-// inValuerList is a slice that is also a driver.Valuer: squirrel asks it for
-// its value and binds the answer as one operand.
+// inValuerList is a slice that is also a driver.Valuer: the door asks it for
+// its value, whatever its length, and binds the answer as one operand.
 type inValuerList []int
 
 func (inValuerList) Value() (driver.Value, error) { return "asked", nil }
@@ -2251,9 +2251,10 @@ func TestInDoorsKeepTheDriverValueAndListShapes(t *testing.T) {
 	}
 }
 
-// TestInDoorsKeepTheWholeOperandRendering pins the pre-#2119 rendering of a map,
-// a chan, or a slice that is a driver.Valuer: bound as one `=` / `<>` argument,
-// or the empty-set constant when it holds nothing.
+// TestInDoorsKeepTheWholeOperandRendering pins the pre-#2119 rendering of a map
+// or a chan: bound as one `=` / `<>` argument, or the empty-set constant when it
+// holds nothing. A slice that is a driver.Valuer is not one of them: it is
+// resolved first and its answer judged in its place (TestOperandJudgeAtTheListDoors).
 func TestInDoorsKeepTheWholeOperandRendering(t *testing.T) {
 	var nilMap map[string]int
 	values := map[string]int{"a": 1}
@@ -2267,7 +2268,6 @@ func TestInDoorsKeepTheWholeOperandRendering(t *testing.T) {
 		{name: "empty_map", value: map[string]int{}, bound: false, wantArgs: nil},
 		{name: "nil_map", value: nilMap, bound: false, wantArgs: nil},
 		{name: "empty_chan", value: make(chan int), bound: false, wantArgs: nil},
-		{name: "valuer_slice", value: inValuerList{1, 2}, bound: true, wantArgs: []any{"asked"}},
 	}
 
 	for _, v := range inListVendors {

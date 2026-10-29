@@ -845,11 +845,8 @@ func judgeList(op string, values any, family doorFamily) (operand, error) {
 		return emptySet(op), nil
 	}
 
-	v := reflect.ValueOf(values)
-	if isListKind(v.Kind()) {
-		return listOperand(op, v, values, family)
-	}
-
+	// Resolve BEFORE judging list-ness: a driver.Valuer is asked once, whatever
+	// its Go shape, and its answer is what the door judges.
 	walk := operandWalk{}
 	element, isList, resolveErr := walkOperand(&walk, values)
 	if resolveErr != nil {
@@ -889,23 +886,6 @@ func judgeList(op string, values any, family doorFamily) (operand, error) {
 		return operand{kind: operandNullOrSet, value: element}, nil
 	}
 	return operand{kind: operandNullOrSet, value: []any{element}}, nil
-}
-
-// listOperand answers an operand that is a list on its surface. It takes both
-// the reflect.Value and the original interface because the two answer
-// different questions: driver.IsValue judges the interface, while the element
-// type and length come from the reflected value.
-func listOperand(op string, v reflect.Value, values any, family doorFamily) (operand, error) {
-	// A []byte is a driver.Value, not a list — squirrel's own rule, which the
-	// compare doors follow through driver.IsValue. Splitting it into a list of
-	// bytes would turn one operand into N.
-	if driver.IsValue(values) {
-		return operand{kind: operandNullOrSet, value: []any{values}}, nil
-	}
-	if v.Len() == 0 {
-		return emptySet(op), nil
-	}
-	return judgeElements(op, v, values, family)
 }
 
 // nilList reports whether the nil pointer a walk settled on, of type t, stood

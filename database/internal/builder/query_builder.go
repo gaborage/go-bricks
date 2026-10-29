@@ -383,6 +383,7 @@ func (qb *QueryBuilder) validateInsertColumns(columns []string) (normalized []st
 // Zero-value ID fields (int64, string, int, or int32 whose db-tag column name resolves to
 // exactly "id", case-insensitive) are automatically excluded to support auto-increment primary keys.
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
+// A field holding a RawExpression is spliced into VALUES, as SetStruct splices one.
 //
 // Example:
 //
@@ -416,7 +417,14 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQ
 		values = append(values, val)
 	}
 
-	iqb := qb.newInsertBuilder("InsertStruct", table)
+	return qb.insertRow("InsertStruct", table, columns, values)
+}
+
+// insertRow builds InsertStruct's and InsertFields' statement: the table and
+// columns validated under context, and every value judged as a VALUES cell
+// labeled by its column.
+func (qb *QueryBuilder) insertRow(context, table string, columns []string, values []any) dbtypes.InsertQueryBuilder {
+	iqb := qb.newInsertBuilder(context, table)
 	if iqb.Err() != nil {
 		return iqb
 	}
@@ -425,15 +433,21 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQ
 		iqb.Fail(err)
 		return iqb
 	}
+	cells, err := valueCells(values, keyLabel(columns))
+	if err != nil {
+		iqb.Fail(err)
+		return iqb
+	}
 	iqb.insertBuilder = iqb.insertBuilder.
 		Columns(qb.quoteColumnsForDML(normalized...)...).
-		Values(values...)
+		Values(cells...)
 	return iqb
 }
 
 // InsertFields creates an INSERT query by extracting only specified fields from a struct instance.
 // This is useful for partial inserts or when you need explicit control over which fields to include.
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
+// A field holding a RawExpression is spliced into VALUES, as SetStruct splices one.
 //
 // Example:
 //
@@ -460,19 +474,7 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 		values = append(values, val)
 	}
 
-	iqb := qb.newInsertBuilder("InsertFields", table)
-	if iqb.Err() != nil {
-		return iqb
-	}
-	normalized, err := qb.validateInsertColumns(columns)
-	if err != nil {
-		iqb.Fail(err)
-		return iqb
-	}
-	iqb.insertBuilder = iqb.insertBuilder.
-		Columns(qb.quoteColumnsForDML(normalized...)...).
-		Values(values...)
-	return iqb
+	return qb.insertRow("InsertFields", table, columns, values)
 }
 
 // extractTerminalIdentifier extracts the final identifier from a column name,
