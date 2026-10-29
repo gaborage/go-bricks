@@ -965,8 +965,7 @@ func executionError(err error) error {
 	if errors.As(err, &clientErr) {
 		return clientErr
 	}
-	stripURLUserinfo(err)
-	return NewNetworkError(errMsgRequestExecutionFailed, err)
+	return NewNetworkError(errMsgRequestExecutionFailed, redactURLError(err, withheldTransportReason))
 }
 
 func (c *client) processHTTPResponse(
@@ -1315,7 +1314,7 @@ func (c *client) buildRequest(ctx context.Context, method string, req *Request) 
 
 	httpReq, err := nethttp.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
-		return nil, NewNetworkError("failed to create HTTP request", err)
+		return nil, NewNetworkError("failed to create HTTP request", redactURLError(err, invalidURLReason))
 	}
 
 	c.applyHeaders(httpReq, req)

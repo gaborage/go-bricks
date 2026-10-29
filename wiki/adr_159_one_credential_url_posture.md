@@ -12,6 +12,13 @@ publisher start errors (`safeStartError`), and the Oracle DSN error. It masked t
 query. go-ora reads `WALLET PASSWORD` from a DSN query, so the query is credential material too.
 Input without `://`, such as an EZ Connect `user/pw@host` DSN, passed through verbatim.
 
+The HTTP client and the migration control-plane source rendered URLs in their errors on their
+own. httpclient's `executionError` dropped the userinfo of a refused redirect's Location only when
+url.Parse accepted it, and kept its query and fragment; its request-build error carried url.Parse's
+error raw. The migration source's `New` errors carried the base URL raw, its redirect guard
+rendered `URL.Redacted()` (username and query kept), and its control-plane request error carried
+net/http's raw Location.
+
 The scan trusted url.Parse once it accepted the URL: an accepted URL never yields a `*url.Error`,
 so a host:port-shaped authority was left as written. That premise does not hold. url.Parse ends
 the authority at the first `/`, `?` or `#`, so an unencoded one inside a password moves password
@@ -57,6 +64,13 @@ the same rules.
   whole as `xxxxx`; empty input renders as the empty string.
 - A `*url.Error` reason that quotes anything is replaced, which is the rule `RedactError` already
   applied.
+- `RedactURLError(e, reason)` returns a copy of a `*url.Error` whose URL renders as `Redact`
+  renders it, for doors that hand the error on as a `*url.Error`; `e` is never mutated. A
+  transport reason is framework or peer text as often as URL text (the JOSE refusal quotes the
+  peer name), so net/http's reasons that quote a redirect's Location or a response header line
+  keep their words with every quoted value masked, and only another reason quoting a URL, or text
+  of `e.URL` that `Redact` drops, becomes `reason`, the original still reachable through
+  `errors.Is`/`errors.As`. Any other reason is kept as the same value.
 - Any other double-quoted segment of the message, two or more bytes long, whose text the input
   or its decoded password holds and the rendering drops, becomes `"xxxxx"`. That covers amqp091's
   port and query checks, which quote a digit-led password or a query value outside any
@@ -71,6 +85,8 @@ the same rules.
 **A door may render stricter, never looser:**
 
 - `redactURLForLog` (httpclient request logs) drops userinfo, query and fragment.
+- The httpclient and migration source error doors drop the whole userinfo (`StripUserinfo` on the
+  `Redact` rendering).
 - The logger filter masks the `broker_url` field whole by name.
 - The PostgreSQL connector renders a fixed message and never the DSN.
 
@@ -80,6 +96,10 @@ the same rules.
 | Streams `safeEnvError` | environment error, the client's own URI-check text included | `RedactError` |
 | Streams `safeStartError` | consumer and publisher start errors | `RedactError` |
 | Oracle connector (`redactDSNError`) | DSN error | `RedactError` |
+| httpclient `executionError` | transport error, a refused redirect's Location included | `RedactURLError`, userinfo dropped |
+| httpclient `buildRequest` | request URL parse error | `RedactURLError`, userinfo dropped |
+| migration `source/http` `New` | base URL parse and missing-host errors | `RedactURLError` and `Redact`, userinfo dropped |
+| migration `source/http` redirect guard and `fetchPage` | refused redirect, control-plane request error | `Redact` and `RedactURLError`, userinfo dropped |
 
 ## Alternatives considered
 
@@ -161,9 +181,21 @@ the same rules.
   `rabbitmq-stream://app:2024/Sp/ring@broker:5552` names endpoint
   `rabbitmq-stream://app:xxxxx@broker:5552`. The logger filter still masks `broker_url` whole by
   name.
+- At the httpclient and migration source doors, net/http's two reasons that quote response
+  text, `failed to parse Location header "…"` and a transport's `malformed MIME header line: "…"`,
+  keep their words with every quoted value rendered `"xxxxx"`. Any other reason that quotes a URL
+  or dropped URL text renders `transport error detail withheld` (a request error) or
+  `invalid URL` (a parse error). A replaced reason no longer answers `(*url.Error).Timeout()`; a
+  timeout's reason quotes nothing, so it is never replaced.
+  These doors scan only the `*url.Error`: an unquoted reason echoing URL text, such as
+  a dial error naming a host url.Parse read from the password, shows as it did before.
+- The two response-quoting reasons are recognized by net/http's wording, so a future net/http
+  reason that quotes response text is not masked until it is listed.
+- The migration redirect guard renders the Location unquoted, so its refusal is kept inside
+  net/http's `*url.Error` rather than withheld for a quote.
 - Tests, log queries and alerts that match the old error text stop matching. See `[C73.18]`.
-- No public API changes (`credurl` is internal; `Redact` and `RedactForLog` are new there), and no
-  configuration key changes.
+- No public API changes (`credurl` is internal; `Redact`, `RedactForLog`, `RedactURLError` and
+  `StripUserinfo` are new there), and no configuration key changes.
 
 ## Open question: refuse a misparsed URL before dialing
 
@@ -178,8 +210,13 @@ each either refuse a valid vhost or miss a misparse. Left open.
 
 ## References
 
-- `internal/credurl/credurl.go`: `Redact`, `RedactForLog`, `RedactError`, `maskURLError`,
-  `maskRejectedAuthority`, `maskQuoted`, `maskRawTokens`, `rebuiltFrom`
+- `internal/credurl/credurl.go`: `Redact`, `RedactForLog`, `RedactError`, `RedactURLError`,
+  `StripUserinfo`, `maskURLError`, `maskRejectedAuthority`, `maskQuoted`, `maskRawTokens`,
+  `rebuiltFrom`
+- `httpclient/redirect.go`: `redactURLError`; `httpclient/client.go`: `executionError`,
+  `buildRequest`
+- `migration/source/http/source.go`: `New`, `redirectGuard`, `fetchPage`, `redactedURL`,
+  `redactURLError`
 - `messaging/amqp_client.go`: `connect`
 - `messaging/streams/manager.go`: `safeEnvError`, `safeStartError`
 - `database/oracle/connection.go`: `redactDSNError`
