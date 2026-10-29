@@ -293,14 +293,7 @@ func TestRouteNodeKeyAgreesWithEchoRouter(t *testing.T) {
 // one- and two-token templates. Echo shares a node when, in both registration orders, a request
 // built from the template registered first reaches the handler registered last.
 func TestRouteNodeKeyAgreesWithEchoSweep(t *testing.T) {
-	tokens := []string{":id", ":", `\:`, `\:cancel`, "a", "/", "*"}
-	templates := make([]string, 0, len(tokens)*(len(tokens)+1))
-	for _, a := range tokens {
-		templates = append(templates, "/"+a)
-		for _, b := range tokens {
-			templates = append(templates, "/"+a+b)
-		}
-	}
+	templates := routeTemplateCorpus()
 	reverse := func(p string) string { return echo.RouteInfo{Path: p}.Reverse("v1", "v2") }
 	for i, a := range templates {
 		for _, b := range templates[i+1:] {

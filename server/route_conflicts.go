@@ -7,8 +7,6 @@ import (
 	"sync"
 
 	"github.com/labstack/echo/v5"
-
-	"github.com/gaborage/go-bricks/internal/pathutil"
 )
 
 // ErrDuplicateRoute is what every *DuplicateRouteError matches, whatever the Reason of its
@@ -196,58 +194,21 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 	return true
 }
 
-// routeNodeKey identifies the echo router node method+path lands on, mirroring
-// DefaultRouter.Add (echo v5.4.1): a missing leading slash is added; an unescaped ':' starts a
-// parameter anywhere in the path and its name runs to the next '/', so the name is dropped,
-// unless an inline verb ends it first (paramNameEnd); an escaped "\:" is a literal colon and
-// is kept verbatim; the first '*' outside a parameter name is the wildcard and ends the path,
-// so anything after it is dropped. Two templates with the same key are one route to echo,
-// which would overwrite the first handler.
+// routeNodeKey identifies the echo router node method+path lands on: parameter names are
+// dropped and nothing after the wildcard counts (walkRouteTemplate), so two templates with the
+// same key are one route to echo, which would overwrite the first handler.
 func routeNodeKey(method, path string) string {
-	path = pathutil.EnsureLeadingSlash(path)
 	var b strings.Builder
 	b.WriteString(method)
 	b.WriteByte(' ')
-	for i := 0; i < len(path); i++ {
-		switch c := path[i]; {
-		case c == ':' && path[i-1] != '\\': // EnsureLeadingSlash made path[0] '/', so i >= 1 here
+	walkRouteTemplate(newRouteTemplate(path), func(kind routePartKind, text string) {
+		if kind == routePartParam {
 			b.WriteByte(':')
-			i = paramNameEnd(path, i+1) - 1
-		case c == '*':
-			b.WriteByte('*')
-			return b.String()
-		default:
-			b.WriteByte(c)
+		} else {
+			b.WriteString(text)
 		}
-	}
+	})
 	return b.String()
-}
-
-// paramNameEnd returns where echo's walkRoutePath ends the parameter name at path[start]: the
-// segment end, or a "\:" opening an inline verb (/:id\:cancel) after a name holding no ':' or '*'.
-func paramNameEnd(path string, start int) int {
-	plainName := true
-	i := start
-	for ; i < len(path) && path[i] != '/'; i++ {
-		if path[i] == '\\' && plainName && i+1 < len(path) && path[i+1] == ':' && isInlineVerb(path[i+2:]) {
-			return i
-		}
-		if path[i] == ':' || path[i] == '*' {
-			plainName = false
-		}
-	}
-	return i
-}
-
-// isInlineVerb reports whether rest, the route text after an escaped colon, stays static to
-// the end of its segment: no '*' and no unescaped ':'.
-func isInlineVerb(rest string) bool {
-	for i := 0; i < len(rest) && rest[i] != '/'; i++ {
-		if rest[i] == '*' || rest[i] == ':' && (i == 0 || rest[i-1] != '\\') {
-			return false
-		}
-	}
-	return true
 }
 
 func (a *routeAdmission) snapshot() []RouteConflict {
