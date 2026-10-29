@@ -27,9 +27,11 @@ renders one posture.** `Redact(raw) string` gives the posture for a raw URL. `Re
 rebuilds a buried `*url.Error`, and masks every other rendering of raw, through the same rules.
 
 - The scheme, host, port and path are kept.
-- The password becomes `xxxxx`. The username is kept only beside a non-empty password: a lone
-  userinfo (`amqp://tok@h`, the API-key-as-username shape) or an empty password (`amqp://u:@h`)
-  becomes `xxxxx@`.
+- The password becomes `xxxxx`. The username is kept only beside a non-empty password, and only
+  when it holds no `@`: a lone userinfo (`amqp://tok@h`, the API-key-as-username shape), an empty
+  password (`amqp://u:@h`) or a username holding an `@` becomes `xxxxx@`. A lone userinfo
+  followed by an `@` later in the path or query reads, under the last-`@` scan, as a username
+  holding an `@`, so `oracle://tok@h:1521/XE@vhost` renders `oracle://xxxxx@vhost`.
 - A non-empty query becomes `?xxxxx`; an empty one is dropped with its `?`. The fragment is
   dropped.
 - The userinfo runs to the last `@` after `://`, wherever url.Parse would end it, whether it
@@ -92,8 +94,16 @@ rebuilds a buried `*url.Error`, and masks every other rendering of raw, through 
   `amqp://h:5672/vh`, so it renders verbatim, as it did before. `amqp://user:QZ/XJK` renders
   `amqp://user:xxxxx/XJK`, and `amqp://user:pa@ss:QZXJ` renders `amqp://user:xxxxx@ss:QZXJ`. This
   class is accepted.
-- A query value, such as an Oracle `WALLET PASSWORD` or an AMQP `connection_name`, no longer shows
-  in these errors.
+- A query value, such as an Oracle `WALLET PASSWORD`, no longer shows in a rendering of the URL.
+  A vendor that echoes a query value it unescaped (`%XX`, `+`) still shows it; that echo is not
+  covered.
+- A username holding an `@`, such as the Azure-style `user@server`, is masked whole with its
+  userinfo: `amqp://svc@corp:pw@h/vh` renders `amqp://xxxxx@h/vh`. That is accepted: the scan
+  cannot tell it from a lone token stretched to a later `@`, and a masked username costs a
+  debugging hint, never a secret.
+- With a `#` before the last `@`, the fragment text after that `@` renders as the host:
+  `oracle://tok@h:1521/XE#f@c` renders `oracle://xxxxx@c`. That text is path or fragment text,
+  never credential text, so this residual is accepted.
 - The `broker_url` and streams `uri` log fields, and the endpoint the streams start error names,
   still render through their own renderers (`redactAMQPURL`, `redactStreamURI`), which keep a lone
   username and render a misparsed password as written; the logger filter masks `broker_url` whole

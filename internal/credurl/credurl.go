@@ -91,12 +91,12 @@ func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 
 // Redact renders raw with its credentials masked. Scheme, host, port and path are
 // kept; the password becomes xxxxx, a non-empty query ?xxxxx, and a fragment is
-// dropped. The username is kept only beside a non-empty password; any other userinfo
-// is masked whole. The userinfo runs to the last '@', wherever url.Parse would end it;
-// when a '?' precedes that '@', all after the '@' renders as one xxxxx. With no '@',
-// a URL url.Parse rejects is masked from the first ':' to the end of its authority.
-// Input with no "://", or with a ':', '/', '?', '#' or '@' before its first "://",
-// renders as xxxxx, and empty input as "".
+// dropped. The username is kept only beside a non-empty password and only when it
+// holds no '@'; any other userinfo is masked whole. The userinfo runs to the last '@',
+// wherever url.Parse would end it; when a '?' precedes that '@', all after the '@'
+// renders as one xxxxx. With no '@', a URL url.Parse rejects is masked from the first
+// ':' to the end of its authority. Input with no "://", or with a ':', '/', '?', '#'
+// or '@' before its first "://", renders as xxxxx, and empty input as "".
 func Redact(raw string) string {
 	if raw == "" {
 		return ""
@@ -127,7 +127,7 @@ func Redact(raw string) string {
 }
 
 func maskUserinfo(userinfo string) string {
-	if user, password, _ := strings.Cut(userinfo, ":"); password != "" {
+	if user, password, _ := strings.Cut(userinfo, ":"); password != "" && !strings.Contains(user, "@") {
 		return user + ":" + redactionPlaceholder + "@"
 	}
 	return redactionPlaceholder + "@"

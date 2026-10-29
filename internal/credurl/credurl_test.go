@@ -105,6 +105,9 @@ func TestRedactRendersOnePosture(t *testing.T) {
 		// password leaves the username alone in it, so both are masked whole.
 		{name: "lone_userinfo", raw: "amqp://zq9x@broker:5672/vh", parse: parseAccepts, want: "amqp://xxxxx@broker:5672/vh"},
 		{name: "empty_password", raw: "amqp://zq9x:@broker:5672/vh", parse: parseAccepts, want: "amqp://xxxxx@broker:5672/vh"},
+		// A later '@' stretches the userinfo past the host, so the key sits in a username holding an '@'.
+		{name: "lone_userinfo_before_at_in_path", raw: "oracle://APIKEY@host:1521/XE@vhost", parse: parseAccepts, want: "oracle://xxxxx@vhost", secrets: []string{"APIKEY"}},
+		{name: "lone_userinfo_before_at_in_query", raw: "oracle://APIKEY@host:1521/XE?a=b@c", parse: parseAccepts, want: "oracle://xxxxx@xxxxx", secrets: []string{"APIKEY"}},
 		// Username and path are kept as written, never decoded.
 		{name: "escaped_username_and_vhost", raw: "amqp://us%40er:zq9x@broker:5672/%2Fproduction", parse: parseAccepts, want: "amqp://us%40er:xxxxx@broker:5672/%2Fproduction"},
 		{name: "hostile_password_characters", raw: "amqp://user:zq9x?#/@:PW@broker:5672/vh", parse: parseRejects, want: "amqp://user:xxxxx@xxxxx"},
@@ -354,15 +357,16 @@ func digitPasswordCases() []redactErrorCase {
 // atSignUserinfoCases pin an '@' in the username, or in the password ahead of an
 // unescaped '/', '?' or '#'. url.Parse splits the authority on that earlier '@', so
 // the password lands where the port belongs; the userinfo still ends at the last '@'
-// after the scheme separator, even one url.Parse cut away with the fragment.
+// after the scheme separator, even one url.Parse cut away with the fragment, and an '@'
+// username is masked whole with its userinfo.
 func atSignUserinfoCases() []redactErrorCase {
-	maskedUsername := `parse "amqp://svc@corp:xxxxx@{host}/vh": invalid URL ` + hint
-	usernameSecrets := []string{"Se", "cretPW"}
+	maskedUsername := `parse "amqp://xxxxx@{host}/vh": invalid URL ` + hint
+	usernameSecrets := []string{"Se", "cretPW", "svc@corp"}
 	passwordSecrets := []string{"Sec", "re:t", "PW"}
 
 	templates := []redactErrorCase{
 		{name: "at_sign_username_password_with_slash", raw: "amqp://svc@corp:Se/cretPW@{host}/vh", parse: parseRejects, want: maskedUsername, secrets: usernameSecrets},
-		{name: "at_sign_username_password_with_question_mark", raw: "amqp://svc@corp:Se?cretPW@{host}/vh", parse: parseRejects, want: `parse "amqp://svc@corp:xxxxx@xxxxx": invalid URL ` + hint, secrets: usernameSecrets},
+		{name: "at_sign_username_password_with_question_mark", raw: "amqp://svc@corp:Se?cretPW@{host}/vh", parse: parseRejects, want: `parse "amqp://xxxxx@xxxxx": invalid URL ` + hint, secrets: usernameSecrets},
 		{
 			name:    "at_sign_username_password_with_hash",
 			raw:     "amqp://svc@corp:Se#cretPW@{host}/vh",
@@ -439,8 +443,8 @@ func scanCases() []redactErrorCase {
 			name:    "at_sign_username_password_with_slash",
 			raw:     "oracle://svc@corp:zqxvwSe/cretPW@host:1521/XE",
 			parse:   parseRejects,
-			want:    `parse "oracle://svc@corp:xxxxx@host:1521/XE": invalid URL ` + hint,
-			secrets: []string{"zqxvwSe", "cretPW"},
+			want:    `parse "oracle://xxxxx@host:1521/XE": invalid URL ` + hint,
+			secrets: []string{"zqxvwSe", "cretPW", "svc@corp"},
 		},
 		// url.Parse cuts the fragment before it reports (the hostile rows pin that
 		// path), so this row renders raw verbatim to observe the scan over the whole

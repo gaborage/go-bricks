@@ -315,7 +315,8 @@ func TestConnectionNewConnectionRedactsAtSignUsername(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), leadingSegment, "password leaked into the startup error")
 	assert.NotContains(t, err.Error(), "cretPW", "password leaked into the startup error")
-	assert.Contains(t, err.Error(), "svc@corp", "username must stay visible so the failing connection is identifiable")
+	assert.NotContains(t, err.Error(), "svc@corp", "an '@' username is masked whole with its userinfo")
+	assert.Contains(t, err.Error(), "oracle://xxxxx@host:1521/XE")
 }
 
 func TestRedactDSNErrorPreservesErrorChain(t *testing.T) {

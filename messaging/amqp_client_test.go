@@ -1755,6 +1755,7 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 	tests := []struct {
 		name     string
 		user     string // empty: "user"
+		shown    string // the userinfo rendered after "//"; empty: user + ":"
 		password string
 		suffix   string
 		secrets  []string
@@ -1770,7 +1771,7 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 		// the URL connect() dialed makes "user:2024" userinfo.
 		{name: "digit_password_with_invalid_escape_before_hash", password: "2024/%zz#x", secrets: []string{"2024", "%zz", "#x"}},
 		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
-		{name: "username_with_at_password_with_slash", user: "svc@corp", password: "Se/cretPW", secrets: []string{"Se/", "cretPW", `":Se"`}},
+		{name: "username_with_at_password_with_slash", user: "svc@corp", shown: "xxxxx@", password: "Se/cretPW", secrets: []string{"Se/", "cretPW", `":Se"`, "svc@corp"}},
 		// url.Parse reports "amqp://user:p@ss:x", cut at the '#'; the last '@' is past it.
 		{name: "password_with_at_and_colon_before_hash", password: "p@ss:x#y", secrets: []string{"ss:x", "p@ss", "#y"}},
 	}
@@ -1795,7 +1796,7 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 			for _, secret := range tt.secrets {
 				assert.NotContains(t, err.Error(), secret)
 			}
-			assert.Contains(t, err.Error(), "//"+user+":", "the username identifies the failing connection")
+			assert.Contains(t, err.Error(), "//"+cmp.Or(tt.shown, user+":"), "the username identifies the failing connection")
 			if tt.hostCut {
 				assert.NotContains(t, err.Error(), "broker", "a '?' before the last '@' masks the host with the tail")
 			} else {
