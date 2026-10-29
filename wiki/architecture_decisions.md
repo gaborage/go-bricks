@@ -2682,6 +2682,28 @@ exported builder loses six names that duplicated the Filter doors under weaker r
 
 ---
 
+### [ADR-159: One Credential-URL Posture](adr_159_one_credential_url_posture.md)
+
+**Date:** 2026-10-28 | **Status:** Accepted
+
+`internal/credurl` is the one credential-URL renderer, and `Redact` gives its posture: scheme,
+host, port and path kept, the password `xxxxx`, the username kept only beside a non-empty password
+and only when it holds no `@`, `/`, `?` or `#`,
+a non-empty query `?xxxxx`, the fragment dropped. `RedactError`, behind the AMQP `connect()` dial
+error, the streams environment and start errors and the Oracle DSN error, renders through the same
+rules, where it kept the query and a lone username and trusted url.Parse once it accepted the URL.
+An unencoded `/`, `?` or `#` in a password makes url.Parse end the authority early, so the userinfo
+now runs to the last `@` after `://`, across the `#` url.Parse cut on the `*url.Error` path, with
+all after it masked when a `?` precedes it, and a rejected URL with no `@` is masked from its first
+`:` to the end of its authority. Input without a
+scheme separator renders `xxxxx`. Refusing a misparsed URL before the dial is left open. See
+[migrations.md](migrations.md) `[C73.18]`.
+
+**Key Benefits:** a password that url.Parse misreads as host, port or path no longer reaches error
+text, and the query, a lone username and a non-URL DSN are masked with it.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3491,7 +3513,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-158) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-159) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
