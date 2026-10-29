@@ -668,8 +668,9 @@ func safeStartError(err error, uri string) error {
 // SECURITY: the client parses the endpoint with url.Parse and returns its
 // *url.Error verbatim, whose Error() renders the raw URI — credentials included —
 // and whose reason can quote part of the password. Its own URI checks can echo
-// password text unquoted, such as a misparsed vhost. credurl.RedactError masks all
-// of it; the endpoint is also reported separately, redacted. This is reachable when a
+// password text unquoted, such as a misparsed vhost. credurl.RedactError masks what
+// the configured URI or its decoded password holds; the endpoint is also reported
+// separately by redactStreamURI. This is reachable when a
 // caller hands ManagerOptions.URI straight to NewManager: that skips config.Validate,
 // the only place a stream URI is parsed before the dial. When no scheme leads the
 // URI's first "://" — a separator other than "://", or one that lost its ':' ahead

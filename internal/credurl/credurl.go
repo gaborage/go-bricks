@@ -52,8 +52,8 @@ func RedactError(err error, raw, reason string) error {
 	}
 	redacted = maskRawIn(redacted, raw)
 	// SECURITY: a vendor reason can quote raw text outside any *url.Error, such as a port or
-	// query value it failed to parse; one byte reveals at most itself, and a vendor hint
-	// quotes reserved characters one by one.
+	// query value it failed to parse, as written; one byte reveals at most itself, and a
+	// vendor hint quotes reserved characters one by one.
 	redacted = maskQuoted(redacted, dropsRawText(raw, strings.Contains))
 	redacted = maskRawTokens(redacted, raw)
 	if redacted == msg {
@@ -84,7 +84,7 @@ func maskRawIn(msg, raw string) string {
 func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 	src := urlErr.URL
 	if strings.HasPrefix(raw, src) || rebuiltFrom(raw, src) {
-		src = raw // url.Parse cut raw's '#' tail before reporting
+		src = raw // url.Parse cut raw's '#' tail, or the rebuild's, before reporting
 	}
 	masked := Redact(src)
 	if masked == urlErr.URL {
@@ -126,7 +126,7 @@ func maskRawTokens(msg, raw string) string {
 	masks := dropsRawText(raw, holdsAligned)
 	var b strings.Builder
 	for _, token := range strings.FieldsFunc(msg, isValueDelimiter) {
-		i := strings.Index(msg, token) // only delimiters precede token
+		i := strings.Index(msg, token) // only delimiter runes precede token
 		b.WriteString(msg[:i])
 		msg = msg[i+len(token):]
 		if len(token) > 1 && masks(token) {

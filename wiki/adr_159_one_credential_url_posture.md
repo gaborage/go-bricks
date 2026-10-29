@@ -117,8 +117,8 @@ the same rules.
   the configured URI, so it names the configured host, not the leader or replica host the client
   rebuilt the URI around.
 - The quoted and unquoted passes mask only text of two or more bytes, so a one-byte quote (the
-  `"?"`, `"#"`, `"@"`, `":"` and `"/"` of amqp091's reserved-character hint) stays readable. Such
-  a quote or word discloses at most one byte.
+  `"?"`, `"#"`, `"@"`, `":"` and `"/"` of amqp091's reserved-character hint) stays readable. Each
+  such quote or word discloses one byte.
 - A vendor word equal to an aligned piece of dropped text is masked, which tells a reader that
   piece was in the input. Query keys count, because the query is dropped whole and a bare query
   token (`?<token>`) sits where a key does. So amqp091's checks lose the parameter name:
@@ -126,6 +126,11 @@ the same rules.
   `xxxxx is not an integer`. When a `?` before the last `@` masks the whole tail, the host and path
   are dropped text too, and an echo of them is masked. A word that only occurs inside a longer
   word of the input (`in` in `Spring`) is not aligned and stays.
+- A piece of dropped text that also occurs in the kept rendering stays, by pass design:
+  `amqp://app:s3cr@co/Q9x@broker.example.com:5672/vh` leaves `lookup co`.
+- The quoted and unquoted passes cost time quadratic in message length times URL length; this is
+  bounded in practice, since AMQP reply-text is at most 255 bytes and the passes run only on a
+  dial or start failure.
 - A URL with no host after its password has no host delimiter, so it is indistinguishable from a
   URL that has one, and password text renders as host, port or path. `amqp://user:1234/broker`
   (a forgotten `@` and an all-digit password) is a valid host and port, the same shape as
