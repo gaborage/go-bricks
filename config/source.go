@@ -159,8 +159,8 @@ func isKeyEntry(node any) bool {
 }
 
 // eachSubtree calls visit with every node of src at the dotted path, each segment matched as
-// mapstructure matches a field name, case-insensitively, so a layer that writes Keystore: is
-// read where decode reads it.
+// mapstructure matches a field name, case-insensitively, so a layer that writes
+// keystore: {Keys: …} is read where decode reads it.
 func eachSubtree(src map[string]any, path string, visit func(node any)) {
 	visitSubtree(src, strings.Split(path, koanfDelim), visit)
 }
@@ -175,7 +175,7 @@ func visitSubtree(node any, path []string, visit func(node any)) {
 		return
 	}
 	for key, value := range section {
-		if strings.EqualFold(key, path[0]) {
+		if sameSegment(key, path[0]) {
 			visitSubtree(value, path[1:], visit)
 		}
 	}
@@ -231,9 +231,10 @@ type keyDelivery struct {
 // of the operator's configuration layers recorded that matches key (pathMatches) — with
 // under set, a path below key too — AND that the final merged tree still holds (ADR-104),
 // with the raw value at that path, sorted by path. Recording is append-only, so the tree
-// half is what evicts a key a later layer replaced or nulled at an ancestor path. A caller
-// reads emptiness from each match's raw value, never from a lookup of key's own spelling.
-// Preloaded defaults are never recorded, and a sourceless Config has no deliveries at all.
+// half is what evicts a key a later layer replaced or nulled at an ancestor path. Emptiness
+// is read from a match's raw value (deliveredValue), never from a lookup of key's own
+// spelling. Preloaded defaults are never recorded, and a sourceless Config has no deliveries
+// at all.
 //
 // Without under, doors query LEAF keys — "database.host", never "database". A YAML null
 // written AT a section path is itself a leaf and records that path, so a section path must
@@ -255,30 +256,42 @@ func (c *Config) deliveries(key string, under bool) []keyDelivery {
 }
 
 // pathMatches reports whether path names key — or, with under set, a node below it —
-// comparing segment by segment with strings.EqualFold, the rule mapstructure applies to a
-// field name and the one visitSubtree and the keystore tree walk apply. EqualFold matches
-// Unicode simple folds (U+017F for s), which strings.ToLower misses.
+// comparing segment by segment with sameSegment, the rule mapstructure applies to a field
+// name.
 func pathMatches(key, path []string, under bool) bool {
 	if len(path) < len(key) || (len(path) > len(key) && !under) {
 		return false
 	}
 	for i, segment := range key {
-		if !strings.EqualFold(segment, path[i]) {
+		if !sameSegment(segment, path[i]) {
 			return false
 		}
 	}
 	return true
 }
 
-// anyDeliveredEmpty reports whether any delivery holds a value deliveredEmptyValue rejects.
-func anyDeliveredEmpty(found []keyDelivery) bool {
-	return slices.ContainsFunc(found, func(d keyDelivery) bool { return deliveredEmptyValue(d.raw) })
+// sameSegment reports whether two key segments name one field as mapstructure matches it:
+// strings.EqualFold, the package's one case fold for keys. EqualFold matches Unicode simple
+// folds (U+017F for s), which strings.ToLower misses.
+func sameSegment(a, b string) bool {
+	return strings.EqualFold(a, b)
 }
 
 // delivered reports whether the leaf key was delivered under any spelling (deliveries). It
 // is presence only: a delivered key may still hold an empty value.
 func (c *Config) delivered(key string) bool {
 	return len(c.deliveries(key, false)) > 0
+}
+
+// deliveredValue returns the raw value at the spelling under which the leaf key was
+// delivered. Decode refuses two spellings of one key (ADR-157), so a decoded Config holds at
+// most one.
+func (c *Config) deliveredValue(key string) (raw any, ok bool) {
+	found := c.deliveries(key, false)
+	if len(found) == 0 {
+		return nil, false
+	}
+	return found[0].raw, true
 }
 
 // deliveredAtOrUnder reports whether key or any path below it was delivered under any

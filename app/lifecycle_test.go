@@ -844,6 +844,33 @@ func TestPrepareRuntimePostRegisterRoutesSeesEveryRouteWithItsModule(t *testing.
 	}, modules)
 }
 
+// reservedMethodModule registers a 404 handler with echo's sentinel method under a
+// middleware-bearing group.
+type reservedMethodModule struct{}
+
+func (reservedMethodModule) Name() string             { return "partner" }
+func (reservedMethodModule) Init(_ *ModuleDeps) error { return nil }
+func (reservedMethodModule) Shutdown() error          { return nil }
+func (reservedMethodModule) RegisterRoutes(_ *server.HandlerRegistry, r server.RouteRegistrar) {
+	g := r.Group("/partner/v2", func(_ server.HandlerContext, next func() error) error { return next() })
+	g.Add("echo_route_not_found", "/*", func(c server.HandlerContext) error { return c.String(http.StatusTeapot, "") })
+}
+
+func TestPrepareRuntimeRefusesReservedEngineMethodBeforePostRegisterRoutes(t *testing.T) {
+	calls := 0
+	a := newConfiguredApp(t, minimalAppConfig(""), &Options{PostRegisterRoutes: func([]server.RouteDescriptor) error {
+		calls++
+		return nil
+	}})
+	require.NoError(t, a.RegisterModule(reservedMethodModule{}))
+
+	err := a.prepareRuntime(context.Background())
+
+	require.ErrorIs(t, err, server.ErrDuplicateRoute)
+	assert.Contains(t, err.Error(), "echo_route_not_found /partner/v2/* — reserved engine method")
+	assert.Zero(t, calls, "the hook never sees a refused route")
+}
+
 // globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
 // optional RegisterGlobalMiddleware capability, capturing what it receives.
 type globalMWCapturingServer struct {

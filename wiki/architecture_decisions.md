@@ -2599,6 +2599,31 @@ or `server.NewWithOptions` without `config.Validate` is outside this rule.
 
 ---
 
+### [ADR-155: Framework-Built Route Doors Refuse Echo's Reserved Engine Methods](adr_155_reserved_engine_methods_refused.md)
+
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a route registered with `echo_route_not_found` or `echo_route_any` through a framework-built route door now fails the framework server's `Start`, and app startup when its server reports `RouteConflicts()` (an injected `ServerRunner` without that method is left to its own `Start`), where `echo_route_not_found` replaced, or was replaced by, a middleware-bearing group's catch-all in registration order and `echo_route_any` answered every method there without the group's middleware; `RouteConflict` gains `Reason`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
+
+Every route door accepted echo's two sentinel methods, so a module's not-found handler at a
+middleware-bearing group's `<prefix>/*` and the group's own catch-all replaced each other in
+registration order, outside the duplicate-route tracker, and `echo_route_any` there answered every
+method without the group middleware. ADR-124's premise that catch-alls serve no module handler was
+false. `routeAdmission.admit` now refuses both methods before keying, records the refusal with
+`Reason` `RouteConflictReasonReservedMethod`, and neither describes nor adds the route.
+`RegisterHandler` given a registrar the framework did not build (a test fake) skips admission, so
+the refusal does not apply there.
+`*server.DuplicateRouteError` stays the one error and `errors.Is(err, server.ErrDuplicateRoute)`
+holds for both reasons; a duplicate-only error reads as before. Echo's own catch-alls never pass
+through admission and are unaffected. Per-module custom 404 handlers are unsupported, and no
+replacement is provided. See [migrations.md](migrations.md) `[C73.12]`.
+
+**Key Benefits:** the catch-all premise ADR-124 assumed now holds by construction: no route
+registered through a framework-built door can take a group's catch-all over, so a group's gates
+run on every sub-path that no route claims. A route registered outside the group, such as
+`GET <prefix>/*` on `ModuleGroup()`, is admitted and skips the group's middleware, as before, so a
+route that needs a group's gate must register on that group.
+
+---
+
 ### [ADR-156: Delivered-Empty Checks Find a Key Under Every Spelling Decode Accepts](adr_156_delivered_empty_checks_match_every_spelling.md)
 
 **Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a mixed-case empty or null `server.probes.host`, `debug.allowedips` or database identity key, or two spellings of one with one empty, fails startup where it booted
@@ -2608,12 +2633,33 @@ mapstructure decodes a key whose segments differ only by case, falling back to
 ADR-104 presence record for the lowercase spelling only, and ADR-153's retired-key check folded
 with `strings.ToLower`. One key lookup, `Config.deliveries`, now matches every recorded path
 segment by segment with `EqualFold` and returns each match with its raw value. Emptiness is read
-at the matched path, any empty spelling refuses the key, and a configured database section is
-refused when an identity key arrives in two spellings with one empty. A named database section
+at the matched path; two spellings of one key are refused at decode as ADR-157 twins. A named
+database section
 reports ADR-051's message instead of "incomplete". See [migrations.md](migrations.md) `[C73.13]`.
 
 **Key Benefits:** the checks see what decode sees, so a template that renders `Host: ""` fails at
 startup instead of widening a bind or emptying an allowlist.
+
+### [ADR-157: A Config Key Decode Would Read Under Another Spelling Fails Startup](adr_157_config_key_spelling_refused.md)
+
+**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a root key that case-folds to a framework section name without being spelled as it (`App:`, `Observability:`) fails `config.Load` and `config.LoadFromMap`, and so do two keys of one map node that differ only by case, a mixed-case override of a framework default included
+
+mapstructure decodes a key into a field by an exact match first and `strings.EqualFold` otherwise,
+while `Config.Exists`, the getters and the observability bootstrap name a key by its exact
+spelling. So `Observability:` booted the no-op telemetry provider, `App:` was dropped beside the
+lowercase `app` defaults, and of two twins such as `Port` and `port` one was dropped, possibly a
+different one per run. `configSource.decode` now refuses, before it unmarshals, a root key that
+folds to a `configSections` name without equaling it (`config_invalid: app is spelled App; …`),
+naming every spelling and never a value, so `go-bricks-migrate --source-config` refuses too. The
+fold-twin rule refuses two such keys at any map node, from any layer, framework defaults
+included, naming each spelling and the variable that reaches the lowercase one (`[C73.19]`).
+Refuse, not normalize: lowercasing at load would break ADR-090's check and change keystore kids
+and header names. Environment variables alone and a lone mixed-case key below the root with no
+twin are unaffected. See [migrations.md](migrations.md) `[C73.14]`, `[C73.19]`.
+
+**Key Benefits:** a framework section is read under one spelling by decode and by every exact-name
+lookup, and a misspelled section, or a mixed-case override beside its default, that the framework
+would have ignored fails at startup instead.
 
 ---
 

@@ -25,15 +25,14 @@ simple folds that `EqualFold` matches, such as U+017F for `s`. Fixes #2210.
    applies the per-segment rule `visitSubtree` and the keystore tree walk already use. A
    preloaded default is never a match, and a hand-built `Config` literal has none.
 2. **Emptiness is read at the matched path.** `server.probes.host` and `debug.allowedips` read the
-   raw value at each delivered spelling, never a `Get` of the lowercase key, so `Host: 127.0.0.2`
-   is kept. The key is refused when any delivered spelling is empty or null, whether the spellings
-   share a layer or come from a base file and an overlay, whatever order a map yields them in. The
-   error's `Field` is the lowercase key.
+   raw value at the delivered spelling, never a `Get` of the lowercase key, so `Host: 127.0.0.2`
+   is kept. Two spellings of one key never reach the check: decode refuses them as twins
+   ([ADR-157](adr_157_config_key_spelling_refused.md)), and so is a mixed-case `allowedIPs:`
+   beside its lowercase default. The error's `Field` is the lowercase key.
 3. **Database identity keys.** ADR-051's section rule finds identity keys in any spelling, in root,
-   named and tenant sections, and a named section reports ADR-051's message. A section that is
-   configured is also refused when one identity key has two or more delivered spellings and any of
-   them is empty or null, with the same message and the lowercase key. One empty identity key in a
-   configured section is still accepted.
+   named and tenant sections, and a named section reports ADR-051's message. Two spellings of one
+   identity key are refused at decode as ADR-157 twins. One empty identity key in a configured
+   section is still accepted.
 4. **Retired keys** (ADR-153) are matched per segment with `EqualFold`, through the same lookup.
 
 ## Alternatives considered

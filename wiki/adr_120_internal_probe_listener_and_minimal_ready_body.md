@@ -9,8 +9,9 @@
 
 > **Amended (2026-10-28, [ADR-156](adr_156_delivered_empty_checks_match_every_spelling.md), #2210):**
 > the delivered-empty check on `server.probes.host` finds the key under any spelling decode
-> accepts (`Host:`, `Probes:`) and reads the raw value at each delivered spelling; any empty
-> spelling refuses it, and a real mixed-case value is kept.
+> accepts (`Host:`, `Probes:`) and reads the raw value at the delivered spelling, and a real
+> mixed-case value is kept. Two spellings of the key are refused earlier, at decode, as
+> [ADR-157](adr_157_config_key_spelling_refused.md) twins.
 
 ## Context
 
