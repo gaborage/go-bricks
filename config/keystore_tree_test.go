@@ -980,9 +980,9 @@ messaging:
 			wantWrap:   "keystore config: ",
 		},
 		{
-			name:       "capitalized_keys_sequence_beside_a_variable",
-			base:       "Keystore:\n  Keys:\n    - tokens:\n        our:\n          public: {value: our-pub}\n",
-			env:        map[string]string{"KEYSTORE_KEYS_SIGNING_PUBLIC_VALUE": "sig-pub"},
+			name:       "capitalized_keys_sequence_under_a_capitalized_overlay_map",
+			base:       "keystore:\n  Keys:\n    - tokens:\n        our:\n          public: {value: our-pub}\n",
+			overlay:    "keystore:\n  Keys:\n    signing:\n      public: {value: sig-pub}\n",
 			wantField:  "keystore.keys",
 			wantAction: keysAction,
 			wantWrap:   "keystore config: ",

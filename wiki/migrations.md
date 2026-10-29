@@ -59,7 +59,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E71 | v0.70.0 → v0.71.0 | compile-break (C71.1–C71.5 — `logger.WithAMQPCounter`/`WithDBCounter`, `FactoryResolver.MessagingClientFactory`, `RouteRegistry.AddRoute`/`RoutesByModule`, `server.NewHandlerContextForTestWithOptions` and the `postgresql`/`oracle` `Statement`/`Transaction` aliases are removed; `NewHandlerContextForTest` gains `...TestContextOption`) + compile-break (C71.6 — ten `database` tracking re-exports are removed: `TrackingContext`, `TrackedStatement`/`TrackedStmt`, `TrackedTransaction`/`TrackedTx`, `TrackDBOperation`, `NewTrackingSettings`, `RegisterConnectionPoolMetrics`, `DefaultSlowQueryThreshold`, `DefaultMaxQueryLength`) + compile-break (C71.7 — `database.TrackedDB`/`NewTrackedDB` and the raw-`*sql.DB` tracking wrapper are removed) + compile-break (C71.8–C71.12 — `app` drops `TimeoutProvider`/`StandardTimeoutProvider`/`Options.TimeoutProvider`, `SignalHandler.WaitForSignal`, `Prober`, `RegisterStreamRuntime`/`StreamRuntime` and `App.MessagingDeclarations()`) + compile-break (C71.13 — `httpclient` no longer exports the trace header constants `HeaderXRequestID`/`HeaderTraceParent`/`HeaderTraceState` or the forwarders `WithTraceID`, `TraceIDFromContext`, `EnsureTraceID`, `WithTraceParent`, `TraceParentFromContext`, `WithTraceState`, `TraceStateFromContext` and `GenerateTraceParent`; each is the same name in `trace`, except the three getters, which are `trace.IDFromContext`/`ParentFromContext`/`StateFromContext`) + compile-break (C71.14 — `httpclient.IsJOSEError` is gone; `jose.IsError` gives the same answer) + compile-break (C71.15 — package `testing` no longer exports the 46 constants after its logger block, its service, messaging, database, user, tenant, OpenTelemetry, duration, port and size literals; only `TestLoggerLevelDebug`/`TestLoggerLevelError`/`TestLoggerLevelDisabled` stay) + compile-break (C71.16 — `messaging.Client`, and so `messaging.AMQPClient`, loses `Consume`, which was `ConsumeFromQueue` with only `Queue` set; `mocks.MockMessagingClient` and `MockAMQPClient` lose `Consume`, `ExpectConsume` and `ExpectConsumeAny`, and `MockAMQPClient` gains `ExpectConsumeFromQueueAny`; `fixtures.NewWorkingMessagingClient`/`NewFailingMessagingClient`/`NewMessageSimulator` return `*mocks.MockAMQPClient`) + compile-break (C71.17 — `cache/testing.AssertOperationCountGreaterThan` is gone; `AssertOperationCountAtLeast` takes the same arguments) | 17 | C71.1, C71.2, C71.3, C71.4, C71.5, C71.6, C71.7, C71.13, C71.14, C71.15, C71.17 — `go build ./... && go vet ./... && go vet -tags=integration ./...` names every call site, and a build-tagged file under `go vet -tags=<tag>`; C71.8–C71.12 — `go build ./... && go vet ./...` names every use, except a `WaitForSignal` method on your own `SignalHandler`, which compiles and goes dead (C71.9); C71.16 only partially — the same commands name every call, mock helper and typed fixture receiver, but a type assertion or type switch to `*mocks.MockMessagingClient` and a testify expectation keyed `"Consume"` compile, so only C71.16's detect greps find them | none |
 | E711 | v0.71.0 → v0.71.1 | silent-behavior (C711.1 — a value logged through a pointer to a string, map, slice, array, interface or another pointer, or a JSON document or PEM block held in a `[]string`/`[N]string`, is now filtered like the value logged directly, so keys the filter masks no longer reach the sink or the OTel log export in clear) | 1 | none | update log fixtures that pinned such a value's unmasked output; logs written by earlier versions through such values may hold secrets — rotate any credential that could have been logged that way and purge retained logs per your retention policy (C711.1) |
 | E72 | v0.71.1 → v0.72.0 | silent-behavior (C72.1 — `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE` is no longer read; attribute arrays and maps nested deeper than 64 export empty; `otel/log/global` is deprecated) + silent-behavior (C72.2 — an OTLP/HTTP endpoint with a path, such as the documented `https://otlp.nr-data.net:4318/v1/traces`, now exports to exactly that path: a path-bearing trace endpoint, which booted and failed every export, starts exporting, and a path-bearing metrics or logs endpoint, which failed provider construction — inside an App a WARN and a no-op provider for all three signals — now boots and exports, so telemetry that was dropped leaves the service as new egress and new vendor ingest) + breaking (C72.3 — an HTTP OTLP endpoint with userinfo, a query, a fragment, an encoded slash or no host, or a gRPC `grpc://` endpoint, fails `Validate` with `ErrInvalidEndpointFormat`, which inside an App is a WARN and a no-op provider for every signal) + breaking (C72.4 — `OTEL_EXPORTER_OTLP_*` endpoint, insecure and trace protocol variables no longer reach the OTLP exporters, so an `insecure: false` exporter, HTTP or gRPC, can no longer be turned into plaintext and an env endpoint path no longer applies; a deployment that relied on either gets no startup error, and its exports fail at runtime if the collector does not serve the configured path over TLS) + silent-behavior (C72.5 — a migration audit event's log record is now an action log on the audit span: a successful one is exported at the default `samplingrate` 0.0, where it was dropped, every one changes `log.type` from trace to action, and with tracing on it carries the span's ids) + breaking (C72.6 — an inbound `traceparent` marked not sampled now drops this service's spans at every nonzero `trace.sample.rate`, including the default `1.0`, where they were recorded and exported as orphans; a remote sampled flag is re-judged by the rate) + silent-behavior (C72.7 — a pooled database, cache or publisher lookup that evicts an LRU victim, or races `Close`, returns only after the resource it displaced is closed, restoring the ≤v0.70 ordering that v0.71.x lost) + breaking (C72.8 — with `multitenant.resolver.proxies: true`, `X-Forwarded-Host` from a peer outside loopback, link-local, private, unix-socket and `server.trustedproxies` fails the request with 400 `Invalid tenant` and stops a composite order, and the tenant host is the last entry of the last header line instead of the first entry) + compile-break (C72.9 — `messaging.RegisterSealCodec`, `ConfigureSealing`, `SealingRuntime`, the twelve `Seal*` seam aliases and the three `SealTenancy*` constants are removed; the seal-runtime seam moves to root `internal/sealruntime`) + breaking (C72.10 — `PublishSealed` admitted an authentic stored body under a sign generation the producer holds without its private key; it now refuses it with `ErrSealedBytesRejected` and `SEAL_KID_UNKNOWN_GENERATION`) + breaking (C72.11 — `jose/sealed.Open`, `OpenDocument` and `Verify` refuse a document carrying a clear top-level member whose name case-folds to the Subject member's without equaling it, with `SEAL_PAYLOAD_UNDECODABLE` rule 10: the sealed consumer nacks it into the DLQ without requeue, where the cleartext sits at rest, and `PublishSealed` refuses it non-recoverably and does not publish) + breaking (C72.12 — under `observability.metrics.temporality: delta` on an OTLP endpoint, UpDownCounters, ObservableUpDownCounters and gauges export as Cumulative where they exported as Delta, so non-monotonic sums carry levels and sync UpDownCounter and Gauge series are kept for the life of the process) + breaking (C72.13 — `Declarations.Validate()` refuses a queue whose `x-dead-letter-exchange` is absent from the declaration set or, being a locally declared fanout, direct or topic exchange, has no binding that delivers the dead-lettered message, where each booted and dropped every dead-lettered message) + breaking (C72.14 — within one `MigrateAll` call, a tenant whose resolved migration target (host, port, database plus schema, or plus the effective post-overlay username when the schema is empty; Oracle: host, port, PDB, username) an earlier tenant claimed is refused with `migration.ErrDuplicateMigrationTarget` before Flyway runs, so a run that was clean ends `ErrFleetSplit`) + silent-behavior (C72.15 — under multi-tenant `messaging.tenancy: shared` the messaging tenant-count WARN no longer fires, and with `publisher.idlettl` or `publisher.maxcached` unset or 0 the publisher pool idles out after 1h instead of 10m and caps at 50 instead of `multitenant.limits.tenants`; under `source.type: dynamic` a leftover `multitenant.tenants` map no longer triggers the tenant-count WARN for any pool) + silent-behavior (C72.16 — `database/testing` transaction and session no-rows errors gain the suffix ` (use WillReturnRows)`, so a consumer test comparing their full text with `EqualError` or `err.Error() ==` fails; prefixes and every pool text are unchanged) + breaking (C72.17 — a key under a `keystore.keys` entry or source that is not one of its fields (a name nested under an entry included), and a `KEYSTORE_KEYS_*` variable whose path ends off a source (a POSIX one spelling a hyphenated entry, which now names the dotted entry, included), fail startup where v0.71.1 dropped them in silence; so does a sequence under `keystore.keys` or `messaging.seal.active`, which v0.71.1 decoded as a map, or dropped with what it held when a later layer replaced it with a map, a nested selector map that a later YAML file replaced with a scalar on its parent path, which v0.71.1 never decoded, and a malformed generation entry in a service without the keystore module, which v0.71.1 refused only in that module's `Init`; a dotted name is now a path written nested, no name that boots today changes its variable or wire kid, and config, keystore, `jose`/`seal:` tag and `sealcli` error texts move) + silent-behavior (C72.18 — an enabled root cache section whose `type` is empty, built by hand or delivered empty (`CACHE_TYPE=`, `type: ""`), passes `Validate` with `redis` filled in, where it failed on `cache.type`) + silent-behavior (C72.19 — a cache section `config.Validate` never saw, from a custom or dynamic `ResourceSource` or `TenantStore.AddTenant`, gets the framework defaults at connect: port and poolsize 0 dial instead of failing, read/write timeouts 5s → 3s, backoff 10ms/1s → 8ms/512ms, `cluster` retries none → 3, and the reported loadtimeout 0 → 500ms) + silent-behavior (C72.20 — cache connector refusals use config's wording with an Action; Field and Category are unchanged) + silent-behavior (C72.21 — for a cache section with two faults, the connector can report a different one first) + silent-behavior (C72.22 — a hand-built `cache/redis.Config` reports `Validate`/`NewClient` errors in config wording: every message except the TLS structure ones changes, such as `invalid port: 0` becoming `invalid value: 0 (must be one of: 1-65535)`, and a negative `LoadTimeout` is reported only after the TLS structure passes; `Field` is unchanged) + silent-behavior (C72.23 — at startup the `cache.redis.keyprefix` grammar is judged after every Redis endpoint rule instead of between `mode` and `username`, so a section that breaks both reports the rule, such as `cache.redis.username`, where it reported `cache.redis.keyprefix`) + silent-behavior (C72.24 — the two cache messages that named a sibling key spell it relative to the block: `must be 0 when mode is cluster: …` and `requires password: …`, at startup and at the cache connector, root and tenant sections alike) + breaking (C72.25 — a static tenant's `multitenant.tenants.<id>.cache.manager` block, enabled or not, fails `config.Validate`, where it was accepted and never read) + silent-behavior (C72.26 — a scheduler job summary line's `correlation_id` holds the framework id, not the OTel trace id, and its `traceparent` carries the run span's real flags, `""` without a valid span context) + silent-behavior (C72.27 — `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT` is no longer read: the OTel log bridge caps every record at 128 attributes itself, `log.type` and the trace triple first, and a line over the cap keeps its lexicographically first caller fields, gains `log.attributes.dropped` and draws one WARN per process) + additive-optional (C72.28 — a `FixedRate` job can opt into `scheduler.Windowed`: one fixed-key action line per `scheduler.summary.window`, edge lines when it turns failing, and one metric per declared Counter, where it wrote one action line per run; the new key defaults to 5m) + silent-behavior (C72.29 — with `inbox.hold.enabled: true`, a hold replay's consume span starts its own root trace linked to the drain job's span instead of nesting under it, so the replay's `trace_id`/`span_id`, exemplars and sampling decision move with it) + silent-behavior (C72.30 — with `outbox.enabled: true`, the relay's per-run `Job 'outbox-relay' completed successfully in …` action line, its per-run WARN and ERROR lines and its skip WARN drop to untagged DEBUG, and `Outbox relay cycle completed` moves from INFO to DEBUG, so below `log.level: debug` none of them is written, to stdout or OTLP (an edge run's panic stack line stays ERROR); one window line per `scheduler.summary.window`, edge lines when the relay turns failing or fails on a new key, and four `outbox.relay.*` metrics replace them) + silent-behavior (C72.31 — with `inbox.hold.enabled: true`, the hold drain runs under `scheduler.Windowed`: its per-pass action line, its skip WARN and its spent-lease WARN drop to DEBUG, a window line and edge lines replace them, three Counters become metrics, and "Hold exceeds max age" drops from one WARN per over-age tenant per pass to one per window per replica) + silent-behavior (C72.32 — `f.In`, `f.NotIn`, `jf.In` and `jf.NotIn` panicked at the door call on a scalar that is not a `driver.Value` (an `int`, a `float32`, a `*int`, a defined type, a struct), on a non-empty map or chan whose value type is an interface, a pointer or a `driver.Valuer`, and on a `RawExpression`; such a scalar now renders `col IN ($1)` bound to its resolved value, such a map or chan binds whole as a concrete-valued one does, `jf` splices the expression as `col IN (<sql>)` and `f` refuses it with `ErrExpressionInFilter` at `ToSQL()`) + silent-behavior (C72.33 — the `f` value doors (`Eq` … `Gte`, both `Between` bounds) refuse a `RawExpression`, or a non-nil pointer to one, with `ErrExpressionInFilter` at `ToSQL()`, where they bound it as an argument the driver rejects; the `jf` value doors splice a pointer to one like the expression; `BuildUpsert` splices an expression from either map, numbering only bound values, and refuses an aliased one with `ErrAliasInValue`) + breaking (C72.34 — a `jf` value door (the six compare doors, both `Between` bounds, `In`, `NotIn`) refuses an aliased `RawExpression`, or a non-nil pointer to one, with `ErrAliasInPredicate` at `ToSQL()`, judged before the alias grammar, where it spliced the body and dropped the alias; `GroupBy` and `OrderBy` keep rendering the body) + breaking (C72.35 — `f.InSubquery` refuses a subquery from another `SelectQueryBuilder` implementation whose SQL carries `$N` or `:N`, failing the outer statement's `ToSQL()`, where it embedded it verbatim) + silent-behavior (C72.36 — on PostgreSQL, `BuildUpsert` renders a `?` in a quoted insert key as written, where squirrel's placeholder pass rewrote it: `"a?b"` rendered `"a$1b"` and numbered the values from `$2`, leaving `$1` unbound and an update value reusing the last value's placeholder, and `"a??b"` rendered `"a?b"`) | 36 | C72.1 (d) only — `go build ./...` fails on a `replace`-pinned old `otel/log`; C72.2–C72.7 move no signature and no configuration key; C72.3's rejections surface at startup; C72.8 partially — a downstream UNKEYED `multitenant.SubdomainResolver{…}` literal stops compiling (`go build ./...` names it; keyed literals are unaffected); the new field and the `ErrUntrustedForwardedHost` sentinel are otherwise additive, and no key moves; C72.9 — `go build ./... && go vet ./... && go vet -tags=integration ./...` names every use; C72.10 moves no signature and no configuration key; C72.11 is a runtime refusal; no signature moves; C72.12 moves no signature and no configuration key; C72.13 moves no signature and no configuration key; Validate refuses at startup; C72.14 is a runtime refusal; no signature moves; C72.15 moves no signature and no configuration key; C72.16 moves no signature and no configuration key; test-time text only; C72.17 moves no signature and no configuration key; a startup refusal; C72.18 moves no signature and no configuration key; C72.19–C72.21 move no signature and no configuration key; C72.22 moves no signature and no configuration key; error text only; C72.23 and C72.24 move no signature and no configuration key; error text and order only; C72.25 moves no signature and no configuration key; Validate refuses at startup; C72.26 moves no signature and no configuration key; log values only; C72.27 moves no signature and no configuration key; C72.28 only adds API; C72.29 moves no signature and no configuration key; trace shape only; C72.30 removes `(*Relay).Execute`, which outside code saw only through the `job any` a `JobRegistrar.FixedRate` receives, and moves no configuration key; a registrar that called `Execute` on that job now gets the scheduler's refusal; C72.31 moves no reachable signature and no configuration key: the removed `(*HoldDrain).Execute` sits on a type with no exported constructor; log levels and metrics only; C72.32 moves no signature and no configuration key and adds the `ErrExpressionInFilter` sentinel; a call that panicked at the door now returns a filter, or one whose `ToSQL()` fails; C72.33 moves no signature and no configuration key; at the `f` doors a refusal at `ToSQL()` where the driver failed at exec, at the `jf` doors a pointer to an expression now spliced, and in `BuildUpsert` a splice, with an aliased or blank expression refused as `BuildUpsert`'s own returned error (`ErrAliasInValue`, `ErrEmptyExpressionSQL`), not at `ToSQL()`; C72.34 moves no signature and no configuration key and adds the `ErrAliasInPredicate` sentinel; a call that built now fails `ToSQL()`; C72.35 moves no signature and no configuration key; a `ToSQL()` refusal; C72.36 moves no signature and no configuration key; rendered SQL only | for C72.2, list every HTTP endpoint that carries a path (the atom's detect), confirm that path is the collector's full export path, a gateway prefix included, and that the backend is meant to receive and bill this telemetry; for C72.3, fix every endpoint form its detect names before the bump; for C72.4, list every `OTEL_EXPORTER_OTLP_*` endpoint, insecure and protocol variable in every environment, and set the same values through `OBSERVABILITY_<SIGNAL>_ENDPOINT`/`_INSECURE` in the same rollout as the bump (a path-bearing config endpoint does not export before it); for C72.5, find dashboards, alerts or queries that select audit records by `log.type = trace` and repoint them to `action`; for C72.6, decide, per service, whether it receives `traceparent` headers from a sampler upstream and at what rate, against its own `trace.sample.rate`; for C72.8, list the CIDRs of every proxy on a public or `100.64.0.0/10` address in `server.trustedproxies`, and give tests that send `X-Forwarded-Host` a trusted `RemoteAddr`; for C72.9, run its detect and list every custom codec (none has a replacement: blank-import `messaging/sealed`) and every `SealingRuntime()` reader (moves to `ModuleDeps`); for C72.10, list each producer that calls `PublishSealed` and holds a sign-family entry `public:`-only, and whether its sealed-bytes store still holds bytes under that generation; for C72.11, list the producers of every sealed `EventType` you consume and check each one that does not seal through go-bricks v0.63.0+ `Seal`/`SealDocument` (a partner or hand-rolled sealer) for a clear member case-folding to the Subject — have it drop or rename that member before the bump, and treat a twin refusal in the DLQ as cleartext cardholder data to scrub, never to replay; for C72.12, list every dashboard, alert or collector rule that reads an UpDownCounter or gauge series from a service running `temporality: delta`, and repoint the ones that summed or rated the old per-interval changes; for C72.13, run its detect and walk every raw-`Args` dead-letter route and every `d.Exchanges`/`d.Queues` mutation against its rules; complete each failing route, or mark a DLX another service owns external with `DeclareExternalExchange`, in the same change as the bump; for C72.14, list every tenant's resolved host, port, database, schema and effective username (the `MigratorIdentity` overlay replaces the username) and give each colliding tenant a distinct `postgresql.schema`, or a migrator role whose role-level `search_path` selects that tenant's schema, or de-list the alias or repeated ID, before the bump; `go-bricks-migrate` gets the check at its routine go-bricks pin bump; for C72.15, under multi-tenant `messaging.tenancy: shared` run its detect and decide whether each service keeps the new publisher `idlettl`/`maxcached` defaults or pins the old values explicitly; for C72.16, run its detect and move every test that compares a `database/testing` transaction or session no-rows error's full text to the suffixed text or a substring check; for C72.17, run its detect and, before the bump, delete or fix every junk key or variable under a keystore entry or source, rename one of an entry nested under another, keep one of two look-alike names, rewrite every sequence under `keystore.keys` or `messaging.seal.active`, in any layer, as a map, delete every selector map a later YAML file replaces with a scalar, rename every malformed generation entry, and move pinned config, keystore, `jose`/`seal:` tag and `sealcli` error texts to the new wording; for C72.18, run its detect and confirm each enabled cache that delivers an empty type meant Redis; for C72.19, run its detect and set in the source any field whose go-redis default you relied on; for C72.20, run its detect and move every pinned cache connector refusal text to config's wording, or match on `Field` and `Category`; for C72.21, run its detect and fix the other fault in each multi-fault fixture, or pin the field now reported; for C72.22, run its detect and move every pinned `cache/redis` validation message to its config wording, or match on `ConfigError.Field` instead; for C72.23, run its detect and fix the other fault in each fixture that pairs a bad keyprefix with a Redis endpoint fault, or pin the endpoint field now reported; for C72.24, run its detect and move every pinned `cache.redis.database` or `cache.redis.username` message to its new wording; for C72.23 and C72.24, run their detects and update every test that pins which field a section with a keyprefix fault and another fault reports, or the two sibling-naming texts; for C72.25, run its detect and delete every static tenant's `cache.manager` block before the bump, moving any value meant for the shared pool to root `cache.manager.*`; for C72.26, run its detect and move every job-summary query that joins logs to traces through `correlation_id` onto `trace_id`; for C72.27, list every `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT` in every environment and drop it in the same rollout as the bump (nothing replaces it); for C72.28, nothing unless adopting `scheduler.Windowed`; for C72.29, run its detect and repoint every trace query or dashboard that found replays under `job.id=inbox-hold-drain` to follow the span link or filter on `messaging.hold.replay=true`; for C72.30, run its detect and repoint every alert, dashboard or query on the relay's per-run `job.id=outbox-relay` line, its skip WARN or `Outbox relay cycle completed` to the window and edge lines (`job.id=outbox-relay`) or the `outbox.relay.*` metrics; for C72.31, run its detect and move every alert or query on the drain's per-pass line, its skip WARN or a recurring "Hold exceeds max age" WARN onto the window line or the `inbox.hold.drain.*` Counters; for C72.32, run its detect and list each such `recover()` or test; delete it in the same change as the bump; for C72.33, run its detect and move each `f`-door expression to `f.Raw` with its `// SECURITY:` annotation, or to a `jf` door, in the same change as the bump; for C72.34, run its detect and drop the alias at each hit, passing an unaliased copy where one expression also serves `Select`, in the same change as the bump; for C72.35, run its detect and make every foreign subquery render `?`; for C72.36, run its detect and spell each key that doubled `?` as the column it names |
-| E73 | v0.72.0 → v0.73.0 | silent-behavior (C73.6 — an over-limit request body answers 413 `BODY_TOO_LARGE` whether or not its length is known, where a known length got 413 `INTERNAL_ERROR` and an unknown length on a typed `application/json` or `+json` route got 400 `BAD_REQUEST`; an unknown-length JOSE overflow keeps `JOSE_BODY_TOO_LARGE`) + silent-behavior (C73.5 — a koanf-loaded config that leaves `server.timeout.idle` unset now holds an idle keep-alive connection for 75s instead of 60s, on the application and probe listeners alike, and `server.DefaultIdleTimeout` reads 75s) + silent-behavior (C73.4 — under an `ErrorRedactor` or an `error` needle, `LogEvent.Err` given a typed-nil pointer error writes no `error` field and no longer calls the redactor, where it wrote the redactor's output or the mask value, or panicked; under zerolog's default `ErrorMarshalFunc`, a typed nil whose `Error()` dereferences its receiver no longer panics in `Err` on any path) + breaking (C73.1 — a type-less migration tenant gets its `DB_*`/`ORACLE_*` variables from its own fields or the `MigratorIdentity` overlay instead of the conf or the parent environment, which on Oracle moves the target; with an overlay set, `MigrateAll` refuses a tenant whose vendor is neither `postgresql` nor `oracle`) + breaking (C73.2 — a seal-tagged publisher or consumer declared on a hand-built `messaging.NewDeclarations()` fails `Validate` with the not-configured error, where after any App in the process had run it silently used that App's seal runtime; a second App's `Run`, successful or failed, no longer re-aims another App's seal-tagged handles or their seal metrics) + silent-behavior (C73.3 — every redial after an AMQP connection close now waits: `U[0, reconnect.delay)` after a connection that stayed up at least `reconnect.delay`, the full-jitter ladder toward `reconnect.maxdelay` after one that closed sooner; the messaging readiness check fails during the wait, which fails `/ready` only under `messaging.consumers.critical`) + breaking (C73.7 — `messaging.broker.virtualhost`, `messaging.routing.exchange`, `messaging.routing.key` and `messaging.headers`, which no framework code ever read, fail startup when delivered, an empty value or a YAML null included, where they were ignored and a path-less broker URL beside `virtualhost` connected to `/`) + breaking (C73.8 — a zero `server.timeout.idle`, explicit or left unset in a hand-built config, now takes the 75s default instead of running at `server.timeout.read`, and a negative fails startup instead of disabling the idle timeout) + silent-behavior (C73.9 — `Logger.WithFields` writes a top-level typed-nil pointer error as `null`, where zerolog wrote the key with no value and left every later line from the derived logger invalid JSON) + silent-behavior (C73.10 — a route template with `\:<verb>` directly after a parameter name, `/x/:id\:cancel`, now matches only `<value>:<verb>` and boots beside `/x/:id`, where it matched any segment and the pair was refused at startup as a duplicate) + silent-behavior (C73.11 — under stream client v1.9.0 each reattach wait is 3–8s, capped at 8s, so a lost plain stream settles in 3–8s for a consumer and 6–16s for a producer before the supervisor's next 5s pass, where it took 3–11s and 6–22s; a super-stream consumer found lost keeps its partitions queued for retry detached until restart; `rabbitmq-stream+tls://` URIs connect and verify the dialed host against the process trust store, where they failed startup) + breaking (C73.13 — a delivered-empty `server.probes.host`, `debug.allowedips` or database identity key spelled with an upper-case letter in any segment, or delivered in two spellings with one empty or null, fails startup as its lowercase spelling does, where it booted; a named database section reports ADR-051's message instead of "database configuration incomplete") + silent-behavior (C73.18 — the URL in an AMQP dial error, a streams environment or start error, an Oracle DSN error and the `broker_url` and streams `uri` log fields renders one posture: the password and a non-empty query become `xxxxx`, the username stays only beside a non-empty password and only when it holds no `@`, `/`, `?` or `#`, a non-URL DSN renders `xxxxx`, and the userinfo runs to the last `@`, so a password url.Parse misreads as host, port or path is masked, and vendor text quoting or echoing dropped URL text as written renders `xxxxx`) | 13 | none (C73.3, C73.4, C73.5, C73.6, C73.9, C73.10, C73.11, C73.18); C73.1 moves no signature or configuration key and adds the `ErrMigratorIdentityUndeliverable` sentinel; C73.2 moves no signature and no configuration key; Validate refuses at startup; C73.7 removes `BrokerConfig.VirtualHost`, `MessagingConfig.Routing`, `MessagingConfig.Headers` and `RoutingConfig`; C73.8 moves no signature or configuration key, and Validate refuses a negative idle at startup; C73.13 moves no signature or configuration key, and Validate refuses at startup | for C73.6, repoint every match on `INTERNAL_ERROR` for a 413, and on a 400 for an oversize chunked `application/json` or `+json` upload to a typed route, to `BODY_TOO_LARGE`; behind an L7 proxy whose upstream idle is 75s or more, or an L4 load balancer whose flow idle is 75s or less, set `server.timeout.idle` per the deployment note (C73.5); for C73.4, run its detect and list every test, fixture or alert that pins the redactor's output or the mask value for a typed-nil error; list tenants with no `type` under a typed runner and the confs that interpolate the parent's `${env.DB_*}`/`${env.ORACLE_*}`, and, where a migrator identity is set, tenants with no, an unknown or a non-canonical `type` (C73.1); for C73.2, run its detect and move each seal-tagged declaration into a module's `DeclareMessaging`, or inject `messaging/testing.CaptureSealedPublisher[T]` in a producer test; for C73.3, if publishes must ride through a reconnect blip, raise `reconnect.readytimeout`, and with it `messaging.publishtimeout` (when set, `>= readytimeout + connectiontimeout`) and `outbox.publishtimeout` (`>= readytimeout`); for C73.7, delete the four keys from every loaded config and env file, moving a non-default vhost into the broker URL path, percent-encoded, first; for C73.8, run its detect, replace a negative `server.timeout.idle` with a positive value (a large one where you meant no timeout), and where an explicit zero or a hand-built config relied on the read timeout, set that value explicitly; for C73.10, run its detect and confirm every `\:` after a parameter name is meant as an inline verb; for C73.11, re-time alerts, runbooks and test timeouts that expect a lost stream within C69.6's 3–11s, and before switching `messaging.streams.uri` to `rabbitmq-stream+tls://` confirm the broker's certificate chains to the process trust store and names every host the service dials; for C73.13, run its detect, give each mixed-case spelling it finds a value in lowercase or remove it, and delete a second spelling of the same key; for C73.18, run its detect and re-point each match at the new render |
+| E73 | v0.72.0 → v0.73.0 | silent-behavior (C73.6 — an over-limit request body answers 413 `BODY_TOO_LARGE` whether or not its length is known, where a known length got 413 `INTERNAL_ERROR` and an unknown length on a typed `application/json` or `+json` route got 400 `BAD_REQUEST`; an unknown-length JOSE overflow keeps `JOSE_BODY_TOO_LARGE`) + silent-behavior (C73.5 — a koanf-loaded config that leaves `server.timeout.idle` unset now holds an idle keep-alive connection for 75s instead of 60s, on the application and probe listeners alike, and `server.DefaultIdleTimeout` reads 75s) + silent-behavior (C73.4 — under an `ErrorRedactor` or an `error` needle, `LogEvent.Err` given a typed-nil pointer error writes no `error` field and no longer calls the redactor, where it wrote the redactor's output or the mask value, or panicked; under zerolog's default `ErrorMarshalFunc`, a typed nil whose `Error()` dereferences its receiver no longer panics in `Err` on any path) + breaking (C73.1 — a type-less migration tenant gets its `DB_*`/`ORACLE_*` variables from its own fields or the `MigratorIdentity` overlay instead of the conf or the parent environment, which on Oracle moves the target; with an overlay set, `MigrateAll` refuses a tenant whose vendor is neither `postgresql` nor `oracle`) + breaking (C73.2 — a seal-tagged publisher or consumer declared on a hand-built `messaging.NewDeclarations()` fails `Validate` with the not-configured error, where after any App in the process had run it silently used that App's seal runtime; a second App's `Run`, successful or failed, no longer re-aims another App's seal-tagged handles or their seal metrics) + silent-behavior (C73.3 — every redial after an AMQP connection close now waits: `U[0, reconnect.delay)` after a connection that stayed up at least `reconnect.delay`, the full-jitter ladder toward `reconnect.maxdelay` after one that closed sooner; the messaging readiness check fails during the wait, which fails `/ready` only under `messaging.consumers.critical`) + breaking (C73.7 — `messaging.broker.virtualhost`, `messaging.routing.exchange`, `messaging.routing.key` and `messaging.headers`, which no framework code ever read, fail startup when delivered, an empty value or a YAML null included, where they were ignored and a path-less broker URL beside `virtualhost` connected to `/`) + breaking (C73.8 — a zero `server.timeout.idle`, explicit or left unset in a hand-built config, now takes the 75s default instead of running at `server.timeout.read`, and a negative fails startup instead of disabling the idle timeout) + silent-behavior (C73.9 — `Logger.WithFields` writes a top-level typed-nil pointer error as `null`, where zerolog wrote the key with no value and left every later line from the derived logger invalid JSON) + silent-behavior (C73.10 — a route template with `\:<verb>` directly after a parameter name, `/x/:id\:cancel`, now matches only `<value>:<verb>` and boots beside `/x/:id`, where it matched any segment and the pair was refused at startup as a duplicate) + silent-behavior (C73.11 — under stream client v1.9.0 each reattach wait is 3–8s, capped at 8s, so a lost plain stream settles in 3–8s for a consumer and 6–16s for a producer before the supervisor's next 5s pass, where it took 3–11s and 6–22s; a super-stream consumer found lost keeps its partitions queued for retry detached until restart; `rabbitmq-stream+tls://` URIs connect and verify the dialed host against the process trust store, where they failed startup) + breaking (C73.12 — a route registered with `echo_route_not_found` or `echo_route_any` through a framework-built route door fails `server.Start` (and app startup, when the server reports `RouteConflicts()`), where `echo_route_not_found` at a middleware-bearing group's `<prefix>/*` replaced the group's catch-all when registered after the group, so it answered unmatched sub-paths without the group's middleware, and was replaced by it when registered before, and `echo_route_any` there answered every method without that middleware) + breaking (C73.13 — a delivered-empty `server.probes.host`, `debug.allowedips` or database identity key spelled with an upper-case letter in any segment fails startup as its lowercase spelling does, where it booted (two spellings of one are C73.19 twins); a named database section reports ADR-051's message instead of "database configuration incomplete") + breaking (C73.14 — a root config key that case-folds to a framework section name without being spelled as it, such as `App:` or `Observability:`, fails `config.Load` and `config.LoadFromMap`, and `go-bricks-migrate --source-config` from its routine go-bricks pin bump, where it decoded into the section through mapstructure's case-insensitive match while exact-name lookups such as the observability bootstrap's read it as absent, or was dropped beside the section's lowercase framework defaults) + silent-behavior (C73.16 — at `f`/`jf` `In`/`NotIn`, a nil pointer to a slice or array is the empty set, so `NotIn` over one renders `(1=1)` and matches every row, where `c NOT IN (NULL)` matched none; an expression inside a list operand is refused by `f` and spliced by `jf`, where both bound it as an argument the driver rejected; `Eq`/`NotEq` resolve a list's elements as `In` does; `f.JSONContains` refuses an expression payload and a cyclic one on both vendors, where PostgreSQL marshaled the expression and died with a stack overflow on a cyclic payload; a slice-shaped `driver.Valuer` at `In`/`NotIn` is asked whatever its length and renders `c IN (?)`/`c NOT IN (?)` where it rendered `c = ?`/`c <> ?`, `IS NULL`/`IS NOT NULL` or the empty-set constant, so `NotIn` over it can only narrow and `In` can match rows equal to an empty Valuer's answer; one over pointers, interfaces or Valuers is asked where it was expanded unasked, so either door can widen or narrow; `InsertStruct`/`InsertFields` splice an expression field where they bound it as an argument the driver rejected) + compile-break (C73.17 — `Eq`, `NotEq`, `Lt`, `LtOrEq`, `Gt` and `GtOrEq` on `*database.QueryBuilder`, which returned a squirrel map holding the value unjudged, are deleted, so a call fails to compile; `qb.Filter()`'s `Eq`/`NotEq`/`Lt`/`Lte`/`Gt`/`Gte` replace them and judge the operand) + silent-behavior (C73.18 — the URL in an AMQP dial error, a streams environment or start error, an Oracle DSN error and the `broker_url` and streams `uri` log fields renders one posture: the password and a non-empty query become `xxxxx`, the username stays only beside a non-empty password and only when it holds no `@`, `/`, `?` or `#`, a non-URL DSN renders `xxxxx`, and the userinfo runs to the last `@`, so a password url.Parse misreads as host, port or path is masked, and vendor text quoting or echoing dropped URL text as written renders `xxxxx`) + breaking (C73.19 — two keys of one config map node that differ only by case, from any layer and in data-keyed maps such as headers too, fail `config.Load` and `config.LoadFromMap`, where decode kept one: a mixed-case override of a defaulted key such as `server: {Port: …}` or `log: {Level: …}` was ignored for the default, `debug: {allowedIPs: …}` decoded beside it, and a YAML key beside the variable that reaches its lowercase spelling made two map entries) | 18 | none (C73.3, C73.4, C73.5, C73.6, C73.9, C73.10, C73.11, C73.16, C73.18); C73.1 moves no signature or configuration key and adds the `ErrMigratorIdentityUndeliverable` sentinel; C73.2 moves no signature and no configuration key; Validate refuses at startup; C73.7 removes `BrokerConfig.VirtualHost`, `MessagingConfig.Routing`, `MessagingConfig.Headers` and `RoutingConfig`; C73.8 moves no signature or configuration key, and Validate refuses a negative idle at startup; C73.12 adds `RouteConflict.Reason`, so an unkeyed `server.RouteConflict{...}` literal stops compiling, and moves no configuration key; C73.13 moves no signature or configuration key, and Validate refuses at startup; C73.14 moves no signature or configuration key, and Load and LoadFromMap refuse at decode; C73.17 removes `Eq`, `NotEq`, `Lt`, `LtOrEq`, `Gt` and `GtOrEq` on `*database.QueryBuilder`; C73.19 moves no signature or configuration key, and Load and LoadFromMap refuse at decode | for C73.6, repoint every match on `INTERNAL_ERROR` for a 413, and on a 400 for an oversize chunked `application/json` or `+json` upload to a typed route, to `BODY_TOO_LARGE`; behind an L7 proxy whose upstream idle is 75s or more, or an L4 load balancer whose flow idle is 75s or less, set `server.timeout.idle` per the deployment note (C73.5); for C73.4, run its detect and list every test, fixture or alert that pins the redactor's output or the mask value for a typed-nil error; list tenants with no `type` under a typed runner and the confs that interpolate the parent's `${env.DB_*}`/`${env.ORACLE_*}`, and, where a migrator identity is set, tenants with no, an unknown or a non-canonical `type` (C73.1); for C73.2, run its detect and move each seal-tagged declaration into a module's `DeclareMessaging`, or inject `messaging/testing.CaptureSealedPublisher[T]` in a producer test; for C73.3, if publishes must ride through a reconnect blip, raise `reconnect.readytimeout`, and with it `messaging.publishtimeout` (when set, `>= readytimeout + connectiontimeout`) and `outbox.publishtimeout` (`>= readytimeout`); for C73.7, delete the four keys from every loaded config and env file, moving a non-default vhost into the broker URL path, percent-encoded, first; for C73.8, run its detect, replace a negative `server.timeout.idle` with a positive value (a large one where you meant no timeout), and where an explicit zero or a hand-built config relied on the read timeout, set that value explicitly; for C73.10, run its detect and confirm every `\:` after a parameter name is meant as an inline verb; for C73.11, re-time alerts, runbooks and test timeouts that expect a lost stream within C69.6's 3–11s, and before switching `messaging.streams.uri` to `rabbitmq-stream+tls://` confirm the broker's certificate chains to the process trust store and names every host the service dials; for C73.12, run its detect and delete each sentinel-method registration, since a module 404 handler has no replacement; for C73.13, run its detect, give each mixed-case spelling it finds a value in lowercase or remove it, and delete a second spelling of the same key; for C73.14, run its detect and rename each root section key spelled other than lowercase, first reviewing that block's values, which take effect once renamed; for C73.16, run its detect and, at each `NotIn` over a pointer to a list that can be nil, above all under `Update`/`Delete`, guard the nil case before building or pass an explicit list, and move every golden SQL that pins `col = ?`/`col <> ?`, `IS NULL`/`IS NOT NULL` or `(1=0)`/`(1=1)` for a slice-shaped `driver.Valuer` at `In`/`NotIn` to `col IN (?)`/`col NOT IN (?)`, guarding one that can be empty, nil or answer NULL before building, passing the plain Go slice to test membership or keeping it one operand at `Eq`/`NotEq` to compare whole arrays; for C73.17, run its detect and move each call to the matching `qb.Filter()` door (`LtOrEq` to `Lte`, `GtOrEq` to `Gte`), passing the `types.Filter` it returns where the squirrel map went; for C73.18, run its detect and re-point each match at the new render; for C73.19, run its detect, rename each twinned spelling to lowercase in the file that holds it, keeping one spelling per file and each layer's override, and review a renamed override's value, which takes effect once renamed |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -13347,7 +13347,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - ref: gaborage/go-bricks#2128 · `database/internal/builder/postgres.go` (`buildPostgreSQLUpsert`,
   `escapeQuestionMarks`)
 
-## E73 · v0.72.0 → v0.73.0 — an over-limit request body answers 413 `BODY_TOO_LARGE` instead of `INTERNAL_ERROR` or a typed `application/json` route's 400 + the server's keep-alive idle timeout defaults to 75s, above an ALB's 60s + `LogEvent.Err` drops a typed-nil pointer error instead of rendering it + a type-less migration tenant runs with the runner's vendor, and `MigrateAll` refuses a migrator identity it cannot deliver + each App binds its own seal runtime + every redial after an AMQP connection close is paced + the four messaging keys nothing ever read fail startup instead of being ignored + a zero `server.timeout.idle` takes the 75s default on every config door, and a negative fails startup + `WithFields` writes a typed-nil pointer error as `null` + a `\:<verb>` after a route parameter is an inline verb, its own route beside the bare parameter + each stream reattach wait is 3–8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects + a delivered-empty key is refused in any letter case + a credential URL in AMQP, streams and Oracle error text renders one posture
+## E73 · v0.72.0 → v0.73.0 — an over-limit request body answers 413 `BODY_TOO_LARGE` instead of `INTERNAL_ERROR` or a typed `application/json` route's 400 + the server's keep-alive idle timeout defaults to 75s, above an ALB's 60s + `LogEvent.Err` drops a typed-nil pointer error instead of rendering it + a type-less migration tenant runs with the runner's vendor, and `MigrateAll` refuses a migrator identity it cannot deliver + each App binds its own seal runtime + every redial after an AMQP connection close is paced + the four messaging keys nothing ever read fail startup instead of being ignored + a zero `server.timeout.idle` takes the 75s default on every config door, and a negative fails startup + `WithFields` writes a typed-nil pointer error as `null` + a `\:<verb>` after a route parameter is an inline verb, its own route beside the bare parameter + each stream reattach wait is 3–8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects + a route registered with echo's `RouteNotFound` or `RouteAny` method fails startup + a delivered-empty key is refused in any letter case + a root config key spelled other than its lowercase section name fails startup + a nil pointer to a list is the empty set, a list element is judged as its own operand, `JSONContains` refuses an expression, a Valuer at `In`/`NotIn` is asked before its shape is judged, and `InsertStruct`/`InsertFields` splice an expression field + the six unjudged comparator methods on `*database.QueryBuilder` are deleted + a credential URL in AMQP, streams and Oracle error text renders one posture + two config keys of one map that differ only by case fail startup, a mixed-case override of a framework default included
 
 - gist: a tenant whose database section sets no `type` got the runner's vendor for its URL, schema
   args, conf and duplicate-target key, but no `DB_*`/`ORACLE_*` variable, so Flyway connected with
@@ -13403,11 +13403,40 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   TLS ClientHello on a `rabbitmq-stream+tls://` URI. Under client v1.9.0 each wait is 3–8s, a lost
   super-stream consumer keeps its queued partitions detached until restart, and a TLS URI connects,
   verifying the dialed host against the process trust store (C73.11).
+- gist: every route door accepted echo's sentinel methods, so a module's `echo_route_not_found` at
+  a middleware-bearing group's `<prefix>/*` and the group's own catch-all replaced each other in
+  registration order, outside the duplicate-route check, and `echo_route_any` there answered every
+  method without the group middleware. Route admission on framework-built registrars now refuses
+  both, and `RouteConflict` gains `Reason` (C73.12). ADR-155.
 - gist: mapstructure decodes `Host:`, `allowedIPs:` or `Database:` by a case-insensitive
   fallback, but the delivered-empty checks looked only for the lowercase key, so a mixed-case empty
   `server.probes.host`, `debug.allowedips` or database identity key booted. Every spelling decode
-  accepts is now found and its own value read, and one empty spelling beside a value is refused
-  too (C73.13). ADR-156.
+  accepts is now found and its own value read; a second spelling of the key is a `[C73.19]`
+  twin (C73.13). ADR-156.
+- gist: mapstructure matched a root key to a framework section case-insensitively, but
+  `Config.Exists` and the observability bootstrap look a section up by its exact name, so
+  `Observability:` booted the no-op telemetry provider and `App:` was dropped beside the
+  lowercase `app` defaults, with no error. A root key that folds to a section name without being
+  spelled as it now fails startup on every load path, `go-bricks-migrate --source-config`
+  included from its routine go-bricks pin bump (C73.14). ADR-157.
+- gist: `In`/`NotIn` read a nil pointer to a slice or array as one NULL element, so `NotIn` over one
+  matched no row; `Eq`/`NotEq` bound a list's elements as written; an expression inside a list was
+  bound as a struct the driver rejected; and PostgreSQL `JSONContains` marshaled an expression and
+  crashed the process on a cyclic payload. A nil pointer to a list is now the empty set, so `NotIn`
+  over one renders `(1=1)` and matches every row; every list element is judged as its own operand,
+  `f` refusing an expression and `jf` splicing it; `JSONContains` refuses an expression and a
+  cyclic payload at build on both vendors; a `driver.Valuer` at `In`/`NotIn` is asked before its
+  Go shape is judged, its answer one element even when it is an empty slice, so `NotIn` over a
+  slice-shaped one can only narrow and `In` can match rows equal to an empty one's answer, while
+  one over pointers, interfaces or Valuers can widen or narrow either door, its answer replacing
+  the elements; and `InsertStruct`/`InsertFields` splice an expression field as `SetStruct` does
+  (C73.16).
+- gist: `*database.QueryBuilder` carried `Eq`, `NotEq`, `Lt`, `LtOrEq`, `Gt` and `GtOrEq`, which
+  quoted the column and returned a squirrel map holding the value as written, past the operand
+  judge: an expression was bound as an argument the driver rejected, a `driver.Valuer` was asked
+  before a nil check, and a list's elements were bound unjudged. Nothing in the framework called
+  them. They are deleted, and the `qb.Filter()` compare doors, which judge every operand, replace
+  them (C73.17). ADR-158.
 - gist: the AMQP dial error carried a credential URL's password as url.Parse rendered it, the
   stream start errors wrapped the client's error unmasked, the streams environment error kept a
   reason that can quote the password, and the Oracle DSN error kept the query and a lone username
@@ -13416,6 +13445,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the password and a non-empty query become `xxxxx`, the username stays only beside a non-empty
   password and only when it holds no `@`, `/`, `?` or `#`, the userinfo runs to the last `@`, and
   vendor text quoting or echoing dropped URL text as written renders `xxxxx` (C73.18). ADR-159.
+- gist: of two keys in one map node that differ only by case, mapstructure decoded the exact
+  spelling, or the first case-insensitive match a Go map yields, and dropped the other without a
+  word: a lowercase framework default beat an operator's `server: {Port: …}`, and a YAML key
+  beside the variable that reaches its lowercase spelling made two map entries. Such twins now
+  fail startup at any map node, from any layer, header and consumer maps included, naming every
+  spelling and never a value (C73.19). ADR-157.
 
 ### [C73.1] a type-less migration tenant runs with the runner's vendor, and an undeliverable migrator identity is refused · breaking · when: match
 
@@ -13869,6 +13904,62 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `messaging/streams/environment.go` (`reconnectBackOff`) · `messaging/streams/supervisor.go`
   (`superviseInterval`) · [streams.md](streams.md#a-lost-stream)
 
+### [C73.12] a route registered with echo's `RouteNotFound` or `RouteAny` method fails startup · breaking · when: match
+
+- detect: `git grep -nE 'RouteNotFound|RouteAny|echo_route_(not_found|any)' -- '*.go'`, keeping
+  hits passed as the method to `Add` on a `server.RouteRegistrar` (`ModuleGroup()`, `RootGroup()`
+  or a registrar that `Group` returned) or to `server.RegisterHandler`. A method computed at
+  runtime counts too, so also read every `Add(` or `RegisterHandler(` whose method is neither a
+  string literal nor an `http.Method*` constant. Separately, for the compile break:
+  `git grep -nE 'server[.]RouteConflict[{]' -- '*.go'`, keeping unkeyed literals.
+- scope: every go-bricks route door on a `server.Server`: `RouteRegistrar.Add` on `ModuleGroup()`,
+  `RootGroup()` and every registrar `Group` returns, and `server.RegisterHandler` on one of those
+  registrars, which the typed helpers (`server.GET`, `server.POST`, …) call with a fixed HTTP
+  method. `RegisterHandler` given a registrar the framework did not build (a test fake) skips
+  admission. **Unchanged**: echo's
+  own group catch-alls, which `Group(prefix, mw...)` and `Use` register at `<prefix>` and
+  `<prefix>/*` and which still run the group's middleware on unmatched sub-paths (`[C51.1]`);
+  custom non-standard methods such as WebDAV-style ones; duplicate detection and its error text;
+  a route registered outside a group at a path under its prefix (`GET <prefix>/*` on
+  `ModuleGroup()`), which is admitted and skips that group's middleware, as before (echo serves it
+  ahead of the group's catch-all), so a route that needs a group's gate must register on that
+  group.
+- gate: match = a detect hit. no-match = no hit.
+- before (v0.72.0): every door accepted either sentinel. `echo_route_not_found` at a
+  middleware-bearing group's `<prefix>/*` replaced the group's catch-all when registered after the
+  group, so the module handler answered unmatched sub-paths without the group middleware, and the
+  group replaced it when registered before; bare `<prefix>` stayed on the group's catch-all.
+  `echo_route_any` at that template answered every method, in either order, without the group
+  middleware. Neither reached the duplicate-route check, and each wrote a route descriptor with the
+  sentinel as its method, which `PostRegisterRoutes`, the `server.logroutes` log and OpenAPI saw.
+- after: a registration through a registrar the framework built is refused, never added and never
+  described (`RegisterHandler` given a test-fake registrar has no admission step). `server.Start`
+  fails, and so does app startup before `PostRegisterRoutes` when the server reports
+  `RouteConflicts()` (the framework's does), with a `*server.DuplicateRouteError`
+  (`errors.Is(err, server.ErrDuplicateRoute)` holds) whose conflict carries `Reason`
+  `server.RouteConflictReasonReservedMethod`:
+
+  ```text
+  route registration refused (1 conflict(s))
+  echo_route_not_found /partner/v2/* — reserved engine method, refused: notFound (github.com/example/partner)
+  ```
+
+  `RouteConflict` gains `Reason`. Every duplicate carries `server.RouteConflictReasonDuplicate`,
+  and an error holding only duplicates reads as before.
+- apply: delete the registration. Per-module custom 404 handlers are unsupported, and go-bricks
+  provides no replacement: an unmatched path answers the framework's own 404, after the group
+  middleware under a middleware-bearing group. Where an `echo_route_any` route served real
+  requests, register each HTTP method it served. Key every unkeyed `server.RouteConflict{...}`
+  literal (typically a test fake's `RouteConflicts()`), and set `Reason` in any literal you build:
+  an empty one renders with the refusal head, not as a duplicate.
+- verify: `srv.RouteConflicts()` is empty after the modules register, so `server.Start` refuses
+  nothing; `GET <prefix>/unknown` under each middleware-bearing group answers 404 with that
+  group's middleware applied.
+- ref: gaborage/go-bricks#2222 · [ADR-155](adr_155_reserved_engine_methods_refused.md) ·
+  [ADR-124](adr_124_server_level_duplicate_route_refusal.md) · `server/route_conflicts.go`
+  (`RouteConflictReason`, `routeAdmission.claim`, `DuplicateRouteError`) ·
+  [startup_defaults.md](startup_defaults.md#duplicate-route-detection)
+
 ### [C73.13] a delivered-empty key is refused in any letter case · breaking · when: match
 
 - detect: the keys below in every YAML file a deployment loads, nested or flat-dotted, with an
@@ -13910,12 +14001,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   retired messaging keys of `[C73.7]` were folded with `strings.ToLower`, which misses U+017F for
   `s`.
 - after: each fails configuration resolution as its lowercase spelling does: a `config_invalid`
-  error with `Field` `server.probes.host` or `debug.allowedips` and "delivered empty", or
+  error with `Field` `server.probes.host` and "delivered empty", or
   `database identity field(s) delivered empty: [<lowercase key path>]` in root, named and tenant
-  sections. Two spellings of one of these keys, one of them empty or null, are refused on every run,
-  also in a database section that is otherwise configured. `allowedIPs: []` still clears the
-  allowlist deliberately. A retired messaging key spelled with a Unicode fold is refused as
-  `[C73.7]` describes.
+  sections. Two spellings of one of these keys are refused at decode as `[C73.19]` twins, also
+  in a database section that is otherwise configured, and so is every non-lowercase spelling of
+  `debug.allowedips` (`allowedIPs:`), which always sits beside its lowercase framework default; a
+  root `Database:` is refused as `[C73.14]`. `allowedips: []` still clears the allowlist
+  deliberately. A
+  retired messaging key spelled with a Unicode fold is refused as `[C73.7]` describes.
 - apply: for the delivered-empty keys, lowercase the key and give it a value, or remove it, and
   delete any second spelling of the same key. For a retired messaging key, remove it per
   `[C73.7]`: lowercasing it does not make it valid.
@@ -13924,6 +14017,279 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `config/source.go` (`Config.deliveries`, `pathMatches`) · `config/delivered_empty.go`
   (`validateNoDeliveredEmptyKeys`) · `config/database_section.go`
   (`validateNoDeliveredEmptyDatabase`)
+
+### [C73.14] a root config key spelled other than its lowercase section name fails startup · breaking · when: match
+
+- detect: a root key, in every file and map the framework decodes, that case-folds to a framework
+  section name (`app`, `server`, `database`, `databases`, `cache`, `log`, `messaging`,
+  `multitenant`, `debug`, `source`, `scheduler`, `outbox`, `inbox`, `keystore`, `auth`,
+  `observability`) without being spelled as it:
+
+  ```bash
+  N='app|server|databases?|cache|log|messaging|multitenant|debug|source|scheduler|outbox|inbox|keystore|auth|observability'
+  # YAML in tracked, untracked and gitignored files (a rendered config.production.yaml) and templates:
+  # a root key, plain (App:) or quoted ("App":), not spelled lowercase
+  git grep --untracked --no-exclude-standard -niE "^[\"']?($N)[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl' | grep -vE ":[0-9]+:[\"']?($N)[\"']?[[:space:]]*:"
+  # YAML: a root flow map ({App: {name: orders}}); read each hit's root keys
+  git grep --untracked --no-exclude-standard -niE "^\{([^#]*[{,])?[[:space:]]*[\"']?($N)[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl'
+  # Go: a config.LoadFromMap map key, plain ("App") or dotted ("App.name"), in a literal or an index assignment
+  git grep -noiE "\"($N)(\.[^\"]*)?\"[[:space:]]*:|\[\"($N)(\.[^\"]*)?\"\][[:space:]]*=" -- '*.go' | grep -vE ":\[?\"($N)(\.[^\"]*)?\"\]?[[:space:]]*[:=]"
+  ```
+
+  Keep a YAML hit only in a file a deployment or a `go-bricks-migrate --source-config` run
+  actually loads, rendered from its template where it has one, and a Go hit only where the key sits
+  at the root of a map handed to `config.LoadFromMap`. A Unicode fold such as U+017F for `s`
+  (`meſſaging:`), or a map key built at run time, is refused too and escapes the greps, so the gate
+  runs the verify step on every loaded configuration. Environment variables need no detect:
+  `envVarToKey` lowercases every one.
+- scope: `config.Load` and `config.LoadFromMap`, so every service built through `app` and, from
+  its routine go-bricks pin bump, every `go-bricks-migrate --source-config` run. **Unchanged**: environment variables; a root key that
+  folds to no section (`Orders:`, `custom:`); a lone mixed-case key below the root, such as `Keys`
+  in `keystore: {Keys: …}`, which still decodes through mapstructure's case-insensitive match; a
+  flat-dotted YAML key such as `App.name:` under `config.Load`, which keeps it as one literal root
+  key that neither decode nor this check reads, in any case (`go-bricks-migrate --source-config`
+  already refuses a top-level dotted key before decoding: write it nested, or remove it); a
+  hand-built `*config.Config` handed to `app.NewWithConfig` or `Builder.WithConfig`, which is
+  never decoded; a dynamic tenant source; every signature and config key.
+- gate: match = a detect hit, or the verify step failing on any loaded configuration. no-match = no
+  detect hit, and the verify step passing on every configuration a deployment, a test or a
+  `go-bricks-migrate --source-config` run loads (each rendered file, each `LoadFromMap` caller's
+  test). Run the verify step against the target framework version, in a branch or staging build
+  that carries the bump, since the current version accepts every spelling; run it even with no
+  hit.
+- before (v0.72.0): mapstructure decoded such a key into its section by `strings.EqualFold`, but
+  `Config.Exists`, the getters and the observability bootstrap name a section by its exact
+  spelling. `Observability:` booted the no-op telemetry provider, because the bootstrap's
+  `Exists("observability")` answered false. `App:` was dropped, because the framework defaults
+  seed a lowercase `app` and mapstructure takes an exact match first, so `App: {name: orders}` ran
+  as `gobricks-service`. A section with no defaults (`Database:`) decoded into the struct while
+  every exact-name lookup read it as absent. Nothing logged or failed.
+- after: decode refuses the tree before it unmarshals, with one `config_invalid` error per
+  section, every wrong spelling of it sorted:
+  `config_invalid: app is spelled App; framework section names are lowercase: rename App to app`.
+  The error names keys only, never a value. `go-bricks-migrate --source-config` reports it as
+  `decode config "<path>": …`.
+- apply: rename each hit to its lowercase section name. First review the block's values: they
+  were ignored, or read by the struct decode alone, and take effect once renamed, so a renamed
+  `App:` applies the name and env it sets, and a renamed `Observability:` turns telemetry on with
+  its endpoint. A dotted `LoadFromMap` key is renamed at its first segment: `"App.name"` becomes
+  `"app.name"`, which `LoadFromMap` unflattens into the `app` section.
+  Rename a block in the file that holds it. Where the same file already holds the lowercase
+  section, merge the two blocks into one; where another layer holds it, keep each layer's block,
+  so an overlay still overrides the base.
+- verify: on the target version, `config.Load()` succeeds, `cfg.Exists("<section>")` is true for
+  each renamed section, and each renamed key reads back its effective value: the one a higher
+  layer (an overlay, or an environment variable such as `APP_NAME`) sets where it sets one,
+  otherwise the renamed block's.
+- ref: gaborage/go-bricks#2219 · [ADR-157](adr_157_config_key_spelling_refused.md) ·
+  `config/key_spelling.go` (`checkKeySpelling`, `misspelledSections`) · `config/config.go`
+  (`configSource.decode`, `configSections`)
+
+### [C73.16] a nil pointer to a list is the empty set, so `NotIn` over one matches every row; a list element is judged as its own operand; and `JSONContains` refuses an expression · silent-behavior · when: match
+
+- detect: (a) `git grep -nE '\.NotIn\(' -- '*.go'`, keeping the calls on a `FilterFactory` or a
+  `JoinFilterFactory` (`qb.Filter()`, `qb.JoinFilter()`) whose operand is a pointer to a slice or
+  array that can be nil, above all in the WHERE of a `qb.Update` or `qb.Delete`, where the
+  statement now affects every row instead of none; (b)
+  `git grep -nE '\.(In|NotIn|Eq|NotEq)\(' -- '*.go'`, keeping the calls on either factory whose
+  list operand holds a `RawExpression` or a pointer to one, and the `Eq`/`NotEq` calls whose list
+  holds a pointer or a `driver.Valuer` element; (c) `git grep -nE 'JSONContains\(' -- '*.go'`,
+  keeping the calls whose payload is, or points to, a `RawExpression`; (d) `In`/`NotIn` calls whose
+  operand is a slice-shaped `driver.Valuer` passed by value, above all one that can be empty, nil
+  or answer NULL, and golden SQL or tests that assert `col = ?`, `col <> ?`, `col IS NULL`,
+  `col IS NOT NULL`, `(1=0)` or `(1=1)` for one. A slice-typed `pq` array built inline is found by
+  `git grep -nE '\.(In|NotIn)\(.*pq\.(Bool|Bytea|Float32|Float64|Int32|Int64|String)Array' -- '*.go'`,
+  and each variable or field of those types reaching either door is kept too. Also keep the
+  `In`/`NotIn` calls whose operand is a `driver.Valuer` over a slice of pointers, interfaces or
+  Valuers; (e) `InsertStruct`/`InsertFields` calls on a struct with a `dbtypes.RawExpression`
+  field, or an `any` field that can hold one.
+- scope: `f.In`, `f.NotIn`, `jf.In` and `jf.NotIn`; `f.Eq`, `f.NotEq`, `jf.Eq` and `jf.NotEq` given
+  a list; `f.JSONContains` and `qb.BuildJSONContains` on PostgreSQL and Oracle; `InsertStruct` and
+  `InsertFields`.
+  1. **Nil pointer to a list.** At `In`/`NotIn`, a nil pointer whose pointee, through every pointer
+     level, is a slice or array (`(*[]int)(nil)`) is the empty set, as an untyped nil is: `In`
+     renders `(1=0)`, which matched no rows before and after, and `NotIn` renders `(1=1)`, which
+     now MATCHES EVERY ROW where `c NOT IN (NULL)` matched none. Reached through an interface
+     (`*any` holding a nil `*[]int`) it is the same empty set. A nil pointer to a `[]byte` or to a
+     `driver.Valuer` type (`*uuid.UUID`, a pointer to a slice-typed Valuer) is not a list: it stays
+     one NULL element, as its non-nil form is one element.
+  2. **Expression element.** A `RawExpression` inside a list, at `In`/`NotIn` and at `Eq`/`NotEq`
+     given a list, follows its family's scalar rule. `f` refuses it, aliased or blank included,
+     with `resolving element <i> of the <op> operand: a RawExpression is not allowed as a Filter
+     operand: <op>`, matching `dbtypes.ErrExpressionInFilter`. `jf` splices it in place,
+     `c IN ($1,UPPER(x),$2)` with args `[1, nil]`: the other elements bind as written, and a
+     `squirrel.Sqlizer` element beside it stays one bound argument. `jf` refuses an aliased element
+     with `dbtypes.ErrAliasInPredicate` and a blank one with the `Validate` error, under the same
+     element wrap. At `Eq`/`NotEq` the list still renders `IN`/`NOT IN`, but `<op>` names the
+     door's operator, `=` or `<>`.
+  3. **`Eq`/`NotEq` elements.** A list operand's elements are resolved the way `In` resolves them
+     (#1209): a nil-pointer element binds NULL, a `driver.Valuer` element is asked once at build
+     and its answer bound, and a pointer element binds its element.
+  4. **`JSONContains` payload.** A `RawExpression`, a pointer to one or an aliased one is refused
+     with `dbtypes.ErrExpressionInFilter` (`a RawExpression is not allowed as a Filter operand:
+     JSONContains`) on both vendors, judged before any vendor renders. A cyclic top-level pointer
+     chain (`var v any; v = &v`) fails `ToSQL()` with `resolving the JSONContains operand: operand
+     pointer chain is cyclic` on both vendors; a cycle nested inside the payload is still
+     `json.Marshal`'s. Every other payload is marshaled as written: a
+     `driver.Valuer` is not asked, and a nil pointer marshals to `null`.
+  5. **`driver.Valuer` at `In`/`NotIn`.** A Valuer is asked once, at build, before its Go shape is
+     judged, and its answer is judged in its place: a driver value is one element, as a struct
+     Valuer such as `sql.NullString`'s already was. A slice-shaped Valuer (`type V []int` with a
+     `Value()`) now renders `c IN ($1)`/`c NOT IN ($1)` bound to its answer, whatever its length
+     or element type.
+     v0.72.0 judged its length first: an empty or nil one rendered the empty-set constant, its
+     `Value()` never called, and squirrel asked a non-empty one, rendering `c = $1`, or `c IS NULL`
+     for a NULL answer. Only case 1 keeps its rows:
+
+     | # | slice-shaped Valuer | `In`: v0.72.0 → v0.73.0 | `NotIn`: v0.72.0 → v0.73.0 |
+     | --- | --- | --- | --- |
+     | 1 | non-empty, answers `x` | `c = $1` → `c IN ($1)`, `[x]`: same rows | `c <> $1` → `c NOT IN ($1)`, `[x]`: same rows |
+     | 2 | empty, answers `x` | `(1=0)` → `c IN ($1)`, `[x]`: no row → rows equal to `x` | `(1=1)` → `c NOT IN ($1)`, `[x]`: every row → rows not equal to `x`, NULL rows dropping out |
+     | 3 | non-empty, answers NULL | `c IS NULL` → `c IN ($1)`, `[nil]`: the NULL rows → none | `c IS NOT NULL` → `c NOT IN ($1)`, `[nil]`: the non-NULL rows → none |
+     | 4 | empty or nil, answers NULL | `(1=0)` → `c IN ($1)`, `[nil]`: none → none | `(1=1)` → `c NOT IN ($1)`, `[nil]`: every row → none |
+
+     In the four tabled cases `NotIn` only narrows; `In` can widen to rows equal to the Valuer's
+     answer (case 2) or narrow (case 3). The common one is a `lib/pq` slice array passed by value
+     (`pq.Int64Array`, `pq.StringArray`): an empty one answers `{}`, so `In` matches rows equal to
+     `'{}'` on a text or array column and fails with a type error on an integer one, and a nil one
+     answers NULL (case 4). `pq.Array(…)` returns a pointer to one (or a `GenericArray` struct),
+     which v0.72.0 already asked, so it does not move. A Valuer over a slice of pointers,
+     interfaces or Valuers (`type V []sql.NullString` with a `Value()`) is asked, one element,
+     where v0.72.0 expanded its underlying slice, dereferencing each pointer and asking each
+     element Valuer, its own `Value()` never called. Its answer replaces the elements, so either
+     door can widen or narrow: `NotIn` over pointers to 1 and 2 rendered `c NOT IN ($1,$2)` with
+     `[1, 2]` and now binds the answer, so rows equal to 1 or 2 can match. A plain
+     `[]sql.NullString`, with no `Value()` of its own, is a list as before, each element asked.
+  6. **`InsertStruct`/`InsertFields`.** A field holding a `RawExpression` is spliced into VALUES as
+     `SetStruct` splices one, an aliased one refused with `dbtypes.ErrAliasInValue` and a blank one
+     with its `Validate` error, each labeled by the column (`c: …`); a pointer to an expression
+     still binds.
+
+  **Supersedes**, for a service crossing both E72 and E73, the parts of `[C72.32]`, `[C72.33]` and
+  `[C72.34]` that list a `RawExpression` inside a list, and `f.JSONContains`, as unchanged; those
+  atoms stay as released. **Unchanged**: a nil pointer to a scalar, a nil `*sql.NullString` and a
+  non-slice Valuer reporting NULL (`sql.NullString{}`), each still one NULL element (`c IN (?)`
+  with `[nil]`); an untyped nil and an empty plain slice or array, still `(1=0)`/`(1=1)`; the
+  spelling of a list at `Eq`/`NotEq` (`c IN (…)`, `(1=0)`/`(1=1)` when empty). An empty, nil or
+  NULL-answering slice-shaped Valuer is not among them: see (5).
+- gate: match = a detect hit. no-match = no hit. Only (a) and three of (d)'s operands change which
+  rows a statement that ran on v0.72.0 touches: the Valuer over pointers, and a slice-shaped
+  Valuer that is empty or nil (cases 2 and 4) or answers NULL (case 3); a non-empty one answering
+  a value (case 1) moves only the SQL text. (b) moves args, or a struct the driver rejected at
+  exec; (c) moves an expression's JSON, which no row was meant to contain, and a cyclic payload,
+  which has no population on v0.72.0: it crashed the process.
+- before (v0.72.0): (1) `NotIn` over `(*[]int)(nil)` rendered `c NOT IN ($1)` with `[nil]`, which
+  matched no row, and `In` rendered `c IN ($1)` with `[nil]`; (2) both families bound an expression
+  element as the `RawExpression` struct (`c IN ($1,$2)` with `[1, {UPPER(x) }]`), and the driver
+  rejected it at exec; (3) `Eq`/`NotEq` handed a list to squirrel untouched, so every element bound
+  as written, and a nil pointer to a `driver.Valuer` element reached the driver unresolved, where a
+  pointer-receiver `Value()` that dereferences panics at exec (#1209); (4) PostgreSQL marshaled an
+  expression payload and bound `{"SQL":…,"Alias":…}` as `$1::jsonb`, and Oracle returned its "not
+  implemented" error. A cyclic payload killed the process on PostgreSQL with
+  `fatal error: stack overflow` inside `json.Marshal`, an unrecoverable crash, not a panic
+  `recover()` catches. Request decoding cannot produce such a value, so it is not reachable from
+  input; (5) a non-empty slice-shaped Valuer rendered `c = $1`/`c <> $1`, or
+  `c IS NULL`/`c IS NOT NULL` for a NULL answer, squirrel asking it, an empty or nil one rendered
+  `(1=0)`/`(1=1)`, its `Value()` never called, and a Valuer over `[]*int` rendered `c IN ($1,$2)`
+  bound to the dereferenced elements, its `Value()` never called; (6) `InsertStruct`/`InsertFields`
+  bound an expression field as the struct, which the driver rejected at exec.
+- after: (1) `In` renders `(1=0)` and `NotIn` `(1=1)`, with no argument, so
+  `qb.Delete("t").Where(f.NotIn("c", (*[]int)(nil)))` renders `DELETE FROM t WHERE (1=1)`; (2) `f`
+  returns the element error and `jf` renders `c IN ($1,UPPER(x),$2)` with `[1, nil]`; (3)
+  `f.Eq("c", []any{(*sql.NullString)(nil), 2})` renders `c IN ($1,$2)` with an untyped nil first;
+  (4) `ToSQL()` returns the refusal or the cyclic error on both vendors, on Oracle in place of its
+  "not implemented" error, and every other payload binds as it did; (5) every slice-shaped
+  Valuer, empty, nil or over pointers, renders `c IN ($1)`/`c NOT IN ($1)` bound to its answer,
+  `[nil]` for NULL; (6) `qb.InsertStruct("t", &row)` with `row.C = qb.MustExpr("NOW()")` renders
+  `INSERT INTO t (c,id) VALUES (NOW(),$1)`.
+- apply: for (a), guard the nil case before building, or pass an explicit list. Move an `f`
+  expression element to a `jf` door, or to `f.Raw` with its `// SECURITY:` annotation, and drop the
+  alias from a `jf` one. Retire a golden file or contract test that pins an `Eq`/`NotEq` list's
+  args to the pointer or the wrapper. For (d), move each pinned `col = ?`/`col <> ?`,
+  `IS NULL`/`IS NOT NULL` or `(1=0)`/`(1=1)` to `col IN (?)`/`col NOT IN (?)`; where the Valuer
+  can be empty, nil or answer NULL, guard that case before building. To test a scalar column's
+  membership in the array, pass the plain Go slice (`[]int64(arr)`), which the door expands and
+  renders as the empty set when empty, or on PostgreSQL write `col = ANY(?)` through `f.Raw` with
+  its `// SECURITY: Manual SQL review completed - …` annotation. To compare an array column with
+  the whole array, keep the Valuer as one operand at `Eq`/`NotEq`, which renders `col = ?`/
+  `col <> ?` (`IS NULL`/`IS NOT NULL` for a NULL answer). For (e), drop the alias from an
+  expression field, or set the column with `SetExpr` after an `Update`.
+- verify: on PostgreSQL, `qb.Delete("t").Where(qb.Filter().NotIn("c", (*[]int)(nil))).ToSQL()`
+  returns `DELETE FROM t WHERE (1=1)`;
+  `qb.Select("t.id").From("t").JoinOn("u", qb.JoinFilter().In("u.c", []any{1, qb.MustExpr("UPPER(x)"), nil})).ToSQL()`
+  returns `SELECT t.id FROM t JOIN u ON u.c IN ($1,UPPER(x),$2)` with args `[1 <nil>]`; and, on
+  Oracle too, `qb.Select("*").From("t").Where(qb.Filter().JSONContains("c", qb.MustExpr("x"))).ToSQL()`
+  returns an error matching `dbtypes.ErrExpressionInFilter`.
+- ref: `database/internal/builder/helpers.go` (`judgeList`, `judgeElements`, `judgePayload`,
+  `nilList`) · [database.md](database.md) (operand contract)
+
+### [C73.17] the six unjudged comparator methods on `*database.QueryBuilder` are deleted; use the `qb.Filter()` compare doors · compile-break · when: match
+
+- detect: `git grep -nE '\.(Eq|NotEq|Lt|LtOrEq|Gt|GtOrEq)([^A-Za-z0-9_]|$)' -- '*.go'`, keeping
+  only calls and method values (`eq := qb.Eq`) whose receiver is a `*database.QueryBuilder`: a
+  `database.NewQueryBuilder(…)` value, or a variable or field of that type. Drop the
+  `qb.Filter()`/`qb.JoinFilter()` factories (`f.Eq`, `jf.Eq`) and squirrel's own types. Every
+  `.LtOrEq` or `.GtOrEq` hit not naming squirrel's map type (`squirrel.LtOrEq{…}`) is one, since
+  the Filter doors spell them `Lte`/`Gte`. To shortlist the files that hold such a receiver:
+  `git grep -nlE 'database\.NewQueryBuilder\(|\*database\.QueryBuilder' -- '*.go'`. After the
+  bump, `go vet ./...`, which also type-checks test files, names the first call left in each
+  package (`qb.Eq undefined (type *database.QueryBuilder has no field or method Eq)`).
+- scope: `Eq`, `NotEq`, `Lt`, `LtOrEq`, `Gt` and `GtOrEq` on `*database.QueryBuilder`, promoted
+  from the embedded internal builder. **Unchanged**: `types.QueryBuilderInterface` and
+  `testing/mocks`, which never carried them; every `qb.Filter()` and `qb.JoinFilter()` door;
+  squirrel's own `Eq`/`NotEq`/`Lt`/`LtOrEq`/`Gt`/`GtOrEq` map types; SQL rendered by any code
+  that still compiles.
+- gate: match = a detect hit. no-match = no hit.
+- before (v0.72.0): `qb.Eq(column, value)` validated and quoted the column (ADR-082) and returned
+  `(squirrel.Eq, error)` holding `{quoted: value}`; the other five returned `squirrel.NotEq`,
+  `squirrel.Lt`, `squirrel.LtOrEq`, `squirrel.Gt` and `squirrel.GtOrEq` the same way. The value
+  skipped the operand judge, so squirrel bound a `RawExpression` as an argument the driver
+  rejected at exec, asked a `driver.Valuer` before checking for a nil pointer (a nil pointer to
+  one whose `Value()` dereferences its receiver panicked at build), and bound a list's elements as
+  written. The map types have no `ToSQL`, so the result could not go to the framework's `Where`;
+  it served a hand-built squirrel builder or `Having`.
+- after: the six names do not exist, and a call fails to compile.
+- apply: replace `qb.Eq(c, v)` with `qb.Filter().Eq(c, v)`, and likewise `NotEq`, `Lt` and `Gt`;
+  `LtOrEq` becomes `Lte` and `GtOrEq` becomes `Gte`. The result is a `types.Filter`, not a map.
+  Pass it to `Where`, or wherever the map went, since a `types.Filter` is a `squirrel.Sqlizer`. Code
+  that indexed or merged the map (`cond[col]`, adding keys to one `squirrel.Eq`) composes filters
+  with `f.And(…)` instead. Resolve a key assigned twice first, keeping the last value as the map
+  did, since `f.And` keeps both conditions. A bad column is no longer a second return value: it
+  fails the enclosing statement's `ToSQL()`, so drop the `err` check at the call and handle the
+  build error. A pointer or `driver.Valuer` operand is resolved when the filter is created, not
+  when the statement renders as squirrel did, so rebuild a reused filter after changing what the
+  pointer or a stateful Valuer holds.
+  The operand is now judged: move a `RawExpression` to a `jf` door, or to `f.Raw` with its
+  `// SECURITY:` annotation, since `f` refuses it with `dbtypes.ErrExpressionInFilter`. A list at
+  `Eq`/`NotEq` still renders `IN`/`NOT IN`, with each element judged. Squirrel dereferenced one
+  pointer level at `Eq`/`NotEq` and none at the ordering doors, and asked a Valuer before checking
+  for a nil pointer; the judge resolves every pointer level first. Every operand whose rendering
+  moves (v0.72.0 `qb.*` against v0.73.0 `qb.Filter()`, on PostgreSQL):
+
+  | # | operand | door | v0.72.0 `qb.*` | v0.73.0 `qb.Filter()` | rows |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | `**int` to a nil `*int` | `Eq` | `c = $1`, `[(*int)(nil)]`, sent as NULL | `c IS NULL` | none → the NULL rows: **widens**, an `Update`/`Delete` hazard |
+  | 2 | `**int` to a nil `*int` | `NotEq` | `c <> $1`, `[(*int)(nil)]`, sent as NULL | `c IS NOT NULL` | none → every non-NULL row: **widens**, an `Update`/`Delete` hazard |
+  | 3 | nil pointer to a value-receiver Valuer (`(*sql.NullString)(nil)`) | `Eq` / `NotEq` | panicked at build | `c IS NULL` / `c IS NOT NULL` | no statement → the NULL rows / every non-NULL row: **widens**, an `Update`/`Delete` hazard |
+  | 4 | nil pointer at any level (`(*int)(nil)`, `**int` to a nil `*int`, `(*[]int)(nil)`) | `Lt`/`Lte`/`Gt`/`Gte` | `c < $1` bound the pointer, sent as NULL | `ErrOrderingOperandNotComparable` at build | none → no statement |
+  | 5 | nil pointer to a value-receiver Valuer | `Lt`/`Lte`/`Gt`/`Gte` | panicked at build | `ErrOrderingOperandNotComparable` at build | no statement → no statement |
+  | 6 | untyped nil, a Valuer answering NULL, or a list (empty or nil included) | `Lt`/`Lte`/`Gt`/`Gte` | squirrel's `cannot use null …` or `cannot use array or slice …` | `ErrOrderingOperandNotComparable` at build | no statement → no statement; the error changes |
+  | 7 | pointer to a list (`&[]int{1, 2}`) | `Lt`/`Lte`/`Gt`/`Gte` | `c < $1` bound the pointer to the list | `ErrOrderingOperandNotComparable` at build | the list as one argument → no statement |
+  | 8 | `*int` to a value, or `**int` to a `*int` to one | `Lt`/`Lte`/`Gt`/`Gte`; the `**int` also `Eq`/`NotEq` | `c < $1` bound the pointer | `c < $1` bound the value | same rows; a pinned argument moves |
+
+  **Unchanged**: a scalar at every door; at `Eq`/`NotEq`, an untyped nil, a nil `*int`, a `*int`
+  to a value, a nil pointer to a slice, a nil pointer-receiver Valuer, a Valuer answering NULL,
+  and a list, an empty or nil slice or a pointer to a list. Rows 1–3 touch rows under `Update` or
+  `Delete` that the old call left alone, and rows 4–5 turn a no-match into a build error: guard a
+  pointer that can be nil at any level before building, and match the build error with
+  `errors.Is(err, dbtypes.ErrOrderingOperandNotComparable)`, not squirrel's text.
+- verify: `go vet ./...` passes and the detect returns no hit; on Oracle,
+  `database.NewQueryBuilder("oracle").Filter().Eq("number", "12345").ToSQL()` returns
+  `"number" = ?` with args `[12345]`.
+- ref: [ADR-158](adr_158_unjudged_qb_comparators_deleted.md) ·
+  `database/internal/builder/filter.go` (`Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`) ·
+  `database/internal/builder/predicate_shells.go` (`comparePredicate`) ·
+  [database.md](database.md) (operand contract)
 
 ### [C73.18] a credential URL in AMQP, streams and Oracle error text and log fields renders one posture · silent-behavior · when: match
 
@@ -14007,6 +14373,88 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `RedactForLog`, `RedactError`) · `messaging/amqp_client.go` (`connect`, `handleReconnect`) ·
   `messaging/manager.go` (`createAMQPClient`) · `messaging/streams/manager.go` (`Start`,
   `safeEnvError`, `safeStartError`) · `database/oracle/connection.go` (`redactDSNError`)
+
+### [C73.19] two config keys of one map that differ only by case fail startup, a mixed-case override of a framework default included · breaking · when: match
+
+- detect: every config key holding an upper-case letter, then the ones that have a twin.
+
+  ```bash
+  # YAML in tracked, untracked and gitignored files (a rendered config.production.yaml) and templates:
+  # every key holding an upper-case letter, at any depth, inside sequences too
+  git grep --untracked --no-exclude-standard -nE "^[[:space:]]*(- )?[\"']?[^\"'#:[:space:]]*[A-Z][^\"'#:[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl'
+  # YAML flow maps: the same keys written inline, server: {Port: 9999}
+  git grep --untracked --no-exclude-standard -nE "[{,][[:space:]]*[\"']?[^\"'#:,{}[:space:]]*[A-Z][^\"'#:,{}[:space:]]*[\"']?[[:space:]]*:" -- '*.yaml' '*.yml' '*.tmpl'
+  # Go: maps handed to config.LoadFromMap; read each one's keys, a dotted one ("server.Port") by segment
+  git grep -n 'LoadFromMap' -- '*.go'
+  ```
+
+  Keep a hit only in a file or map a deployment, a test or a `go-bricks-migrate --source-config`
+  run actually loads, rendered from its template where it has one, and leave a root key that folds
+  to a section name to `[C73.14]`. A hit
+  matches when any of these holds for its path:
+  - its lowercase spelling is a framework default: on the current version,
+    `cfg, _ := config.LoadFromMap(nil)` answers `cfg.Exists("<lowercase path>")` true. That is
+    the common case: `server.Port`, `log.Level` and `debug.allowedIPs` all match.
+  - a sibling key in the same map node folds to it, in the same file or in another layer loaded
+    at the same path: `Host:` in `config.prod.yaml` over the base's `host:`, `Port` beside
+    `PORT`, a header `Authorization:` beside `authorization:`. A Unicode fold such as U+017F for
+    `s` counts and escapes the grep; the verify step catches it.
+  - an environment variable reaches its lowercase spelling: the path upper-cased with each `.`
+    as `_`, such as `SERVER_PROBES_PORT` for `server.probes.Port`, or
+    `OBSERVABILITY_TRACE_HEADERS_AUTHORIZATION` for a trace header `Authorization:` (likewise
+    `.metrics.` and `.logs.`). Search the deployment's env files and manifests for the bare name,
+    `grep -rnw '<VARIABLE>' k8s/ deploy/ .env* 2>/dev/null`, and keep a hit that sets it:
+    `<VARIABLE>=` in an env file, `name: <VARIABLE>` in a manifest.
+- scope: `config.Load` and `config.LoadFromMap`, at every map node of the merged tree, data-keyed
+  maps included (`observability.{trace,metrics,logs}.headers`, `custom.*`, keystore names) and
+  maps inside sequences; `go-bricks-migrate --source-config` from the first CLI release that pins
+  this framework version. **Unchanged**: a lone mixed-case key with no twin, which still decodes
+  through mapstructure's case-insensitive match (`server: {probes: {Port: 9090}}` with no
+  `SERVER_PROBES_PORT`); a lone header, which keeps its case; environment variables alone, which
+  are lowercased; a flat-dotted YAML key such as `server.Port:` under `config.Load`, which keeps
+  it as one literal root key that decode never reads, so it twins only with another spelling of
+  that same literal key (a dotted `LoadFromMap` key is unflattened and twins as a nested one does;
+  `go-bricks-migrate --source-config` already refuses a top-level dotted key before decoding); a
+  hand-built `*config.Config`, which is never decoded; a dynamic tenant source; every signature and
+  config key.
+- gate: match = a hit that meets one of the three conditions, or the verify step failing on any
+  loaded configuration. no-match = no hit has a twin, and the verify step passing on every
+  configuration a deployment, a test or a `go-bricks-migrate --source-config` run loads (each
+  rendered file with its variables, each `LoadFromMap` caller's test). Run the verify step
+  against the target framework version, in a branch or staging build that carries the bump,
+  since the current version accepts every spelling; run it even with no hit, since a Unicode
+  fold or a key built at run time escapes the greps.
+- before (v0.72.0): mapstructure took a key's exact spelling first, otherwise the first
+  `EqualFold` match a Go map yields, and nothing reported the spelling it dropped. A mixed-case
+  override of a defaulted key lost to the default: `server: {Port: 9999}` ran on the default port
+  and `log: {Level: debug}` at the default level. `debug: {allowedIPs: …}` decoded beside the
+  default `allowedips`, a list, `[]`, `""` or null alike. Two operator spellings of one key kept
+  one, possibly a different one per run. A YAML key beside the variable that reaches its
+  lowercase spelling, `server: {probes: {Port: 9090}}` with `SERVER_PROBES_PORT` or a header
+  `Authorization:` with `OBSERVABILITY_TRACE_HEADERS_AUTHORIZATION`, was two map entries.
+- after: decode refuses the tree before it unmarshals, with one `config_invalid` error per group
+  of twins, naming every spelling sorted and never a value:
+  `config_invalid: server.port is written in spellings that differ only by case: server.Port,
+  server.port (framework default); keys are lowercase: write it once as server.port (SERVER_PORT)`.
+  `(framework default)` marks a spelling no operator layer delivered at or under that path. The
+  variable is left out when the key does not round-trip through the environment mapping, or when
+  its path crosses a sequence (`orders.routes[0].name`).
+- apply: leave each file one lowercase spelling of the key. Where one file holds two spellings,
+  write the value you mean once under the lowercase key and delete the others. Where each layer
+  holds its own spelling, as an overlay's `Host:` over the base's `host:`, rename each to
+  lowercase in its own file and keep both, so the overlay still overrides the base; a mixed-case
+  override of a framework default is renamed in place. Renaming makes the value you wrote take
+  effect, so review it first: `server: {Port: 9999}` moves the listener, and a renamed
+  `allowedIPs` replaces the loopback default. For a YAML key beside its variable, lowercase the
+  YAML key; the variable overrides it, as a variable overrides any lowercase YAML key.
+- verify: on the target version, `config.Load()` succeeds with each environment's files and
+  variables, `config.LoadFromMap` with each caller's map, and each renamed key reads back its
+  effective value through `cfg.Int("server.port")`, `cfg.String("log.level")` and the like: the
+  one a higher layer (an overlay, or the variable that reaches it, such as `SERVER_PORT`) sets
+  where it sets one, otherwise the value you wrote.
+- ref: gaborage/go-bricks#2219 · [ADR-157](adr_157_config_key_spelling_refused.md) ·
+  `config/key_spelling.go` (`caseTwinErrors`, `caseTwinError`, `fromDefaults`) ·
+  `config/source.go` (`Config.deliveries`)
 
 ---
 

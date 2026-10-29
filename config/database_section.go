@@ -242,22 +242,21 @@ var pgTLSMandatorySSLModes = []string{sslModeRequire, sslModeVerifyCA, sslModeVe
 
 // validateNoDeliveredEmptyDatabase fails startup when any database section the
 // deployment consumes was delivered with only empty identity fields — the shape
-// ADR-047 could not see (ADR-051) — or, in a section that is configured, with one
-// identity key in two spellings of which either is empty (ADR-156). Presence is the
-// recorded delivery of the key by an operator layer (ADR-104) under any spelling
-// decode accepts, so it is naturally inert for hand-built Config literals (no
-// source) and for dynamic-source tenant configs (never loaded). Every offending
-// key is reported by its canonical spelling, not just the first: the error
-// promises "field(s)", and an operator who clears only the one named would hit
-// the same abort again. Sorted, so the startup error is deterministic.
+// ADR-047 could not see (ADR-051). Presence is the recorded delivery of the key by
+// an operator layer (ADR-104) under any spelling decode accepts (ADR-156), so it is
+// naturally inert for hand-built Config literals (no source) and for dynamic-source
+// tenant configs (never loaded). Every offending key is reported by its canonical
+// spelling, not just the first: the error promises "field(s)", and an operator who
+// clears only the one named would hit the same abort again. Sorted, so the startup
+// error is deterministic.
 func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 	var offending []string
 	_ = forEachDatabaseSection(cfg, func(sec section, db *DatabaseConfig) error {
-		configured := IsDatabaseConfigured(db)
+		if IsDatabaseConfigured(db) {
+			return nil
+		}
 		for _, k := range databaseIdentityKeys {
-			key := sec.path + "." + k
-			found := cfg.deliveries(key, false)
-			if (!configured && len(found) > 0) || (len(found) > 1 && anyDeliveredEmpty(found)) {
+			if key := sec.path + "." + k; cfg.delivered(key) {
 				offending = append(offending, key)
 			}
 		}

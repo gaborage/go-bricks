@@ -33,7 +33,7 @@ func TestRouteAdmissionRecordsDuplicate(t *testing.T) {
 	require.Len(t, conflicts, 1)
 	assert.Equal(t, RouteConflict{
 		Method: http.MethodGet, Path: "/users", FirstPath: "/users",
-		First: first, Duplicate: dup,
+		First: first, Duplicate: dup, Reason: RouteConflictReasonDuplicate,
 	}, conflicts[0])
 
 	// Different methods, same path — no conflict.
@@ -116,6 +116,17 @@ func TestRouteConflictTypedAndRawBothTracked(t *testing.T) {
 }
 
 func TestDuplicateRouteError(t *testing.T) {
+	getOneDuplicate := RouteConflict{
+		Method: http.MethodGet, Path: "/one", FirstPath: "/one",
+		First:     RouteRegistrant{HandlerName: "a", Package: "pkg/a"},
+		Duplicate: RouteRegistrant{HandlerName: "b", Package: "pkg/b"},
+		Reason:    RouteConflictReasonDuplicate,
+	}
+	reservedConflict := RouteConflict{
+		Method: echo.RouteNotFound, Path: "/partner/v2/*",
+		Duplicate: RouteRegistrant{HandlerName: "b", Package: "pkg/b"},
+		Reason:    RouteConflictReasonReservedMethod,
+	}
 	tests := []struct {
 		name      string
 		conflicts []RouteConflict
@@ -126,15 +137,12 @@ func TestDuplicateRouteError(t *testing.T) {
 		{
 			name: "two_conflicts",
 			conflicts: []RouteConflict{
-				{
-					Method: http.MethodGet, Path: "/one", FirstPath: "/one",
-					First:     RouteRegistrant{HandlerName: "a", Package: "pkg/a"},
-					Duplicate: RouteRegistrant{HandlerName: "b", Package: "pkg/b"},
-				},
+				getOneDuplicate,
 				{
 					Method: http.MethodPost, Path: "/two",
 					First:     RouteRegistrant{HandlerName: "c", Package: "pkg/c"},
 					Duplicate: RouteRegistrant{HandlerName: "d", Package: "pkg/d"},
+					Reason:    RouteConflictReasonDuplicate,
 				},
 			},
 			wantMsg: "duplicate route registration (2 conflict(s))\n" +
@@ -147,9 +155,23 @@ func TestDuplicateRouteError(t *testing.T) {
 				Method: http.MethodGet, Path: "/users/:uid", FirstPath: "/users/:id",
 				First:     RouteRegistrant{HandlerName: "a", Package: "pkg/a"},
 				Duplicate: RouteRegistrant{HandlerName: "b", Package: "pkg/b"},
+				Reason:    RouteConflictReasonDuplicate,
 			}},
 			wantMsg: "duplicate route registration (1 conflict(s))\n" +
 				"GET /users/:uid — first: a (pkg/a) at /users/:id, duplicate: b (pkg/b)",
+		},
+		{
+			name:      "reserved_method_only",
+			conflicts: []RouteConflict{reservedConflict},
+			wantMsg: "route registration refused (1 conflict(s))\n" +
+				"echo_route_not_found /partner/v2/* — reserved engine method, refused: b (pkg/b)",
+		},
+		{
+			name:      "duplicate_and_reserved_method",
+			conflicts: []RouteConflict{getOneDuplicate, reservedConflict},
+			wantMsg: "route registration refused (2 conflict(s))\n" +
+				"GET /one — first: a (pkg/a), duplicate: b (pkg/b)\n" +
+				"echo_route_not_found /partner/v2/* — reserved engine method, refused: b (pkg/b)",
 		},
 	}
 	for _, tt := range tests {
@@ -476,6 +498,99 @@ func TestServerStartRefusesRouteConflict(t *testing.T) {
 	require.ErrorAs(t, err, &dre)
 	require.Len(t, dre.Conflicts, 1)
 	assert.Equal(t, "/dup", dre.Conflicts[0].Path)
+	assert.Equal(t, RouteConflictReasonDuplicate, dre.Conflicts[0].Reason)
+	name := dre.Conflicts[0].First.HandlerName
+	assert.Equal(t, "duplicate route registration (1 conflict(s))\nGET /dup — first: "+name+" ("+serverPackagePath+"), duplicate: "+name+" ("+serverPackagePath+")", err.Error())
+}
+
+const reservedTemplate = "/partner/v2/*"
+
+// reservedDoors registers method at reservedTemplate through each module route door; group is
+// a registrar at /partner/v2.
+var reservedDoors = []struct {
+	name     string
+	register func(srv *Server, group RouteRegistrar, method string)
+}{
+	{name: "module_group_add", register: func(srv *Server, _ RouteRegistrar, method string) {
+		srv.ModuleGroup().Add(method, reservedTemplate, func(c HandlerContext) error { return c.String(http.StatusTeapot, "") })
+	}},
+	{name: "register_handler", register: func(srv *Server, _ RouteRegistrar, method string) {
+		RegisterHandler(NewHandlerRegistry(srv.cfg), srv.ModuleGroup(), method, reservedTemplate,
+			func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+	}},
+	{name: "group_registrar_add", register: func(_ *Server, group RouteRegistrar, method string) {
+		group.Add(method, "/*", func(c HandlerContext) error { return c.String(http.StatusTeapot, "") })
+	}},
+}
+
+// TestServerStartRefusesReservedEngineMethod pins that echo's sentinel methods are refused at every
+// module door, on either side of the group catch-alls echo registers when /partner/v2 gets middleware.
+func TestServerStartRefusesReservedEngineMethod(t *testing.T) {
+	orders := []struct {
+		name            string
+		middlewareFirst bool
+	}{{name: "after_group", middlewareFirst: true}, {name: "before_group"}}
+	for _, method := range []string{echo.RouteNotFound, echo.RouteAny} {
+		for _, door := range reservedDoors {
+			for _, order := range orders {
+				t.Run(method+"_"+door.name+"_"+order.name, func(t *testing.T) { requireReservedRefusal(t, method, door.register, order.middlewareFirst) })
+			}
+		}
+	}
+}
+
+func requireReservedRefusal(t *testing.T, method string, register func(*Server, RouteRegistrar, string), middlewareFirst bool) {
+	t.Helper()
+	srv := newTestServer("", "", "")
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	group := srv.ModuleGroup().Group("/partner/v2")
+	addGroupMiddleware := func() { group.Use(func(_ HandlerContext, next func() error) error { return next() }) }
+	if middlewareFirst {
+		addGroupMiddleware()
+	}
+	mark := DefaultRouteRegistry.Count()
+	register(srv, group, method)
+	rec := serveEngine(srv.echo, http.MethodGet, "/partner/v2/refused")
+	assert.Equal(t, http.StatusNotFound, rec.Code, "a refused registration installs no engine route")
+	if !middlewareFirst {
+		addGroupMiddleware()
+	}
+
+	assert.Equal(t, mark, DefaultRouteRegistry.Count(), "a refused registration writes no descriptor")
+	conflicts := srv.RouteConflicts()
+	require.Len(t, conflicts, 1)
+	assert.Equal(t, RouteConflict{
+		Method: method, Path: reservedTemplate, Duplicate: conflicts[0].Duplicate, Reason: RouteConflictReasonReservedMethod,
+	}, conflicts[0], "a reserved refusal names no first registrant")
+	err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite a reserved engine method")
+	require.ErrorIs(t, err, ErrDuplicateRoute)
+	for _, want := range []string{method + " " + reservedTemplate, "reserved engine method"} {
+		assert.Contains(t, err.Error(), want)
+	}
+	assert.NotContains(t, err.Error(), "duplicate")
+}
+
+// TestGroupCatchAllsUnaffectedByAdmission guards echo's own group catch-alls, which never pass
+// through admission: unknown sub-paths under each middleware-bearing group still run its middleware.
+func TestGroupCatchAllsUnaffectedByAdmission(t *testing.T) {
+	srv := newTestServer("", "", "")
+	prefixes := []string{"/partner/v2", "/billing"}
+	for _, prefix := range prefixes {
+		marker := func(c HandlerContext, next func() error) error {
+			c.ResponseWriter().Header().Set("X-Group", prefix)
+			return next()
+		}
+		srv.ModuleGroup().Group(prefix, marker).Add(http.MethodGet, "/known", func(c HandlerContext) error {
+			return c.String(http.StatusOK, "")
+		})
+	}
+	require.Empty(t, srv.RouteConflicts(), "no recorded conflict, so Start would not refuse the route table")
+
+	for _, prefix := range prefixes {
+		rec := serveEngine(srv.echo, http.MethodGet, prefix+"/unknown")
+		assert.Equal(t, http.StatusNotFound, rec.Code, prefix)
+		assert.Equal(t, prefix, rec.Header().Get("X-Group"), prefix)
+	}
 }
 
 // TestServerProbeListenerHealthEqualsReady pins first-wins on both engines when the probe

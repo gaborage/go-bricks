@@ -36,7 +36,7 @@ exemption rested on a check that `app` alone ran.
 
 ## Decision
 
-> **Amended (2026-10-28, #2222):** every route door (`addEcho`, `RouteRegistrar.Add` and both
+> **Amended (2026-10-28, #2222):** every framework-built route door (`addEcho`, `RouteRegistrar.Add` and both
 > probe arms) now goes through one admission step, `routeAdmission.admit`, which replaces
 > `routeConflictTracker.record` and `registerRoute`. It keys the route, refuses a duplicate, and
 > only then writes the route-registry descriptor and calls the engine `Add`. A refused route is
@@ -106,9 +106,24 @@ while a check runs, not by construction.
   startup.
 - **A duplicate registered after `Start` is dropped.** It is visible only through
   `RouteConflicts()`; nothing returns an error, since `Start` already ran.
+
+> **Amended (2026-10-28, #2222):** the premise of the next bullet was false: a module could
+> register `echo_route_not_found` at a catch-all's template, and the two replaced each other in
+> registration order, outside the tracker. It is now an enforced invariant: admission refuses
+> `echo_route_not_found` and `echo_route_any` at every framework-built route door, recording a `RouteConflict`
+> whose `Reason` is `RouteConflictReasonReservedMethod`. See
+> [ADR-155](adr_155_reserved_engine_methods_refused.md).
+
 - **Echo's own `RouteNotFound` catch-alls stay outside the tracker.** `Group.Use` registers them at
   `<prefix>` and `<prefix>/*` with overwrite allowed, so a second `Group("/api", mw)` replaces the
   first group's 404 chain; they serve no GET/HEAD handler and no module handler.
+
+> **Amended (2026-10-28, #2222):** the next bullet is reversed (see the note at the top of
+> Consequences): admission now describes a route only once it is admitted, through `addEcho`,
+> `RouteRegistrar.Add` and both probe arms alike. The one path that still describes before adding is
+> `RegisterHandler`'s fallback for a registrar the framework did not build (a test fake), which has
+> no admission step.
+
 - **A refused duplicate still writes its route-registry descriptor** (`DefaultRouteRegistry`):
   a typed route (its descriptor is written before `addEcho`), a raw route and, at
   `server.probes.port` 0, a probe (through `registerRoute`; only `dispatchReady` at a shared
