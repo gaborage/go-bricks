@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/internal/credurl"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // DefaultPageLimit is the default page size requested from the control-plane.
@@ -189,7 +190,7 @@ func redactedURL(raw string) string {
 }
 
 // envelope mirrors the go-bricks server.APIResponse shape (see server/handler.go).
-// Defined inline to keep this package a leaf import.
+// Defined inline so this package never imports server.
 type envelope struct {
 	Data  *envelopeData  `json:"data,omitempty"`
 	Error *envelopeError `json:"error,omitempty"`
@@ -221,11 +222,13 @@ func (e *ContractError) Error() string {
 	if e.Code == "" && e.Message == "" {
 		return fmt.Sprintf("control-plane returned HTTP %d", e.StatusCode)
 	}
-	return fmt.Sprintf("control-plane returned HTTP %d: %s: %s", e.StatusCode, e.Code, e.Message)
+	// Quoted: the control plane wrote this text, and %q escapes its control bytes.
+	return fmt.Sprintf("control-plane returned HTTP %d: %q: %q", e.StatusCode, e.Code, e.Message)
 }
 
 // ListTenants walks all pages of the contract endpoint and returns the union
-// of tenant IDs.
+// of tenant IDs, each trimmed. Blank entries are skipped; any other ID that
+// fails multitenant.ValidateTenantID fails the whole listing.
 func (s *TenantSource) ListTenants(ctx context.Context) ([]string, error) {
 	var (
 		out    []string
@@ -238,10 +241,15 @@ func (s *TenantSource) ListTenants(ctx context.Context) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, t := range page.Tenants {
+		for j, t := range page.Tenants {
 			id := strings.TrimSpace(t.ID)
 			if id == "" {
 				continue
+			}
+			// One off-grammar ID fails the whole listing rather than quietly
+			// shrinking the fleet; the error names its place, never its value.
+			if err := multitenant.ValidateTenantID(id); err != nil {
+				return nil, fmt.Errorf("control-plane tenant on page %d, entry %d: %w", i+1, j+1, err)
 			}
 			out = append(out, id)
 		}
