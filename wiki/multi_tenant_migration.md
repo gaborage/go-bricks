@@ -50,6 +50,11 @@ Authorization: Bearer <optional>
 Rules:
 
 - `id` is the only required field per tenant; extra fields are ignored.
+- `id` must match `^[a-z0-9-]{1,64}$` (`multitenant.ValidateTenantID`) after trimming. A blank
+  `id` is skipped; any other non-conforming `id` fails the whole listing with an error naming its
+  page and entry, never its value, so no tenant is migrated.
+- A non-2xx reply surfaces as `ContractError`, whose message quotes the envelope's `code` and
+  `message`.
 - Empty/absent `next_cursor` ends iteration.
 - `limit` is advisory; the CLI defaults to 100.
 - `Authorization: Bearer ...` is sent when `--source-token` (or the
@@ -738,7 +743,7 @@ itself. `MigrateAll` will not grow `Prepare`/`Finish` interceptor callbacks; see
 When the need is only a different secret-name grammar, no decorator is needed:
 set `SecretsProvider.NameFor` (for example to compose `/env/platform/<id>/db`).
 It replaces the default `Prefix + tenantID` composition, receives the tenant ID
-already trimmed and allowlist-validated, and is library-only; the CLI exposes
+already trimmed and checked by `multitenant.ValidateTenantID`, and is library-only; the CLI exposes
 `--secrets-prefix`.
 
 ## Run verdicts
