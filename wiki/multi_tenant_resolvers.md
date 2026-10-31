@@ -82,7 +82,7 @@ Use this when downstream clients route by URL path rather than header or hostnam
 
 ### Why path-segment over Echo's `c.Param("tenantID")`?
 
-Route params would only resolve **inside** a route group like `r.Group("/itsp/:tenantID", ...)`, and they never reach a resolver. Echo v5 matches the route first and the tenant middleware runs on the root `e.Use` chain after it, before group and route middleware, but a resolver receives only the `*http.Request`: echo's router keeps a matched `:tenantID` on its own context and does not copy it onto the request (`SetPathValue`). The path resolver reads the segment from `URL.Path` instead, so framework middleware that needs the tenant (rate limiting, request logging, OTel span attributes, tenant-scoped DB resolution) has the value from the tenant middleware onward.
+A route parameter such as `:tenantID` in `/itsp/:tenantID` is matched by echo's router on any route, grouped or not, but it never reaches a resolver. Echo v5 matches the route first and the tenant middleware runs on the root `e.Use` chain after it, before group and route middleware, but a resolver receives only the `*http.Request`: echo's router keeps a matched `:tenantID` on its own context and does not copy it onto the request (`SetPathValue`). The path resolver reads the segment from `URL.Path` instead, so framework middleware that needs the tenant (rate limiting, request logging, OTel span attributes, tenant-scoped DB resolution) has the value from the tenant middleware onward.
 
 ## Composite resolver
 
@@ -127,7 +127,7 @@ See [ADR-039](adr_039_composite_resolver_order.md) for why the framework refuses
 - **Path** — the URL path is authored entirely by the caller. With `segment: 2` and no prefix gate, a request to `/api/v1/orders` resolves the tenant `v1`.
 - **Subdomain** — `SubdomainResolver` reads `req.Host`, and `Host` is *itself a request header*. It is constrained only if your ingress pins it (per-tenant DNS/vhost/SNI, or a `Host` allowlist) — something the framework cannot verify.
 
-The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a [global middleware](global_middleware.md) comparing `multitenant.GetTenant(ctx)` against the tenant claim in the verified JWT.
+The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a [global middleware](global_middleware.md) that reads `tenantID, ok := multitenant.GetTenant(ctx)`, rejects the request when `ok` is false, and compares `tenantID` with the tenant claim in the verified JWT.
 
 > **Deployment obligations (normative).** A composite deployment that does not meet these does not have tenant isolation, whatever order it declares. Each is scoped to the order you actually declare — an obligation about a sub-resolver you did not list does not apply to you.
 >
