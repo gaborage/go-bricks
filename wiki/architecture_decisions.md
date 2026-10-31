@@ -2715,7 +2715,8 @@ tenant drained its bucket and read its `X-RateLimit-Remaining`, and the store gr
 value. The built-in limiter and `server.RateLimit` now key on `RealIP()` alone; burst, cleanup and
 `<= 0` disabling are unchanged. The new `server.TenantRateLimit` limits per context tenant with the
 same derivation, passes a tenant-less request through uncharged, and is never installed by the
-framework: it goes in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it.
+framework: it goes in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it and
+after the application's tenant-authorization check.
 Every client behind one NAT or gateway now shares a bucket, and `server.trustedproxies` decides the
 key. Closes the tenant-keyed half of F23 that [ADR-057](adr_057_trusted_proxy_ip_extraction.md) left
 open. See [migrations.md](migrations.md) `[C73.20]`.

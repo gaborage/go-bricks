@@ -200,12 +200,13 @@ Both limiters key **every** request by **client IP**, probe or tenant-resolved, 
 
 **Shared addresses and trusted proxies.** Every client behind one NAT, partner gateway or load balancer shares one bucket of each limiter, so every tenant behind such an address shares one `app.rate.limit` budget. A correct `server.trustedproxies` is load-bearing for both: a missing entry for a proxy on a public address keys the whole fleet on the proxy's address, and an over-broad entry lets a caller pick its own key through `X-Forwarded-For` ([ADR-057](adr_057_trusted_proxy_ip_extraction.md)).
 
-**Per-tenant budgets.** The framework installs no tenant-keyed limiter. `server.TenantRateLimit(rps)` keys on the context tenant with the global limiter's rate and burst derivation; attach it in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it, so authentication runs first:
+**Per-tenant budgets.** The framework installs no tenant-keyed limiter. `server.TenantRateLimit(rps)` keys on the context tenant with the global limiter's rate and burst derivation; attach it in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after authentication and after your tenant-authorization check:
 
 ```go
-r.Group("/orders", auth.Middleware(verifier), server.TenantRateLimit(20))
+// authorizeTenant is application-supplied: it refuses a principal the resolved tenant does not admit.
+r.Group("/orders", auth.Middleware(verifier), authorizeTenant, server.TenantRateLimit(20))
 ```
 
-`auth.Middleware` verifies the credential, not the tenant, so the limiter belongs after whatever check ties the resolved tenant to the caller; ahead of it, any caller can drain a tenant it names. A request with no tenant passes through without charging any bucket. Its `X-RateLimit-*` headers overwrite the global limiter's, so a response's headers describe the innermost limiter that ran.
+`auth.Middleware` verifies the credential, not the tenant, so without the tenant check a credentialed caller can drain any tenant it names. A request with no tenant passes through without charging any bucket. Its `X-RateLimit-*` headers overwrite the global limiter's, so a response's headers describe the innermost limiter that ran.
 
 These are *koanf* defaults. A `*config.Config` assembled in Go rather than loaded through configuration leaves both at zero, and the global limiter is a pass-through at `<= 0` — such a deployment has no ceiling at all (see [ADR-049](adr_049_debug_endpoints_fail_closed.md)).
