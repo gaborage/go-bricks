@@ -25,6 +25,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Test constants for common values
@@ -1916,4 +1917,57 @@ func TestErrorDetailMasksASensitiveErrorField(t *testing.T) {
 		"a field the operator marked sensitive must be masked at this door too")
 	assert.NotContains(t, out, detailGateErrorText,
 		"the raw error message must not reach the sink when the error field is sensitive")
+}
+
+func TestClassifyErrorUnknownTenantIsClientFault(t *testing.T) {
+	storeErr := unknownTenantStoreErr(t)
+	tests := []struct {
+		name       string
+		err        error
+		middleware bool
+		want       int
+		lines      []string // the refusal lines' levels
+	}{
+		{name: "bare_sentinel", err: multitenant.ErrUnknownTenant, want: http.StatusBadRequest, lines: []string{"warn"}},
+		{name: "wrapped_in_plain_error", err: fmt.Errorf("load orders: %w", storeErr), want: http.StatusBadRequest, lines: []string{"warn"}},
+		{name: "door_error_from_raw_handler", err: NewUnknownTenantError(storeErr), want: http.StatusBadRequest, lines: []string{"warn"}},
+		{name: "group_middleware_error", err: storeErr, middleware: true, want: http.StatusBadRequest, lines: []string{"warn"}},
+		{name: "dynamic_store_wrapped_sentinel_is_400", err: fmt.Errorf("%w: no secret for this tenant", multitenant.ErrUnknownTenant), want: http.StatusBadRequest, lines: []string{"warn"}},
+		{name: "dynamic_store_untyped_error_stays_500", err: errors.New("secrets manager: request timed out"), want: http.StatusInternalServerError, lines: []string{"error"}},
+		{name: "deadline_still_503", err: fmt.Errorf("%w: %w", multitenant.ErrUnknownTenant, context.DeadlineExceeded), want: http.StatusServiceUnavailable},
+		{name: "other_api_error_keeps_its_answer", err: fmt.Errorf("%w: %w", NewNotFoundError("Order"), multitenant.ErrUnknownTenant), want: http.StatusNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testLog := &testLogger{}
+			srv := newTenantServer(config.ResolverTypeHeader, testLog)
+			r, path, handler := srv.ModuleGroup(), "/orders", func(HandlerContext) error { return tc.err }
+			if tc.middleware {
+				r, path = r.Group("/mw", func(HandlerContext, func() error) error { return tc.err }), "/mw/orders"
+				handler = func(c HandlerContext) error { return c.JSON(http.StatusOK, nil) }
+			}
+			r.Add(http.MethodGet, "/orders", handler)
+
+			status, resp := serveTenant(t, srv, path, unknownTenantID)
+
+			assert.Equal(t, tc.want, status)
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, statusToErrorCode(tc.want), resp.Error.Code)
+			if tc.want == http.StatusBadRequest {
+				assert.Equal(t, msgInvalidTenant, resp.Error.Message)
+			}
+			assert.Equal(t, tc.lines, refusalLogLevels(testLog.logEntries()), "one refusal WARN per 400, one unhandled-error line per 500, never both")
+		})
+	}
+}
+
+// refusalLogLevels lists the level of each tenant-refusal or unhandled-error line, in order.
+func refusalLogLevels(entries []testLogEntry) []string {
+	var got []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.msg, "[server.tenant]") || e.msg == "unhandled error" {
+			got = append(got, e.level)
+		}
+	}
+	return got
 }

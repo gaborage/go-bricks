@@ -29,6 +29,65 @@ rule is their gate.
 
 **This is input sanitization, not access control.** The regex — and the subsequent known-tenant lookup — reject *garbage*, not *cross-tenant access*. A forged value naming a real tenant passes both checks and resolves fine. Resolution answers "which tenant does this request claim to be for"; it never checks whether the caller is entitled to that tenant. See [Tenant resolution is identification, not authorization](#tenant-resolution-is-identification-not-authorization).
 
+## Unknown tenants
+
+The seat checks a tenant's form, not its existence, so a well-formed tenant the deployment does not serve reaches the handler. The first per-tenant accessor the request calls (`deps.DB(ctx)`, `deps.Cache(ctx)`, `deps.Messaging(ctx)`) refuses it: for a key absent from `multitenant.tenants`, the built-in store returns an error that `errors.Is` `multitenant.ErrUnknownTenant`. The answer is the malformed-tenant one, 400 `BAD_REQUEST` "Invalid tenant", plus one WARN with `reason="unknown tenant"` whose `path` is the route template, never the tenant ID ([ADR-161](adr_161_unknown_tenant_is_a_client_fault.md)). A known tenant missing a section, the control-plane key `""` and named databases still answer 500, as server faults.
+
+- **Raw handlers and middleware** get it automatically: return the accessor's error, bare or wrapped with `%w`.
+- **Typed handlers** return it through `server.NewUnknownTenantError`. The door is fail-closed: a cause that is not the sentinel (nil, an outage, a timeout) answers 500, so it is safe for any accessor error. A `WithRawResponse` route renders the same `code` and `message` in its flat shape, and a JOSE route through its own error sink.
+
+```go
+db, err := h.getDB(ctx.RequestContext())
+if err != nil {
+	return server.Result[Order]{}, server.NewUnknownTenantError(err) // 400 unknown tenant, else 500
+}
+```
+
+To keep the handler's own 500 wording for every other error, guard first:
+
+```go
+switch {
+case errors.Is(err, multitenant.ErrUnknownTenant):
+	return server.Result[Order]{}, server.NewUnknownTenantError(err)
+case err != nil:
+	return server.Result[Order]{}, server.NewInternalServerError("orders unavailable")
+}
+```
+
+**A dynamic store** (`app.Options.ResourceSource`) wraps `multitenant.ErrUnknownTenant` only when it knows the tenant does not exist, as in `fmt.Errorf("%w: no catalog entry", multitenant.ErrUnknownTenant)`. Any other error, such as an outage or a timeout, stays unwrapped and answers 500, so a store that cannot tell never fails open.
+
+**A custom `app.Options.CacheConnector` still dials an unknown tenant:** it owns its dial, and the framework reads the store's error for that key as "no cache section". Refuse unknown tenants in the connector, or before the handler as below.
+
+**Refusing before the handler.** The handler runs until its first accessor, and a route that never calls one serves the unknown tenant. To refuse earlier, or in your own shape, attach a group middleware: it runs right after the seat, so the tenant is in context. It reads the tenant catalog and writes its own bytes:
+
+```go
+func knownTenant(deps *app.ModuleDeps) server.MiddlewareFunc {
+	return func(c server.HandlerContext, next func() error) error {
+		ctx := c.RequestContext()
+		tenantID, ok := multitenant.GetTenant(ctx) // set by the seat, which runs first
+		if !ok {
+			return errors.New("knownTenant: no tenant in context") // 500: mounted without multitenant
+		}
+		catalog, err := deps.DBByName(ctx, "catalog")
+		if err != nil {
+			return err // 500
+		}
+		var n int
+		if err = catalog.QueryRow(ctx, "SELECT COUNT(*) FROM tenants WHERE id = $1", tenantID).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "unknown tenant"})
+		}
+		return next()
+	}
+}
+
+orders := r.Group("/orders", knownTenant(m.deps)) // m.deps saved in Init
+```
+
+Returning `multitenant.ErrUnknownTenant` instead of writing the body gives the framework's 400 and WARN.
+
 ## Header resolver
 
 ```yaml

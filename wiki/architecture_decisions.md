@@ -2728,6 +2728,26 @@ is bounded by client addresses, and a per-tenant budget is an explicit, post-aut
 
 ---
 
+### [ADR-161: An Unknown Tenant Is a Client Fault](adr_161_unknown_tenant_is_a_client_fault.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a well-formed tenant absent from the built-in store answers 400 `BAD_REQUEST` "Invalid tenant" plus a WARN at its first per-tenant accessor, from a raw handler or a middleware, instead of 500 `INTERNAL_ERROR` and `ERROR "unhandled error"`
+
+The tenant seat checks form, not existence, so a well-formed unknown tenant reached the handler, and
+the built-in store's error for it, a `*config.ConfigError` no sentinel matched, became a 500. The store
+now joins `multitenant.ErrUnknownTenant` on its absent-key branch only, and `classifyError` answers it
+with the seat's malformed-tenant 400 and one WARN with `reason="unknown tenant"` and the route template
+as `path`, never the tenant ID. Typed handlers reach the same answer through
+`server.NewUnknownTenantError(err)`, which is fail-closed: any cause that is not the sentinel answers
+500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
+JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
+the tenant does not exist. The seat still does no existence check. See [migrations.md](migrations.md)
+`[C73.21]`.
+
+**Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
+pages an operator, and no error a store cannot classify is ever answered as a 400.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3537,7 +3557,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-160) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-161) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

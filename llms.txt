@@ -1171,6 +1171,17 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 	user, err := h.svc.GetUserForTenant(ctx.RequestContext(), tenantID, req.ID)
 	// ...
 }
+
+// Unknown tenant (well-formed, but not in the store): a raw handler or middleware returning
+// the accessor's error answers 400 "Invalid tenant" on its own; a typed handler uses the door,
+// which answers 500 for any cause that is not multitenant.ErrUnknownTenant (ADR-161)
+func (h *Handler) ListOrders(_ NoBodyReq, ctx server.HandlerContext) (server.Result[[]Order], server.IAPIError) {
+	db, err := h.getDB(ctx.RequestContext())
+	if err != nil {
+		return server.Result[[]Order]{}, server.NewUnknownTenantError(err)
+	}
+	// ...
+}
 ```
 
 | Pattern | Use Case | Example |

@@ -9,3 +9,7 @@ var ErrTenantResolutionFailed = errors.New("tenant resolution failed")
 // a peer it does not trust sends X-Forwarded-Host. CompositeResolver stops on it instead of
 // trying the next sub-resolver.
 var ErrUntrustedForwardedHost = errors.New("multitenant: X-Forwarded-Host from an untrusted peer")
+
+// ErrUnknownTenant is returned for a well-formed tenant ID that names no tenant the
+// deployment serves. The HTTP layer answers it as a client fault (400).
+var ErrUnknownTenant = errors.New("multitenant: unknown tenant")

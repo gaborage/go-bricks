@@ -2,10 +2,13 @@ package config
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -519,6 +522,44 @@ func TestTenantStoreDBConfigTenantAndNamedKeysStayLoud(t *testing.T) {
 			// Resolving is fine; what matters is that it did not claim absence. The
 			// empty type then fails loudly at the connection factory.
 			assert.Empty(t, got.Type)
+		})
+	}
+}
+
+func TestTenantStoreUnknownTenantIsErrUnknownTenant(t *testing.T) {
+	cfg := &Config{}
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Tenants = map[string]TenantEntry{tenantA: {}}
+	store := NewTenantStore(cfg)
+	ctx := context.Background()
+	lookups := map[string]func(key string) error{
+		"db":     func(key string) error { _, err := store.DBConfig(ctx, key); return err },
+		"cache":  func(key string) error { _, err := store.CacheConfig(ctx, key); return err },
+		"broker": func(key string) error { _, err := store.BrokerURL(ctx, key); return err },
+	}
+
+	tests := []struct {
+		name    string
+		lookup  string
+		key     string
+		unknown bool
+	}{
+		{name: "db_config", lookup: "db", key: "ghost", unknown: true},
+		{name: "cache_config", lookup: "cache", key: "ghost", unknown: true},
+		{name: "broker_url", lookup: "broker", key: "ghost", unknown: true},
+		{name: "known_tenant_without_messaging_url_unaffected", lookup: "broker", key: tenantA},
+		{name: "known_tenant_cache_not_enabled_unaffected", lookup: "cache", key: tenantA},
+		{name: "control_plane_key_unaffected", lookup: "db", key: ""},
+		{name: "named_database_unaffected", lookup: "db", key: NamedDatabasePrefix + "ghost"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := lookups[tc.lookup](tc.key)
+
+			require.Error(t, err)
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr, "the existing *ConfigError stays reachable")
+			assert.Equal(t, tc.unknown, errors.Is(err, multitenant.ErrUnknownTenant))
 		})
 	}
 }

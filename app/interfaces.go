@@ -26,6 +26,11 @@ type ServerRunner interface {
 }
 
 // TenantStore combines the interfaces required by the database, messaging, and cache managers.
+//
+// A lookup wraps multitenant.ErrUnknownTenant only when the store knows the tenant does
+// not exist, as the built-in store does for a key absent from multitenant.tenants; the
+// request is then refused as a client fault (400). Any other error, such as an outage or
+// a timeout, stays unwrapped and answers 500, so a store that cannot tell never fails open.
 type TenantStore interface {
 	database.DBConfigProvider
 	messaging.BrokerURLProvider

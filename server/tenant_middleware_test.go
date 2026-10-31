@@ -1,11 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -118,7 +123,7 @@ func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 // log escaped on both logger paths.
 func TestTenantRejectionLogEscapesRequestValues(t *testing.T) {
 	assertRejectionLogEscapesRequestValues(t, func(l logger.Logger, c *echo.Context) {
-		logTenantRejection(l, c, nil)
+		logTenantRejection(l, c, tenantRejectionReason(nil), c.Request().URL.Path)
 	})
 }
 
@@ -168,4 +173,113 @@ func TestTenantMiddlewareNilSkipperResolvesEveryRoute(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "with a tenant header the same request resolves")
+}
+
+// newTenantServer is a Server resolving the tenant from X-Tenant-ID, or from path segment 1.
+func newTenantServer(resolverType string, testLog *testLogger) *Server {
+	cfg := newTestConfig("", "", "")
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = resolverType
+	cfg.Multitenant.Resolver.Path.Segment = 1
+	return New(cfg, testLog)
+}
+
+// serveTenant sends GET path for tenant and decodes the envelope.
+func serveTenant(t *testing.T, srv *Server, path, tenant string) (int, APIResponse) {
+	t.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
+	req.Header.Set(HeaderXTenantID, tenant)
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), rec.Body.String())
+	return rec.Code, resp
+}
+
+type unknownTenantReq struct{}
+
+func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
+	storeErr := unknownTenantStoreErr(t)
+	tests := []struct {
+		name     string
+		resolver string
+		typed    bool
+		cause    error
+		misused  bool
+	}{
+		{name: "raw_header_resolver", resolver: config.ResolverTypeHeader, cause: storeErr},
+		{name: "raw_path_resolver", resolver: config.ResolverTypePath, cause: storeErr},
+		{name: "typed_header_resolver", resolver: config.ResolverTypeHeader, typed: true, cause: storeErr},
+		{name: "typed_path_resolver", resolver: config.ResolverTypePath, typed: true, cause: storeErr},
+		{name: "typed_misused_door_logs_error", resolver: config.ResolverTypeHeader, typed: true, cause: errors.New("secrets manager: request timed out"), misused: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testLog := &testLogger{}
+			srv := newTenantServer(tc.resolver, testLog)
+			route, path := "/orders", "/orders"
+			if tc.resolver == config.ResolverTypePath {
+				route, path = "/:tenant/orders", "/"+unknownTenantID+"/orders"
+			}
+			if tc.typed {
+				hr := NewHandlerRegistry(srv.cfg, WithLogger(testLog))
+				GET(hr, srv.ModuleGroup(), route, func(unknownTenantReq, HandlerContext) (Result[string], IAPIError) {
+					return Result[string]{}, NewUnknownTenantError(tc.cause)
+				})
+			} else {
+				srv.ModuleGroup().Add(http.MethodGet, route, func(HandlerContext) error { return tc.cause })
+			}
+			before := len(testLog.logEntries())
+
+			status, _ := serveTenant(t, srv, path, unknownTenantID)
+
+			warns, unhandled := splitTenantRefusalLogs(testLog.logEntries()[before:])
+			if tc.misused {
+				assert.Equal(t, http.StatusInternalServerError, status)
+				assert.Empty(t, warns)
+				assert.Len(t, unhandled, 1, "a misused door is a server fault, logged once")
+				return
+			}
+			assert.Equal(t, http.StatusBadRequest, status)
+			assert.Empty(t, unhandled, "an unknown tenant is not an unhandled error")
+			require.Len(t, warns, 1, "exactly one WARN per refusal")
+			assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
+			assert.Contains(t, warns[0].msg, "status=400")
+			assert.Contains(t, warns[0].msg, fmt.Sprintf("path=%q", route), "the route template, never the URL")
+			for _, field := range append([]string{warns[0].msg}, slices.Collect(maps.Values(warns[0].values))...) {
+				assert.NotContains(t, field, unknownTenantID, "the tenant ID never reaches the line")
+				assert.NotContains(t, field, "configuration not found", "the error text never reaches the line")
+			}
+		})
+	}
+}
+
+// splitTenantRefusalLogs splits entries into tenant-refusal WARNs and unhandled-error lines.
+func splitTenantRefusalLogs(entries []testLogEntry) (warns, unhandled []testLogEntry) {
+	for _, e := range entries {
+		if e.level == "warn" && strings.HasPrefix(e.msg, "[server.tenant]") {
+			warns = append(warns, e)
+		}
+		if e.msg == "unhandled error" {
+			unhandled = append(unhandled, e)
+		}
+	}
+	return warns, unhandled
+}
+
+// TestUnknownTenantRefusalNilLoggerFallsBackToStdlib covers public WrapHandler, which threads
+// a nil logger: a misused door still leaves its unhandled-error line, type only.
+func TestUnknownTenantRefusalNilLoggerFallsBackToStdlib(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/orders", http.NoBody)
+	c := echo.New().NewContext(req, httptest.NewRecorder())
+
+	logUnknownTenantRefusal(NewUnknownTenantError(errors.New("dial tcp 10.0.0.7: refused")), c, nil, newTestConfig("", "", ""))
+
+	assert.Contains(t, buf.String(), "ERROR unhandled error")
+	assert.Contains(t, buf.String(), "error_type=*errors.errorString")
+	assert.NotContains(t, buf.String(), "10.0.0.7", "outside debug the error text stays out")
 }

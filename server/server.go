@@ -23,6 +23,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Server represents an HTTP server instance with Echo framework.
@@ -858,10 +859,21 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		return NewServiceUnavailableError("Request processing timed out")
 	}
 
-	// Already a structured API error — use as-is
+	// Already a structured API error — use as-is. The unknown-tenant refusal is
+	// asserted here rather than with its own errors.As, whose escaping target
+	// would add an allocation to every error path (ADR-026).
 	var apiErr IAPIError
 	if goerrors.As(err, &apiErr) {
+		if unknownTenant, ok := apiErr.(*UnknownTenantError); ok {
+			logUnknownTenantRefusal(unknownTenant, c, log, cfg)
+		}
 		return apiErr
+	}
+
+	if goerrors.Is(err, multitenant.ErrUnknownTenant) {
+		unknownTenant := NewUnknownTenantError(err)
+		logUnknownTenantRefusal(unknownTenant, c, log, cfg)
+		return unknownTenant
 	}
 
 	// Map echo.HTTPError, echo.HTTPStatusCoder, and untyped errors.
