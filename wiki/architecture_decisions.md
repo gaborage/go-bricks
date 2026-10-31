@@ -2724,6 +2724,21 @@ open. See [migrations.md](migrations.md) `[C73.20]`.
 **Key Benefits:** no caller-chosen string keys a framework rate-limit bucket by default, limiter memory
 is bounded by client addresses, and a per-tenant budget is an explicit, post-authentication choice.
 
+### [ADR-163: Migration Tenant IDs Follow the Framework Grammar](adr_163_migration_tenant_ids_follow_framework_grammar.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `SecretsProvider.DBConfig` refuses a tenant ID outside `^[a-z0-9-]{1,64}$` where it admitted `^[A-Za-z0-9_-]{1,128}$`, and `migration.ErrInvalidTenantID` is removed; the HTTP tenant source fails a listing that holds such an ID
+
+Migration checked tenant IDs with its own, wider rule, so a run provisioned tenants the HTTP seat and
+the stamp reader refuse, and the HTTP tenant source passed whatever the control plane listed. Both
+doors now call `multitenant.ValidateTenantID`: the secrets provider before `NameFor` or `Fetch`, the
+source per non-blank trimmed `id`, failing the whole listing with the page and entry, never the
+value, so `MigrateAll` dispatches nothing. `ContractError.Error()` quotes the envelope's `code` and
+`message`. Amends [ADR-018](adr_018_multi_tenant_migration_cli.md). See
+[migrations.md](migrations.md) `[C73.23]`.
+
+**Key Benefits:** migration provisions only tenants the runtime can resolve, and no control-plane
+text reaches an operator terminal or CI log unescaped through the source.
+
 ---
 
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
@@ -3535,7 +3550,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-160) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-163) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

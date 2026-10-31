@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 func TestSecretsProviderValidate(t *testing.T) {
@@ -334,64 +335,79 @@ func TestSecretsProviderEmptyTenantID(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmptyTenantID)
 }
 
-func TestSecretsProviderTenantIDAllowlist(t *testing.T) {
+func TestSecretsProviderTenantIDFollowsFrameworkGrammar(t *testing.T) {
 	validPayload := []byte(`{"type":"postgresql","host":"h","username":"u"}`)
 
-	t.Run("accepts_allowed_characters", func(t *testing.T) {
-		cases := []string{
-			"tenant1",
-			"TENANT-X",
-			"a_b-c_2",
-			"A",                                // 1 char
-			strings.Repeat("a", 128),           // 128 chars (upper bound)
-			"abcdef-ABCDEF-0123456789-_______", // mixed allowed runes
+	t.Run("accepts_grammar_ids", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			id         string
+			wantSecret string
+		}{
+			{"lowercase", "tenant", "gobricks/migrate/tenant"},
+			{"digits_and_hyphens", "t-1-2", "gobricks/migrate/t-1-2"},
+			{"max_64_bytes", strings.Repeat("a", 64), "gobricks/migrate/" + strings.Repeat("a", 64)},
+			{"padded_whitespace_trimmed", "  tenant-1\t", "gobricks/migrate/tenant-1"},
 		}
-		for _, id := range cases {
-			t.Run(id, func(t *testing.T) {
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				var requested string
 				p := &SecretsProvider{
-					Fetch: func(context.Context, string) ([]byte, error) { return validPayload, nil },
+					Fetch: func(_ context.Context, name string) ([]byte, error) {
+						requested = name
+						return validPayload, nil
+					},
 				}
-				_, err := p.DBConfig(context.Background(), id)
+				_, err := p.DBConfig(context.Background(), tc.id)
 				require.NoError(t, err)
+				assert.Equal(t, tc.wantSecret, requested)
 			})
 		}
 	})
 
-	t.Run("rejects_disallowed_inputs", func(t *testing.T) {
+	t.Run("refuses_off_grammar_ids", func(t *testing.T) {
 		cases := []struct {
 			name string
 			id   string
 		}{
+			{"uppercase", "Tenant"},
+			{"underscore", "tenant_1"},
+			{"over_64_bytes", strings.Repeat("a", 65)},
 			{"space", "tenant 1"},
-			{"slash", "tenant/secret"},
 			{"dot", "tenant.id"},
+			{"slash", "tenant/secret"},
 			{"colon", "tenant:id"},
-			{"nul", "tenant\x00id"},
 			{"newline", "tenant\nid"},
+			{"nul", "tenant\x00id"},
+			{"escape_byte", "tenant\x1b[31m"},
 			{"unicode", "tenanté"},
-			{"over_128_chars", strings.Repeat("a", 129)},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				p := &SecretsProvider{
+					NameFor: func(string) (string, error) {
+						t.Fatal("NameFor should not be called for an off-grammar tenantID")
+						return "", nil
+					},
 					Fetch: func(context.Context, string) ([]byte, error) {
-						t.Fatal("Fetch should not be called for disallowed tenantID")
+						t.Fatal("Fetch should not be called for an off-grammar tenantID")
 						return nil, nil
 					},
 				}
 				_, err := p.DBConfig(context.Background(), tc.id)
-				require.ErrorIs(t, err, ErrInvalidTenantID)
+				require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
 			})
 		}
 	})
 
-	t.Run("trims_then_validates", func(t *testing.T) {
+	t.Run("error_carries_no_value", func(t *testing.T) {
 		p := &SecretsProvider{
 			Fetch: func(context.Context, string) ([]byte, error) { return validPayload, nil },
 		}
-		// Leading/trailing whitespace is trimmed; the inner ID must still match.
-		_, err := p.DBConfig(context.Background(), "  tenant-1  ")
-		require.NoError(t, err)
+		_, err := p.DBConfig(context.Background(), "Secret_Tenant\x1b[31m")
+		require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+		assert.NotContains(t, err.Error(), "Secret_Tenant")
+		assert.NotContains(t, err.Error(), "\x1b")
 	})
 }
 
@@ -490,7 +506,7 @@ func TestSecretsProviderNameForRunsAfterValidation(t *testing.T) {
 	t.Run("invalid_characters", func(t *testing.T) {
 		p := newRecordingProvider(t)
 		_, err := p.DBConfig(context.Background(), "../../evil")
-		require.ErrorIs(t, err, ErrInvalidTenantID)
+		require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
 	})
 
 	t.Run("whitespace_only", func(t *testing.T) {
