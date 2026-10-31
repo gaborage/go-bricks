@@ -927,26 +927,30 @@ func tenantGet(t *testing.T, url, tenant string) (int, server.APIResponse) {
 
 func TestUnknownTenantAccessorsAnswer400(t *testing.T) {
 	tests := []struct {
-		name    string
-		store   TenantStore
-		path    string
-		knownOK bool // false where the known tenant would dial a real Redis
+		name      string
+		store     TenantStore
+		path      string
+		skipKnown bool // true where the known tenant would dial a real Redis
 	}{
-		{name: "raw_db_accessor", path: "/raw/db", knownOK: true},
-		{name: "raw_cache_accessor_builtin_connector", path: "/raw/cache"},
-		{name: "raw_messaging_accessor_per_tenant", path: "/raw/messaging", knownOK: true},
-		{name: "typed_db_accessor", path: "/typed/db", knownOK: true},
-		{name: "typed_stub_store_error", store: contractStore{config.NewTenantStore(&config.Config{})}, path: "/typed/db", knownOK: true},
+		{name: "raw_db_accessor", path: "/raw/db"},
+		{name: "raw_cache_accessor_builtin_connector", path: "/raw/cache", skipKnown: true},
+		{name: "raw_messaging_accessor_per_tenant", path: "/raw/messaging"},
+		{name: "typed_db_accessor", path: "/typed/db"},
+		{name: "typed_stub_store_error", store: contractStore{config.NewTenantStore(&config.Config{})}, path: "/typed/db"},
 	}
+	shared := startTenantApp(t, nil, &Options{})
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			base := startTenantApp(t, tc.store, &Options{})
+			base := shared
+			if tc.store != nil {
+				base = startTenantApp(t, tc.store, &Options{})
+			}
 
 			status, env := tenantGet(t, base+tc.path, unknownTenantID)
 
 			assert.Equal(t, http.StatusBadRequest, status)
 			assert.Equal(t, &server.APIErrorResponse{Code: "BAD_REQUEST", Message: "Invalid tenant"}, env.Error)
-			if tc.knownOK {
+			if !tc.skipKnown {
 				status, env = tenantGet(t, base+tc.path, knownTenantID)
 				assert.Equal(t, http.StatusOK, status, "%+v", env.Error)
 			}
@@ -960,6 +964,7 @@ func TestUnknownTenantTypedAndRawAnswersMatchMalformed(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, seatStatus)
 	require.NotNil(t, seat.Error)
 	require.Contains(t, seat.Meta, "timestamp")
+	seatMetaKeys := slices.Sorted(maps.Keys(seat.Meta))
 
 	for _, path := range []string{"/typed/db", "/raw/db"} {
 		status, env := tenantGet(t, base+path, unknownTenantID)
@@ -967,7 +972,7 @@ func TestUnknownTenantTypedAndRawAnswersMatchMalformed(t *testing.T) {
 		assert.Equal(t, seatStatus, status, path)
 		assert.Equal(t, seat.Error, env.Error, path)
 		metaKeys := slices.Sorted(maps.Keys(env.Meta))
-		assert.Equal(t, slices.Sorted(maps.Keys(seat.Meta)), metaKeys, path)
+		assert.Equal(t, seatMetaKeys, metaKeys, path)
 		assert.Subset(t, []string{"timestamp", "traceId"}, metaKeys, "%s: framework meta keys only", path)
 	}
 }
@@ -982,16 +987,21 @@ func TestKnownAndMalformedTenantAnswersUnchanged(t *testing.T) {
 	}}
 	tests := []struct {
 		name, path, tenant string
-		opts               Options
+		opts               *Options
 		want               int
 	}{
 		{name: "known_tenant_answers_200", path: "/raw/db", tenant: knownTenantID, want: http.StatusOK},
 		{name: "malformed_tenant_answers_400", path: "/raw/db", tenant: malformedTenantID, want: http.StatusBadRequest},
-		{name: "custom_cache_connector_still_dials", path: "/raw/cache", tenant: unknownTenantID, opts: dialing, want: http.StatusOK},
+		{name: "custom_cache_connector_still_dials", path: "/raw/cache", tenant: unknownTenantID, opts: &dialing, want: http.StatusOK},
 	}
+	shared := startTenantApp(t, nil, &Options{})
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			status, env := tenantGet(t, startTenantApp(t, nil, &tc.opts)+tc.path, tc.tenant)
+			base := shared
+			if tc.opts != nil {
+				base = startTenantApp(t, nil, tc.opts)
+			}
+			status, env := tenantGet(t, base+tc.path, tc.tenant)
 
 			assert.Equal(t, tc.want, status)
 			if tc.want == http.StatusBadRequest {
