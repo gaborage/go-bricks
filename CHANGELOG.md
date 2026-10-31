@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.73.0](https://github.com/gaborage/go-bricks/compare/v0.72.0...v0.73.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **server:** key the global rate limiter on client IP only ([#2285](https://github.com/gaborage/go-bricks/issues/2285))
+* **database:** delete the unjudged qb comparator methods ([#2258](https://github.com/gaborage/go-bricks/issues/2258))
+* **config:** refuse sibling config keys that differ only by case ([#2254](https://github.com/gaborage/go-bricks/issues/2254))
+* **config:** refuse a root section key spelled other than its name ([#2251](https://github.com/gaborage/go-bricks/issues/2251))
+* **server:** refuse reserved engine methods at framework-built doors ([#2242](https://github.com/gaborage/go-bricks/issues/2242))
+* **config:** find a delivered key under every spelling decode takes ([#2245](https://github.com/gaborage/go-bricks/issues/2245))
+* **config:** default a zero server idle timeout, reject a negative ([#2209](https://github.com/gaborage/go-bricks/issues/2209))
+* **config:** refuse the four messaging keys nothing ever read ([#2204](https://github.com/gaborage/go-bricks/issues/2204))
+* **server:** answer 413 BODY_TOO_LARGE for every over-limit body ([#2206](https://github.com/gaborage/go-bricks/issues/2206))
+* **messaging:** give each App its own seal runtime ([#2157](https://github.com/gaborage/go-bricks/issues/2157))
+* **migration:** run a type-less tenant with the runner's vendor ([#2153](https://github.com/gaborage/go-bricks/issues/2153))
+
+### Added
+
+* **jose:** add the minimal JWS-of-JWE mode's policy rules ([#2170](https://github.com/gaborage/go-bricks/issues/2170)) ([bd5fd82](https://github.com/gaborage/go-bricks/commit/bd5fd826fa23de49ad74764b63ef541a3eaeb8a0))
+* **jose:** let a bare inbound policy accept a missing kid ([#2168](https://github.com/gaborage/go-bricks/issues/2168)) ([5e4e1d3](https://github.com/gaborage/go-bricks/commit/5e4e1d342e477be0c689bb342946a893c1ac307a))
+* **jose:** let a bare outbound policy omit the kid ([#2169](https://github.com/gaborage/go-bricks/issues/2169)) ([fd1a56f](https://github.com/gaborage/go-bricks/commit/fd1a56fd2896cd7b6eaef2d4c51b4928a72bbc09))
+* **jose:** open the minimal JWS-of-JWE mode ([#2171](https://github.com/gaborage/go-bricks/issues/2171)) ([ac54c1d](https://github.com/gaborage/go-bricks/commit/ac54c1d65fb7be8a0b824fafca0fcdaeaaf00931))
+* **jose:** reattach a detached JWS for the minimal mode ([#2172](https://github.com/gaborage/go-bricks/issues/2172)) ([66d4bcf](https://github.com/gaborage/go-bricks/commit/66d4bcffddeb52c7a2aa2f31e00a689694a01593))
+
+
+### Fixed
+
+* **cache:** render a cache key by its length in framework error text ([#2231](https://github.com/gaborage/go-bricks/issues/2231)) ([8f202c8](https://github.com/gaborage/go-bricks/commit/8f202c868eba2fe52e95b96c851f448e6931571e))
+* **config:** default a zero server idle timeout, reject a negative ([#2209](https://github.com/gaborage/go-bricks/issues/2209)) ([1c8cc67](https://github.com/gaborage/go-bricks/commit/1c8cc6706f039a9040e8ccd1888a91d7b263fe63))
+* **config:** find a delivered key under every spelling decode takes ([#2245](https://github.com/gaborage/go-bricks/issues/2245)) ([455d065](https://github.com/gaborage/go-bricks/commit/455d0658f09a53e059b6452bae0509d8c4f6e42e)), closes [#2210](https://github.com/gaborage/go-bricks/issues/2210)
+* **config:** refuse a root section key spelled other than its name ([#2251](https://github.com/gaborage/go-bricks/issues/2251)) ([3d7584a](https://github.com/gaborage/go-bricks/commit/3d7584aea3887b52297d375448cc90f890a27b92))
+* **config:** refuse sibling config keys that differ only by case ([#2254](https://github.com/gaborage/go-bricks/issues/2254)) ([e1a1250](https://github.com/gaborage/go-bricks/commit/e1a12501e63ac9e2dfbd6410e3fa7a88b406dc79))
+* **config:** refuse the four messaging keys nothing ever read ([#2204](https://github.com/gaborage/go-bricks/issues/2204)) ([9593a11](https://github.com/gaborage/go-bricks/commit/9593a11d52d5792be4e068622c2f626c8783f4e6))
+* **database:** delete the unjudged qb comparator methods ([#2258](https://github.com/gaborage/go-bricks/issues/2258)) ([6c14900](https://github.com/gaborage/go-bricks/commit/6c14900f1b25ea952af7b062a10d09929ba054bd))
+* **database:** judge list elements and JSON payloads like any operand ([#2255](https://github.com/gaborage/go-bricks/issues/2255)) ([cbccb73](https://github.com/gaborage/go-bricks/commit/cbccb730a75cb88f29d642c398d77a4219a94777))
+* **database:** resolve Valuers before list-ness, judge struct inserts ([#2256](https://github.com/gaborage/go-bricks/issues/2256)) ([5eb3516](https://github.com/gaborage/go-bricks/commit/5eb351675572a199fe07e48147e0d8c34c49e515))
+* **deps:** bump Go toolchain to 1.27.3 ([#2187](https://github.com/gaborage/go-bricks/issues/2187)) ([db15fca](https://github.com/gaborage/go-bricks/commit/db15fca1a0e6da1b207fc545461908fa0b786294))
+* **deps:** update aws-sdk-go-v2 monorepo ([#2179](https://github.com/gaborage/go-bricks/issues/2179)) ([b33a881](https://github.com/gaborage/go-bricks/commit/b33a8811a44bb020bfd9bb210458eeb9bcfe3939))
+* **deps:** update aws-sdk-go-v2 monorepo ([#2217](https://github.com/gaborage/go-bricks/issues/2217)) ([84f851a](https://github.com/gaborage/go-bricks/commit/84f851a121b651e55f3ba281842e7b131ce7d2b5))
+* **deps:** update module github.com/fxamacker/cbor/v2 to v2.10.0 ([#2247](https://github.com/gaborage/go-bricks/issues/2247)) ([4cacc99](https://github.com/gaborage/go-bricks/commit/4cacc99c4fad32a12f75e6b06c0ae66aba6c232d))
+* **deps:** update module github.com/go-co-op/gocron/v2 to v2.23.0 ([#2211](https://github.com/gaborage/go-bricks/issues/2211)) ([f47c6b6](https://github.com/gaborage/go-bricks/commit/f47c6b6f3331790411fa1a23df270e8a347e95df))
+* **deps:** update module github.com/knadh/koanf/v2 to v2.4.1 ([#2141](https://github.com/gaborage/go-bricks/issues/2141)) ([9d99ef6](https://github.com/gaborage/go-bricks/commit/9d99ef6ed604597734253f0c9cc87b3d22ab7d56))
+* **deps:** update module github.com/labstack/echo/v5 to v5.4.1 [security] ([#2191](https://github.com/gaborage/go-bricks/issues/2191)) ([3ecef7e](https://github.com/gaborage/go-bricks/commit/3ecef7eb26f1df2c1a2d6b6f9c07b532a2b5f006))
+* **deps:** update module github.com/labstack/echo/v5 to v5.4.2 ([#2183](https://github.com/gaborage/go-bricks/issues/2183)) ([181f7c7](https://github.com/gaborage/go-bricks/commit/181f7c7c9459f4187b2d5011469592036d504412))
+* **deps:** update module github.com/rabbitmq/amqp091-go to v1.16.0 ([#2176](https://github.com/gaborage/go-bricks/issues/2176)) ([5dc22aa](https://github.com/gaborage/go-bricks/commit/5dc22aab82279ef465d209140b78432b8ca93ef2))
+* **deps:** update module google.golang.org/grpc to v1.85.0 ([#2229](https://github.com/gaborage/go-bricks/issues/2229)) ([98f0c16](https://github.com/gaborage/go-bricks/commit/98f0c16beefe8386512fabb0d6b24652d4fef064))
+* **httpclient:** mask credential URLs in HTTP client and migration source errors ([#2269](https://github.com/gaborage/go-bricks/issues/2269)) ([9d6eca8](https://github.com/gaborage/go-bricks/commit/9d6eca8986769523b67655838be229576e3f715e))
+* **logger:** stop Err panicking on a typed-nil pointer error ([#2152](https://github.com/gaborage/go-bricks/issues/2152)) ([9fb6203](https://github.com/gaborage/go-bricks/commit/9fb6203f614e502f31945a8faf0ddd1766be757b))
+* **logger:** write a typed-nil error as null in WithFields ([#2207](https://github.com/gaborage/go-bricks/issues/2207)) ([1a4d3fe](https://github.com/gaborage/go-bricks/commit/1a4d3fe0a13789ac403b57c9df98b400e4c1b225))
+* **messaging:** bind AMQP close notifications instead of dropping them ([#2135](https://github.com/gaborage/go-bricks/issues/2135)) ([678166d](https://github.com/gaborage/go-bricks/commit/678166d4e3e8c81756cd78825a974c92dbe6bf14))
+* **messaging:** bind seal instruments into each sealer and opener ([#2156](https://github.com/gaborage/go-bricks/issues/2156)) ([3cf2f97](https://github.com/gaborage/go-bricks/commit/3cf2f970dbcffc79519f4ff65207f452015f09ee))
+* **messaging:** bind the AMQP meter before reading lifecycle counters ([#2148](https://github.com/gaborage/go-bricks/issues/2148)) ([5f6f520](https://github.com/gaborage/go-bricks/commit/5f6f520413537d3fddc2d66abd26bd55701b3e97))
+* **messaging:** give each App its own seal runtime ([#2157](https://github.com/gaborage/go-bricks/issues/2157)) ([babe12d](https://github.com/gaborage/go-bricks/commit/babe12d6160ef9a69aaa57e9216de7b8cfc87e98))
+* **messaging:** mask the password in AMQP and stream dial errors ([#2257](https://github.com/gaborage/go-bricks/issues/2257)) ([7fc23fd](https://github.com/gaborage/go-bricks/commit/7fc23fd50483a4c4ce06b23a10fa69d9810d3077))
+* **messaging:** mask the password in stream start errors ([#2259](https://github.com/gaborage/go-bricks/issues/2259)) ([3c5d70e](https://github.com/gaborage/go-bricks/commit/3c5d70ed5825b9ca0d1ab754cfd2da56c5dae72a))
+* **messaging:** mask the query and misparsed userinfo in dial errors ([#2266](https://github.com/gaborage/go-bricks/issues/2266)) ([03dc32b](https://github.com/gaborage/go-bricks/commit/03dc32bd3ca4a0ce2431d9664c000482ebd54be0))
+* **messaging:** mask URL text that AMQP and stream errors quote or echo ([#2267](https://github.com/gaborage/go-bricks/issues/2267)) ([48afed3](https://github.com/gaborage/go-bricks/commit/48afed351b4465a27b63e3a11d70d59f3b5d9588))
+* **messaging:** pace the redial after an AMQP connection close ([#2154](https://github.com/gaborage/go-bricks/issues/2154)) ([4a9bbb0](https://github.com/gaborage/go-bricks/commit/4a9bbb0b23254d8e51dc9d19c044d5cc07c3d269))
+* **messaging:** render broker_url and stream uri in one posture ([#2268](https://github.com/gaborage/go-bricks/issues/2268)) ([393f231](https://github.com/gaborage/go-bricks/commit/393f231cda3d107dacd90a9d846411539a0de445))
+* **migration:** run a type-less tenant with the runner's vendor ([#2153](https://github.com/gaborage/go-bricks/issues/2153)) ([4f6f8c0](https://github.com/gaborage/go-bricks/commit/4f6f8c03f803ebb77d45842969497b7abcc8f635))
+* **scheduler:** stop echoing the job id in an unknown-job 404 ([#2230](https://github.com/gaborage/go-bricks/issues/2230)) ([01d2071](https://github.com/gaborage/go-bricks/commit/01d207180015dbbf7ce483664b6756570876cb98))
+* **server:** answer 413 BODY_TOO_LARGE for every over-limit body ([#2206](https://github.com/gaborage/go-bricks/issues/2206)) ([25195a9](https://github.com/gaborage/go-bricks/commit/25195a9ee571697d608ec19c99aad4603c9b3960))
+* **server:** bind every admitted JSON media type through one decoder ([#2249](https://github.com/gaborage/go-bricks/issues/2249)) ([424a51e](https://github.com/gaborage/go-bricks/commit/424a51e99c31b2ab1ca3967c8c9fde526f6a5381))
+* **server:** default server.timeout.idle to 75s, above the ALB's 60s ([#2149](https://github.com/gaborage/go-bricks/issues/2149)) ([c1113c7](https://github.com/gaborage/go-bricks/commit/c1113c7f7d47b9e531c7cd0a938ee4bc4d8e6fcd))
+* **server:** describe a route only when one admission step admits it ([#2240](https://github.com/gaborage/go-bricks/issues/2240)) ([08f3cab](https://github.com/gaborage/go-bricks/commit/08f3cabd61591d55b53c0c193cf5e525c67faaee))
+* **server:** key inline-verb routes the way echo v5.4.1 does ([#2203](https://github.com/gaborage/go-bricks/issues/2203)) ([4eeee15](https://github.com/gaborage/go-bricks/commit/4eeee15349015370eb5323d5d9a46c62e91bea16))
+* **server:** key the global rate limiter on client IP only ([#2285](https://github.com/gaborage/go-bricks/issues/2285)) ([6365413](https://github.com/gaborage/go-bricks/commit/63654132e6159a11f097e9a2954e031d4c2e6698)), closes [#2167](https://github.com/gaborage/go-bricks/issues/2167)
+* **server:** refuse reserved engine methods at framework-built doors ([#2242](https://github.com/gaborage/go-bricks/issues/2242)) ([2721072](https://github.com/gaborage/go-bricks/commit/2721072dd2402d6566c23275579b4582aefd25fe))
+* **streams:** adopt stream client v1.9.0 and own reconnect backoff ([#2140](https://github.com/gaborage/go-bricks/issues/2140)) ([8a99a20](https://github.com/gaborage/go-bricks/commit/8a99a206d52a5e36ab1861e8cedda22abb30c8cb))
+* **streams:** keep shutdown quiet about a lost handle's second close ([#2208](https://github.com/gaborage/go-bricks/issues/2208)) ([51066af](https://github.com/gaborage/go-bricks/commit/51066af035fe8d01f3a3dcff79b9c602d24fbfa3))
+
+
+### Changed
+
+* **database:** extract the credential-URL renderer into internal/credurl ([#2243](https://github.com/gaborage/go-bricks/issues/2243)) ([18c2c80](https://github.com/gaborage/go-bricks/commit/18c2c801c15b2df80c9aea4779af09e5e52e223e))
+* **database:** judge every compare operand in one place ([#2246](https://github.com/gaborage/go-bricks/issues/2246)) ([cb4b15a](https://github.com/gaborage/go-bricks/commit/cb4b15a84fbaa84fe0b426966ec22c800a58c492))
+* **database:** list and value positions ask the operand judge ([#2250](https://github.com/gaborage/go-bricks/issues/2250)) ([cd3e563](https://github.com/gaborage/go-bricks/commit/cd3e563142bff7279a006c324d52207e94c5bece))
+* **server:** add the mask table for masked route templates ([#2233](https://github.com/gaborage/go-bricks/issues/2233)) ([c42b5e7](https://github.com/gaborage/go-bricks/commit/c42b5e738ae1779644fd325728b873348d2fcde0))
+* **server:** move the route grammar scanner to its own file ([#2252](https://github.com/gaborage/go-bricks/issues/2252)) ([26a5985](https://github.com/gaborage/go-bricks/commit/26a5985043194ad2b0d49882b952aa497ea6917a))
+* **server:** router that learns each template's masked rendering ([#2234](https://github.com/gaborage/go-bricks/issues/2234)) ([3ff8bf2](https://github.com/gaborage/go-bricks/commit/3ff8bf2f4e5626b7a1d2299c03e9df99a776cd5f))
+* **streams:** defer stream re-creation and drop the reattach seam ([#2150](https://github.com/gaborage/go-bricks/issues/2150)) ([a82e882](https://github.com/gaborage/go-bricks/commit/a82e882031327262c8694460d650028b58f4c0f9))
+
 ## [0.72.0](https://github.com/gaborage/go-bricks/compare/v0.71.1...v0.72.0) (2026-10-15)
 
 
