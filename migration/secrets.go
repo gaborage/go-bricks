@@ -38,9 +38,8 @@ type SecretsProvider struct {
 	// of the default Prefix + tenantID. The tenantID it receives has already
 	// been trimmed and checked by multitenant.ValidateTenantID. Use it for
 	// grammars that place segments after the tenant ID (e.g.
-	// "/env/platform/<id>/db"). The
-	// returned name is used as-is apart from a blank-name check — the
-	// composer owns its correctness. When NameFor is set, Prefix is ignored
+	// "/env/platform/<id>/db"). The returned name is used as-is apart from a
+	// blank-name check — the composer owns its correctness. When NameFor is set, Prefix is ignored
 	// for lookups but a non-empty Prefix is still checked by Validate (a
 	// malformed Prefix alongside NameFor fails fast rather than lingering).
 	NameFor func(tenantID string) (string, error)

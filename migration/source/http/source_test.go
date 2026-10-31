@@ -346,10 +346,7 @@ func TestContractErrorQuotesControlPlaneText(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.err.Error()
-			assert.Equal(t, tc.want, got)
-			assert.NotContains(t, got, "\n")
-			assert.NotContains(t, got, "\x1b")
+			assert.Equal(t, tc.want, tc.err.Error())
 		})
 	}
 }
