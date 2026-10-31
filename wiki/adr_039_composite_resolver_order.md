@@ -45,8 +45,9 @@ caller — is **wrong**, and this ADR retires that framing.
 The resolver extracts an identifier and injects it into `context.Context`; there
 is no entitlement check anywhere in it. Whichever source is used, the deployment
 must authorize the resolved tenant against the authenticated principal — e.g. an
-app-level global middleware (ADR-036) comparing `multitenant.GetTenant(ctx)` against
-a tenant claim in the verified JWT.
+app-level global middleware (ADR-036) that reads `tenantID, ok := multitenant.GetTenant(ctx)`,
+rejects the request when `ok` is false, and compares `tenantID` with a tenant claim in the
+verified JWT.
 
 ### The actual defect in the hardcoded order
 
