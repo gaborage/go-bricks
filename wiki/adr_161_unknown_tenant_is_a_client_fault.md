@@ -34,8 +34,11 @@ tenant the deployment does not serve passes the seat, and the handler runs (#222
    `*ConfigError`. A known tenant's missing section (`BrokerURL` with no `messaging.url`,
    `CacheConfig` with the cache not enabled), the control-plane key `""` and named databases are
    unchanged and never take the sentinel.
-3. **The answer is the malformed-tenant answer:** 400 `BAD_REQUEST` "Invalid tenant" (the shared
-   `msgInvalidTenant`), plus one WARN in the seat's shape, from `logTenantRejection`:
+3. **The answer has the malformed-tenant status and error object:** 400 `BAD_REQUEST` "Invalid
+   tenant" (the shared `msgInvalidTenant`). Response headers can differ: the refusal is written
+   inside the middleware chain, so it carries the security headers and `Vary` the seat's earlier
+   400 does not, which reveals only that the ID matched the public grammar. It also logs one WARN
+   in the seat's shape, from `logTenantRejection`:
    `[server.tenant] request rejected: invalid tenant method=... path=... client=... status=400 reason="unknown tenant"`.
    `path` is the matched route template (`matchedRouteTemplate`), not `URL.Path`, because a path
    resolver puts the tenant ID in the URL. The line never carries the tenant ID or the error text,
@@ -86,6 +89,9 @@ tenant the deployment does not serve passes the seat, and the handler runs (#222
   ([multi_tenant_resolvers.md](multi_tenant_resolvers.md#tenant-resolution-is-identification-not-authorization)).
 - A typed handler changes only when it adopts the door. One that maps the accessor's error to its
   own 500 keeps that answer.
+- The sentinel classifies wherever it sits in the error chain; it is not tied to the request's own
+  tenant. A handler that looks up some other tenant and returns that miss raw answers 400 with
+  the WARN. Map such an error yourself when it is a server fault.
 - A custom `Options.CacheConnector` still dials an unknown tenant: it owns its dial, and
   `FactoryResolver.readCacheSectionForNamespace` still reaches the `*config.ConfigError` and reads
   it as "no section".
