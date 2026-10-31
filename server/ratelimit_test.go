@@ -362,29 +362,21 @@ const (
 	authorizedToken = "Bearer test"
 )
 
-// newTenantLimitServer builds a server whose root chain resolves the tenant from
-// X-Tenant-ID (when tenanted) and runs the built-in limiter at limit rps.
-func newTenantLimitServer(limit int, tenanted bool) *Server {
+// newLimitedGroup builds a server whose root chain resolves the tenant from
+// X-Tenant-ID (when tenanted) and runs the built-in limiter at limit rps, and
+// registers limitedPath under a group at prefix with mw. It returns the route's path.
+func newLimitedGroup(limit int, tenanted bool, prefix string, mw ...MiddlewareFunc) (srv *Server, path string) {
 	cfg := newTestConfig("", "", "")
 	cfg.App.Rate.Limit = limit
 	cfg.Multitenant = config.MultitenantConfig{
 		Enabled:  tenanted,
 		Resolver: config.ResolverConfig{Type: config.ResolverTypeHeader},
 	}
-	return New(cfg, &testLogger{})
-}
-
-func okHandler(c HandlerContext) error {
-	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// authGateStub stands in for auth.Middleware: it rejects a request without an
-// Authorization header before any middleware listed after it runs.
-func authGateStub(c HandlerContext, next func() error) error {
-	if c.RequestHeader(echo.HeaderAuthorization) == "" {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
-	}
-	return next()
+	srv = New(cfg, &testLogger{})
+	srv.ModuleGroup().Group(prefix, mw...).Add(http.MethodGet, limitedPath, func(c HandlerContext) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+	return srv, prefix + limitedPath
 }
 
 func serveLimited(srv *Server, path, remoteAddr, tenant string, authenticated bool) *httptest.ResponseRecorder {
@@ -401,40 +393,39 @@ func serveLimited(srv *Server, path, remoteAddr, tenant string, authenticated bo
 	return rec
 }
 
-func TestRateLimitKeysOnClientIPWhenTenantRotates(t *testing.T) {
-	srv := newTenantLimitServer(1, true)
-	srv.ModuleGroup().Add(http.MethodGet, limitedPath, okHandler)
-
-	tenants := []string{"r1", "r2", "r3", "r4", "r5", "r6"}
+func codesAcrossTenants(srv *Server, path, remoteAddr string, tenants ...string) []int {
 	codes := make([]int, 0, len(tenants))
 	for _, tenant := range tenants {
-		codes = append(codes, serveLimited(srv, limitedPath, clientAAddr, tenant, false).Code)
+		codes = append(codes, serveLimited(srv, path, remoteAddr, tenant, false).Code)
 	}
+	return codes
+}
+
+func TestRateLimitKeysOnClientIPWhenTenantRotates(t *testing.T) {
+	srv, path := newLimitedGroup(1, true, "")
 
 	assert.Equal(t, []int{
 		http.StatusOK, http.StatusOK,
 		http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusTooManyRequests,
-	}, codes, "rotating the tenant must not buy one address a fresh bucket")
+	}, codesAcrossTenants(srv, path, clientAAddr, "r1", "r2", "r3", "r4", "r5", "r6"),
+		"rotating the tenant must not buy one address a fresh bucket")
 }
 
 func TestRateLimitTenantBudgetNotSharedAcrossClientIPs(t *testing.T) {
-	srv := newTenantLimitServer(1, true)
-	srv.ModuleGroup().Add(http.MethodGet, limitedPath, okHandler)
+	srv, path := newLimitedGroup(1, true, "")
 
 	for range 2 {
-		require.Equal(t, http.StatusOK, serveLimited(srv, limitedPath, clientAAddr, "acme", false).Code)
+		require.Equal(t, http.StatusOK, serveLimited(srv, path, clientAAddr, "acme", false).Code)
 	}
-	require.Equal(t, http.StatusTooManyRequests, serveLimited(srv, limitedPath, clientAAddr, "acme", false).Code)
+	require.Equal(t, http.StatusTooManyRequests, serveLimited(srv, path, clientAAddr, "acme", false).Code)
 
-	rec := serveLimited(srv, limitedPath, clientBAddr, "acme", false)
+	rec := serveLimited(srv, path, clientBAddr, "acme", false)
 	assert.Equal(t, http.StatusOK, rec.Code, "client A spending acme must not spend client B's budget")
 	assert.Equal(t, "1", rec.Header().Get("X-RateLimit-Remaining"), "B's headers describe only B's own address bucket")
 }
 
 func TestRateLimitUnauthenticatedFloodSparesOtherClients(t *testing.T) {
-	srv := newTenantLimitServer(1, true)
-	srv.ModuleGroup().Group("/secure", authGateStub).Add(http.MethodGet, limitedPath, okHandler)
-	path := "/secure" + limitedPath
+	srv, path := newLimitedGroup(1, true, "/secure", blockUnlessAuthorized)
 
 	for range 5 {
 		code := serveLimited(srv, path, clientAAddr, "x", false).Code
@@ -446,24 +437,15 @@ func TestRateLimitUnauthenticatedFloodSparesOtherClients(t *testing.T) {
 }
 
 func TestRateLimitPublicKeysOnClientIP(t *testing.T) {
-	srv := newTenantLimitServer(0, true)
-	srv.ModuleGroup().Group("/public", RateLimit(1)).Add(http.MethodGet, limitedPath, okHandler)
-	path := "/public" + limitedPath
+	srv, path := newLimitedGroup(0, true, "/public", RateLimit(1))
 
-	tenants := []string{"r1", "r2", "r3", "r4"}
-	codes := make([]int, 0, len(tenants))
-	for _, tenant := range tenants {
-		codes = append(codes, serveLimited(srv, path, clientAAddr, tenant, false).Code)
-	}
-
-	assert.Equal(t, []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests, http.StatusTooManyRequests}, codes,
+	assert.Equal(t, []int{http.StatusOK, http.StatusOK, http.StatusTooManyRequests, http.StatusTooManyRequests},
+		codesAcrossTenants(srv, path, clientAAddr, "r1", "r2", "r3", "r4"),
 		"server.RateLimit keys on client IP like the built-in limiter")
 }
 
 func TestTenantRateLimitAfterAuthChargesOnlyAuthenticated(t *testing.T) {
-	srv := newTenantLimitServer(0, true)
-	srv.ModuleGroup().Group("/tenant", authGateStub, TenantRateLimit(1)).Add(http.MethodGet, limitedPath, okHandler)
-	path := "/tenant" + limitedPath
+	srv, path := newLimitedGroup(0, true, "/tenant", blockUnlessAuthorized, TenantRateLimit(1))
 
 	for range 3 {
 		rec := serveLimited(srv, path, clientAAddr, "acme", false)
@@ -480,9 +462,7 @@ func TestTenantRateLimitAfterAuthChargesOnlyAuthenticated(t *testing.T) {
 }
 
 func TestTenantRateLimitSharesTenantBudgetAcrossClientIPs(t *testing.T) {
-	srv := newTenantLimitServer(0, true)
-	srv.ModuleGroup().Group("/tenant", authGateStub, TenantRateLimit(1)).Add(http.MethodGet, limitedPath, okHandler)
-	path := "/tenant" + limitedPath
+	srv, path := newLimitedGroup(0, true, "/tenant", blockUnlessAuthorized, TenantRateLimit(1))
 
 	assert.Equal(t, http.StatusOK, serveLimited(srv, path, clientAAddr, "acme", true).Code)
 	assert.Equal(t, http.StatusOK, serveLimited(srv, path, clientBAddr, "acme", true).Code)
@@ -492,26 +472,26 @@ func TestTenantRateLimitSharesTenantBudgetAcrossClientIPs(t *testing.T) {
 		"another tenant from the same address keeps its own budget")
 }
 
-func TestTenantRateLimitPassesThroughWithoutTenant(t *testing.T) {
-	srv := newTenantLimitServer(0, false)
-	srv.ModuleGroup().Group("/tenant", TenantRateLimit(1)).Add(http.MethodGet, limitedPath, okHandler)
-	path := "/tenant" + limitedPath
-
-	for i := range 5 {
-		rec := serveLimited(srv, path, clientAAddr, "", false)
-		require.Equalf(t, http.StatusOK, rec.Code, "request %d without a tenant must pass through", i+1)
-		require.Emptyf(t, rec.Header().Get("X-RateLimit-Limit"), "request %d without a tenant charges no bucket", i+1)
+func TestTenantRateLimitPassesThrough(t *testing.T) {
+	tests := []struct {
+		name     string
+		tenanted bool
+		tenant   string
+		rps      int
+	}{
+		{name: "without_tenant", rps: 1},
+		{name: "disabled", tenanted: true, tenant: "acme", rps: 0},
 	}
-}
 
-func TestTenantRateLimitDisabled(t *testing.T) {
-	srv := newTenantLimitServer(0, true)
-	srv.ModuleGroup().Group("/tenant", TenantRateLimit(0)).Add(http.MethodGet, limitedPath, okHandler)
-	path := "/tenant" + limitedPath
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, path := newLimitedGroup(0, tt.tenanted, "/tenant", TenantRateLimit(tt.rps))
 
-	for i := range 5 {
-		rec := serveLimited(srv, path, clientAAddr, "acme", false)
-		require.Equalf(t, http.StatusOK, rec.Code, "request %d must pass when the tenant limiter is disabled", i+1)
-		require.Empty(t, rec.Header().Get("X-RateLimit-Limit"))
+			for i := range 5 {
+				rec := serveLimited(srv, path, clientAAddr, tt.tenant, false)
+				require.Equalf(t, http.StatusOK, rec.Code, "request %d must pass through", i+1)
+				require.Emptyf(t, rec.Header().Get("X-RateLimit-Limit"), "request %d charges no bucket", i+1)
+			}
+		})
 	}
 }
