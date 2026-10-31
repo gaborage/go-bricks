@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 
@@ -13,14 +12,8 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/configdecode"
+	"github.com/gaborage/go-bricks/multitenant"
 )
-
-// tenantIDPattern enforces a conservative character allowlist on tenant IDs
-// before they are concatenated into secret-store lookup names. AWS Secrets
-// Manager has no path-traversal semantics, so this is defense-in-depth: a
-// compromised control-plane returning malicious tenant IDs cannot craft
-// unexpected secret names (whitespace, control chars, slashes, dots).
-var tenantIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // DefaultSecretsPrefix is the default name prefix used to look up tenant
 // database credentials in a secret store. The full secret name is
@@ -43,8 +36,9 @@ type SecretsProvider struct {
 
 	// NameFor, when non-nil, composes the secret name for a tenant instead
 	// of the default Prefix + tenantID. The tenantID it receives has already
-	// been trimmed and allowlist-validated. Use it for grammars that place
-	// segments after the tenant ID (e.g. "/env/platform/<id>/db"). The
+	// been trimmed and checked by multitenant.ValidateTenantID. Use it for
+	// grammars that place segments after the tenant ID (e.g.
+	// "/env/platform/<id>/db"). The
 	// returned name is used as-is apart from a blank-name check — the
 	// composer owns its correctness. When NameFor is set, Prefix is ignored
 	// for lookups but a non-empty Prefix is still checked by Validate (a
@@ -70,11 +64,6 @@ var ErrNoFetcher = errors.New("migration: SecretsProvider.Fetch is nil")
 
 // ErrEmptyTenantID is returned when DBConfig is invoked with a blank tenant ID.
 var ErrEmptyTenantID = errors.New("migration: tenantID is empty")
-
-// ErrInvalidTenantID is returned when DBConfig is invoked with a tenant ID
-// that contains characters outside the [A-Za-z0-9_-] allowlist or exceeds
-// the 128-character length bound.
-var ErrInvalidTenantID = errors.New("migration: tenantID contains characters outside [A-Za-z0-9_-] or exceeds 128 characters")
 
 // ErrNameForFailed indicates the custom NameFor hook returned an error or
 // a blank (empty/whitespace-only) name for a validated tenant ID.
@@ -137,8 +126,10 @@ func (p *SecretsProvider) DBConfig(ctx context.Context, tenantID string) (*confi
 	if tenantID == "" {
 		return nil, ErrEmptyTenantID
 	}
-	if !tenantIDPattern.MatchString(tenantID) {
-		return nil, ErrInvalidTenantID
+	// The framework grammar keeps whitespace, control bytes, slashes and dots
+	// out of the composed secret name.
+	if err := multitenant.ValidateTenantID(tenantID); err != nil {
+		return nil, err
 	}
 
 	name, err := p.secretNameFor(tenantID)

@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // envelope mirrors the production envelope but is defined locally so tests
@@ -257,6 +259,133 @@ func TestHTTPTenantSourceSkipsEmptyIDs(t *testing.T) {
 	got, err := src.ListTenants(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"good", "also-good"}, got)
+}
+
+func TestHTTPTenantSourceRefusesOffGrammarIDs(t *testing.T) {
+	cases := []struct {
+		name   string
+		pages  [][]string
+		wantAt string
+	}{
+		{"uppercase", [][]string{{"good", "Acme"}}, "page 1, entry 2"},
+		{"underscore", [][]string{{"acme_1"}}, "page 1, entry 1"},
+		{"over_64_bytes", [][]string{{strings.Repeat("a", 65)}}, "page 1, entry 1"},
+		{"newline", [][]string{{"a\nb"}}, "page 1, entry 1"},
+		{"escape_byte", [][]string{{"a\x1b[31mb"}}, "page 1, entry 1"},
+		{"second_page", [][]string{{"a", "b"}, {"c", "Bad"}}, "page 2, entry 2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := listPages(t, tc.pages...)
+			require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+			assert.Contains(t, err.Error(), tc.wantAt)
+		})
+	}
+
+	t.Run("error_carries_no_value", func(t *testing.T) {
+		_, err := listPages(t, []string{"Secret_Tenant\x1b[31m\nX"})
+		require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+		assert.NotContains(t, err.Error(), "Secret_Tenant")
+		assert.NotContains(t, err.Error(), "\x1b")
+		assert.NotContains(t, err.Error(), "\n")
+	})
+
+	t.Run("no_partial_listing", func(t *testing.T) {
+		got, err := listPages(t, []string{"a", "b"}, []string{"Bad"})
+		require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+		assert.Nil(t, got)
+	})
+}
+
+func TestHTTPTenantSourceAcceptsGrammarIDs(t *testing.T) {
+	cases := []struct {
+		name  string
+		pages [][]string
+		want  []string
+	}{
+		{"lowercase", [][]string{{"acme"}}, []string{"acme"}},
+		{"max_64_bytes", [][]string{{strings.Repeat("a", 64)}}, []string{strings.Repeat("a", 64)}},
+		{"padded_whitespace_trimmed", [][]string{{"  acme\t"}}, []string{"acme"}},
+		{"multi_page", [][]string{{"a", "b"}, {"c"}}, []string{"a", "b", "c"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := listPages(t, tc.pages...)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestContractErrorQuotesControlPlaneText(t *testing.T) {
+	cases := []struct {
+		name string
+		err  ContractError
+		want string
+	}{
+		{
+			name: "newline",
+			err:  ContractError{StatusCode: 502, Code: "BAD\nCODE", Message: "line1\nline2"},
+			want: `control-plane returned HTTP 502: "BAD\nCODE": "line1\nline2"`,
+		},
+		{
+			name: "escape_byte",
+			err:  ContractError{StatusCode: 502, Code: "E\x1b[31m", Message: "\x1b]0;title\x07"},
+			want: `control-plane returned HTTP 502: "E\x1b[31m": "\x1b]0;title\a"`,
+		},
+		{
+			name: "plain_text_unchanged_inside_quotes",
+			err:  ContractError{StatusCode: 401, Code: "AUTH_FAILED", Message: "invalid token"},
+			want: `control-plane returned HTTP 401: "AUTH_FAILED": "invalid token"`,
+		},
+		{
+			name: "no_envelope_unchanged",
+			err:  ContractError{StatusCode: 503},
+			want: "control-plane returned HTTP 503",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.err.Error()
+			assert.Equal(t, tc.want, got)
+			assert.NotContains(t, got, "\n")
+			assert.NotContains(t, got, "\x1b")
+		})
+	}
+}
+
+// listPages serves each element of pages as one listing page, chained by
+// cursor, and returns what ListTenants makes of the whole listing.
+func listPages(t *testing.T, pages ...[]string) ([]string, error) {
+	t.Helper()
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		idx := 0
+		if c := r.URL.Query().Get("cursor"); c != "" {
+			n, err := strconv.Atoi(c)
+			if err != nil || n >= len(pages) {
+				t.Errorf("unexpected cursor %q", c)
+				return
+			}
+			idx = n
+		}
+		tenants := make([]map[string]string, 0, len(pages[idx]))
+		for _, id := range pages[idx] {
+			tenants = append(tenants, map[string]string{"id": id})
+		}
+		next := ""
+		if idx+1 < len(pages) {
+			next = strconv.Itoa(idx + 1)
+		}
+		writeJSON(w, stdhttp.StatusOK, writeEnvelope{
+			Data: map[string]any{"tenants": tenants, "next_cursor": next},
+			Meta: map[string]any{},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true})
+	require.NoError(t, err)
+	return src.ListTenants(context.Background())
 }
 
 func TestHTTPTenantSourceRefusesSchemeDowngradeRedirect(t *testing.T) {
