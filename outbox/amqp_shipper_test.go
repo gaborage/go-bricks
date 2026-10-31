@@ -199,6 +199,21 @@ func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 	}
 }
 
+func TestAMQPShipperClassifiesOffGrammarStampAsPoison(t *testing.T) {
+	t.Run("amqp_lane", func(t *testing.T) {
+		f := newFakeAMQP()
+		f.PublishErr = multitenant.ValidateTenantID("Acme")
+		s := newAMQPShipperWithFake(f)
+		rec := &Record{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"}
+
+		v := s.Ship(context.Background(), &shipment{Record: rec, Headers: map[string]any{}, Stamp: "Acme"})
+
+		assert.Equal(t, shipPoison, v.Kind, "a stored stamp off the grammar fails the same way every cycle")
+		require.ErrorIs(t, v.Err, multitenant.ErrInvalidTenantID)
+		assert.NotContains(t, v.Err.Error(), "Acme")
+	})
+}
+
 // TestAMQPShipperReportsABrokerDropWhenItsClientCannotBeResolved pins that a client that
 // disappears mid-cycle is an outage, not a per-record fault: the relay stops the cycle
 // rather than resolving a dead broker once per remaining row.

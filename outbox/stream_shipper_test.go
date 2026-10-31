@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // TestStreamShipperIsAlwaysReady pins that the stream lane has no lane-wide pre-flight:
@@ -187,6 +188,21 @@ func TestStreamShipperClassifiesItsPublishFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStreamShipperClassifiesOffGrammarStampAsPoison(t *testing.T) {
+	t.Run("stream_lane", func(t *testing.T) {
+		pub := &fakeStreamPublisher{Err: multitenant.ValidateTenantID("Acme")}
+		s := streamShipperWith(pub)
+		rec := streamRow()
+		rec.PartitionKey = "Acme"
+
+		v := s.Ship(context.Background(), &shipment{Record: &rec, Headers: map[string]any{}, Stamp: "Acme", Scope: "customers"})
+
+		assert.Equal(t, shipPoison, v.Kind, "a stored stamp off the grammar fails the same way every cycle")
+		require.ErrorIs(t, v.Err, multitenant.ErrInvalidTenantID)
+		assert.NotContains(t, v.Err.Error(), "Acme")
+	})
 }
 
 // TestStreamShipperShipsPoisonAsATotalityGuardForAnUnknownTarget keeps Ship total: the

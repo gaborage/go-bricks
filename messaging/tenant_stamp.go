@@ -27,7 +27,9 @@ var ErrTenantStampConflict = tenantstamp.ErrConflict
 // TenantStampHeader in headers is refused with ErrTenantStampConflict (equal
 // value included), then the context tenant is the stamp. There is no pool key to
 // fall back on, so the context is the only source; an empty stamp with a nil
-// error means no tenant is in play and nothing must be written.
+// error means no tenant is in play and nothing must be written. A non-empty
+// stamp that fails the tenant-ID grammar is refused with an error wrapping
+// multitenant.ErrInvalidTenantID (ADR-162).
 func ResolveTenantStamp(ctx context.Context, headers map[string]any) (string, error) {
 	return tenantstamp.ResolveForPublish(ctx, headers, "")
 }

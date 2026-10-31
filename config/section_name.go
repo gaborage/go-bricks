@@ -9,8 +9,10 @@ import (
 
 // checkSectionName holds the USER-CHOSEN section keys under databases and
 // multitenant.tenants to one grammar, keyname.ValidSectionName (^[a-z0-9-]+$).
-// It is the resolver's tenant-ID grammar without the length bound, which stays
-// the resolver's. A keystore.keys entry name and a messaging.seal.active
+// It is the tenant-ID grammar without its length bound. For a static
+// multitenant.tenants key, checkMultitenantTenantEntry also applies
+// multitenant.ValidateTenantID, and with it the 64-byte bound, after this
+// check (ADR-162). A keystore.keys entry name and a messaging.seal.active
 // selector key are dotted paths of such segments instead, written nested and
 // reached by the same transform (keyname.ValidName, ADR-144).
 //

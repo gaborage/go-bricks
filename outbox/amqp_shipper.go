@@ -7,6 +7,7 @@ import (
 
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // amqpShipper is the classic AMQP 0.9.1 lane's adapter (ADR-088). It reaches the
@@ -112,9 +113,11 @@ func (s *amqpShipper) Ship(ctx context.Context, sh *shipment) verdict {
 	case errors.Is(err, context.Canceled), errors.Is(err, messaging.ErrShutdown):
 		// Shutdown/cancel is not a delivery failure — do not advance retry_count.
 		return verdict{Kind: shipAborted}
-	case errors.Is(err, messaging.ErrInvalidPublishDestination), errors.Is(err, messaging.ErrTenantStampConflict):
-		// A frame the wire can never carry, or a stamp the row contradicts: both read
-		// the same way every cycle, so they park rather than retrying forever.
+	case errors.Is(err, messaging.ErrInvalidPublishDestination), errors.Is(err, messaging.ErrTenantStampConflict),
+		errors.Is(err, multitenant.ErrInvalidTenantID):
+		// A frame the wire can never carry, a stamp the row contradicts, or a stored stamp
+		// off the tenant-ID grammar: all read the same way every cycle, so they park rather
+		// than retrying forever.
 		return verdict{Kind: shipPoison, Err: err}
 	case errors.Is(err, messaging.ErrNotConnected) && !client.IsReady():
 		// Checked fresh, not inferred from the error alone: a flap that already

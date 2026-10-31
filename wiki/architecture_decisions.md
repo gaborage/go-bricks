@@ -2724,6 +2724,27 @@ open. See [migrations.md](migrations.md) `[C73.20]`.
 **Key Benefits:** no caller-chosen string keys a framework rate-limit bucket by default, limiter memory
 is bounded by client addresses, and a per-tenant budget is an explicit, post-authentication choice.
 
+### [ADR-162: The Tenant-ID Grammar Is Fixed and Enforced at Every Write Door](adr_162_tenant_id_grammar_is_fixed.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a static `multitenant.tenants` key over 64 bytes fails startup, a publish whose context tenant or replay key fails the grammar returns `multitenant.ErrInvalidTenantID` and sends or persists nothing, and a pending outbox row stored under such a stamp parks at `MaxRetries`
+
+`^[a-z0-9-]{1,64}$`, applied through `multitenant.ValidateTenantID`, is the one tenant-ID grammar
+and is never configurable. It is the fleet-wide wire contract of the `x-tenant-id` stamp, which
+per-service configuration cannot keep in agreement, and the isolation invariant for the key spaces a
+tenant ID shares: the `named:` database keys, the cache key delimiter `:` (ADR-117) and the 64-byte
+`jose/sealed` `MaxTenantIDLen`. Only the HTTP seat and the stamp read enforced it, so a static key
+over 64 bytes booted unreachable, and a publish stamped an off-grammar tenant that a shared-tenancy
+consumer refused on another service. `checkMultitenantTenantEntry` now applies it after the ADR-090
+section-name check, `tenantstamp.Resolve` applies it to a non-empty decided stamp after the conflict
+rule, and both outbox shippers park a stored off-grammar stamp as poison. A tenant identity that
+does not fit is mapped into the grammar in a route family's `Tenant` step (#2166). The unread
+`multitenant.validation.pattern` leaves `config.example.yaml`. See [migrations.md](migrations.md)
+`[C73.22]`.
+
+**Key Benefits:** an off-grammar tenant fails where it is written, at startup or at the publish call,
+instead of as a dead letter on the consuming service, and the rule that keeps a tenant ID out of the
+named-database and other tenants' cache key spaces is a recorded contract, not a convention.
+
 ---
 
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
@@ -3535,7 +3556,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-160) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-162) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

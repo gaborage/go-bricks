@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,6 +46,27 @@ func TestResolveTenantStampRefusesACallerSuppliedStamp(t *testing.T) {
 
 			require.ErrorIs(t, err, ErrTenantStampConflict)
 			assert.Empty(t, stamp)
+		})
+	}
+}
+
+func TestResolveTenantStampRefusesOffGrammarTenant(t *testing.T) {
+	tests := []struct {
+		name   string
+		tenant string
+	}{
+		{name: "uppercase", tenant: "Acme"},
+		{name: "over_64_bytes", tenant: strings.Repeat("a", 65)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := multitenant.SetTenant(context.Background(), tt.tenant)
+
+			stamp, err := ResolveTenantStamp(ctx, nil)
+
+			require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+			assert.Empty(t, stamp)
+			assert.NotContains(t, err.Error(), tt.tenant)
 		})
 	}
 }

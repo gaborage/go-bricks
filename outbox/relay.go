@@ -763,13 +763,16 @@ func (r *Relay) recordPublished(ctx context.Context, log logger.Logger, db dbtyp
 // it only advances retry_count and leaves the record pending.
 //
 // Poison is message-intrinsic — the row reads the same way every cycle, so no broker state can
-// make it publishable. Six classes park here, each from a call site above:
+// make it publishable. Seven classes park here, each from a call site above:
 //   - undecodable headers: the stored JSON does not parse, so no frame can be built.
 //   - unknown lane: the row names a lane this build has no shipper for.
 //   - unpublishable destination: an exchange, routing key or header key past the AMQP shortstr
 //     ceiling, refused before any channel work (messaging.ErrInvalidPublishDestination).
 //   - tenant-stamp conflict: the row's own stamp contradicts the publish context
 //     (messaging.ErrTenantStampConflict). ONE class, reachable on BOTH lanes.
+//   - off-grammar tenant stamp: the row's stored stamp fails the tenant-ID grammar
+//     (multitenant.ErrInvalidTenantID), as a row written before the publish-side check
+//     can. ONE class, reachable on BOTH lanes.
 //   - stream not an outbox target: the streams lane is not wired at all, or the row's stream
 //     left outbox.superstreams between deploys.
 //   - stream row with no partition key: nothing to hash a partition from.

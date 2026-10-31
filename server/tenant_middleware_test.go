@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -168,4 +169,47 @@ func TestTenantMiddlewareNilSkipperResolvesEveryRoute(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "with a tenant header the same request resolves")
+}
+
+// TestTenantSeatRefusesOffGrammarID pins the seat built by New: a header-resolved ID
+// outside the tenant-ID grammar is refused before any module route runs.
+func TestTenantSeatRefusesOffGrammarID(t *testing.T) {
+	cfg := newTestConfig("", "", "")
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = config.ResolverTypeHeader
+	srv := New(cfg, &testLogger{})
+	srv.echo.GET("/api/orders", okEchoHandler)
+
+	tests := []struct {
+		name       string
+		tenant     string
+		wantStatus int
+	}{
+		{name: "uppercase", tenant: "Acme", wantStatus: http.StatusBadRequest},
+		{name: "underscore", tenant: "acme_1", wantStatus: http.StatusBadRequest},
+		{name: "dot", tenant: "acme.prod", wantStatus: http.StatusBadRequest},
+		{name: "colon", tenant: "named:primary", wantStatus: http.StatusBadRequest},
+		{name: "slash", tenant: "acme/prod", wantStatus: http.StatusBadRequest},
+		{name: "over_64_bytes", tenant: strings.Repeat("a", 65), wantStatus: http.StatusBadRequest},
+		{name: "max_64_bytes", tenant: strings.Repeat("a", 64), wantStatus: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/orders", http.NoBody)
+			req.Header.Set(HeaderXTenantID, tt.tenant)
+			rec := httptest.NewRecorder()
+
+			srv.echo.ServeHTTP(rec, req)
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantStatus == http.StatusOK {
+				return
+			}
+			var resp APIResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, "BAD_REQUEST", resp.Error.Code)
+			assert.Equal(t, "Invalid tenant", resp.Error.Message)
+		})
+	}
 }

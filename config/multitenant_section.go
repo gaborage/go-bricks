@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // normalizeMultitenant shapes the multitenant section: resolver and limits
@@ -99,8 +101,8 @@ func checkStaticTenantMap(tenants map[string]TenantEntry, msg *MessagingConfig) 
 
 // checkMultitenantTenantEntry rejects one static tenant's ID and cache
 // section: an empty or dotted ID, an ID no environment variable can address
-// (checkSectionName), or (once the ID is valid) whatever checkTenantCache
-// rejects.
+// (checkSectionName), an ID over the tenant-ID grammar's 64-byte bound, or
+// (once the ID is valid) whatever checkTenantCache rejects.
 func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 	if tenantID == "" {
 		return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")
@@ -118,6 +120,15 @@ func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 	// its request-time gate.
 	if err := checkSectionName(fmt.Sprintf(tenantsFieldPrefix, tenantID), tenantID); err != nil {
 		return err
+	}
+	// After checkSectionName, so its messages win: the length bound is all this adds.
+	if err := multitenant.ValidateTenantID(tenantID); err != nil {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fmt.Sprintf(tenantsFieldPrefix, tenantID),
+			Message:  fmt.Sprintf("tenant ID is %d bytes, maximum is 64 (the tenant-ID grammar)", len(tenantID)),
+			Action:   "rename it to 64 bytes or fewer: the request seat and the message stamp refuse a longer tenant ID",
+		}
 	}
 	return checkTenantCache(tenantID, &entry.Cache)
 }

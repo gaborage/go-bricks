@@ -17,13 +17,23 @@ All resolvers funnel through the same interface (`multitenant.TenantResolver`) a
 
 ## Validation
 
-Every resolved tenant ID is checked against a regex (default `^[a-z0-9-]{1,64}$`) before it lands in context. Reject the request rather than silently masking malformed IDs — tenant strings are used downstream as DB schema names, cache keys, and span attributes, so a strict allowlist closes a class of injection attacks. The composite resolver advances to the next sub-resolver if the validation fails (same as a missing tenant).
+Every resolved tenant ID is checked against the tenant-ID grammar `^[a-z0-9-]{1,64}$`
+(`multitenant.ValidateTenantID`) before it lands in context. The grammar is fixed, not
+configurable ([ADR-162](adr_162_tenant_id_grammar_is_fixed.md)). Reject the request rather than
+silently masking malformed IDs: a tenant ID shares key spaces with other identifiers, and the
+grammar is what keeps them apart. It keeps a tenant named `named:x` out of the named-database keys
+(`databases.x`), keeps a `:` from reaching into another tenant's cache keys (the cache key
+delimiter, [ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md)), and is the fleet-wide wire
+contract of the `x-tenant-id` message stamp, checked when a message is published and again when it
+is consumed. No schema or SQL identifier is built from a tenant ID. The composite resolver advances to the next
+sub-resolver if the validation fails (same as a missing tenant).
 
-The same character class applies to the keys of a STATIC `multitenant.tenants` map, checked at
-startup rather than per request, so a tenant section is reachable by environment variable
-([ADR-090](adr_090_env_reachable_section_names.md)). It is a separate regexp with no length bound,
-so a static key longer than 64 characters passes startup and would still be refused here; a hyphenated ID is legal but settable only
-where the runtime permits `-` in a variable name (Docker and Kubernetes yes, POSIX `export` no).
+The same grammar applies to the keys of a STATIC `multitenant.tenants` map, checked at startup
+rather than per request. The section-name check runs first, so a tenant section is reachable by
+environment variable ([ADR-090](adr_090_env_reachable_section_names.md)); then
+`multitenant.ValidateTenantID` runs, so the 64-byte bound applies at load and a longer key fails
+startup. A hyphenated ID is legal but settable only where the runtime permits `-` in a variable
+name (Docker and Kubernetes yes, POSIX `export` no).
 A DYNAMIC source's IDs are not checked at startup — they arrive at request time and this resolver
 rule is their gate.
 
