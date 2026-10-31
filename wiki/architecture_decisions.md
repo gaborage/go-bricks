@@ -1130,7 +1130,7 @@ strengthening [ADR-055](adr_055_reserved_log_attribute_namespaces.md). Fixes
 
 ### [ADR-057: The client IP is derived through trusted proxies, not raw `X-Forwarded-For`](adr_057_trusted_proxy_ip_extraction.md)
 
-**Date:** 2026-08-10 | **Status:** Accepted
+**Date:** 2026-08-10 (amended 2026-10-31, #2167) | **Status:** Accepted
 
 [ADR-015](adr_015_echo_v5_migration.md) installed `echo.LegacyIPExtractor()` to restore v4-compatible
 `RealIP()` across the echo v5 hop and recorded replacing it with trusted-proxy-aware extraction as a
@@ -1158,8 +1158,9 @@ used the safe `server.ClientIP` path. **Watch:** rate-limit buckets and the clie
 five `RealIP()` sites change value; a proxy on a public address now needs a `server.trustedproxies`
 entry; and a proxy that writes a non-IP XFF entry (AWS ALB's `routing.http.xff_client_port.enabled`)
 makes echo abandon the chain and key the whole fleet on the load balancer — a deployment-side fix that
-`server.trustedproxies` cannot rescue. The tenant-keyed half of F23 remains open. See
-[migrations.md](migrations.md) `[C59.1]`.
+`server.trustedproxies` cannot rescue. The tenant-keyed half of F23 is closed by
+[ADR-160](adr_160_rate_limit_keys_on_client_ip.md), which keys the global limiter on the client IP
+alone. See [migrations.md](migrations.md) `[C59.1]`.
 
 ### [ADR-058: Consumers carry per-consumer AMQP arguments, at the cost of struct comparability](adr_058_consumer_scoped_amqp_arguments.md)
 
@@ -2704,6 +2705,25 @@ scheme separator renders `xxxxx`. Refusing a misparsed URL before the dial is le
 **Key Benefits:** a password that url.Parse misreads as host, port or path no longer reaches error
 text, and the query, a lone username and a non-URL DSN are masked with it.
 
+### [ADR-160: The Global Rate Limiter Keys on the Client IP Only](adr_160_rate_limit_keys_on_client_ip.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `app.rate.limit` becomes a per-client-IP budget for every request, whether or not a tenant resolved (before, a resolved tenant had its own bucket); `server.RateLimit` keys the same way
+
+The built-in limiter keyed on the resolved tenant when there was one, and the tenant is whatever the
+caller wrote. Rotating tenant values bought one address a fresh bucket per value, naming a victim
+tenant drained its bucket and read its `X-RateLimit-Remaining`, and the store grew by one entry per
+value. The built-in limiter and `server.RateLimit` now key on `RealIP()` alone; burst, cleanup and
+`<= 0` disabling are unchanged. The new `server.TenantRateLimit` limits per context tenant with the
+same derivation, passes a tenant-less request through uncharged, and is never installed by the
+framework: it goes in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it and
+after the application's tenant-authorization check.
+Every client behind one NAT or gateway now shares a bucket, and `server.trustedproxies` decides the
+key. Closes the tenant-keyed half of F23 that [ADR-057](adr_057_trusted_proxy_ip_extraction.md) left
+open. See [migrations.md](migrations.md) `[C73.20]`.
+
+**Key Benefits:** no caller-chosen string keys a framework rate-limit bucket by default, limiter memory
+is bounded by client addresses, and a per-tenant budget is an explicit, post-authentication choice.
+
 ---
 
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
@@ -3515,7 +3535,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-159) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-160) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

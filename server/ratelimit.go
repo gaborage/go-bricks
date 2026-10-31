@@ -16,7 +16,8 @@ const (
 )
 
 // RateLimit returns a rate limiting middleware with the specified requests per second.
-// It limits the number of requests per tenant (or per client IP when no tenant is resolved) to prevent abuse.
+// It keys on the client IP alone, as the built-in limiter does, whether or not a tenant
+// resolved (ADR-160); the IP is derived through server.trustedproxies (ADR-057).
 // If requestsPerSecond is 0 or negative, rate limiting is disabled.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
@@ -26,10 +27,38 @@ func RateLimit(requestsPerSecond int) MiddlewareFunc {
 	return fromEchoMiddleware(rateLimitEcho(requestsPerSecond))
 }
 
+// TenantRateLimit returns a rate limiting middleware keyed on the tenant in the
+// request context, with RateLimit's rate and burst derivation (ADR-160). A request
+// with no tenant passes through without charging any bucket. If requestsPerSecond is
+// 0 or negative, it is a pass-through. The framework never installs it.
+//
+// The tenant is caller-written, so attach it in the same RouteRegistrar.Group call as
+// auth.Middleware, listed after it, and after whatever check ties the resolved tenant
+// to the caller: auth.Middleware verifies the credential, not the tenant. Its
+// X-RateLimit-* headers overwrite the built-in limiter's, so a response's headers
+// describe the innermost limiter that ran.
+func TenantRateLimit(requestsPerSecond int) MiddlewareFunc {
+	return fromEchoMiddleware(rateLimiterEcho(requestsPerSecond, withoutTenant, contextTenant))
+}
+
 // rateLimitEcho is the echo-native rate-limiting middleware constructor. Public
 // callers use RateLimit (echo-free); SetupMiddlewares uses this form to keep the
 // default chain baton-free.
 func rateLimitEcho(requestsPerSecond int) echo.MiddlewareFunc {
+	return rateLimiterEcho(requestsPerSecond, middleware.DefaultSkipper, (*echo.Context).RealIP)
+}
+
+func withoutTenant(ctx *echo.Context) bool {
+	_, ok := multitenant.GetTenant(ctx.Request().Context())
+	return !ok
+}
+
+func contextTenant(ctx *echo.Context) string {
+	tenantID, _ := multitenant.GetTenant(ctx.Request().Context())
+	return tenantID
+}
+
+func rateLimiterEcho(requestsPerSecond int, skipper middleware.Skipper, key func(*echo.Context) string) echo.MiddlewareFunc {
 	if requestsPerSecond <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next
@@ -37,7 +66,7 @@ func rateLimitEcho(requestsPerSecond int) echo.MiddlewareFunc {
 	}
 
 	config := middleware.RateLimiterConfig{
-		Skipper: middleware.DefaultSkipper,
+		Skipper: skipper,
 		Store: middleware.NewRateLimiterMemoryStoreWithConfig(
 			middleware.RateLimiterMemoryStoreConfig{
 				Rate:      float64(requestsPerSecond),
@@ -46,10 +75,7 @@ func rateLimitEcho(requestsPerSecond int) echo.MiddlewareFunc {
 			},
 		),
 		IdentifierExtractor: func(ctx *echo.Context) (string, error) {
-			if tenantID, ok := multitenant.GetTenant(ctx.Request().Context()); ok {
-				return tenantID, nil
-			}
-			return ctx.RealIP(), nil
+			return key(ctx), nil
 		},
 		ErrorHandler: func(context *echo.Context, _ error) error {
 			return context.JSON(http.StatusTooManyRequests, map[string]any{

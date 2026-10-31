@@ -82,7 +82,7 @@ Use this when downstream clients route by URL path rather than header or hostnam
 
 ### Why path-segment over Echo's `c.Param("tenantID")`?
 
-Route params would only resolve **inside** a route group like `r.Group("/itsp/:tenantID", ...)`. That means framework middleware that needs the tenant before route matching (rate limiting, request logging, OTel span attributes, tenant-scoped DB resolution) wouldn't have it. The path resolver extracts at the URL level, before routing, so the entire framework's tenant-aware machinery has the value from the first middleware onward.
+Route params would only resolve **inside** a route group like `r.Group("/itsp/:tenantID", ...)`. That means framework middleware that needs the tenant before route matching (request logging, OTel span attributes, tenant-scoped DB resolution) wouldn't have it. The path resolver extracts at the URL level, before routing, so the entire framework's tenant-aware machinery has the value from the first middleware onward.
 
 ## Composite resolver
 
@@ -128,6 +128,8 @@ See [ADR-039](adr_039_composite_resolver_order.md) for why the framework refuses
 - **Subdomain** — `SubdomainResolver` reads `req.Host`, and `Host` is *itself a request header*. It is constrained only if your ingress pins it (per-tenant DNS/vhost/SNI, or a `Host` allowlist) — something the framework cannot verify.
 
 The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a [global middleware](global_middleware.md) comparing `multitenant.Tenant(ctx)` against the tenant claim in the verified JWT.
+
+The same holds for a per-tenant rate limit. The framework's global limiter keys on the client IP, never on the resolved tenant ([ADR-160](adr_160_rate_limit_keys_on_client_ip.md)). A per-tenant budget is `server.TenantRateLimit`, attached in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it, and after whatever check ties the resolved tenant to the caller; ahead of that check, any caller can drain a tenant it names.
 
 > **Deployment obligations (normative).** A composite deployment that does not meet these does not have tenant isolation, whatever order it declares. Each is scoped to the order you actually declare — an obligation about a sub-resolver you did not list does not apply to you.
 >

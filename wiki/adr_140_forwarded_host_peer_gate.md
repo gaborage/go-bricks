@@ -22,6 +22,12 @@ limiter. Per-tenant accessors and the tenant-keyed rate-limit bucket follow it.
 ingress to ensure only the trusted proxy can set the header, so this ADR hardens a
 posture-based model rather than restoring a broken guarantee.
 
+> **Amended (2026-10-31, #2167, by [ADR-160](adr_160_rate_limit_keys_on_client_ip.md)):** the
+> rate limiter no longer follows the resolved tenant. The global limiter keys on the client IP
+> alone, so no framework rate-limit bucket is keyed on the tenant; a per-tenant budget is the
+> opt-in `server.TenantRateLimit`, attached after authentication. Per-tenant accessors still
+> follow the resolved tenant.
+
 ## Decision
 
 1. **`proxies` stays the explicit opt-in, default `false`.** With it `false`,
