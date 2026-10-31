@@ -16,6 +16,10 @@
 > `auth.Middleware` shape (ADR-109). No config key is added. Mounting the guard makes the same
 > posture assertion as `enabled` for that route family, in every environment, whatever `enabled`
 > says.
+>
+> **Corrected (2026-10-31, #2221):** the amendment above says the middleware runs before
+> routing. It runs on the root `e.Use` chain, which echo v5 runs after routing and before group
+> and route middleware; the other reasons for rejecting a scoped `require` are unaffected.
 
 ## Context
 

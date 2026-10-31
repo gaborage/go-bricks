@@ -7,6 +7,10 @@
 > `proxies: true`, `SubdomainResolver` believes `X-Forwarded-Host` only from a trusted
 > immediate peer, takes its last entry, and fails the request terminally when an untrusted
 > peer sends it. Obligation 1 below is reworded to match.
+>
+> **Corrected (2026-10-31, #2221):** the trust-model section cited `multitenant.Tenant(ctx)`,
+> which does not exist; the context accessors are `multitenant.GetTenant` and
+> `multitenant.TenantID`, and the text below now names `GetTenant`.
 
 ## Context
 
@@ -41,7 +45,7 @@ caller — is **wrong**, and this ADR retires that framing.
 The resolver extracts an identifier and injects it into `context.Context`; there
 is no entitlement check anywhere in it. Whichever source is used, the deployment
 must authorize the resolved tenant against the authenticated principal — e.g. an
-app-level global middleware (ADR-036) comparing `multitenant.Tenant(ctx)` against
+app-level global middleware (ADR-036) comparing `multitenant.GetTenant(ctx)` against
 a tenant claim in the verified JWT.
 
 ### The actual defect in the hardcoded order

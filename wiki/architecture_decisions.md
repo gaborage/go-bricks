@@ -702,6 +702,8 @@ Amended 2026-09-14 (#1611): a route family requires the identity with
 `server.RequireForwardedClientCert` mounted on its group — it re-parses the headers under any
 `enabled` setting, refuses on the same two conditions with the same 401, and exempts no probe;
 YAML scoping of `require` was rejected (polymorphic bool, raw-path matching, client-written `Host`).
+Corrected 2026-10-31 (#2221): the middleware runs on the root `e.Use` chain after routing, not
+before it, so the raw-path reason does not hold; the other two are unaffected.
 
 **Key Benefits:** Replaces per-service hand-rolled header parsing (and its URL-decoding
 trap) with one audited implementation; corrects the ALB-stripping assumption ADR-042's

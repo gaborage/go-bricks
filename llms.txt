@@ -4834,7 +4834,7 @@ func (h *OrderHandler) Handle(ctx context.Context, delivery *amqp.Delivery) erro
 ```
 
   A missing or malformed stamp is refused before the handler (nack-without-requeue on the classic lane, uncommitted offset on the streams lane); set `ConsumerOptions.TenantOptional` for a control-plane consumer that legitimately has no tenant. A caller that sets `x-tenant-id` itself gets `messaging.ErrTenantStampConflict`. The stamp is identification, not authorization: under shared tenancy the queue's publish ACL is the tenant-isolation boundary.
-- Resolution runs as middleware before route matching, so `deps.DB(ctx)` / `deps.Cache(ctx)` etc. resolve to the tenant-specific instance on every request.
+- Resolution runs as root middleware after routing and before group and route middleware, so `deps.DB(ctx)` / `deps.Cache(ctx)` etc. resolve to the tenant-specific instance on every request.
 - Resolved tenant IDs are validated against `^[a-z0-9-]{1,64}$` before landing in context. The composite resolver returns the first non-empty, valid tenant ID, advancing to the next sub-resolver when one yields nothing (empty result or error) or fails validation.
 
 **Header (default for internal APIs):**
