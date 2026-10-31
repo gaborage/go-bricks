@@ -49,7 +49,7 @@ The resolver extracts an identifier and injects it into `context.Context`; there
 is no entitlement check anywhere in it. Whichever source is used, the deployment
 must authorize the resolved tenant against the authenticated principal — e.g. a
 middleware attached in the same route group as `auth.Middleware` and listed after it, that
-reads `tenantID, ok := multitenant.GetTenant(ctx)`, rejects the request when `ok` is false,
+reads `tenantID, ok := multitenant.GetTenant(ctx.RequestContext())`, rejects the request when `ok` is false,
 and compares `tenantID` with a tenant claim of the verified `auth.Principal`.
 
 ### The actual defect in the hardcoded order
