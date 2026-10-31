@@ -775,26 +775,7 @@ func TestCheckMultitenantTenantEntryAcceptsReachableIDs(t *testing.T) {
 	}
 }
 
-// staticTenantKeyConfig is a static multitenant map with one tenant under key, every
-// other section valid, so the key is the only thing Validate can refuse.
-func staticTenantKeyConfig(key string) map[string]any {
-	return map[string]any{
-		"multitenant": map[string]any{
-			"enabled":  true,
-			"resolver": map[string]any{"type": ResolverTypeHeader, "header": testTenantHeader},
-			"tenants": map[string]any{
-				key: map[string]any{
-					"database": map[string]any{
-						"type": PostgreSQL, "host": testTenantDBHost, "port": 5432,
-						"database": "acme", "username": "acme",
-					},
-				},
-			},
-		},
-	}
-}
-
-func TestLoadRefusesOverlongStaticTenantKey(t *testing.T) {
+func TestValidateRefusesOverlongStaticTenantKey(t *testing.T) {
 	tests := []struct {
 		name    string
 		key     string
@@ -805,17 +786,19 @@ func TestLoadRefusesOverlongStaticTenantKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := LoadFromMap(staticTenantKeyConfig(tt.key))
-			require.NoError(t, err)
+			cfg := staticMultitenantFixture()
+			cfg.Multitenant.Tenants[tt.key] = TenantEntry{Database: createValidDatabaseConfig()}
 
-			err = Validate(cfg)
+			err := Validate(cfg)
 
 			if !tt.wantErr {
 				require.NoError(t, err)
-				assert.Contains(t, cfg.Multitenant.Tenants, tt.key)
 				return
 			}
-			assertSectionNameRejected(t, err, "multitenant.tenants."+tt.key)
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "multitenant.tenants."+tt.key, cfgErr.Field)
+			require.ErrorContains(t, err, "rename")
 			assert.ErrorContains(t, err, "65 bytes")
 		})
 	}

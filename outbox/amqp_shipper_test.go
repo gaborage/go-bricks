@@ -133,6 +133,7 @@ func TestAMQPShipperShipsTheRecordToItsDestination(t *testing.T) {
 func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 	destinationErr := fmt.Errorf("%w: routing key is 256 bytes, limit is 255", messaging.ErrInvalidPublishDestination)
 	nackErr := fmt.Errorf("%w after 5 attempts: %w", messaging.ErrPublishRetriesExhausted, messaging.ErrPublishNacked)
+	offGrammarErr := multitenant.ValidateTenantID("Acme")
 	// The resolver Ready already reports as "the lane is unusable" — a nil client with no
 	// error. Ship must read that condition identically, so the expected text is asked of
 	// Ready itself rather than hand-spelled, and the two can never drift apart.
@@ -156,6 +157,10 @@ func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 		{
 			name: "stamp_conflict_is_poison", publishErr: messaging.ErrTenantStampConflict,
 			wantKind: shipPoison, wantReason: messaging.ErrTenantStampConflict.Error(),
+		},
+		{
+			name: "off_grammar_stamp_is_poison", publishErr: offGrammarErr,
+			wantKind: shipPoison, wantReason: offGrammarErr.Error(),
 		},
 		{
 			name: "not_connected_and_still_unready_is_a_broker_drop", publishErr: messaging.ErrNotConnected,
@@ -197,21 +202,6 @@ func TestAMQPShipperClassifiesItsPublishFailures(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestAMQPShipperClassifiesOffGrammarStampAsPoison(t *testing.T) {
-	t.Run("amqp_lane", func(t *testing.T) {
-		f := newFakeAMQP()
-		f.PublishErr = multitenant.ValidateTenantID("Acme")
-		s := newAMQPShipperWithFake(f)
-		rec := &Record{ID: "evt-1", Exchange: "ex", RoutingKey: "rk"}
-
-		v := s.Ship(context.Background(), &shipment{Record: rec, Headers: map[string]any{}, Stamp: "Acme"})
-
-		assert.Equal(t, shipPoison, v.Kind, "a stored stamp off the grammar fails the same way every cycle")
-		require.ErrorIs(t, v.Err, multitenant.ErrInvalidTenantID)
-		assert.NotContains(t, v.Err.Error(), "Acme")
-	})
 }
 
 // TestAMQPShipperReportsABrokerDropWhenItsClientCannotBeResolved pins that a client that

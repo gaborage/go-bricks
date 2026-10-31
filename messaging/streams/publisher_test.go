@@ -261,24 +261,15 @@ func TestPublisherPublishRefusesACallerSuppliedStamp(t *testing.T) {
 }
 
 func TestStreamsPublishRefusesOffGrammarTenant(t *testing.T) {
-	tests := []struct {
-		name   string
-		tenant string
-	}{
-		{name: "uppercase", tenant: "Acme"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			handle := openProducer()
-			p := boundPublisher(handle)
+	const tenant = "Acme"
+	handle := openProducer()
+	p := boundPublisher(handle)
 
-			err := p.Publish(multitenant.SetTenant(context.Background(), tt.tenant), &PublishMessage{Data: []byte(testBody)})
+	err := p.Publish(multitenant.SetTenant(context.Background(), tenant), &PublishMessage{Data: []byte(testBody)})
 
-			require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
-			assert.NotContains(t, err.Error(), tt.tenant)
-			assert.Zero(t, handle.sentCount(), "a refused publish never reaches the producer")
-		})
-	}
+	require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+	assert.NotContains(t, err.Error(), tenant)
+	assert.Zero(t, handle.sentCount(), "a refused publish never reaches the producer")
 }
 
 func TestPublisherPublishFailsOnARejectedConfirmation(t *testing.T) {

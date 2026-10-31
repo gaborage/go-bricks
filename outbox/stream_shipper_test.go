@@ -153,6 +153,7 @@ func TestStreamShipperAbortsOnAClosedPublisherWithoutWriting(t *testing.T) {
 
 func TestStreamShipperClassifiesItsPublishFailures(t *testing.T) {
 	confirmErr := errors.New(`publish to stream "customers" was not confirmed by the broker`)
+	offGrammarErr := multitenant.ValidateTenantID("Acme")
 	tests := []struct {
 		name       string
 		publishErr error
@@ -165,6 +166,10 @@ func TestStreamShipperClassifiesItsPublishFailures(t *testing.T) {
 		{
 			name: "stamp_conflict_is_poison", publishErr: messaging.ErrTenantStampConflict,
 			wantKind: shipPoison, wantReason: messaging.ErrTenantStampConflict.Error(),
+		},
+		{
+			name: "off_grammar_stamp_is_poison", publishErr: offGrammarErr,
+			wantKind: shipPoison, wantReason: offGrammarErr.Error(),
 		},
 		{name: "publisher_not_started_stalls_the_stream", publishErr: streams.ErrPublisherNotStarted, wantKind: shipScopeDown},
 		{name: "deadline_stalls_the_stream", publishErr: context.DeadlineExceeded, wantKind: shipScopeDown},
@@ -188,21 +193,6 @@ func TestStreamShipperClassifiesItsPublishFailures(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestStreamShipperClassifiesOffGrammarStampAsPoison(t *testing.T) {
-	t.Run("stream_lane", func(t *testing.T) {
-		pub := &fakeStreamPublisher{Err: multitenant.ValidateTenantID("Acme")}
-		s := streamShipperWith(pub)
-		rec := streamRow()
-		rec.PartitionKey = "Acme"
-
-		v := s.Ship(context.Background(), &shipment{Record: &rec, Headers: map[string]any{}, Stamp: "Acme", Scope: "customers"})
-
-		assert.Equal(t, shipPoison, v.Kind, "a stored stamp off the grammar fails the same way every cycle")
-		require.ErrorIs(t, v.Err, multitenant.ErrInvalidTenantID)
-		assert.NotContains(t, v.Err.Error(), "Acme")
-	})
 }
 
 // TestStreamShipperShipsPoisonAsATotalityGuardForAnUnknownTarget keeps Ship total: the

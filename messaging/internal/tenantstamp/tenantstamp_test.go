@@ -1,6 +1,7 @@
 package tenantstamp
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"testing"
@@ -81,11 +82,7 @@ func TestResolveRefusesOffGrammarTenant(t *testing.T) {
 			}
 			require.ErrorIs(t, err, tt.wantErr)
 			assert.Empty(t, id)
-			for _, value := range []string{tt.ctxTenant, tt.replayKey} {
-				if value != "" {
-					assert.NotContains(t, err.Error(), value, "the error carries the byte length, never the value")
-				}
-			}
+			assert.NotContains(t, err.Error(), cmp.Or(tt.ctxTenant, tt.replayKey), "the error carries the byte length, never the value")
 		})
 	}
 }

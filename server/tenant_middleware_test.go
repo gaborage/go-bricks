@@ -195,11 +195,9 @@ func TestTenantSeatRefusesOffGrammarID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/orders", http.NoBody)
-			req.Header.Set(HeaderXTenantID, tt.tenant)
 			rec := httptest.NewRecorder()
 
-			srv.echo.ServeHTTP(rec, req)
+			srv.echo.ServeHTTP(rec, observedRequest(http.MethodGet, "/api/orders", tt.tenant, nil))
 
 			require.Equal(t, tt.wantStatus, rec.Code)
 			if tt.wantStatus == http.StatusOK {
