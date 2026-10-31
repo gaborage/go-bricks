@@ -74,16 +74,9 @@ func (r *SubdomainResolver) ResolveTenant(ctx context.Context, req *http.Request
 	host = foldASCIICase(host)
 	rootDomain := foldASCIICase(r.RootDomain)
 
-	// Require dot-delimited root domain to prevent suffix trickery
-	if host == rootDomain {
-		return "", ErrTenantResolutionFailed
-	}
-	if !strings.HasSuffix(host, "."+rootDomain) {
-		return "", ErrTenantResolutionFailed
-	}
-
-	tenantPart := strings.TrimSuffix(host, "."+rootDomain)
-	if tenantPart == "" {
+	// Require dot-delimited root domain to prevent suffix trickery; the apex host fails it too
+	tenantPart, ok := strings.CutSuffix(host, "."+rootDomain)
+	if !ok || tenantPart == "" {
 		return "", ErrTenantResolutionFailed
 	}
 	return tenantPart, nil

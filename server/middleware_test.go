@@ -1142,20 +1142,13 @@ func TestCompositeTenantResolutionStopsOnUntrustedForwardedHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			log := &testLogger{}
-			srv := New(forwardedHostConfig(config.ResolverTypeComposite, tt.trustedProxies...), log)
-			srv.echo.GET("/forwarded", func(c *echo.Context) error {
-				tenantID, _ := multitenant.GetTenant(c.Request().Context())
-				return c.String(http.StatusOK, tenantID)
-			})
-
 			req := forwardedRequest(tt.remoteAddr)
 			if !tt.forwardedHost {
 				req.Header.Del(HeaderXForwardedHost)
 			}
 			req.Header.Set(HeaderXTenantID, "bravo")
-			rec := httptest.NewRecorder()
-			srv.echo.ServeHTTP(rec, req)
+			log := &testLogger{}
+			rec := serveSeatTenant(t, forwardedHostConfig(config.ResolverTypeComposite, tt.trustedProxies...), log, req)
 
 			require.Equal(t, tt.wantStatus, rec.Code)
 			if tt.wantTenant != "" {
@@ -1178,9 +1171,9 @@ func TestCompositeTenantResolutionStopsOnUntrustedForwardedHost(t *testing.T) {
 
 // serveSeatTenant serves req through the tenant seat New installs from cfg and returns the
 // recorder; the route echoes the resolved tenant.
-func serveSeatTenant(t *testing.T, cfg *config.Config, req *http.Request) *httptest.ResponseRecorder {
+func serveSeatTenant(t *testing.T, cfg *config.Config, log *testLogger, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
-	srv := New(cfg, &testLogger{})
+	srv := New(cfg, log)
 	srv.echo.GET("/forwarded", func(c *echo.Context) error {
 		tenantID, _ := multitenant.GetTenant(c.Request().Context())
 		return c.String(http.StatusOK, tenantID)
@@ -1199,13 +1192,12 @@ func TestSubdomainSeatFoldsHostCase(t *testing.T) {
 		domain     string
 		host       string
 		forwarded  string
-		wantStatus int
-		wantTenant string
+		wantTenant string // empty: the seat answers 400
 	}{
-		{name: "mixed_case_host_resolves", domain: testDomain, host: "Acme." + testDomain, wantStatus: http.StatusOK, wantTenant: "acme"},
-		{name: "upper_case_host_resolves", domain: testDomain, host: "ACME.EXAMPLE.COM", wantStatus: http.StatusOK, wantTenant: "acme"},
-		{name: "mixed_case_configured_domain_resolves", domain: "Example.COM", host: "acme." + testDomain, wantStatus: http.StatusOK, wantTenant: "acme"},
-		{name: "kelvin_sign_forwarded_host_refused", domain: testDomain, forwarded: "Kilo." + testDomain, wantStatus: http.StatusBadRequest},
+		{name: "mixed_case_host_resolves", domain: testDomain, host: "Acme." + testDomain, wantTenant: "acme"},
+		{name: "upper_case_host_resolves", domain: testDomain, host: "ACME.EXAMPLE.COM", wantTenant: "acme"},
+		{name: "mixed_case_configured_domain_resolves", domain: "Example.COM", host: "acme." + testDomain, wantTenant: "acme"},
+		{name: "kelvin_sign_forwarded_host_refused", domain: testDomain, forwarded: "\u212Ailo." + testDomain},
 	}
 
 	for _, tt := range tests {
@@ -1220,12 +1212,14 @@ func TestSubdomainSeatFoldsHostCase(t *testing.T) {
 				req.Host = tt.host
 			}
 
-			rec := serveSeatTenant(t, cfg, req)
+			rec := serveSeatTenant(t, cfg, &testLogger{}, req)
 
-			require.Equal(t, tt.wantStatus, rec.Code)
-			if tt.wantTenant != "" {
-				assert.Equal(t, tt.wantTenant, rec.Body.String())
+			if tt.wantTenant == "" {
+				assert.Equal(t, http.StatusBadRequest, rec.Code)
+				return
 			}
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantTenant, rec.Body.String())
 		})
 	}
 }
@@ -1250,7 +1244,7 @@ func TestCompositeSubdomainFirstResolvesFoldedHost(t *testing.T) {
 			req.Host = tt.host
 			req.Header.Set(HeaderXTenantID, "beta")
 
-			rec := serveSeatTenant(t, forwardedHostConfig(config.ResolverTypeComposite), req)
+			rec := serveSeatTenant(t, forwardedHostConfig(config.ResolverTypeComposite), &testLogger{}, req)
 
 			require.Equal(t, http.StatusOK, rec.Code)
 			assert.Equal(t, tt.wantTenant, rec.Body.String())

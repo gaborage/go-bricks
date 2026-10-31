@@ -1,6 +1,7 @@
 package multitenant
 
 import (
+	"cmp"
 	"context"
 	"net"
 	"net/http"
@@ -846,38 +847,39 @@ func TestValidatingResolverPassesUntrustedForwardedHostThrough(t *testing.T) {
 func TestSubdomainResolverFoldsASCIICase(t *testing.T) {
 	tests := []struct {
 		name       string
-		rootDomain string
+		rootDomain string // testDomain when empty
 		host       string
 		forwarded  string
-		want       string
-		wantErr    bool
+		want       string // empty: resolution fails
 	}{
-		{name: "lowercase_host", rootDomain: testDomain, host: "acme.example.com", want: "acme"},
-		{name: "mixed_case_label", rootDomain: testDomain, host: "Acme.example.com", want: "acme"},
-		{name: "upper_case_host", rootDomain: testDomain, host: "ACME.EXAMPLE.COM", want: "acme"},
-		{name: "mixed_case_root_segment", rootDomain: testDomain, host: "acme.Example.com", want: "acme"},
-		{name: "z_boundary_label", rootDomain: testDomain, host: "Zulu.example.com", want: "zulu"},
-		{name: "forwarded_host_mixed_case", rootDomain: testDomain, forwarded: "Acme.Example.COM", want: "acme"},
-		{name: "upper_case_host_with_port", rootDomain: testDomain, host: "ACME.EXAMPLE.COM:8443", want: "acme"},
-		{name: "ipv6_literal_unchanged", rootDomain: testDomain, host: "[2001:DB8::1]:8080", wantErr: true},
-		{name: "apex_host_any_case_refused", rootDomain: testDomain, host: "EXAMPLE.COM", wantErr: true},
+		{name: "lowercase_host", host: "acme.example.com", want: "acme"},
+		{name: "mixed_case_label", host: "Acme.example.com", want: "acme"},
+		{name: "upper_case_host", host: "ACME.EXAMPLE.COM", want: "acme"},
+		{name: "mixed_case_root_segment", host: "acme.Example.com", want: "acme"},
+		{name: "z_boundary_label", host: "Zulu.example.com", want: "zulu"},
+		{name: "forwarded_host_mixed_case", forwarded: "Acme.Example.COM", want: "acme"},
+		{name: "upper_case_host_with_port", host: "ACME.EXAMPLE.COM:8443", want: "acme"},
+		{name: "ipv6_literal_unchanged", host: "[2001:DB8::1]:8080"},
+		{name: "apex_host_any_case_refused", host: "EXAMPLE.COM"},
 		{name: "mixed_case_configured_domain", rootDomain: "Example.COM", host: "acme.example.com", want: "acme"},
 		{name: "hand_built_mixed_case_domain", rootDomain: "EXAMPLE.com", host: "Acme.Example.Com", want: "acme"},
-		{name: "kelvin_sign_label_not_folded", rootDomain: testDomain, forwarded: "Kilo.example.com", want: "Kilo"},
+		{name: "kelvin_sign_label_not_folded", forwarded: "\u212Ailo.example.com", want: "\u212Ailo"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolver := &SubdomainResolver{RootDomain: tt.rootDomain, TrustProxies: tt.forwarded != ""}
-			req := setupTestRequest(testHost, nil)
-			req.Host = tt.host
+			resolver := &SubdomainResolver{RootDomain: cmp.Or(tt.rootDomain, testDomain), TrustProxies: tt.forwarded != ""}
+			var req *http.Request
 			if tt.forwarded != "" {
 				req = forwardedHostRequest("10.0.0.1:443", tt.forwarded)
+			} else {
+				req = setupTestRequest(testHost, nil)
+				req.Host = tt.host
 			}
 
 			got, err := resolver.ResolveTenant(context.Background(), req)
 
-			if tt.wantErr {
+			if tt.want == "" {
 				require.ErrorIs(t, err, ErrTenantResolutionFailed)
 				assert.Empty(t, got)
 				return
