@@ -2707,7 +2707,7 @@ text, and the query, a lone username and a non-URL DSN are masked with it.
 
 ### [ADR-160: The Global Rate Limiter Keys on the Client IP Only](adr_160_rate_limit_keys_on_client_ip.md)
 
-**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `app.rate.limit` becomes a per-client-IP budget for every request, where a resolved tenant had its own bucket; `server.RateLimit` keys the same way
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `app.rate.limit` becomes a per-client-IP budget for every request, whether or not a tenant resolved (before, a resolved tenant had its own bucket); `server.RateLimit` keys the same way
 
 The built-in limiter keyed on the resolved tenant when there was one, and the tenant is whatever the
 caller wrote. Rotating tenant values bought one address a fresh bucket per value, naming a victim
