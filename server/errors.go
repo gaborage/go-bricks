@@ -274,10 +274,9 @@ func (e *UnknownTenantError) Unwrap() error {
 }
 
 // NewUnknownTenantError refuses a request for a tenant the deployment does not serve.
-// It is fail-closed: only a cause that errors.Is multitenant.ErrUnknownTenant answers
-// 400 BAD_REQUEST "Invalid tenant", the answer for a malformed tenant; any other cause
-// (nil, an outage, a timeout) answers 500 INTERNAL_ERROR, so it is safe for any
-// accessor error in a typed handler:
+// Fail-closed: only a cause that errors.Is multitenant.ErrUnknownTenant answers 400
+// "Invalid tenant"; any other cause (nil, an outage) answers 500, so any accessor
+// error in a typed handler is safe to pass:
 //
 //	db, err := deps.DB(ctx)
 //	if err != nil {

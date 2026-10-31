@@ -1926,14 +1926,13 @@ func TestClassifyErrorUnknownTenantIsClientFault(t *testing.T) {
 		err        error
 		middleware bool
 		want       int
-		lines      []string // the refusal lines' levels
 	}{
-		{name: "bare_sentinel", err: multitenant.ErrUnknownTenant, want: http.StatusBadRequest, lines: []string{"warn"}},
-		{name: "wrapped_in_plain_error", err: fmt.Errorf("load orders: %w", storeErr), want: http.StatusBadRequest, lines: []string{"warn"}},
-		{name: "door_error_from_raw_handler", err: NewUnknownTenantError(storeErr), want: http.StatusBadRequest, lines: []string{"warn"}},
-		{name: "group_middleware_error", err: storeErr, middleware: true, want: http.StatusBadRequest, lines: []string{"warn"}},
-		{name: "dynamic_store_wrapped_sentinel_is_400", err: fmt.Errorf("%w: no secret for this tenant", multitenant.ErrUnknownTenant), want: http.StatusBadRequest, lines: []string{"warn"}},
-		{name: "dynamic_store_untyped_error_stays_500", err: errors.New("secrets manager: request timed out"), want: http.StatusInternalServerError, lines: []string{"error"}},
+		{name: "bare_sentinel", err: multitenant.ErrUnknownTenant, want: http.StatusBadRequest},
+		{name: "wrapped_in_plain_error", err: fmt.Errorf("load orders: %w", storeErr), want: http.StatusBadRequest},
+		{name: "door_error_from_raw_handler", err: NewUnknownTenantError(storeErr), want: http.StatusBadRequest},
+		{name: "group_middleware_error", err: storeErr, middleware: true, want: http.StatusBadRequest},
+		{name: "dynamic_store_wrapped_sentinel_is_400", err: fmt.Errorf("%w: no secret for this tenant", multitenant.ErrUnknownTenant), want: http.StatusBadRequest},
+		{name: "dynamic_store_untyped_error_stays_500", err: errors.New("secrets manager: request timed out"), want: http.StatusInternalServerError},
 		{name: "deadline_still_503", err: fmt.Errorf("%w: %w", multitenant.ErrUnknownTenant, context.DeadlineExceeded), want: http.StatusServiceUnavailable},
 		{name: "other_api_error_keeps_its_answer", err: fmt.Errorf("%w: %w", NewNotFoundError("Order"), multitenant.ErrUnknownTenant), want: http.StatusNotFound},
 	}
@@ -1953,21 +1952,20 @@ func TestClassifyErrorUnknownTenantIsClientFault(t *testing.T) {
 			assert.Equal(t, tc.want, status)
 			require.NotNil(t, resp.Error)
 			assert.Equal(t, statusToErrorCode(tc.want), resp.Error.Code)
-			if tc.want == http.StatusBadRequest {
+			wantWarns, wantUnhandled := 0, 0
+			switch tc.want {
+			case http.StatusBadRequest:
+				wantWarns = 1
 				assert.Equal(t, msgInvalidTenant, resp.Error.Message)
+			case http.StatusInternalServerError:
+				wantUnhandled = 1
 			}
-			assert.Equal(t, tc.lines, refusalLogLevels(testLog.logEntries()), "one refusal WARN per 400, one unhandled-error line per 500, never both")
+			warns, unhandled := splitTenantRefusalLogs(testLog.logEntries())
+			assert.Len(t, warns, wantWarns, "one refusal WARN per 400, never on a 500")
+			assert.Len(t, unhandled, wantUnhandled, "one unhandled-error line per 500, never on a 400")
+			for _, e := range unhandled {
+				assert.Equal(t, "error", e.level)
+			}
 		})
 	}
-}
-
-// refusalLogLevels lists the level of each tenant-refusal or unhandled-error line, in order.
-func refusalLogLevels(entries []testLogEntry) []string {
-	var got []string
-	for _, e := range entries {
-		if strings.HasPrefix(e.msg, "[server.tenant]") || e.msg == "unhandled error" {
-			got = append(got, e.level)
-		}
-	}
-	return got
 }

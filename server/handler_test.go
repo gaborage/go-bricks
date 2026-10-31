@@ -3763,11 +3763,9 @@ func TestUnknownTenantErrorOnRawResponseRoute(t *testing.T) {
 	GET(hr, srv.ModuleGroup(), "/legacy/orders", func(unknownTenantReq, HandlerContext) (Result[string], IAPIError) {
 		return Result[string]{}, NewUnknownTenantError(storeErr)
 	}, WithRawResponse())
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/legacy/orders", http.NoBody)
-	req.Header.Set(HeaderXTenantID, unknownTenantID)
 	rec := httptest.NewRecorder()
 
-	srv.echo.ServeHTTP(rec, req)
+	srv.echo.ServeHTTP(rec, observedRequest(http.MethodGet, "/legacy/orders", unknownTenantID, nil))
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	var raw map[string]any
@@ -3776,11 +3774,7 @@ func TestUnknownTenantErrorOnRawResponseRoute(t *testing.T) {
 	assert.Equal(t, msgInvalidTenant, raw["message"])
 	assert.NotContains(t, raw, "error", "flat raw shape, no envelope")
 	assert.NotContains(t, raw, "meta", "flat raw shape, no envelope")
-	var refusals int
-	for _, e := range testLog.logEntries() {
-		if e.level == "warn" && strings.Contains(e.msg, `reason="unknown tenant"`) {
-			refusals++
-		}
-	}
-	assert.Equal(t, 1, refusals, "the raw-response sink still logs the one refusal WARN")
+	warns, _ := splitTenantRefusalLogs(testLog.logEntries())
+	require.Len(t, warns, 1, "the raw-response sink still logs the one refusal WARN")
+	assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
 }

@@ -859,20 +859,19 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		return NewServiceUnavailableError("Request processing timed out")
 	}
 
-	// Already a structured API error — use as-is. The unknown-tenant refusal is
-	// asserted here rather than with its own errors.As, whose escaping target
-	// would add an allocation to every error path (ADR-026).
+	// Already a structured API error — use as-is. A type assertion, not its own errors.As,
+	// finds the unknown-tenant refusal: an escaping target allocates on every error (ADR-026).
 	var apiErr IAPIError
 	if goerrors.As(err, &apiErr) {
 		if unknownTenant, ok := apiErr.(*UnknownTenantError); ok {
-			logUnknownTenantRefusal(unknownTenant, c, log, cfg)
+			logUnknownTenantRefusal(unknownTenant, c, log, cfg.App.Debug)
 		}
 		return apiErr
 	}
 
 	if goerrors.Is(err, multitenant.ErrUnknownTenant) {
 		unknownTenant := NewUnknownTenantError(err)
-		logUnknownTenantRefusal(unknownTenant, c, log, cfg)
+		logUnknownTenantRefusal(unknownTenant, c, log, cfg.App.Debug)
 		return unknownTenant
 	}
 
@@ -910,8 +909,7 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		// FilterConfig.ErrorRedactor — the seam that CAN see message content — reaches
 		// it (#1182), and Err applies the field-name filter as well, so marking `error`
 		// sensitive still masks this line. The non-debug error_type goes through Str.
-		appendErrorDetail(log.Error().Str("request_id", safeGetRequestID(c)), err, cfg.App.Debug).
-			Msg("unhandled error")
+		logUnhandledError(log, c, err, cfg.App.Debug)
 	}
 
 	code := statusToErrorCode(status)

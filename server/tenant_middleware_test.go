@@ -187,10 +187,8 @@ func newTenantServer(resolverType string, testLog *testLogger) *Server {
 // serveTenant sends GET path for tenant and decodes the envelope.
 func serveTenant(t *testing.T, srv *Server, path, tenant string) (int, APIResponse) {
 	t.Helper()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
-	req.Header.Set(HeaderXTenantID, tenant)
 	rec := httptest.NewRecorder()
-	srv.echo.ServeHTTP(rec, req)
+	srv.echo.ServeHTTP(rec, observedRequest(http.MethodGet, path, tenant, nil))
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), rec.Body.String())
 	return rec.Code, resp
@@ -205,13 +203,12 @@ func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
 		resolver string
 		typed    bool
 		cause    error
-		misused  bool
 	}{
 		{name: "raw_header_resolver", resolver: config.ResolverTypeHeader, cause: storeErr},
 		{name: "raw_path_resolver", resolver: config.ResolverTypePath, cause: storeErr},
 		{name: "typed_header_resolver", resolver: config.ResolverTypeHeader, typed: true, cause: storeErr},
 		{name: "typed_path_resolver", resolver: config.ResolverTypePath, typed: true, cause: storeErr},
-		{name: "typed_misused_door_logs_error", resolver: config.ResolverTypeHeader, typed: true, cause: errors.New("secrets manager: request timed out"), misused: true},
+		{name: "typed_misused_door_logs_error", resolver: config.ResolverTypeHeader, typed: true, cause: errors.New("secrets manager: request timed out")},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,12 +226,11 @@ func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
 			} else {
 				srv.ModuleGroup().Add(http.MethodGet, route, func(HandlerContext) error { return tc.cause })
 			}
-			before := len(testLog.logEntries())
 
 			status, _ := serveTenant(t, srv, path, unknownTenantID)
 
-			warns, unhandled := splitTenantRefusalLogs(testLog.logEntries()[before:])
-			if tc.misused {
+			warns, unhandled := splitTenantRefusalLogs(testLog.logEntries())
+			if !errors.Is(tc.cause, multitenant.ErrUnknownTenant) {
 				assert.Equal(t, http.StatusInternalServerError, status)
 				assert.Empty(t, warns)
 				assert.Len(t, unhandled, 1, "a misused door is a server fault, logged once")
@@ -277,7 +273,7 @@ func TestUnknownTenantRefusalNilLoggerFallsBackToStdlib(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/orders", http.NoBody)
 	c := echo.New().NewContext(req, httptest.NewRecorder())
 
-	logUnknownTenantRefusal(NewUnknownTenantError(errors.New("dial tcp 10.0.0.7: refused")), c, nil, newTestConfig("", "", ""))
+	logUnknownTenantRefusal(NewUnknownTenantError(errors.New("dial tcp 10.0.0.7: refused")), c, nil, false)
 
 	assert.Contains(t, buf.String(), "ERROR unhandled error")
 	assert.Contains(t, buf.String(), "error_type=*errors.errorString")
