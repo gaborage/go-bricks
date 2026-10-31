@@ -82,7 +82,7 @@ Use this when downstream clients route by URL path rather than header or hostnam
 
 ### Why path-segment over Echo's `c.Param("tenantID")`?
 
-A route parameter such as `:tenantID` in `/itsp/:tenantID` is matched by echo's router on any route, grouped or not, but it never reaches a resolver. Echo v5 matches the route first and the tenant middleware runs on the root `e.Use` chain after it, before group and route middleware, but a resolver receives only the `*http.Request`: echo's router keeps a matched `:tenantID` on its own context and does not copy it onto the request (`SetPathValue`). The path resolver reads the segment from `URL.Path` instead, so framework middleware that needs the tenant (request logging, OTel span attributes, tenant-scoped DB resolution) has the value from the tenant middleware onward.
+A route parameter such as `:tenantID` in `/itsp/:tenantID` is matched by echo's router on any route, grouped or not, but it never reaches a resolver. Echo v5 matches the route first and the tenant middleware runs on the root `e.Use` chain after it, before group and route middleware, but a resolver receives only the `*http.Request`: echo's router keeps a matched `:tenantID` on its own context and does not copy it onto the request (`SetPathValue`). The path resolver reads the segment from `URL.Path` instead, so middleware and handlers that run after the tenant middleware (request logging, group and route middleware, tenant-scoped DB resolution) have the value. Middleware ahead of it on the root chain, such as the OTel middleware and the IP pre-guard, does not.
 
 ## Composite resolver
 
