@@ -1175,3 +1175,85 @@ func TestCompositeTenantResolutionStopsOnUntrustedForwardedHost(t *testing.T) {
 		})
 	}
 }
+
+// serveSeatTenant serves req through the tenant seat New installs from cfg and returns the
+// recorder; the route echoes the resolved tenant.
+func serveSeatTenant(t *testing.T, cfg *config.Config, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	srv := New(cfg, &testLogger{})
+	srv.echo.GET("/forwarded", func(c *echo.Context) error {
+		tenantID, _ := multitenant.GetTenant(c.Request().Context())
+		return c.String(http.StatusOK, tenantID)
+	})
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestSubdomainSeatFoldsHostCase pins the case fold through the seat: a host or a configured
+// domain differing only in ASCII case resolves the lowercase tenant, and a non-ASCII byte
+// still fails the grammar.
+func TestSubdomainSeatFoldsHostCase(t *testing.T) {
+	tests := []struct {
+		name       string
+		domain     string
+		host       string
+		forwarded  string
+		wantStatus int
+		wantTenant string
+	}{
+		{name: "mixed_case_host_resolves", domain: testDomain, host: "Acme." + testDomain, wantStatus: http.StatusOK, wantTenant: "acme"},
+		{name: "upper_case_host_resolves", domain: testDomain, host: "ACME.EXAMPLE.COM", wantStatus: http.StatusOK, wantTenant: "acme"},
+		{name: "mixed_case_configured_domain_resolves", domain: "Example.COM", host: "acme." + testDomain, wantStatus: http.StatusOK, wantTenant: "acme"},
+		{name: "kelvin_sign_forwarded_host_refused", domain: testDomain, forwarded: "Kilo." + testDomain, wantStatus: http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := forwardedHostConfig(config.ResolverTypeSubdomain)
+			cfg.Multitenant.Resolver.Domain = tt.domain
+			req := forwardedRequest("10.0.0.1:443")
+			req.Header.Del(HeaderXForwardedHost)
+			if tt.forwarded != "" {
+				req.Header.Set(HeaderXForwardedHost, tt.forwarded)
+			} else {
+				req.Host = tt.host
+			}
+
+			rec := serveSeatTenant(t, cfg, req)
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantTenant != "" {
+				assert.Equal(t, tt.wantTenant, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestCompositeSubdomainFirstResolvesFoldedHost pins the precedence the fold restores: with
+// subdomain ahead of the header, a mixed-case host resolves its own tenant instead of falling
+// through, and an apex host still falls through to the header.
+func TestCompositeSubdomainFirstResolvesFoldedHost(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       string
+		wantTenant string
+	}{
+		{name: "mixed_case_host_beats_header", host: "Acme." + testDomain, wantTenant: "acme"},
+		{name: "apex_host_falls_through_to_header", host: "Example.COM", wantTenant: "beta"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := forwardedRequest("10.0.0.1:443")
+			req.Header.Del(HeaderXForwardedHost)
+			req.Host = tt.host
+			req.Header.Set(HeaderXTenantID, "beta")
+
+			rec := serveSeatTenant(t, forwardedHostConfig(config.ResolverTypeComposite), req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantTenant, rec.Body.String())
+		})
+	}
+}

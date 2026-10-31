@@ -71,20 +71,41 @@ func (r *SubdomainResolver) ResolveTenant(ctx context.Context, req *http.Request
 	if i := strings.LastIndex(host, ":"); i > 0 && !strings.Contains(host[:i], ":") {
 		host = host[:i]
 	}
+	host = foldASCIICase(host)
+	rootDomain := foldASCIICase(r.RootDomain)
 
 	// Require dot-delimited root domain to prevent suffix trickery
-	if host == r.RootDomain {
+	if host == rootDomain {
 		return "", ErrTenantResolutionFailed
 	}
-	if !strings.HasSuffix(host, "."+r.RootDomain) {
+	if !strings.HasSuffix(host, "."+rootDomain) {
 		return "", ErrTenantResolutionFailed
 	}
 
-	tenantPart := strings.TrimSuffix(host, "."+r.RootDomain)
+	tenantPart := strings.TrimSuffix(host, "."+rootDomain)
 	if tenantPart == "" {
 		return "", ErrTenantResolutionFailed
 	}
 	return tenantPart, nil
+}
+
+// foldASCIICase lowercases A-Z only, returning s itself when it has none. DNS names compare
+// case-insensitively in ASCII alone (RFC 4343); Unicode folding would map U+212A to "k".
+func foldASCIICase(s string) string {
+	i := 0
+	for i < len(s) && (s[i] < 'A' || s[i] > 'Z') {
+		i++
+	}
+	if i == len(s) {
+		return s
+	}
+	b := []byte(s)
+	for ; i < len(b); i++ {
+		if 'A' <= b[i] && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // requestHost returns Host, or with TrustProxies the last X-Forwarded-Host entry from a

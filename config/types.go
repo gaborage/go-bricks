@@ -770,7 +770,7 @@ type TenantMessagingConfig struct {
 type ResolverConfig struct {
 	Type   string `koanf:"type" json:"type" yaml:"type" toml:"type" mapstructure:"type"`           // header, subdomain, path, composite
 	Header string `koanf:"header" json:"header" yaml:"header" toml:"header" mapstructure:"header"` // default: X-Tenant-ID
-	Domain string `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"` // e.g., api.example.com or .api.example.com (leading dot optional)
+	Domain string `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"` // e.g., api.example.com or .api.example.com (leading dot optional; hosts match it ASCII case-insensitively)
 	// Proxies lets the subdomain resolver read X-Forwarded-Host, only from a trusted
 	// immediate peer (loopback, link-local, private, unix socket, or server.trustedproxies),
 	// taking the header's last entry. An untrusted peer that sends it gets 400 (ADR-140).

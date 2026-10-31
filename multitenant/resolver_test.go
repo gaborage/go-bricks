@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/racedetect"
 )
 
 const (
@@ -836,4 +838,73 @@ func TestValidatingResolverPassesUntrustedForwardedHostThrough(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrUntrustedForwardedHost)
 	assert.NotErrorIs(t, err, ErrTenantResolutionFailed, "the untrusted-peer sentinel stays distinct from an ordinary miss")
+}
+
+// TestSubdomainResolverFoldsASCIICase pins the RFC 4343 fold: ASCII letters in the host and
+// in RootDomain compare case-insensitively and the label returns lowercase, while every other
+// byte, U+212A KELVIN SIGN included, passes through for the grammar to judge.
+func TestSubdomainResolverFoldsASCIICase(t *testing.T) {
+	tests := []struct {
+		name       string
+		rootDomain string
+		host       string
+		forwarded  string
+		want       string
+		wantErr    bool
+	}{
+		{name: "lowercase_host", rootDomain: testDomain, host: "acme.example.com", want: "acme"},
+		{name: "mixed_case_label", rootDomain: testDomain, host: "Acme.example.com", want: "acme"},
+		{name: "upper_case_host", rootDomain: testDomain, host: "ACME.EXAMPLE.COM", want: "acme"},
+		{name: "mixed_case_root_segment", rootDomain: testDomain, host: "acme.Example.com", want: "acme"},
+		{name: "z_boundary_label", rootDomain: testDomain, host: "Zulu.example.com", want: "zulu"},
+		{name: "forwarded_host_mixed_case", rootDomain: testDomain, forwarded: "Acme.Example.COM", want: "acme"},
+		{name: "upper_case_host_with_port", rootDomain: testDomain, host: "ACME.EXAMPLE.COM:8443", want: "acme"},
+		{name: "ipv6_literal_unchanged", rootDomain: testDomain, host: "[2001:DB8::1]:8080", wantErr: true},
+		{name: "apex_host_any_case_refused", rootDomain: testDomain, host: "EXAMPLE.COM", wantErr: true},
+		{name: "mixed_case_configured_domain", rootDomain: "Example.COM", host: "acme.example.com", want: "acme"},
+		{name: "hand_built_mixed_case_domain", rootDomain: "EXAMPLE.com", host: "Acme.Example.Com", want: "acme"},
+		{name: "kelvin_sign_label_not_folded", rootDomain: testDomain, forwarded: "Kilo.example.com", want: "Kilo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := &SubdomainResolver{RootDomain: tt.rootDomain, TrustProxies: tt.forwarded != ""}
+			req := setupTestRequest(testHost, nil)
+			req.Host = tt.host
+			if tt.forwarded != "" {
+				req = forwardedHostRequest("10.0.0.1:443", tt.forwarded)
+			}
+
+			got, err := resolver.ResolveTenant(context.Background(), req)
+
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrTenantResolutionFailed)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// Tripwire guard (CONTEXT.md § Testing), ADR-026: pins allocs/op exactly for a host and a
+// RootDomain that are already lowercase, the shape of nearly every request. A toolchain bump
+// re-pins (never widens). Pinned on go1.27.3 darwin/arm64; CI (linux, `make test-alloc`)
+// enforces, so if CI differs re-pin from the CI log.
+func TestSubdomainResolverLowercaseHostAllocsStable(t *testing.T) {
+	if racedetect.Enabled {
+		t.Skip("testing.AllocsPerRun is unreliable under -race; alloc baseline enforced in the non-race matrix")
+	}
+	resolver := &SubdomainResolver{RootDomain: testDomain}
+	req := setupTestRequest("acme.example.com:8080", nil)
+	ctx := context.Background()
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := resolver.ResolveTenant(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	assert.InDelta(t, 0, allocs, 0, "allocs/op for an already-lowercase host")
 }
