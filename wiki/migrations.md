@@ -14552,8 +14552,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   when no source matched.
 - after: ASCII letters in the host (`Host`, or the trusted `X-Forwarded-Host` entry) and in the
   domain fold to lowercase before the apex check and the suffix match, so that host resolves the
-  subdomain's lowercase tenant, the same as its lowercase spelling. Any other byte is left as is
-  and still fails the grammar.
+  subdomain's lowercase tenant, the same as its lowercase spelling. Only ASCII letters fold: a
+  non-ASCII byte in the tenant label is kept as is and still fails the server's tenant-ID grammar
+  check.
 - apply: nothing to change, unless an edge rule (a `Host` allowlist, a WAF match) compares the
   host case-sensitively: fold it there too, since such a host now reaches a tenant.
 - verify: with `order: [subdomain, header]` and `domain: example.com`, `Host: Acme.example.com`
