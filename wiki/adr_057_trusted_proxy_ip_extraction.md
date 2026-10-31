@@ -255,6 +255,12 @@ terminates. Nothing bounds that but the HTTP header size limit.
 resolves, the global limiter still keys on the tenant, so one caller can exhaust a whole
 tenant's budget. That is a separate design question about limiter keying and remains open.
 
+> **Amended (2026-10-31, #2167, by [ADR-160](adr_160_rate_limit_keys_on_client_ip.md)):** the
+> tenant-keyed half of F23 is closed. The global limiter and `server.RateLimit` key on the
+> client IP alone, whether or not a tenant resolved, so this ADR's trusted-proxy derivation now
+> decides every key of both limiters. A per-tenant budget is the opt-in `server.TenantRateLimit`,
+> attached after authentication.
+
 ## Consistency
 
 [ADR-043](adr_043_forwarded_client_cert.md) established the model this ADR follows: in-app
