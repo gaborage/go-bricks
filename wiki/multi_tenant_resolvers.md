@@ -73,6 +73,7 @@ func knownTenant(deps *app.ModuleDeps) server.MiddlewareFunc {
 			return err // 500
 		}
 		var n int
+		// $1 is PostgreSQL's placeholder; an Oracle catalog takes :1.
 		if err = catalog.QueryRow(ctx, "SELECT COUNT(*) FROM tenants WHERE id = $1", tenantID).Scan(&n); err != nil {
 			return err
 		}

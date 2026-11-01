@@ -276,8 +276,10 @@ tenant gate
 
 **Unknown tenant**:
 A well-formed tenant identity that names no tenant the deployment serves. The
-seat lets it through, because it checks form, not existence. The first tenant
-resource the request asks for refuses it as a client fault.
+seat lets it through, because it checks form, not existence. The first per-tenant
+accessor refuses it as a client fault when the store's error wraps
+`multitenant.ErrUnknownTenant`, as the built-in store's does; a typed handler
+passes that error on through `server.NewUnknownTenantError`.
 _Avoid_: invalid tenant (that one is malformed), missing tenant
 
 **Route family**:
