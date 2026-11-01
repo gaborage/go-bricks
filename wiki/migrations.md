@@ -14567,9 +14567,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   check that the new fleet holds no duplicate before renaming anything. A mechanical rename
   (lowercase, `_` to `-`, cut to 64 bytes) can map two tenants onto one ID (`Acme` and `acme`,
   `acme_1` and `acme-1`), and the default secret name is `Prefix` plus the tenant ID, so the two
-  would then share one secret. Rename each tenant in the control plane, in its secret and in every
-  store that names it. In
-  Go, replace `migration.ErrInvalidTenantID` with `multitenant.ErrInvalidTenantID` in each
+  would then share one secret. With a `NameFor` composer, compute its name for every old and new ID,
+  check that the new names are unique too, and move each secret from its old composed name to its
+  new one. Rename each tenant in the control plane, in its secret and in every store that names
+  it. In Go, replace `migration.ErrInvalidTenantID` with `multitenant.ErrInvalidTenantID` in each
   `errors.Is`, and repoint any match on the old unquoted `ContractError` text.
 - verify: on the target version, `TenantSource.ListTenants` (or `go-bricks-migrate list` after its
   pin bump) returns the fleet without error, and `DBConfig` resolves every listed tenant.
