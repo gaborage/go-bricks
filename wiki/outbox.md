@@ -449,7 +449,8 @@ context. A consumer still reads `x-tenant-id` as before, and a hand-written stam
 `OutboxEvent.Headers` is refused at `Publish` with `messaging.ErrTenantStampConflict`. A context
 tenant that fails the tenant-ID grammar is refused at `Publish` with
 `multitenant.ErrInvalidTenantID` and writes no row; a row already stored under such a stamp is
-refused the same way each time the relay re-stamps it, so it parks as poison at `maxretries`
+refused each cycle (on the AMQP lane before the client resolves, on the stream lane when the relay
+re-stamps it), so it parks as poison at `maxretries`
 ([ADR-162](adr_162_tenant_id_grammar_is_fixed.md)).
 
 ## Relay Window Line and Metrics

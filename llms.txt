@@ -1171,6 +1171,17 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 	user, err := h.svc.GetUserForTenant(ctx.RequestContext(), tenantID, req.ID)
 	// ...
 }
+
+// Unknown tenant (well-formed, but not in the store): a raw handler or middleware returning
+// the accessor's error answers 400 "Invalid tenant" on its own; a typed handler uses the door,
+// which answers 500 for any cause that is not multitenant.ErrUnknownTenant (ADR-161)
+func (h *Handler) ListOrders(_ NoBodyReq, ctx server.HandlerContext) (server.Result[[]Order], server.IAPIError) {
+	db, err := h.getDB(ctx.RequestContext())
+	if err != nil {
+		return server.Result[[]Order]{}, server.NewUnknownTenantError(err)
+	}
+	// ...
+}
 ```
 
 | Pattern | Use Case | Example |
@@ -4834,7 +4845,7 @@ func (h *OrderHandler) Handle(ctx context.Context, delivery *amqp.Delivery) erro
 ```
 
   A missing or malformed stamp is refused before the handler (nack-without-requeue on the classic lane, uncommitted offset on the streams lane); set `ConsumerOptions.TenantOptional` for a control-plane consumer that legitimately has no tenant. A caller that sets `x-tenant-id` itself gets `messaging.ErrTenantStampConflict`, and a publish whose tenant fails the fixed tenant-ID grammar `^[a-z0-9-]{1,64}$` gets `multitenant.ErrInvalidTenantID` with nothing sent (ADR-162). The stamp is identification, not authorization: under shared tenancy the queue's publish ACL is the tenant-isolation boundary.
-- Resolution runs as middleware before route matching, so `deps.DB(ctx)` / `deps.Cache(ctx)` etc. resolve to the tenant-specific instance on every request.
+- Resolution runs as root middleware after routing and before group and route middleware, so `deps.DB(ctx)` / `deps.Cache(ctx)` etc. resolve to the tenant-specific instance on every non-probe request (health and ready probes skip the tenant middleware).
 - Resolved tenant IDs are validated against `^[a-z0-9-]{1,64}$` before landing in context. The composite resolver returns the first non-empty, valid tenant ID, advancing to the next sub-resolver when one yields nothing (empty result or error) or fails validation.
 
 **Header (default for internal APIs):**
@@ -4865,7 +4876,7 @@ multitenant:
   enabled: true
   resolver:
     type: subdomain
-    domain: api.example.com  # leading dot optional
+    domain: api.example.com  # leading dot optional; hosts match it ASCII case-insensitively, and the tenant is the lowercase label
     proxies: true            # read X-Forwarded-Host (last entry) only from a trusted peer: loopback/link-local/private/unix or server.trustedproxies; any other peer sending it gets 400
 ```
 

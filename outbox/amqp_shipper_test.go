@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,6 +234,45 @@ func TestAMQPShipperReportsWaitedWhenClientResolutionStalls(t *testing.T) {
 
 	assert.Equal(t, shipBrokerDown, v.Kind)
 	assert.GreaterOrEqual(t, v.Waited, minWait)
+}
+
+// TestAMQPShipperParksAnOffGrammarStampBeforeResolvingTheClient pins that a stored stamp is
+// judged before the client resolves: per tenant, an off-grammar tenant is unknown, so its
+// lookup fails and would otherwise read as an outage that stops every cycle.
+func TestAMQPShipperParksAnOffGrammarStampBeforeResolvingTheClient(t *testing.T) {
+	unknownTenantErr := errors.New("tenant not found")
+	tests := []struct {
+		name         string
+		stamp        string
+		wantKind     verdictKind
+		wantResolves int
+	}{
+		{name: "off_grammar_stamp", stamp: "Acme", wantKind: shipPoison},
+		{name: "over_64_bytes_stamp", stamp: strings.Repeat("a", 65), wantKind: shipPoison},
+		{name: "valid_stamp", stamp: "acme", wantKind: shipBrokerDown, wantResolves: 1},
+		{name: "control_plane_empty", wantKind: shipBrokerDown, wantResolves: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolves := 0
+			s := &amqpShipper{client: func(context.Context) (messaging.AMQPClient, error) {
+				resolves++
+				return nil, unknownTenantErr
+			}}
+			ship := &shipment{Record: &Record{ID: "evt-1"}, Headers: map[string]any{}, Stamp: tt.stamp}
+
+			v := s.Ship(context.Background(), ship)
+
+			assert.Equal(t, tt.wantKind, v.Kind)
+			assert.Equal(t, tt.wantResolves, resolves)
+			if tt.wantKind == shipPoison {
+				assert.ErrorIs(t, v.Err, multitenant.ErrInvalidTenantID)
+			} else {
+				assert.ErrorIs(t, v.Err, unknownTenantErr)
+			}
+		})
+	}
 }
 
 // compile-time proof the production adapters satisfy the port the relay holds.

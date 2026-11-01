@@ -772,7 +772,8 @@ func (r *Relay) recordPublished(ctx context.Context, log logger.Logger, db dbtyp
 //     (messaging.ErrTenantStampConflict). ONE class, reachable on BOTH lanes.
 //   - off-grammar tenant stamp: the row's stored stamp fails the tenant-ID grammar
 //     (multitenant.ErrInvalidTenantID), as a row written before the publish-side check
-//     can. ONE class, reachable on BOTH lanes.
+//     can; the AMQP lane judges it before resolving the client. ONE class, reachable on BOTH
+//     lanes.
 //   - stream not an outbox target: the streams lane is not wired at all, or the row's stream
 //     left outbox.superstreams between deploys.
 //   - stream row with no partition key: nothing to hash a partition from.

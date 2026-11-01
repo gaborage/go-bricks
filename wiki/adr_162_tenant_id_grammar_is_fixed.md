@@ -73,8 +73,12 @@ parameterized. The old wiki rationale ("DB schema names") was wrong.
    sentinel's text drops "default", since publish errors and the outbox ledger's error column now
    carry it.
 6. **The outbox relay parks a stored off-grammar stamp as poison.** A row enqueued before the
-   upgrade under an off-grammar tenant is refused by `Resolve` when the relay re-stamps it, every
-   cycle. Both shippers classify `multitenant.ErrInvalidTenantID` as `shipPoison` beside
+   upgrade under an off-grammar tenant is refused every cycle. The AMQP shipper checks a non-empty
+   stored stamp with `ValidateTenantID` before it resolves the client: in a per-tenant ledger an
+   off-grammar tenant is unknown, so its client lookup fails, and without the check the row would
+   read as a broker outage that stops the cycle every time. The stream shipper resolves no
+   per-tenant client, so `Resolve`'s refusal when the relay re-stamps the row is enough. Both
+   shippers classify `multitenant.ErrInvalidTenantID` as `shipPoison` beside
    `ErrTenantStampConflict`, so the row is dead-lettered at `outbox.maxretries` instead of retried
    forever.
 7. **`config.example.yaml`'s unread `multitenant.validation.pattern` block is deleted.**

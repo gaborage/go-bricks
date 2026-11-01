@@ -3754,3 +3754,27 @@ func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T)
 		})
 	}
 }
+
+func TestUnknownTenantErrorOnRawResponseRoute(t *testing.T) {
+	testLog := &testLogger{}
+	srv := newTenantServer(config.ResolverTypeHeader, testLog)
+	hr := NewHandlerRegistry(srv.cfg, WithLogger(testLog))
+	storeErr := unknownTenantStoreErr(t)
+	GET(hr, srv.ModuleGroup(), "/legacy/orders", func(unknownTenantReq, HandlerContext) (Result[string], IAPIError) {
+		return Result[string]{}, NewUnknownTenantError(storeErr)
+	}, WithRawResponse())
+	rec := httptest.NewRecorder()
+
+	srv.echo.ServeHTTP(rec, observedRequest(http.MethodGet, "/legacy/orders", unknownTenantID, nil))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	assert.Equal(t, errCodeBadRequest, raw["code"])
+	assert.Equal(t, msgInvalidTenant, raw["message"])
+	assert.NotContains(t, raw, "error", "flat raw shape, no envelope")
+	assert.NotContains(t, raw, "meta", "flat raw shape, no envelope")
+	warns, _ := splitTenantRefusalLogs(testLog.logEntries())
+	require.Len(t, warns, 1, "the raw-response sink still logs the one refusal WARN")
+	assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
+}

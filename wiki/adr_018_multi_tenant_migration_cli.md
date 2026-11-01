@@ -116,6 +116,12 @@ The prefix is configurable via `--secrets-prefix` (and
 `prefix + tenant_id` — no template language, no normalization. Tenant IDs from
 the listing API are used verbatim.
 
+> **Amended (2026-10-31, #2286):** Listed tenant IDs are no longer used verbatim. The HTTP source
+> trims each `id`, skips a blank one, and fails the whole listing on any other that fails
+> `multitenant.ValidateTenantID` (`^[a-z0-9-]{1,64}$`); `SecretsProvider.DBConfig` checks the same
+> grammar before composing the secret name, and `ContractError` quotes the envelope's
+> `code`/`message`. See [ADR-163](adr_163_migration_tenant_ids_follow_framework_grammar.md).
+
 The secret payload supports two JSON shapes; canonical wins when both are
 present:
 

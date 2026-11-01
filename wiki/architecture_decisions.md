@@ -702,6 +702,8 @@ Amended 2026-09-14 (#1611): a route family requires the identity with
 `server.RequireForwardedClientCert` mounted on its group — it re-parses the headers under any
 `enabled` setting, refuses on the same two conditions with the same 401, and exempts no probe;
 YAML scoping of `require` was rejected (polymorphic bool, raw-path matching, client-written `Host`).
+Corrected 2026-10-31 (#2221): the middleware runs on the root `e.Use` chain after routing, not
+before it, so the raw-path reason does not hold; the other two are unaffected.
 
 **Key Benefits:** Replaces per-service hand-rolled header parsing (and its URL-decoding
 trap) with one audited implementation; corrects the ALB-stripping assumption ADR-042's
@@ -2724,6 +2726,25 @@ open. See [migrations.md](migrations.md) `[C73.20]`.
 **Key Benefits:** no caller-chosen string keys a framework rate-limit bucket by default, limiter memory
 is bounded by client addresses, and a per-tenant budget is an explicit, post-authentication choice.
 
+### [ADR-161: An Unknown Tenant Is a Client Fault](adr_161_unknown_tenant_is_a_client_fault.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a well-formed tenant absent from the built-in store answers 400 `BAD_REQUEST` "Invalid tenant" plus a WARN at its first per-tenant accessor, from a raw handler or a middleware, instead of 500 `INTERNAL_ERROR` and `ERROR "unhandled error"`
+
+The tenant seat checks form, not existence, so a well-formed unknown tenant reached the handler, and
+the built-in store's error for it, a `*config.ConfigError` no sentinel matched, became a 500. The store
+now joins `multitenant.ErrUnknownTenant` on its absent-key branch only, and `classifyError` answers it
+with the seat's malformed-tenant 400 and one WARN with `reason="unknown tenant"` and the route template
+as `path`, never the tenant ID. Typed handlers reach the same answer through
+`server.NewUnknownTenantError(err)`, which is fail-closed: any cause that is not the sentinel answers
+500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
+JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
+the tenant does not exist. The seat still does no existence check. See [migrations.md](migrations.md)
+`[C73.21]`.
+
+**Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
+pages an operator, and a store error that does not wrap `multitenant.ErrUnknownTenant` never
+earns the unknown-tenant 400.
+
 ### [ADR-162: The Tenant-ID Grammar Is Fixed and Enforced at Every Write Door](adr_162_tenant_id_grammar_is_fixed.md)
 
 **Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a static `multitenant.tenants` key over 64 bytes fails startup, a publish whose context tenant or replay key fails the grammar returns `multitenant.ErrInvalidTenantID` and sends or persists nothing, and a pending outbox row stored under such a stamp parks at `MaxRetries`
@@ -2744,6 +2765,21 @@ does not fit is mapped into the grammar in a route family's `Tenant` step (#2166
 **Key Benefits:** an off-grammar tenant fails where it is written, at startup or at the publish call,
 instead of as a dead letter on the consuming service, and the rule that keeps a tenant ID out of the
 named-database and other tenants' cache key spaces is a recorded contract, not a convention.
+
+### [ADR-163: Migration Tenant IDs Follow the Framework Grammar](adr_163_migration_tenant_ids_follow_framework_grammar.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `SecretsProvider.DBConfig` refuses a tenant ID outside `^[a-z0-9-]{1,64}$` where it admitted `^[A-Za-z0-9_-]{1,128}$`, and `migration.ErrInvalidTenantID` is removed; the HTTP tenant source fails a listing that holds such an ID
+
+Migration checked tenant IDs with its own, wider rule, so a run provisioned tenants the HTTP seat and
+the stamp reader refuse, and the HTTP tenant source passed whatever the control plane listed. Both
+doors now call `multitenant.ValidateTenantID`: the secrets provider before `NameFor` or `Fetch`, the
+source per non-blank trimmed `id`, failing the whole listing with the page and entry, never the
+value, so `MigrateAll` dispatches nothing. `ContractError.Error()` quotes the envelope's `code` and
+`message`. Amends [ADR-018](adr_018_multi_tenant_migration_cli.md). See
+[migrations.md](migrations.md) `[C73.23]`.
+
+**Key Benefits:** migration provisions only tenants the runtime can resolve, and no control-plane
+text reaches an operator terminal or CI log unescaped through the source.
 
 ---
 
@@ -3556,7 +3592,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-162) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-163) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

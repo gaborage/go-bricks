@@ -39,6 +39,66 @@ rule is their gate.
 
 **This is input sanitization, not access control.** The regex — and the subsequent known-tenant lookup — reject *garbage*, not *cross-tenant access*. A forged value naming a real tenant passes both checks and resolves fine. Resolution answers "which tenant does this request claim to be for"; it never checks whether the caller is entitled to that tenant. See [Tenant resolution is identification, not authorization](#tenant-resolution-is-identification-not-authorization).
 
+## Unknown tenants
+
+The seat checks a tenant's form, not its existence, so a well-formed tenant the deployment does not serve reaches the handler. The first per-tenant accessor the request calls (`deps.DB(ctx)`, `deps.Cache(ctx)`, `deps.Messaging(ctx)`) refuses it: for a key absent from `multitenant.tenants`, the built-in store returns an error that `errors.Is` `multitenant.ErrUnknownTenant`. The answer is the malformed-tenant one, 400 `BAD_REQUEST` "Invalid tenant", plus one WARN with `reason="unknown tenant"` whose `path` is the route template, never the tenant ID ([ADR-161](adr_161_unknown_tenant_is_a_client_fault.md)). A known tenant missing a section, the control-plane key `""` and named databases still answer 500, as server faults.
+
+- **Raw handlers and middleware** get it automatically: return the accessor's error, bare or wrapped with `%w`.
+- **Typed handlers** return it through `server.NewUnknownTenantError`. The door is fail-closed: a cause that is not the sentinel (nil, an outage, a timeout) answers 500, so it is safe for any accessor error. A `WithRawResponse` route renders the same `code` and `message` in its flat shape, and a JOSE route through its own error sink.
+
+```go
+db, err := h.getDB(ctx.RequestContext())
+if err != nil {
+	return server.Result[Order]{}, server.NewUnknownTenantError(err) // 400 unknown tenant, else 500
+}
+```
+
+To keep the handler's own 500 wording for every other error, guard first:
+
+```go
+switch {
+case errors.Is(err, multitenant.ErrUnknownTenant):
+	return server.Result[Order]{}, server.NewUnknownTenantError(err)
+case err != nil:
+	return server.Result[Order]{}, server.NewInternalServerError("orders unavailable")
+}
+```
+
+**A dynamic store** (`app.Options.ResourceSource`) wraps `multitenant.ErrUnknownTenant` only when it knows the tenant does not exist, as in `fmt.Errorf("%w: no catalog entry", multitenant.ErrUnknownTenant)`. Any other error, such as an outage or a timeout, stays unwrapped and is never a 400, so a store that cannot tell never fails open: a raw handler or middleware returning it answers 500, or 503 when it wraps `context.DeadlineExceeded`, and a typed handler returning it through `server.NewUnknownTenantError` answers 500.
+
+**A custom `app.Options.CacheConnector` still dials an unknown tenant:** it owns its dial, and the framework reads the store's error for that key as "no cache section". Refuse unknown tenants in the connector, or before the handler as below.
+
+**Refusing before the handler.** The handler runs until its first accessor, and a route that never calls one serves the unknown tenant. To refuse earlier, or in your own shape, attach a group middleware: it runs right after the seat, so the tenant is in context. It reads the tenant catalog and writes its own bytes:
+
+```go
+func knownTenant(deps *app.ModuleDeps) server.MiddlewareFunc {
+	return func(c server.HandlerContext, next func() error) error {
+		ctx := c.RequestContext()
+		tenantID, ok := multitenant.GetTenant(ctx) // set by the seat, which runs first
+		if !ok {
+			return errors.New("knownTenant: no tenant in context") // 500: mounted without multitenant
+		}
+		catalog, err := deps.DBByName(ctx, "catalog")
+		if err != nil {
+			return err // 500
+		}
+		var n int
+		// $1 is PostgreSQL's placeholder; an Oracle catalog takes :1.
+		if err = catalog.QueryRow(ctx, "SELECT COUNT(*) FROM tenants WHERE id = $1", tenantID).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "unknown tenant"})
+		}
+		return next()
+	}
+}
+
+orders := r.Group("/orders", knownTenant(m.deps)) // m.deps saved in Init
+```
+
+Returning `multitenant.ErrUnknownTenant` instead of writing the body gives the framework's 400 and WARN.
+
 ## Header resolver
 
 ```yaml
@@ -62,7 +122,7 @@ multitenant:
     proxies: true             # read X-Forwarded-Host from a trusted peer
 ```
 
-Extracts the part before `.<domain>` from the request `Host`. Ports are stripped from the host; IPv6 literals are preserved correctly.
+Extracts the part before `.<domain>` from the request `Host`. Ports are stripped from the host; IPv6 literals are preserved correctly. Matching is ASCII case-insensitive (RFC 4343): ASCII letters in the host and in `domain` fold to lowercase first, so `ACME.api.example.com` resolves tenant `acme`. Only ASCII letters fold: a non-ASCII byte in the tenant label, such as U+212A KELVIN SIGN, is kept as is, and the tenant-ID grammar check the server wraps every resolver in refuses it. `SubdomainResolver` itself does not validate its result, so a caller that uses it directly checks the label with `multitenant.ValidateTenantID`.
 
 With `proxies: true` the resolver reads `X-Forwarded-Host` instead, but only when the immediate peer is trusted by the rule the server applies to `X-Forwarded-For` and `X-Forwarded-Proto`: loopback, link-local, private and unix-socket peers, plus the vetted `server.trustedproxies` ranges ([ADR-140](adr_140_forwarded_host_peer_gate.md)). It takes the last comma-separated entry of the last header line, the one the nearest proxy wrote; an empty last entry is no match. When any other peer sends the header, the request is rejected with 400 `Invalid tenant` (a composite order stops there), and the WARN reason reads `X-Forwarded-Host from a peer outside server.trustedproxies` without logging the header. A proxy on a public or `100.64.0.0/10` address therefore needs its CIDRs in `server.trustedproxies`, the same entry the client IP and HSTS already need. A request without the header resolves from `Host`, and `proxies: false` (the default) ignores the header.
 
@@ -92,7 +152,7 @@ Use this when downstream clients route by URL path rather than header or hostnam
 
 ### Why path-segment over Echo's `c.Param("tenantID")`?
 
-Route params would only resolve **inside** a route group like `r.Group("/itsp/:tenantID", ...)`. That means framework middleware that needs the tenant before route matching (request logging, OTel span attributes, tenant-scoped DB resolution) wouldn't have it. The path resolver extracts at the URL level, before routing, so the entire framework's tenant-aware machinery has the value from the first middleware onward.
+A route parameter such as `:tenantID` in `/itsp/:tenantID` is matched by echo's router on any route, grouped or not, but it never reaches a resolver. Echo v5 matches the route first and the tenant middleware runs on the root `e.Use` chain after it, before group and route middleware, but a resolver receives only the `*http.Request`: echo's router keeps a matched `:tenantID` on its own context and does not copy it onto the request (`SetPathValue`). The path resolver reads the segment from `URL.Path` instead, so middleware and handlers that run after the tenant middleware (request logging, group and route middleware, tenant-scoped DB resolution) have the value. Middleware ahead of it on the root chain, such as the OTel middleware and the IP pre-guard, does not.
 
 ## Composite resolver
 
@@ -137,7 +197,7 @@ See [ADR-039](adr_039_composite_resolver_order.md) for why the framework refuses
 - **Path** — the URL path is authored entirely by the caller. With `segment: 2` and no prefix gate, a request to `/api/v1/orders` resolves the tenant `v1`.
 - **Subdomain** — `SubdomainResolver` reads `req.Host`, and `Host` is *itself a request header*. It is constrained only if your ingress pins it (per-tenant DNS/vhost/SNI, or a `Host` allowlist) — something the framework cannot verify.
 
-The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a [global middleware](global_middleware.md) comparing `multitenant.Tenant(ctx)` against the tenant claim in the verified JWT.
+The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a middleware attached in the same `RouteRegistrar.Group` call as `auth.Middleware` and listed after it, that reads `tenantID, ok := multitenant.GetTenant(ctx.RequestContext())`, rejects the request when `ok` is false, and compares `tenantID` with the tenant claim of the verified `auth.Principal` (`auth.PrincipalFromContext`). A [global middleware](global_middleware.md) runs before every group middleware, so it sees no verified principal unless it verifies the credential itself.
 
 The same holds for a per-tenant rate limit. The framework's global limiter keys on the client IP, never on the resolved tenant ([ADR-160](adr_160_rate_limit_keys_on_client_ip.md)). A per-tenant budget is `server.TenantRateLimit`, attached in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it, and after whatever check ties the resolved tenant to the caller; ahead of that check, any caller can drain a tenant it names.
 

@@ -67,6 +67,12 @@ func (s *amqpShipper) Plan(rec *Record, headers map[string]any) shipment {
 // since a NACK is a transient broker condition rather than a bad message.
 func (s *amqpShipper) Ship(ctx context.Context, sh *shipment) verdict {
 	start := time.Now()
+	// Before the client resolves: per tenant, an off-grammar tenant's lookup fails and would read as an outage.
+	if sh.Stamp != "" {
+		if err := multitenant.ValidateTenantID(sh.Stamp); err != nil {
+			return verdict{Kind: shipPoison, Err: err}
+		}
+	}
 	client, err := s.client(ctx)
 	if err != nil {
 		// The client resolved at pre-flight and is gone now: an outage mid-batch, not a

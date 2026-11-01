@@ -274,6 +274,14 @@ multitenant there is no seat.
 _Avoid_: tenant middleware (names the mechanism, not the role), tenant check,
 tenant gate
 
+**Unknown tenant**:
+A well-formed tenant identity that names no tenant the deployment serves. The
+seat lets it through, because it checks form, not existence. The first per-tenant
+accessor refuses it as a client fault when the store's error wraps
+`multitenant.ErrUnknownTenant`, as the built-in store's does; a typed handler
+passes that error on through `server.NewUnknownTenantError`.
+_Avoid_: invalid tenant (that one is malformed), missing tenant
+
 **Route family**:
 Routes registered together under one path prefix that share one policy: who
 authenticates them, where their tenant comes from, what their error bodies look

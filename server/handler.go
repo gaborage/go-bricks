@@ -690,8 +690,11 @@ func (hw *handlerWrapper[T, R]) runJOSEInbound(c *echo.Context) IAPIError {
 	return apiErr
 }
 
-// dispatchResponse picks the correct response writer based on JOSE / raw configuration.
+// dispatchResponse logs an unknown-tenant refusal, then picks the response writer based on JOSE / raw configuration.
 func (hw *handlerWrapper[T, R]) dispatchResponse(c *echo.Context, response any, apiErr IAPIError) error {
+	if unknownTenant, ok := apiErr.(*UnknownTenantError); ok {
+		logUnknownTenantRefusal(unknownTenant, c, hw.responder.log, hw.responder.cfg.App.Debug)
+	}
 	if outbound := hw.jose.outbound(); outbound != nil {
 		return hw.responder.joseHandleResponseWithObs(c, response, apiErr, outbound, hw.jose.resolver(), hw.jose.obs())
 	}
