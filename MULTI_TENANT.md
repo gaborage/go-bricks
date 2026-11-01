@@ -6,7 +6,7 @@ GoBricks provides comprehensive multi-tenant support through tenant-specific dat
 
 GoBricks implements multi-tenancy through several key components:
 
-1. **Tenant Resolution**: Extract tenant ID from requests using headers, subdomains, composite strategies, or custom logic with built-in validation support.
+1. **Tenant Resolution**: Extract tenant ID from requests using headers, subdomains, path segments, or a composite of them (`multitenant.resolver.type`), with built-in validation support.
 2. **Resource Isolation**: Each tenant gets isolated database and messaging connections with complete separation.
 3. **Context Propagation**: Tenant ID flows through request context automatically across all framework components.
 4. **Function-Based Injection**: Database and messaging resources are resolved via functions in `ModuleDeps`, enabling lazy per-tenant connection management.

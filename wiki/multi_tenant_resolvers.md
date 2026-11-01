@@ -82,7 +82,7 @@ Use this when downstream clients route by URL path rather than header or hostnam
 
 ### Why path-segment over Echo's `c.Param("tenantID")`?
 
-Route params would only resolve **inside** a route group like `r.Group("/itsp/:tenantID", ...)`. That means framework middleware that needs the tenant before route matching (request logging, OTel span attributes, tenant-scoped DB resolution) wouldn't have it. The path resolver extracts at the URL level, before routing, so the entire framework's tenant-aware machinery has the value from the first middleware onward.
+A route parameter such as `:tenantID` in `/itsp/:tenantID` is matched by echo's router on any route, grouped or not, but it never reaches a resolver. Echo v5 matches the route first and the tenant middleware runs on the root `e.Use` chain after it, before group and route middleware, but a resolver receives only the `*http.Request`: echo's router keeps a matched `:tenantID` on its own context and does not copy it onto the request (`SetPathValue`). The path resolver reads the segment from `URL.Path` instead, so middleware and handlers that run after the tenant middleware (request logging, group and route middleware, tenant-scoped DB resolution) have the value. Middleware ahead of it on the root chain, such as the OTel middleware and the IP pre-guard, does not.
 
 ## Composite resolver
 
@@ -127,7 +127,7 @@ See [ADR-039](adr_039_composite_resolver_order.md) for why the framework refuses
 - **Path** — the URL path is authored entirely by the caller. With `segment: 2` and no prefix gate, a request to `/api/v1/orders` resolves the tenant `v1`.
 - **Subdomain** — `SubdomainResolver` reads `req.Host`, and `Host` is *itself a request header*. It is constrained only if your ingress pins it (per-tenant DNS/vhost/SNI, or a `Host` allowlist) — something the framework cannot verify.
 
-The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a [global middleware](global_middleware.md) comparing `multitenant.Tenant(ctx)` against the tenant claim in the verified JWT.
+The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a middleware attached in the same `RouteRegistrar.Group` call as `auth.Middleware` and listed after it, that reads `tenantID, ok := multitenant.GetTenant(ctx.RequestContext())`, rejects the request when `ok` is false, and compares `tenantID` with the tenant claim of the verified `auth.Principal` (`auth.PrincipalFromContext`). A [global middleware](global_middleware.md) runs before every group middleware, so it sees no verified principal unless it verifies the credential itself.
 
 The same holds for a per-tenant rate limit. The framework's global limiter keys on the client IP, never on the resolved tenant ([ADR-160](adr_160_rate_limit_keys_on_client_ip.md)). A per-tenant budget is `server.TenantRateLimit`, attached in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it, and after whatever check ties the resolved tenant to the caller; ahead of that check, any caller can drain a tenant it names.
 
