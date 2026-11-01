@@ -232,7 +232,7 @@ func TestUnknownTenantErrorOnJOSERoute(t *testing.T) {
 	POST(hr, srv.ModuleGroup(), "/tokens", func(taggedReq, HandlerContext) (taggedResp, IAPIError) {
 		return taggedResp{}, NewUnknownTenantError(storeErr)
 	})
-	compactReq := jositest.SealForTest(t, []byte(`{"pan":"4111111111111111"}`), f.peerOutbound(), f.resolver)
+	compactReq := jositest.SealForTest(t, []byte(`{"pan":"test-pan-001"}`), f.peerOutbound(), f.resolver)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", strings.NewReader(compactReq))
 	req.Header.Set(echo.HeaderContentType, jose.ContentType)
 	req.Header.Set(HeaderXTenantID, unknownTenantID)
