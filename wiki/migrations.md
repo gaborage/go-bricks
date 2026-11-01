@@ -14543,11 +14543,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - scope: `migration.SecretsProvider.DBConfig` (the library, and the CLI's AWS path),
   `migration/source/http.TenantSource.ListTenants` and `ContractError.Error()`. **Unchanged**:
   trimming, a blank ID (`ErrEmptyTenantID` at the secrets provider, skipped by the HTTP source), the
-  static source, `MigrateAll` given IDs from another lister, the secret-name composition,
+  static source, `MigrateAll` (it adds no check of its own), the secret-name composition,
   `ContractError`'s fields, and every configuration key. `go-bricks-migrate` takes it from its
   routine go-bricks pin bump.
-- class note: `breaking`: a run against a fleet that names a non-conforming tenant fails before
-  dispatching anything, and removing `migration.ErrInvalidTenantID` breaks the build of code that
+- class note: `breaking`: a run whose HTTP tenant source lists a non-conforming tenant fails before
+  dispatching anything. With any other lister (the static source or your own) and
+  `SecretsProvider` credentials, the ID fails at `DBConfig` inside that tenant's own run, possibly
+  after other tenants have already run; credentials from another provider (the CLI's file source)
+  meet no new refusal. Removing `migration.ErrInvalidTenantID` breaks the build of code that
   matched it.
 - gate: match = a detect hit. no-match = no hit.
 - before (v0.72.0): `DBConfig` admitted `^[A-Za-z0-9_-]{1,128}$` and returned
@@ -14560,8 +14563,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   multitenant: tenant id does not match the default grammar: 6 bytes`), never naming the value, so
   `MigrateAll` dispatches nothing. `ContractError.Error()` reads `control-plane returned HTTP 401:
   "AUTH_FAILED": "invalid token"`.
-- apply: before upgrading, rename each non-conforming tenant into the grammar (lowercase, `_` to
-  `-`, at most 64 bytes) in the control plane, in its secret and in every store that names it. In
+- apply: before upgrading, choose a new ID in the grammar for each non-conforming tenant, and
+  check that the new fleet holds no duplicate before renaming anything. A mechanical rename
+  (lowercase, `_` to `-`, cut to 64 bytes) can map two tenants onto one ID (`Acme` and `acme`,
+  `acme_1` and `acme-1`), and the default secret name is `Prefix` plus the tenant ID, so the two
+  would then share one secret. Rename each tenant in the control plane, in its secret and in every
+  store that names it. In
   Go, replace `migration.ErrInvalidTenantID` with `multitenant.ErrInvalidTenantID` in each
   `errors.Is`, and repoint any match on the old unquoted `ContractError` text.
 - verify: on the target version, `TenantSource.ListTenants` (or `go-bricks-migrate list` after its
