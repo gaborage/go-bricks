@@ -53,9 +53,10 @@ parameterized. The old wiki rationale ("DB schema names") was wrong.
 2. **It is the fleet-wide wire contract of the `x-tenant-id` stamp,** and the isolation invariant
    for every key space a tenant ID shares: the `named:` database keys, the cache key delimiter `:`
    and the 64-byte `MaxTenantIDLen`.
-3. **A tenant identity that does not fit is mapped into the grammar,** inside a route family's
-   `Tenant` step (#2166), never by widening the grammar. There is no known consumer need for an ID
-   outside it.
+3. **A tenant identity that does not fit is mapped into the grammar where it is set,** never by
+   widening the grammar: today at the caller of `multitenant.SetTenant` or the code that builds a
+   `ForEachTenant` list, and in a route family's `Tenant` step once #2166 lands. There is no known
+   consumer need for an ID outside it.
 4. **Static config load enforces it.** `checkMultitenantTenantEntry` calls
    `multitenant.ValidateTenantID` after `checkSectionName`, so the existing messages for `.`,
    uppercase and `_` win and the new check adds only the 64-byte bound. Its `ConfigError` has

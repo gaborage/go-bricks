@@ -17,15 +17,17 @@ All resolvers funnel through the same interface (`multitenant.TenantResolver`) a
 
 ## Validation
 
-Every resolved tenant ID is checked against the tenant-ID grammar `^[a-z0-9-]{1,64}$`
-(`multitenant.ValidateTenantID`) before it lands in context. The grammar is fixed, not
+Every tenant ID a framework-built resolver returns is checked against the tenant-ID grammar
+`^[a-z0-9-]{1,64}$` (`multitenant.ValidateTenantID`) before it lands in context. A caller-built
+resolver passed to `server.TenantMiddleware` is not checked: its non-empty result goes into
+context as returned, so validate it with `multitenant.ValidateTenantID` inside the resolver. The grammar is fixed, not
 configurable ([ADR-162](adr_162_tenant_id_grammar_is_fixed.md)). Reject the request rather than
 silently masking malformed IDs: a tenant ID shares key spaces with other identifiers, and the
 grammar is what keeps them apart. It keeps a tenant named `named:x` out of the named-database keys
 (`databases.x`), keeps a `:` from reaching into another tenant's cache keys (the cache key
 delimiter, [ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md)), and is the fleet-wide wire
-contract of the `x-tenant-id` message stamp, checked when a message is published and again when it
-is consumed. No schema or SQL identifier is built from a tenant ID. The composite resolver advances to the next
+contract of the `x-tenant-id` message stamp, checked when a message is published and again when a
+`messaging.tenancy: shared` consumer reads it (a per-tenant consumer ignores the stamp). No schema or SQL identifier is built from a tenant ID. The composite resolver advances to the next
 sub-resolver if the validation fails (same as a missing tenant).
 
 The same grammar applies to the keys of a STATIC `multitenant.tenants` map, checked at startup

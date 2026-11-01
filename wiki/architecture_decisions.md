@@ -2758,7 +2758,8 @@ over 64 bytes booted unreachable, and a publish stamped an off-grammar tenant th
 consumer refused on another service. `checkMultitenantTenantEntry` now applies it after the ADR-090
 section-name check, `tenantstamp.Resolve` applies it to a non-empty decided stamp after the conflict
 rule, and both outbox shippers park a stored off-grammar stamp as poison. A tenant identity that
-does not fit is mapped into the grammar in a route family's `Tenant` step (#2166). The unread
+does not fit is mapped into the grammar where it is set: at the `multitenant.SetTenant` caller today,
+in a route family's `Tenant` step once #2166 lands. The unread
 `multitenant.validation.pattern` leaves `config.example.yaml`. See [migrations.md](migrations.md)
 `[C73.22]`.
 
