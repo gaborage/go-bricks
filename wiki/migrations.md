@@ -13458,8 +13458,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   that tenant's bucket, so one address rotating the tenant value got a fresh bucket per value,
   and any caller naming a tenant drained that tenant's budget. Every request now draws on its
   client IP's bucket, so tenants behind one NAT, gateway or load balancer share one
-  `app.rate.limit` budget; `server.TenantRateLimit`, attached after `auth.Middleware`, gives a
-  tenant its own (C73.20). ADR-160.
+  `app.rate.limit` budget; `server.TenantRateLimit`, attached after `auth.Middleware` and after
+  the check that ties the resolved tenant to the caller, gives a tenant its own, and ahead of
+  that check any caller can drain a tenant it names (C73.20). ADR-160.
 
 ### [C73.1] a type-less migration tenant runs with the runner's vendor, and an undeliverable migrator identity is refused · breaking · when: match
 
