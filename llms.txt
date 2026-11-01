@@ -4865,7 +4865,7 @@ multitenant:
   enabled: true
   resolver:
     type: subdomain
-    domain: api.example.com  # leading dot optional
+    domain: api.example.com  # leading dot optional; hosts match it ASCII case-insensitively, and the tenant is the lowercase label
     proxies: true            # read X-Forwarded-Host (last entry) only from a trusted peer: loopback/link-local/private/unix or server.trustedproxies; any other peer sending it gets 400
 ```
 
