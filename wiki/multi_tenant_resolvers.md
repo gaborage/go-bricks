@@ -54,7 +54,7 @@ case err != nil:
 }
 ```
 
-**A dynamic store** (`app.Options.ResourceSource`) wraps `multitenant.ErrUnknownTenant` only when it knows the tenant does not exist, as in `fmt.Errorf("%w: no catalog entry", multitenant.ErrUnknownTenant)`. Any other error, such as an outage or a timeout, stays unwrapped and answers 500, so a store that cannot tell never fails open.
+**A dynamic store** (`app.Options.ResourceSource`) wraps `multitenant.ErrUnknownTenant` only when it knows the tenant does not exist, as in `fmt.Errorf("%w: no catalog entry", multitenant.ErrUnknownTenant)`. Any other error, such as an outage or a timeout, stays unwrapped and is never a 400, so a store that cannot tell never fails open: a raw handler or middleware returning it answers 500, or 503 when it wraps `context.DeadlineExceeded`, and a typed handler returning it through `server.NewUnknownTenantError` answers 500.
 
 **A custom `app.Options.CacheConnector` still dials an unknown tenant:** it owns its dial, and the framework reads the store's error for that key as "no cache section". Refuse unknown tenants in the connector, or before the handler as below.
 

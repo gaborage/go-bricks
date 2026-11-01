@@ -30,7 +30,10 @@ type ServerRunner interface {
 // A lookup wraps multitenant.ErrUnknownTenant only when the store knows the tenant does
 // not exist, as the built-in store does for a key absent from multitenant.tenants; the
 // request is then refused as a client fault (400). Any other error, such as an outage or
-// a timeout, stays unwrapped and answers 500, so a store that cannot tell never fails open.
+// a timeout, stays unwrapped and is never a 400, so a store that cannot tell never fails
+// open: a raw handler or middleware returning it answers 500, or 503 when it wraps
+// context.DeadlineExceeded, and a typed handler returning it through
+// server.NewUnknownTenantError answers 500.
 type TenantStore interface {
 	database.DBConfigProvider
 	messaging.BrokerURLProvider

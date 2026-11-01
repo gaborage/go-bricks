@@ -74,8 +74,10 @@ tenant the deployment does not serve passes the seat, and the handler runs (#222
    as it does every `IAPIError`.
 7. **The dynamic-store contract** (`app.TenantStore` godoc): a store wraps the sentinel only when
    it knows the tenant does not exist. Any other error, such as an outage or a timeout, stays
-   unwrapped and answers 500 on both paths and through the door. A store that cannot tell never
-   fails open.
+   unwrapped and is never a 400, so a store that cannot tell never fails open. A raw handler or
+   middleware returning it answers 500, or 503 when it wraps `context.DeadlineExceeded`, since
+   `classifyError` checks the deadline first; a typed handler returning it through the door
+   answers 500.
 8. **The seat does no existence check.** It checks form; existence belongs to the store, and the
    first tenant resource the request asks for answers it. An opt-in existence check at the seat
    can come later and return the same sentinel, so the wire answer would not move.
