@@ -2742,7 +2742,8 @@ the tenant does not exist. The seat still does no existence check. See [migratio
 `[C73.21]`.
 
 **Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
-pages an operator, and no error a store cannot classify is ever answered as a 400.
+pages an operator, and a store error that does not wrap `multitenant.ErrUnknownTenant` never
+earns the unknown-tenant 400.
 
 ### [ADR-163: Migration Tenant IDs Follow the Framework Grammar](adr_163_migration_tenant_ids_follow_framework_grammar.md)
 
