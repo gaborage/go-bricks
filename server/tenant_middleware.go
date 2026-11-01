@@ -12,6 +12,9 @@ import (
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
+// msgInvalidTenant is the 400 message for a malformed tenant and for an unknown one.
+const msgInvalidTenant = "Invalid tenant"
+
 // TenantMiddleware resolves the tenant ID and injects it into the request context.
 // If a skipper function is provided, certain routes (e.g., health probes) can bypass tenant resolution.
 // If skipper is nil, all routes will undergo tenant resolution.
@@ -49,8 +52,8 @@ func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkip
 
 			tenantID, err := resolver.ResolveTenant(c.Request().Context(), c.Request())
 			if err != nil || tenantID == "" {
-				logTenantRejection(l, c, err)
-				return NewBadRequestError("Invalid tenant")
+				logTenantRejection(l, c, tenantRejectionReason(err), c.Request().URL.Path)
+				return NewBadRequestError(msgInvalidTenant)
 			}
 
 			ctx := multitenant.SetTenant(c.Request().Context(), tenantID)
@@ -60,30 +63,50 @@ func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkip
 	}
 }
 
-// logTenantRejection emits one WARN per request rejected by tenant resolution
-// (400). This middleware is registered outer to the access logger and never
-// calls next() on reject, so without this the request leaves no server-side
-// trail when observability is disabled. The resolved tenant is never logged
-// here — there is none on this path; only the failure reason (empty tenant,
-// untrusted X-Forwarded-Host peer, or resolver error) is included, never the
-// resolver error's message or the forwarded host (which may
-// carry caller-controlled request data). With a framework logger it routes
-// through structured WARN-level logging (SensitiveDataFilter, dual-mode
-// routing); with nil (public TenantMiddleware construction) it falls back to
-// the stdlib log package, mirroring corsWarnf in cors.go.
-func logTenantRejection(l logger.Logger, c *echo.Context, resolveErr error) {
-	reason := "empty tenant"
+// tenantRejectionReason names the seat's failure class (empty tenant, untrusted
+// X-Forwarded-Host peer, or resolver error), never the resolver error's message.
+func tenantRejectionReason(resolveErr error) string {
 	if errors.Is(resolveErr, multitenant.ErrUntrustedForwardedHost) {
-		reason = "X-Forwarded-Host from a peer outside server.trustedproxies"
-	} else if resolveErr != nil {
-		reason = "resolver error"
+		return "X-Forwarded-Host from a peer outside server.trustedproxies"
 	}
+	if resolveErr != nil {
+		return "resolver error"
+	}
+	return "empty tenant"
+}
+
+// logTenantRejection emits one WARN per request refused for its tenant (400), carrying the
+// reason class and the caller-chosen path, never a tenant ID or an error message. With a nil
+// logger (public TenantMiddleware construction) it falls back to stdlib log, like corsWarnf.
+func logTenantRejection(l logger.Logger, c *echo.Context, reason, path string) {
 	req := c.Request()
 	msg := fmt.Sprintf("[server.tenant] request rejected: invalid tenant method=%s path=%s client=%s status=%d reason=%q",
-		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(c.RealIP()), http.StatusBadRequest, reason)
+		logSafeValue(req.Method), logSafeValue(path), logSafeValue(c.RealIP()), http.StatusBadRequest, reason)
 	if l == nil {
 		log.Printf("WARN %s", msg)
 		return
 	}
 	l.Warn().Msg(msg)
+}
+
+// logUnknownTenantRefusal writes the one line an UnknownTenantError leaves. A 400
+// logs the tenant-rejection WARN with the route template, since a path resolver
+// puts the tenant ID in the URL. A 500 (a cause that is not the sentinel) logs
+// classifyError's unhandled-error line, the error type only outside debug.
+func logUnknownTenantRefusal(apiErr *UnknownTenantError, c *echo.Context, l logger.Logger, debug bool) {
+	if apiErr.HTTPStatus() == http.StatusBadRequest {
+		logTenantRejection(l, c, "unknown tenant", matchedRouteTemplate(c))
+		return
+	}
+	logUnhandledError(l, c, apiErr.cause, debug)
+}
+
+// logUnhandledError writes the 5xx "unhandled error" line, the error type only outside
+// debug; with a nil logger it falls back to stdlib log.
+func logUnhandledError(l logger.Logger, c *echo.Context, err error, debug bool) {
+	if l == nil {
+		log.Printf("ERROR unhandled error request_id=%s error_type=%T", logSafeValue(safeGetRequestID(c)), err)
+		return
+	}
+	appendErrorDetail(l.Error().Str("request_id", safeGetRequestID(c)), err, debug).Msg("unhandled error")
 }

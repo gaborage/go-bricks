@@ -25,6 +25,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Test constants for common values
@@ -1916,4 +1917,55 @@ func TestErrorDetailMasksASensitiveErrorField(t *testing.T) {
 		"a field the operator marked sensitive must be masked at this door too")
 	assert.NotContains(t, out, detailGateErrorText,
 		"the raw error message must not reach the sink when the error field is sensitive")
+}
+
+func TestClassifyErrorUnknownTenantIsClientFault(t *testing.T) {
+	storeErr := unknownTenantStoreErr(t)
+	tests := []struct {
+		name       string
+		err        error
+		middleware bool
+		want       int
+	}{
+		{name: "bare_sentinel", err: multitenant.ErrUnknownTenant, want: http.StatusBadRequest},
+		{name: "wrapped_in_plain_error", err: fmt.Errorf("load orders: %w", storeErr), want: http.StatusBadRequest},
+		{name: "door_error_from_raw_handler", err: NewUnknownTenantError(storeErr), want: http.StatusBadRequest},
+		{name: "group_middleware_error", err: storeErr, middleware: true, want: http.StatusBadRequest},
+		{name: "dynamic_store_wrapped_sentinel_is_400", err: fmt.Errorf("%w: no secret for this tenant", multitenant.ErrUnknownTenant), want: http.StatusBadRequest},
+		{name: "dynamic_store_untyped_error_stays_500", err: errors.New("secrets manager: request timed out"), want: http.StatusInternalServerError},
+		{name: "deadline_still_503", err: fmt.Errorf("%w: %w", multitenant.ErrUnknownTenant, context.DeadlineExceeded), want: http.StatusServiceUnavailable},
+		{name: "other_api_error_keeps_its_answer", err: fmt.Errorf("%w: %w", NewNotFoundError("Order"), multitenant.ErrUnknownTenant), want: http.StatusNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testLog := &testLogger{}
+			srv := newTenantServer(config.ResolverTypeHeader, testLog)
+			r, path, handler := srv.ModuleGroup(), "/orders", func(HandlerContext) error { return tc.err }
+			if tc.middleware {
+				r, path = r.Group("/mw", func(HandlerContext, func() error) error { return tc.err }), "/mw/orders"
+				handler = func(c HandlerContext) error { return c.JSON(http.StatusOK, nil) }
+			}
+			r.Add(http.MethodGet, "/orders", handler)
+
+			status, resp := serveTenant(t, srv, path, unknownTenantID)
+
+			assert.Equal(t, tc.want, status)
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, statusToErrorCode(tc.want), resp.Error.Code)
+			wantWarns, wantUnhandled := 0, 0
+			switch tc.want {
+			case http.StatusBadRequest:
+				wantWarns = 1
+				assert.Equal(t, msgInvalidTenant, resp.Error.Message)
+			case http.StatusInternalServerError:
+				wantUnhandled = 1
+			}
+			warns, unhandled := splitTenantRefusalLogs(testLog.logEntries())
+			assert.Len(t, warns, wantWarns, "one refusal WARN per 400, never on a 500")
+			assert.Len(t, unhandled, wantUnhandled, "one unhandled-error line per 500, never on a 400")
+			for _, e := range unhandled {
+				assert.Equal(t, "error", e.level)
+			}
+		})
+	}
 }

@@ -2726,6 +2726,25 @@ open. See [migrations.md](migrations.md) `[C73.20]`.
 **Key Benefits:** no caller-chosen string keys a framework rate-limit bucket by default, limiter memory
 is bounded by client addresses, and a per-tenant budget is an explicit, post-authentication choice.
 
+### [ADR-161: An Unknown Tenant Is a Client Fault](adr_161_unknown_tenant_is_a_client_fault.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a well-formed tenant absent from the built-in store answers 400 `BAD_REQUEST` "Invalid tenant" plus a WARN at its first per-tenant accessor, from a raw handler or a middleware, instead of 500 `INTERNAL_ERROR` and `ERROR "unhandled error"`
+
+The tenant seat checks form, not existence, so a well-formed unknown tenant reached the handler, and
+the built-in store's error for it, a `*config.ConfigError` no sentinel matched, became a 500. The store
+now joins `multitenant.ErrUnknownTenant` on its absent-key branch only, and `classifyError` answers it
+with the seat's malformed-tenant 400 and one WARN with `reason="unknown tenant"` and the route template
+as `path`, never the tenant ID. Typed handlers reach the same answer through
+`server.NewUnknownTenantError(err)`, which is fail-closed: any cause that is not the sentinel answers
+500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
+JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
+the tenant does not exist. The seat still does no existence check. See [migrations.md](migrations.md)
+`[C73.21]`.
+
+**Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
+pages an operator, and a store error that does not wrap `multitenant.ErrUnknownTenant` never
+earns the unknown-tenant 400.
+
 ### [ADR-163: Migration Tenant IDs Follow the Framework Grammar](adr_163_migration_tenant_ids_follow_framework_grammar.md)
 
 **Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `SecretsProvider.DBConfig` refuses a tenant ID outside `^[a-z0-9-]{1,64}$` where it admitted `^[A-Za-z0-9_-]{1,128}$`, and `migration.ErrInvalidTenantID` is removed; the HTTP tenant source fails a listing that holds such an ID

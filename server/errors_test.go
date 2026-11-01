@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 func TestBaseAPIError(t *testing.T) {
@@ -802,4 +803,47 @@ func TestPanicRecoveryStructuredLogging(t *testing.T) {
 
 	// Verify response is a 500 error (PanicStackError → classifyError → internal error)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+const unknownTenantID = "ghost"
+
+// unknownTenantStoreErr is the built-in store's answer for a tenant it does not serve.
+func unknownTenantStoreErr(t *testing.T) error {
+	t.Helper()
+	cfg := &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}}
+	_, err := config.NewTenantStore(cfg).DBConfig(context.Background(), unknownTenantID)
+	require.ErrorIs(t, err, multitenant.ErrUnknownTenant)
+	return err
+}
+
+func TestNewUnknownTenantErrorFailsClosed(t *testing.T) {
+	storeErr := unknownTenantStoreErr(t)
+	invalidTenant, internal := NewBadRequestError("Invalid tenant"), NewInternalServerError(msgInternalErrorProd)
+	tests := []struct {
+		name  string
+		cause error
+		want  IAPIError
+	}{
+		{name: "store_error_is_400", cause: storeErr, want: invalidTenant},
+		{name: "wrapped_store_error_is_400", cause: fmt.Errorf("load orders: %w", storeErr), want: invalidTenant},
+		{name: "nil_cause_is_500", cause: nil, want: internal},
+		{name: "untyped_cause_is_500", cause: errors.New("dial tcp: connection refused"), want: internal},
+		{name: "config_error_without_sentinel_is_500", cause: config.NewMultiTenantError(unknownTenantID, "tenant", "configuration not found", ""), want: internal},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			apiErr := NewUnknownTenantError(tc.cause)
+
+			assert.Equal(t, []any{tc.want.ErrorCode(), tc.want.Message(), tc.want.HTTPStatus()}, []any{apiErr.ErrorCode(), apiErr.Message(), apiErr.HTTPStatus()})
+			assert.NotContains(t, apiErr.Error(), unknownTenantID, "the cause text never reaches Error()")
+		})
+	}
+
+	t.Run("unwraps_to_sentinel_and_config_error", func(t *testing.T) {
+		apiErr := NewUnknownTenantError(storeErr)
+
+		var cfgErr *config.ConfigError
+		require.ErrorIs(t, apiErr, multitenant.ErrUnknownTenant)
+		assert.ErrorAs(t, apiErr, &cfgErr)
+	})
 }
