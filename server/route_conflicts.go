@@ -248,10 +248,9 @@ func (a *routeAdmission) claimFamily(full string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, f := range a.families {
-		if _, under := pathutil.StripPathPrefix(full, f); under {
-			return f, false
-		}
-		if _, covers := pathutil.StripPathPrefix(f, full); covers {
+		_, under := pathutil.StripPathPrefix(full, f)
+		_, covers := pathutil.StripPathPrefix(f, full)
+		if under || covers {
 			return f, false
 		}
 	}

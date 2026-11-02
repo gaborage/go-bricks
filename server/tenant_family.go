@@ -19,7 +19,7 @@ type tenantFamily struct {
 // equals or covers the health or ready path, or it equals, covers or sits under another family.
 func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
-	if !ok || rg.admission == nil || rg.admission.engine == nil {
+	if !ok || rg.admission == nil {
 		panic(tenantFamilyRefusal(prefix, "the registrar was not built by a Server; use ModuleGroup, RootGroup or a Group under them"))
 	}
 	relative := pathutil.NormalizePrefix(prefix)
@@ -36,7 +36,7 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if !isStaticTemplate(full) {
 		panic(tenantFamilyRefusal(full, "a family prefix cannot hold a path parameter or wildcard"))
 	}
-	if rg.cfg == nil || !rg.cfg.Multitenant.Enabled {
+	if !rg.cfg.Multitenant.Enabled {
 		panic(tenantFamilyRefusal(full, "multitenant.enabled is false; a module shared with single-tenant binaries must branch on config"))
 	}
 	if probe, covered := rg.admission.coveredProbePath(full); covered {
