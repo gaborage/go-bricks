@@ -16,6 +16,8 @@ type routeGroup struct {
 	family *tenantFamily
 	// familyNode holds this family registrar's own middleware; nil outside a family.
 	familyNode *familyNode
+	// carriesMiddleware is set when the echo group has middleware, its own or its parent's.
+	carriesMiddleware bool
 }
 
 func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) *routeGroup {
@@ -123,14 +125,17 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 			familyNode: &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)},
 		}
 	}
-	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
-
-	return &routeGroup{
-		group:     newGroup,
-		prefix:    rg.combinePrefix(normalized),
-		cfg:       rg.cfg,
-		admission: rg.admission,
+	child := &routeGroup{
+		group:             rg.group.Group(normalized, rg.adaptAll(middleware)...),
+		prefix:            rg.combinePrefix(normalized),
+		cfg:               rg.cfg,
+		admission:         rg.admission,
+		carriesMiddleware: rg.carriesMiddleware || len(middleware) > 0,
 	}
+	if child.carriesMiddleware {
+		rg.admission.admitGroup(child.prefix, getCallerPackage(2))
+	}
+	return child
 }
 
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
@@ -139,6 +144,10 @@ func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
 		// only routes registered after this call, through this registrar or a Group below it.
 		rg.familyNode.mw = append(rg.familyNode.mw, rg.adaptAll(middleware)...)
 		return
+	}
+	if len(middleware) > 0 {
+		rg.carriesMiddleware = true
+		rg.admission.admitGroup(rg.prefix, getCallerPackage(2))
 	}
 	rg.group.Use(rg.adaptAll(middleware)...)
 }
