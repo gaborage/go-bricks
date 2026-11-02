@@ -26,16 +26,13 @@ type tenantFamily struct {
 // familyPublishedKey holds the request context a family's steps published the tenant on.
 const familyPublishedKey = "_tenant_family_published"
 
-// guard wraps a family route's leaf handler h. It sits inside the route's middleware and
-// around the typed leaf, so binding and JOSE run after it. h runs only on a request the
+// guard is a family route's innermost middleware (routeMiddleware): it wraps the leaf handler
+// h, around the typed leaf, so binding and JOSE run after it. h runs only on a request the
 // tenant seat skipped (seatSkippedKey) whose tenant is still exactly the one the family's
 // steps published. Anything else is a wiring fault: the framework 500, logged once, and h
 // never runs. It guards wiring, not a security boundary: HandlerContext.Set can write the
-// evidence it reads. Outside a family (nil f) it returns h.
+// evidence it reads.
 func (f *tenantFamily) guard(h echo.HandlerFunc) echo.HandlerFunc {
-	if f == nil {
-		return h
-	}
 	return func(c *echo.Context) error {
 		if skipped, _ := c.Get(seatSkippedKey).(bool); !skipped {
 			return newTenantFault(newHandlerContext(c, nil), f.log, reasonSeatNotSkipped, nil)
@@ -136,7 +133,8 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	}
 }
 
-// middleware runs p as a flat MiddlewareFunc, logging its refusals to l.
+// middleware runs p as a flat MiddlewareFunc, logging its refusals to l, and records the
+// context it published the tenant on under familyPublishedKey for the leaf guard.
 func (p TenantPolicy) middleware(l logger.Logger) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
 		_, _, err := p.run(c, l, func() error {

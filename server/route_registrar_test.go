@@ -480,10 +480,8 @@ const (
 	warnIPPreGuard     = "[server.ip_preguard] request rejected"
 	warnAccessLog4xx   = "with status 4xx" // the request logger's WARN for a 4xx
 
-	observedFamilyPrefix = "/partner" // the tenant-owned family a family server mounts
-	// observedDenyHeader, when present, makes the observed family's Tenant step a client
-	// fault, which Deny answers.
-	observedDenyHeader = "X-Observed-Deny"
+	observedFamilyPrefix = "/partner"        // the tenant-owned family a family server mounts
+	observedDenyHeader   = "X-Observed-Deny" // makes observedFamilyPolicy deny
 )
 
 var errObservedDeny = fmt.Errorf("observed family: %w", multitenant.ErrTenantResolutionFailed)
