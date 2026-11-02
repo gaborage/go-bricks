@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/labstack/echo/v5"
+
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -65,6 +67,7 @@ func (p TenantPolicy) ResolveForTest(c HandlerContext) (tenantID string, denied 
 const (
 	reasonGrammarBackstop   = "tenant ID fails the tenant-ID grammar"
 	reasonNoTenantPublished = "authenticate chain returned without publishing a tenant"
+	reasonStepCommitted     = "authenticate step committed a response"
 	reasonNoTenantAccessor  = "per-tenant accessor called before the tenant exists"
 	reasonDenyError         = "deny returned an error"
 	reasonDenyNothing       = "deny returned without committing a response"
@@ -103,6 +106,11 @@ func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) 
 	if stage == stagePublished {
 		return published, false, chainErr
 	}
+	// Deny is the only byte writer: committed bytes stand, and the fault is only logged.
+	if resp, unwrapErr := echo.UnwrapResponse(c.ectx.Response()); unwrapErr == nil && resp.Committed {
+		logTenantRefusal(c, l, resp.Status, reasonStepCommitted)
+		return "", false, nil
+	}
 	if stage == stageBackstop {
 		return "", false, logTenantFault(c, l, backstop)
 	}
@@ -113,13 +121,23 @@ func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) 
 	return "", denied, err
 }
 
+// runSteps runs steps in order, then inner. A step's next runs the rest once: a second call,
+// or a call after the step committed a response (a wiring fault), returns nil and runs
+// nothing, neither a later step nor inner.
 func runSteps(c HandlerContext, steps []MiddlewareFunc, inner func() error) error {
 	var call func(i int) error
 	call = func(i int) error {
 		if i == len(steps) {
 			return inner()
 		}
-		return steps[i](c, func() error { return call(i + 1) })
+		called := false
+		return steps[i](c, func() error {
+			if called || isResponseCommitted(c.ectx) {
+				return nil
+			}
+			called = true
+			return call(i + 1)
+		})
 	}
 	return call(0)
 }
