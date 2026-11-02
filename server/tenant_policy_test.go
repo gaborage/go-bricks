@@ -324,6 +324,27 @@ func TestTenantPolicyFailsClosedWithoutTenant(t *testing.T) {
 	assert.Contains(t, entries[0].msg, `reason="authenticate chain returned without publishing a tenant"`)
 }
 
+func TestTenantPolicyReturnsCommittedStepErrorUntouched(t *testing.T) {
+	c, rec := newTenantPolicyTestContext(t)
+	tl := &testLogger{}
+	stepErr := fmt.Errorf("committed then refused: %w", multitenant.ErrTenantResolutionFailed)
+	p := TenantPolicy{
+		Authenticate: []MiddlewareFunc{func(sc HandlerContext, _ func() error) error {
+			return errors.Join(sc.echoContext().NoContent(http.StatusUnauthorized), stepErr)
+		}},
+		Tenant: func(HandlerContext) (string, error) { return "acme", nil },
+		Deny:   denyMustNotRun(t),
+	}
+
+	id, denied, err := p.run(c, tl, func() error { return nil })
+
+	require.ErrorIs(t, err, stepErr)
+	assert.False(t, denied)
+	assert.Empty(t, id)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.Len(t, refusalEntries(tl, reasonStepCommitted), 1)
+}
+
 func TestTenantPolicyReturnsNextErrorUntouched(t *testing.T) {
 	nextErr := NewBadRequestError("x")
 	t.Run("next_error_returned", func(t *testing.T) {

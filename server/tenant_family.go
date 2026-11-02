@@ -20,6 +20,21 @@ type tenantFamily struct {
 	catchAlls map[string]struct{} // routeNodeKey(echo.RouteNotFound, full path) of each not-found catch-all
 }
 
+// familyNode is one family registrar's own middleware: the family root's (nil parent) or a
+// Group's below it. Use appends to it; a route reads its ancestors' at registration.
+type familyNode struct {
+	parent *familyNode
+	mw     []echo.MiddlewareFunc
+}
+
+// appendChain appends the middleware of n's ancestors, the family root first, then n's own.
+func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareFunc {
+	if n == nil {
+		return chain
+	}
+	return append(n.parent.appendChain(chain), n.mw...)
+}
+
 // tenantOwnedGroup mounts a tenant-owned route family at r's prefix joined with prefix. The
 // family's echo group is built on the application engine at that full prefix, not under r, so
 // no parent group's middleware ever runs on its routes. The family's steps (p.run) run outermost
@@ -28,10 +43,11 @@ type tenantFamily struct {
 // sub-path or a wrong method answers the framework 404 only after the tenant is published, and
 // Deny before it. A Tenant reading a path parameter finds none on the prefix catch-alls, so it
 // must fail on the empty value, which Deny answers; returning "" with no error fails the grammar
-// backstop, a 500. It panics at the call site when r was not built
-// by a Server, r is already inside a family, p.Tenant is nil, the prefix is empty or "/", the
-// full prefix holds a path parameter or wildcard, multi-tenant mode is off, the full prefix
-// equals or covers the health or ready path, or it equals, covers or sits under another family.
+// backstop, a 500. Use and Group middleware inside the family attach per route at registration,
+// never to a catch-all. It panics at the call site when r was not built by a Server, r is already
+// inside a family, p.Tenant is nil, the prefix is empty or "/", the full prefix holds a path
+// parameter or wildcard, multi-tenant mode is off, the full prefix equals or covers the health or
+// ready path, or it equals, covers or sits under another family.
 func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
 	if !ok || rg.admission == nil {
@@ -74,11 +90,12 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	group.Any("", familyNotFound, fam.steps)
 	group.RouteNotFound("/*", familyNotFound, fam.steps)
 	return &routeGroup{
-		group:     group,
-		prefix:    full,
-		cfg:       rg.cfg,
-		admission: rg.admission,
-		family:    fam,
+		group:      group,
+		prefix:     full,
+		cfg:        rg.cfg,
+		admission:  rg.admission,
+		family:     fam,
+		familyNode: &familyNode{},
 	}
 }
 

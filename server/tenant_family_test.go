@@ -1,8 +1,10 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -236,6 +238,7 @@ const (
 	traceMiddleware   = "middleware"
 	traceHandler      = "handler"
 	traceForeign      = "foreign" // a handler outside every family
+	traceNextNil      = "next_returned_nil"
 
 	familyDenyStatus = http.StatusForbidden
 	familyDenyBody   = "family-deny"
@@ -297,12 +300,26 @@ func recordingHandler(tr *familyTrace) Handler {
 	}
 }
 
-func recordingMiddleware(tr *familyTrace) MiddlewareFunc {
+// forbiddingHandler records traceHandler, then returns a 403 with msg, committing nothing.
+func forbiddingHandler(tr *familyTrace, msg string) Handler {
+	return func(c HandlerContext) error {
+		tr.record(traceHandler, c)
+		return NewForbiddenError(msg)
+	}
+}
+
+// recordingStep is a middleware recording stage, then calling next.
+func recordingStep(tr *familyTrace, stage string) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
-		tr.record(traceMiddleware, c)
+		tr.record(stage, c)
 		return next()
 	}
 }
+
+func recordingMiddleware(tr *familyTrace) MiddlewareFunc { return recordingStep(tr, traceMiddleware) }
+
+// passThrough is a middleware calling next.
+func passThrough(_ HandlerContext, next func() error) error { return next() }
 
 // recordingPolicy is the recording family's TenantPolicy: fakeBearerStep, a Tenant resolving
 // familyTenant, and a Deny writing familyDenyStatus and familyDenyBody.
@@ -369,12 +386,16 @@ func assertFrameworkError(t *testing.T, rec *httptest.ResponseRecorder, status i
 	assert.Equal(t, code, envelope.Error.Code)
 }
 
-// newNotFoundFamilies builds the recording family /fam with a nested group and two wildcard
-// routes; /t, whose Tenant reads the org path parameter: empty on the family's catch-all; and
-// /bare, whose one route is GET at its bare prefix, under a foreign POST, HEAD and OPTIONS /:seg.
-func newNotFoundFamilies(t *testing.T) (*Server, *familyTrace) {
+// newNotFoundFamilies builds the recording family /fam, with recording Use middleware when use
+// is set, a nested group and two wildcard routes; /t, whose Tenant reads the org path
+// parameter: empty on the family's catch-all; and /bare, whose one route is GET at its bare
+// prefix, under a foreign POST, HEAD and OPTIONS /:seg.
+func newNotFoundFamilies(t *testing.T, use bool) (*Server, *familyTrace) {
 	t.Helper()
 	srv, family, tr := newRecordingFamily(t)
+	if use {
+		family.Use(recordingMiddleware(tr))
+	}
 	family.Group("/sub").Add(http.MethodGet, "/items", recordingHandler(tr))
 	family.Add(http.MethodGet, "/files/*", recordingHandler(tr))
 	family.Add(http.MethodGet, "/x/:id/*", recordingHandler(tr))
@@ -399,58 +420,22 @@ func newNotFoundFamilies(t *testing.T) (*Server, *familyTrace) {
 	return srv, tr
 }
 
-// notFoundCase is one TestTenantOwnedGroupAnswersNotFoundAfterTenant request.
+// notFoundCase is one TestTenantOwnedGroupAnswersNotFoundAfterTenant case.
 type notFoundCase struct {
 	name       string
 	method     string
 	path       string
 	credential bool
+	use        bool     // the family's Use middleware precedes /sub/items, which then carries it
 	wantDeny   bool     // the family's Deny answers; otherwise the framework 404, after the tenant
 	sameAs     string   // a known path whose anonymous answer this one equals byte for byte
 	control    string   // a known path the same caller resolves, so Deny is not the only answer
 	stepsOn    []string // instead of method: each sent anonymous, then resolved (assertStepsAnswer)
 }
 
-func TestTenantOwnedGroupAnswersNotFoundAfterTenant(t *testing.T) {
-	// The two Use cases arrive with per-route Use in a later link.
-	tests := []notFoundCase{
-		{name: "known_path_anonymous_gets_deny", method: http.MethodGet, path: "/fam/orders", wantDeny: true},
-		{name: "unknown_sub_path_anonymous_gets_same_deny", method: http.MethodGet, path: "/fam/nope", wantDeny: true, sameAs: "/fam/orders"},
-		{name: "bare_prefix_without_route_runs_family", method: http.MethodGet, path: "/fam", wantDeny: true},
-		{name: "unknown_sub_path_resolved_gets_404", method: http.MethodGet, path: "/fam/nope", credential: true},
-		{name: "wrong_method_resolved_gets_404", method: http.MethodDelete, path: "/fam/orders", credential: true},
-		{name: "nested_group_unknown_path_gets_404", method: http.MethodGet, path: "/fam/sub/nope", credential: true},
-		{name: "nested_group_wrong_method_gets_404", method: http.MethodDelete, path: "/fam/sub/items", credential: true},
-		{name: "path_param_family_denies_on_unknown_sub_path", method: http.MethodGet, path: "/t/acme/nope", credential: true, wantDeny: true, control: "/t/acme/orders"},
-		{name: "wildcard_wrong_method_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodPost}},
-		{name: "wildcard_head_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodHead}},
-		{name: "wildcard_options_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodOptions}},
-		{name: "param_wildcard_wrong_method_runs_steps", path: "/fam/x/1/a", stepsOn: []string{http.MethodPost}},
-		{name: "wildcard_bare_prefix_wrong_method_runs_steps", path: "/fam/files", stepsOn: []string{http.MethodPost}},
-		{name: "bare_prefix_wrong_method_runs_steps", path: "/bare", stepsOn: []string{http.MethodPost}},
-		{name: "bare_prefix_head_and_options_run_steps", path: "/bare", stepsOn: []string{http.MethodHead, http.MethodOptions}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv, tr := newNotFoundFamilies(t)
-			if len(tt.stepsOn) > 0 {
-				assertStepsAnswer(t, srv, tr, tt.path, tt.stepsOn)
-				return
-			}
-			assertNotFoundCase(t, srv, tr, &tt)
-		})
-	}
-}
-
-// assertNotFoundCase sends tt's one request and asserts its answer.
-func assertNotFoundCase(t *testing.T, srv *Server, tr *familyTrace, tt *notFoundCase) {
+// assertAnswer checks rec, then the known paths the case names as controls.
+func (tt *notFoundCase) assertAnswer(t *testing.T, srv *Server, tr *familyTrace, rec *httptest.ResponseRecorder, edits []func(*http.Request)) {
 	t.Helper()
-	var edits []func(*http.Request)
-	if tt.credential {
-		edits = append(edits, withFamilyCredential)
-	}
-
-	rec := serveFamily(srv, tt.method, tt.path, edits...)
 	if tt.wantDeny {
 		assertFamilyDenied(t, rec, tr)
 	} else {
@@ -466,6 +451,50 @@ func assertNotFoundCase(t *testing.T, srv *Server, tr *familyTrace, tt *notFound
 		known := serveFamily(srv, http.MethodGet, tt.control, edits...)
 		assert.Equal(t, http.StatusOK, known.Code, known.Body.String())
 		assert.Equal(t, "acme", tr.tenants[traceHandler])
+	}
+	if tt.use {
+		tr.reset()
+		known := serveFamily(srv, http.MethodGet, "/fam/sub/items", edits...)
+		assert.Equal(t, http.StatusOK, known.Code, known.Body.String())
+		assert.True(t, tr.ran(traceMiddleware), "control: the known route runs the Use middleware")
+	}
+}
+
+func TestTenantOwnedGroupAnswersNotFoundAfterTenant(t *testing.T) {
+	tests := []notFoundCase{
+		{name: "known_path_anonymous_gets_deny", method: http.MethodGet, path: "/fam/orders", wantDeny: true},
+		{name: "unknown_sub_path_anonymous_gets_same_deny", method: http.MethodGet, path: "/fam/nope", wantDeny: true, sameAs: "/fam/orders"},
+		{name: "bare_prefix_without_route_runs_family", method: http.MethodGet, path: "/fam", wantDeny: true},
+		{name: "unknown_sub_path_resolved_gets_404", method: http.MethodGet, path: "/fam/nope", credential: true},
+		{name: "wrong_method_resolved_gets_404", method: http.MethodDelete, path: "/fam/orders", credential: true},
+		{name: "nested_group_unknown_path_gets_404", method: http.MethodGet, path: "/fam/sub/nope", credential: true},
+		{name: "nested_group_wrong_method_gets_404", method: http.MethodDelete, path: "/fam/sub/items", credential: true},
+		{name: "path_param_family_denies_on_unknown_sub_path", method: http.MethodGet, path: "/t/acme/nope", credential: true, wantDeny: true, control: "/t/acme/orders"},
+		{name: "use_middleware_skips_unknown_sub_path", method: http.MethodGet, path: "/fam/sub/nope", credential: true, use: true},
+		{name: "use_middleware_skips_wrong_method", method: http.MethodDelete, path: "/fam/sub/items", credential: true, use: true},
+		{name: "wildcard_wrong_method_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodPost}},
+		{name: "wildcard_head_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodHead}},
+		{name: "wildcard_options_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodOptions}},
+		{name: "param_wildcard_wrong_method_runs_steps", path: "/fam/x/1/a", stepsOn: []string{http.MethodPost}},
+		{name: "wildcard_bare_prefix_wrong_method_runs_steps", path: "/fam/files", stepsOn: []string{http.MethodPost}},
+		{name: "bare_prefix_wrong_method_runs_steps", path: "/bare", stepsOn: []string{http.MethodPost}},
+		{name: "bare_prefix_head_and_options_run_steps", path: "/bare", stepsOn: []string{http.MethodHead, http.MethodOptions}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, tr := newNotFoundFamilies(t, tt.use)
+			if len(tt.stepsOn) > 0 {
+				assertStepsAnswer(t, srv, tr, tt.path, tt.stepsOn)
+				return
+			}
+			var edits []func(*http.Request)
+			if tt.credential {
+				edits = append(edits, withFamilyCredential)
+			}
+
+			rec := serveFamily(srv, tt.method, tt.path, edits...)
+			tt.assertAnswer(t, srv, tr, rec, edits)
+		})
 	}
 }
 
@@ -490,6 +519,16 @@ func assertStepsAnswer(t *testing.T, srv *Server, tr *familyTrace, path string, 
 	}
 }
 
+// assertMiddlewareRuns sends GET path with the credential and asserts the recording middleware
+// ran after the publish, seeing the family's tenant, then the handler answered.
+func assertMiddlewareRuns(t *testing.T, srv *Server, tr *familyTrace, path string) {
+	t.Helper()
+	rec := serveFamily(srv, http.MethodGet, path, withFamilyCredential)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, []string{traceAuthenticate, traceTenant, traceMiddleware, traceHandler}, tr.events)
+	assert.Equal(t, familyTenant, tr.tenants[traceMiddleware])
+}
+
 func TestTenantOwnedGroupPublishesTenant(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -499,11 +538,22 @@ func TestTenantOwnedGroupPublishesTenant(t *testing.T) {
 			name: "route_middleware_sees_tenant",
 			check: func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace) {
 				family.Add(http.MethodGet, "/mw", recordingHandler(tr), recordingMiddleware(tr))
-
-				rec := serveFamily(srv, http.MethodGet, "/fam/mw", withFamilyCredential)
-				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-				assert.Equal(t, []string{traceAuthenticate, traceTenant, traceMiddleware, traceHandler}, tr.events)
-				assert.Equal(t, familyTenant, tr.tenants[traceMiddleware])
+				assertMiddlewareRuns(t, srv, tr, "/fam/mw")
+			},
+		},
+		{
+			name: "use_middleware_sees_tenant",
+			check: func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace) {
+				family.Use(recordingMiddleware(tr))
+				family.Add(http.MethodGet, "/used", recordingHandler(tr))
+				assertMiddlewareRuns(t, srv, tr, "/fam/used")
+			},
+		},
+		{
+			name: "nested_middleware_sees_tenant",
+			check: func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace) {
+				family.Group("/sub", recordingMiddleware(tr)).Add(http.MethodGet, "/items", recordingHandler(tr))
+				assertMiddlewareRuns(t, srv, tr, "/fam/sub/items")
 			},
 		},
 		{
@@ -664,7 +714,6 @@ func TestTenantOwnedGroupDenyMisbehavior(t *testing.T) {
 }
 
 func TestTenantOwnedGroupErrorsAfterPublishBypassDeny(t *testing.T) {
-	// use_middleware_returns_403 arrives with per-route Use in a later link.
 	tests := []struct {
 		name       string
 		route      func(srv *Server, family RouteRegistrar, tr *familyTrace)
@@ -702,16 +751,28 @@ func TestTenantOwnedGroupErrorsAfterPublishBypassDeny(t *testing.T) {
 		{
 			name: "error_returned_through_authenticate_step",
 			route: func(_ *Server, family RouteRegistrar, tr *familyTrace) {
-				family.Add(http.MethodGet, "/forbidden", func(c HandlerContext) error {
-					tr.record(traceHandler, c)
-					return NewForbiddenError("not your order")
-				})
+				family.Add(http.MethodGet, "/forbidden", forbiddingHandler(tr, "not your order"))
 			},
 			method:     http.MethodGet,
 			path:       "/fam/forbidden",
 			wantStatus: http.StatusForbidden,
 			wantCode:   errCodeForbidden,
 			wantEvents: []string{traceAuthenticate, traceTenant, traceHandler},
+		},
+		{
+			name: "use_middleware_returns_403",
+			route: func(_ *Server, family RouteRegistrar, tr *familyTrace) {
+				family.Use(func(c HandlerContext, _ func() error) error {
+					tr.record(traceMiddleware, c)
+					return NewForbiddenError("not your order")
+				})
+				family.Add(http.MethodGet, "/guarded", recordingHandler(tr))
+			},
+			method:     http.MethodGet,
+			path:       "/fam/guarded",
+			wantStatus: http.StatusForbidden,
+			wantCode:   errCodeForbidden,
+			wantEvents: []string{traceAuthenticate, traceTenant, traceMiddleware},
 		},
 	}
 	for _, tt := range tests {
@@ -753,7 +814,6 @@ func TestTenantOwnedGroupCopiesAuthenticateSteps(t *testing.T) {
 
 func TestTenantOwnedGroupRegistersOneCatchAllPair(t *testing.T) {
 	srv := newTenantFamilyServer(t, "")
-	passThrough := func(_ HandlerContext, next func() error) error { return next() }
 	// The parent's middleware gives it its own catch-all pair at /p and /p/*.
 	parent := srv.ModuleGroup().Group("/p", passThrough)
 	family := tenantOwnedGroup(parent, "/fam", fixedTenantPolicy(familyTenant))
@@ -791,9 +851,7 @@ func TestTenantOwnedGroupRegistersOneCatchAllPerWildcardNode(t *testing.T) {
 		family.Add(http.MethodPost, "/x/:org/*", answerWith("org"))
 		family.Group("/sub").Add(http.MethodGet, "/*", answerWith("sub"))
 		family.Add(http.MethodGet, "/*", answerWith("root")) // the node of the prefix's own catch-all
-		GET(NewHandlerRegistry(srv.cfg), family, "/typed/*", func(req familyOrderRequest, _ HandlerContext) (familyOrderResponse, IAPIError) {
-			return familyOrderResponse(req), nil
-		})
+		GET(NewHandlerRegistry(srv.cfg), family, "/typed/*", echoFamilyOrder)
 	})
 
 	assert.ElementsMatch(t, []string{
@@ -815,13 +873,310 @@ func TestTenantOwnedGroupLogsRefusalsToServerLogger(t *testing.T) {
 	tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("Acme")).Add(http.MethodGet, "/orders", answerWith("orders"))
 
 	assertFrameworkError(t, serveFamilyRequest(srv, "/fam/orders"), http.StatusInternalServerError, errCodeInternalError)
-	var refusals []testLogEntry
-	for _, entry := range testLog.logEntries() {
-		if strings.Contains(entry.msg, "family request refused") {
-			refusals = append(refusals, entry)
-		}
-	}
+	refusals := refusalEntries(testLog, reasonGrammarBackstop)
 	require.Len(t, refusals, 1, "the grammar backstop's refusal reaches the Server's logger")
 	assert.Equal(t, "error", refusals[0].level)
-	assert.Contains(t, refusals[0].msg, "reason="+strconv.Quote(reasonGrammarBackstop))
+}
+
+// refusalEntries returns log's family refusal lines carrying reason.
+func refusalEntries(log *testLogger, reason string) []testLogEntry {
+	var out []testLogEntry
+	for _, entry := range log.logEntries() {
+		if strings.Contains(entry.msg, "reason="+strconv.Quote(reason)) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func TestTenantOwnedGroupRunsStepsInOrder(t *testing.T) {
+	srv, family, tr := newRecordingFamily(t, func(p *TenantPolicy, tr *familyTrace) {
+		p.Authenticate = []MiddlewareFunc{recordingStep(tr, "authenticate_1"), recordingStep(tr, "authenticate_2")}
+	})
+	family.Use(func(c HandlerContext, next func() error) error {
+		tr.record("publish", c)
+		tr.record("use_middleware", c)
+		return next()
+	})
+	family.Group("/sub", recordingStep(tr, "nested_middleware")).
+		Add(http.MethodGet, "/items", recordingHandler(tr), recordingStep(tr, "route_middleware"))
+
+	rec := serveFamily(srv, http.MethodGet, "/fam/sub/items")
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, []string{
+		"authenticate_1", "authenticate_2", traceTenant, "publish",
+		"use_middleware", "nested_middleware", "route_middleware", traceHandler,
+	}, tr.events)
+	assert.Equal(t, familyTenant, tr.tenants["publish"], "the first stored middleware observes the publish: the family's tenant, not the seat's")
+}
+
+// The committing step's answer, which must stand byte for byte.
+const (
+	stepCommitStatus = http.StatusUnauthorized
+	stepCommitBody   = "step-bytes"
+)
+
+// assertStepCommitLogged asserts srv logged one step-committed refusal at ERROR for GET
+// /fam/orders, carrying no seat-tenant header value.
+func assertStepCommitLogged(t *testing.T, srv *Server) {
+	t.Helper()
+	log, ok := srv.logger.(*testLogger)
+	require.True(t, ok, "newTenantFamilyServer logs to a testLogger")
+	entries := refusalEntries(log, reasonStepCommitted)
+	require.Len(t, entries, 1, "one wiring-fault line: %v", log.logEntries())
+	assert.Equal(t, "error", entries[0].level)
+	assert.Contains(t, entries[0].msg, `path="/fam/orders"`)
+	assert.NotContains(t, entries[0].msg, familySeatTenant, "the log line never carries a header value")
+}
+
+// assertCommittedBytesStand asserts rec is the committing step's answer and srv logged the
+// wiring fault.
+func assertCommittedBytesStand(t *testing.T, srv *Server, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	assert.Equal(t, stepCommitStatus, rec.Code)
+	assert.Equal(t, stepCommitBody, rec.Body.String(), "the committed bytes stand")
+	assertStepCommitLogged(t, srv)
+}
+
+// noteNextNil calls next and records traceNextNil when it returns nil.
+func noteNextNil(tr *familyTrace, c HandlerContext, next func() error) {
+	if next() == nil {
+		tr.record(traceNextNil, c)
+	}
+}
+
+// newStepOutcomeFamily builds the recording family with steps as its Authenticate steps, plus
+// /fam/refused, whose handler returns a 403 without committing.
+func newStepOutcomeFamily(t *testing.T, steps []func(*familyTrace) MiddlewareFunc) (*Server, *familyTrace) {
+	t.Helper()
+	srv, family, tr := newRecordingFamily(t, func(p *TenantPolicy, tr *familyTrace) {
+		p.Authenticate = make([]MiddlewareFunc, len(steps))
+		for i, step := range steps {
+			p.Authenticate[i] = step(tr)
+		}
+	})
+	family.Add(http.MethodGet, "/refused", forbiddingHandler(tr, "refused"))
+	return srv, tr
+}
+
+func TestTenantOwnedGroupAuthenticateStepOutcomes(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string // default /fam/orders
+		steps      []func(*familyTrace) MiddlewareFunc
+		wantEvents []string
+		check      func(t *testing.T, srv *Server, rec *httptest.ResponseRecorder, tr *familyTrace)
+	}{
+		{
+			name: "step_commits_response_is_wiring_fault",
+			steps: []func(*familyTrace) MiddlewareFunc{func(tr *familyTrace) MiddlewareFunc {
+				return func(c HandlerContext, _ func() error) error {
+					tr.record(traceAuthenticate, c)
+					return c.String(stepCommitStatus, stepCommitBody)
+				}
+			}},
+			wantEvents: []string{traceAuthenticate},
+			check: func(t *testing.T, srv *Server, rec *httptest.ResponseRecorder, _ *familyTrace) {
+				assertCommittedBytesStand(t, srv, rec)
+			},
+		},
+		{
+			name: "step_commits_then_calls_next_gets_nil",
+			steps: []func(*familyTrace) MiddlewareFunc{
+				func(tr *familyTrace) MiddlewareFunc {
+					return func(c HandlerContext, next func() error) error {
+						tr.record(traceAuthenticate, c)
+						err := c.String(stepCommitStatus, stepCommitBody)
+						noteNextNil(tr, c, next)
+						return err
+					}
+				},
+				func(tr *familyTrace) MiddlewareFunc { return recordingStep(tr, "authenticate_2") },
+			},
+			wantEvents: []string{traceAuthenticate, traceNextNil},
+			check: func(t *testing.T, srv *Server, rec *httptest.ResponseRecorder, _ *familyTrace) {
+				assertCommittedBytesStand(t, srv, rec)
+			},
+		},
+		{
+			name: "step_commits_and_returns_error_skips_deny",
+			steps: []func(*familyTrace) MiddlewareFunc{func(tr *familyTrace) MiddlewareFunc {
+				return func(c HandlerContext, _ func() error) error {
+					tr.record(traceAuthenticate, c)
+					return errors.Join(c.String(stepCommitStatus, stepCommitBody),
+						fmt.Errorf("committed then refused: %w", multitenant.ErrTenantResolutionFailed))
+				}
+			}},
+			wantEvents: []string{traceAuthenticate},
+			check: func(t *testing.T, srv *Server, rec *httptest.ResponseRecorder, _ *familyTrace) {
+				assertCommittedBytesStand(t, srv, rec)
+			},
+		},
+		{
+			name: "step_calls_next_twice_runs_tenant_once",
+			path: "/fam/refused", // its handler commits nothing, so only the re-entry check stops a second pass
+			steps: []func(*familyTrace) MiddlewareFunc{func(tr *familyTrace) MiddlewareFunc {
+				return func(c HandlerContext, next func() error) error {
+					tr.record(traceAuthenticate, c)
+					first := next()
+					noteNextNil(tr, c, next)
+					return first
+				}
+			}},
+			wantEvents: []string{traceAuthenticate, traceTenant, traceHandler, traceNextNil},
+			check: func(t *testing.T, _ *Server, rec *httptest.ResponseRecorder, _ *familyTrace) {
+				assertFrameworkError(t, rec, http.StatusForbidden, errCodeForbidden)
+			},
+		},
+		{
+			name: "step_returns_nil_without_next_gets_500",
+			steps: []func(*familyTrace) MiddlewareFunc{func(tr *familyTrace) MiddlewareFunc {
+				return func(c HandlerContext, _ func() error) error {
+					tr.record(traceAuthenticate, c)
+					return nil
+				}
+			}},
+			wantEvents: []string{traceAuthenticate},
+			check: func(t *testing.T, _ *Server, rec *httptest.ResponseRecorder, _ *familyTrace) {
+				assertFrameworkError(t, rec, http.StatusInternalServerError, errCodeInternalError)
+			},
+		},
+		{
+			name:       "step_returns_401_goes_to_deny",
+			steps:      []func(*familyTrace) MiddlewareFunc{fakeBearerStep},
+			wantEvents: []string{traceAuthenticate, traceDeny},
+			check: func(t *testing.T, _ *Server, rec *httptest.ResponseRecorder, tr *familyTrace) {
+				assertFamilyDenied(t, rec, tr)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, tr := newStepOutcomeFamily(t, tt.steps)
+
+			// Anonymous: only fakeBearerStep reads the credential, and it must deny.
+			rec := serveFamily(srv, http.MethodGet, cmp.Or(tt.path, "/fam/orders"))
+			tt.check(t, srv, rec, tr)
+			assert.Equal(t, tt.wantEvents, tr.events, tt.name)
+		})
+	}
+}
+
+func TestTenantOwnedGroupUseAttachesPerRoute(t *testing.T) {
+	tests := []struct {
+		name  string
+		check func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace)
+	}{
+		{
+			name: "use_reaches_later_route",
+			check: func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace) {
+				family.Use(recordingMiddleware(tr))
+				family.Add(http.MethodGet, "/later", recordingHandler(tr))
+				assertMiddlewareRuns(t, srv, tr, "/fam/later")
+			},
+		},
+		{
+			name: "use_reaches_later_route_in_earlier_nested_group",
+			check: func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace) {
+				sub := family.Group("/sub")
+				family.Use(recordingMiddleware(tr))
+				sub.Add(http.MethodGet, "/later", recordingHandler(tr))
+				assertMiddlewareRuns(t, srv, tr, "/fam/sub/later")
+			},
+		},
+		{
+			name: "use_skips_earlier_route",
+			check: func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace) {
+				family.Add(http.MethodGet, "/earlier", recordingHandler(tr))
+				family.Use(recordingMiddleware(tr))
+				family.Add(http.MethodGet, "/later", recordingHandler(tr))
+
+				rec := serveFamily(srv, http.MethodGet, "/fam/earlier", withFamilyCredential)
+				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.Equal(t, []string{traceAuthenticate, traceTenant, traceHandler}, tr.events)
+
+				tr.reset()
+				rec = serveFamily(srv, http.MethodGet, "/fam/later", withFamilyCredential)
+				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.True(t, tr.ran(traceMiddleware), "control: a route registered after Use runs it")
+			},
+		},
+		{
+			name: "use_registers_no_catch_all",
+			check: func(t *testing.T, srv *Server, family RouteRegistrar, tr *familyTrace) {
+				want := []string{echo.RouteAny + " /fam", echo.RouteNotFound + " /fam/*"}
+				family.Use(recordingMiddleware(tr))
+				assert.ElementsMatch(t, want, catchAllRoutes(srv, "/fam"), "after Use")
+				family.Group("/sub", recordingMiddleware(tr)).Add(http.MethodGet, "/items", recordingHandler(tr))
+				assert.ElementsMatch(t, want, catchAllRoutes(srv, "/fam"), "after a nested group with middleware")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, family, tr := newRecordingFamily(t)
+			tt.check(t, srv, family, tr)
+		})
+	}
+}
+
+// echoFamilyOrder is a typed handler answering its request.
+func echoFamilyOrder(req familyOrderRequest, _ HandlerContext) (familyOrderResponse, IAPIError) {
+	return familyOrderResponse(req), nil
+}
+
+func TestTenantOwnedDescriptorCannotBeForgedOrCleared(t *testing.T) {
+	setOwned := func(owned bool) RouteOption {
+		return func(d *RouteDescriptor) { d.TenantOwned = owned }
+	}
+	tests := []struct {
+		name string
+		// register registers one route and returns its full path.
+		register func(srv *Server, family RouteRegistrar) string
+		want     bool
+	}{
+		{
+			name: "typed_route_option_clears_flag_in_family",
+			register: func(srv *Server, family RouteRegistrar) string {
+				POST(NewHandlerRegistry(srv.cfg), family, "/typed", echoFamilyOrder, setOwned(false))
+				return "/fam/typed"
+			},
+			want: true,
+		},
+		{
+			name: "typed_route_option_sets_flag_outside_family",
+			register: func(srv *Server, _ RouteRegistrar) string {
+				POST(NewHandlerRegistry(srv.cfg), srv.ModuleGroup(), "/plain", echoFamilyOrder, setOwned(true))
+				return "/plain"
+			},
+			want: false,
+		},
+		{
+			name: "raw_add_route",
+			register: func(_ *Server, family RouteRegistrar) string {
+				family.Add(http.MethodPost, "/raw", answerWith("raw"))
+				return "/fam/raw"
+			},
+			want: true,
+		},
+		{
+			name: "nested_group_route",
+			register: func(srv *Server, family RouteRegistrar) string {
+				POST(NewHandlerRegistry(srv.cfg), family.Group("/sub", passThrough), "/typed", echoFamilyOrder)
+				return "/fam/sub/typed"
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTenantFamilyServer(t, "")
+			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+			path := tt.register(srv, family)
+
+			routes := DefaultRouteRegistry.ByPath(path)
+			require.Len(t, routes, 1)
+			assert.Equal(t, tt.want, routes[0].TenantOwned)
+		})
+	}
 }

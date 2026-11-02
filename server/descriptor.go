@@ -32,6 +32,12 @@ type RouteDescriptor struct {
 	RawResponse  bool         // If true, bypass APIResponse envelope (for Strangler Fig migration)
 	InboundJOSE  *jose.Policy // Resolved at registration time from request type's jose: tag; nil for raw routes
 	OutboundJOSE *jose.Policy // Resolved at registration time from response type's jose: tag; nil for raw routes
+	// TenantOwned is true when the route was registered through a tenant-owned family or a
+	// Group below one. On a registrar the framework built (ModuleGroup, RootGroup or a Group
+	// below them), the framework stamps it after every RouteOption, so no option can forge or
+	// clear it; a registrar the framework did not build, passed to RegisterHandler, is outside
+	// that guarantee. Audit it in app.Options.PostRegisterRoutes.
+	TenantOwned bool
 }
 
 // ListenerProbes is RouteDescriptor.Listener for a route served on the probe listener

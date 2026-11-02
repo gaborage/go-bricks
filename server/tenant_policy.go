@@ -58,7 +58,9 @@ func DenyBodyless(c HandlerContext, fault error) error {
 
 // ResolveForTest runs steps 1-3 and the fault rule on c (from NewHandlerContextForTest)
 // without a router. denied is true only when Deny ran; the backstop's error stays unexported.
-// It panics when p.Tenant is nil, before any Authenticate step runs.
+// When a step commits a response it returns no tenant, denied false and the chain's error as
+// the step returned it (nil when it returned nil). It panics when p.Tenant is nil, before any
+// Authenticate step runs.
 func (p TenantPolicy) ResolveForTest(c HandlerContext) (tenantID string, denied bool, err error) {
 	if p.Tenant == nil {
 		panic("server: TenantPolicy.Tenant is nil")
@@ -69,6 +71,7 @@ func (p TenantPolicy) ResolveForTest(c HandlerContext) (tenantID string, denied 
 const (
 	reasonGrammarBackstop   = "tenant ID fails the tenant-ID grammar"
 	reasonNoTenantPublished = "authenticate chain returned without publishing a tenant"
+	reasonStepCommitted     = "a step before the publish committed a response"
 	reasonNoTenantAccessor  = "per-tenant accessor called before the tenant exists"
 	reasonDenyError         = "deny returned an error"
 	reasonDenyNothing       = "deny returned without committing a response"
@@ -95,6 +98,12 @@ func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) 
 	if tenantID != "" {
 		return tenantID, false, chainErr
 	}
+	// Deny is the only byte writer: committed bytes stand, the fault is logged, and the chain's
+	// error is returned untouched (the framework renders nothing over a committed response).
+	if isResponseCommitted(c.echoContext()) {
+		logTenantRefusal(c, l, reasonStepCommitted)
+		return "", false, chainErr
+	}
 	if backstop != nil {
 		return "", false, backstop
 	}
@@ -105,13 +114,23 @@ func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) 
 	return "", denied, err
 }
 
+// runSteps runs steps in order, then inner. A step's next runs the rest once: a second call,
+// or a call after the step committed a response (a wiring fault), returns nil and runs
+// nothing, neither a later step nor inner.
 func runSteps(c HandlerContext, steps []MiddlewareFunc, inner func() error) error {
 	var call func(i int) error
 	call = func(i int) error {
 		if i == len(steps) {
 			return inner()
 		}
-		return steps[i](c, func() error { return call(i + 1) })
+		called := false
+		return steps[i](c, func() error {
+			if called || isResponseCommitted(c.echoContext()) {
+				return nil
+			}
+			called = true
+			return call(i + 1)
+		})
 	}
 	return call(0)
 }
