@@ -255,6 +255,20 @@ func TestRouteGroupGroupAppliesFlatMiddleware(t *testing.T) {
 	assert.True(t, called, "flat middleware passed to Group must run")
 }
 
+// TestRouteGroupRefusesMiddlewareInsideTenantFamily pins the interim refusal: Group middleware
+// and Use inside a tenant-owned family never reach echo, whose group middleware auto-registers
+// a catch-all pair; a plain Group below the family still builds.
+func TestRouteGroupRefusesMiddlewareInsideTenantFamily(t *testing.T) {
+	srv := newTenantFamilyServer(t, "")
+	sub := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("family-tenant")).Group("/sub")
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	want := `tenant-owned family at "/fam"`
+
+	assertRegistrationPanics(t, want, func() { sub.Group("/x", mw) })
+	assertRegistrationPanics(t, want, func() { sub.Use(mw) })
+	assert.Equal(t, []string{"/fam"}, srv.admission.familyPrefixes())
+}
+
 // BenchmarkMiddlewareAdapter contrasts a request routed through one adaptMiddleware-wrapped
 // flat MiddlewareFunc against an echo-native middleware. The flat adapter carries a single
 // structurally-unavoidable per-request baton allocation (func() error { return next(c) });

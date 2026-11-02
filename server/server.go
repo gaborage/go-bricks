@@ -264,6 +264,7 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 		probeErrs:       make(chan error, 1),
 		probeStopBudget: probeStopTimeout,
 	}
+	s.admission.engine = e
 	s.closeProbeErrs = sync.OnceFunc(func() { close(s.probeErrs) })
 	if cfg.Server.Probes.Port > 0 {
 		s.probeAddr = hostPort(cfg.Server.EffectiveProbeHost(), cfg.Server.Probes.Port)
@@ -345,6 +346,7 @@ func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healt
 // probe engine serves the probes at their unprefixed paths. Then the route table lists
 // the probe listener's routes, not the reservation.
 func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
+	s.admission.probePaths = []string{healthPath, readyPath}
 	probes := []struct {
 		path, route, name     string
 		handler, probeHandler echo.HandlerFunc

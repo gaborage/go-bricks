@@ -610,6 +610,12 @@ func sharedProbePath(cfg *config.Config) *config.Config {
 	return cfg
 }
 
+// TestRouteAdmissionFamilyPrefixesNilSafe pins that a nil admission (a bare newRouteGroup)
+// reports no tenant-owned families.
+func TestRouteAdmissionFamilyPrefixesNilSafe(t *testing.T) {
+	assert.Nil(t, (*routeAdmission)(nil).familyPrefixes())
+}
+
 // TestRouteAdmissionRefusedDuplicateIsNotDescribed pins that every route door describes only the
 // route admission keeps: a refused duplicate writes no route-registry descriptor.
 func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"strconv"
+
 	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/config"
@@ -12,6 +14,8 @@ type routeGroup struct {
 	prefix    string
 	cfg       *config.Config // populates HandlerContext.Config in the go-bricks↔echo adapters
 	admission *routeAdmission
+	// family is non-nil on a tenant-owned family's registrar and on every Group below it.
+	family *tenantFamily
 }
 
 func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) *routeGroup {
@@ -88,6 +92,21 @@ func modellessDescriptor(method, path string, reg RouteRegistrant) *RouteDescrip
 
 func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
 	normalized := pathutil.NormalizePrefix(prefix)
+	if rg.family != nil {
+		// Echo's Group with middleware auto-registers a catch-all pair, so family middleware
+		// never reaches echo; until it is attached per route, refuse it.
+		if len(middleware) > 0 {
+			panic("server: Group middleware inside the tenant-owned family at " + strconv.Quote(rg.family.prefix) +
+				" is not supported yet; pass it per route to Add")
+		}
+		return &routeGroup{
+			group:     rg.group.Group(normalized),
+			prefix:    rg.combinePrefix(normalized),
+			cfg:       rg.cfg,
+			admission: rg.admission,
+			family:    rg.family,
+		}
+	}
 	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
 
 	return &routeGroup{
@@ -99,6 +118,11 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 }
 
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
+	if rg.family != nil {
+		// Echo's Group.Use auto-registers a catch-all pair; see Group.
+		panic("server: Use inside the tenant-owned family at " + strconv.Quote(rg.family.prefix) +
+			" is not supported yet; pass middleware per route to Add")
+	}
 	rg.group.Use(rg.adaptAll(middleware)...)
 }
 
