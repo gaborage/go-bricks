@@ -265,6 +265,7 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 		probeStopBudget: probeStopTimeout,
 	}
 	s.admission.engine = e
+	s.admission.log = log
 	s.closeProbeErrs = sync.OnceFunc(func() { close(s.probeErrs) })
 	if cfg.Server.Probes.Port > 0 {
 		s.probeAddr = hostPort(cfg.Server.EffectiveProbeHost(), cfg.Server.Probes.Port)

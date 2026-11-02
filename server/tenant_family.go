@@ -3,17 +3,23 @@ package server
 import (
 	"strconv"
 
+	"github.com/labstack/echo/v5"
+
 	"github.com/gaborage/go-bricks/internal/pathutil"
 )
 
 // tenantFamily is one tenant-owned route family.
 type tenantFamily struct {
-	prefix string // the full template the family's echo group mounts at
+	prefix string              // the full template the family's echo group mounts at
+	steps  echo.MiddlewareFunc // Authenticate, Tenant, the grammar check and the publish
 }
 
 // tenantOwnedGroup mounts a tenant-owned route family at r's prefix joined with prefix. The
 // family's echo group is built on the application engine at that full prefix, not under r, so
-// no parent group's middleware ever runs on it. It panics at the call site when r was not built
+// no parent group's middleware ever runs on it. The family's steps (p.run) run outermost on
+// every family route and on the one catch-all pair at the prefix and prefix/*, so an unknown
+// sub-path or a wrong method answers the framework 404 only after the tenant is published, and
+// Deny before it. It panics at the call site when r was not built
 // by a Server, r is already inside a family, p.Tenant is nil, the prefix is empty or "/", the
 // full prefix holds a path parameter or wildcard, multi-tenant mode is off, the full prefix
 // equals or covers the health or ready path, or it equals, covers or sits under another family.
@@ -45,14 +51,28 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if other, claimed := rg.admission.claimFamily(full); !claimed {
 		panic(tenantFamilyRefusal(full, "it overlaps the tenant-owned family at "+strconv.Quote(other)))
 	}
+	cfg, log := rg.cfg, rg.admission.log
+	fam := &tenantFamily{prefix: full, steps: func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			_, _, err := p.run(newHandlerContext(c, cfg), log, func() error { return next(c) })
+			return err
+		}
+	}}
+	group := rg.admission.engine.Group(full)
+	// Registered on the engine outside admission, which refuses RouteNotFound (ADR-155).
+	group.RouteNotFound("", familyNotFound, fam.steps)
+	group.RouteNotFound("/*", familyNotFound, fam.steps)
 	return &routeGroup{
-		group:     rg.admission.engine.Group(full),
+		group:     group,
 		prefix:    full,
 		cfg:       rg.cfg,
 		admission: rg.admission,
-		family:    &tenantFamily{prefix: full},
+		family:    fam,
 	}
 }
+
+// familyNotFound answers a family request no route matched, once the steps let it through.
+func familyNotFound(*echo.Context) error { return echo.ErrNotFound }
 
 // tenantFamilyRefusal renders tenantOwnedGroup's call-site panic for prefix.
 func tenantFamilyRefusal(prefix, reason string) string {

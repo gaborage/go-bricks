@@ -44,7 +44,7 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descripto
 		Method:     method,
 		Path:       rg.fullPathFromRelative(relative),
 		Descriptor: descriptor,
-	}, func() { rg.group.Add(method, relative, h) })
+	}, func() { rg.group.Add(method, relative, h, rg.routeMiddleware(nil)...) })
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -66,7 +66,18 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 		Method:     method,
 		Path:       fullPath,
 		Descriptor: modellessDescriptor(method, fullPath, reg),
-	}, func() { rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...) })
+	}, func() {
+		rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.routeMiddleware(middleware)...)
+	})
+}
+
+// routeMiddleware returns a route's echo middleware: mw adapted, behind the family's steps
+// (outermost) inside a tenant-owned family.
+func (rg *routeGroup) routeMiddleware(mw []MiddlewareFunc) []echo.MiddlewareFunc {
+	if rg.family == nil {
+		return rg.adaptAll(mw)
+	}
+	return append([]echo.MiddlewareFunc{rg.family.steps}, rg.adaptAll(mw)...)
 }
 
 // probeListenerDescriptor describes a probe served on the probe listener, at its unprefixed
