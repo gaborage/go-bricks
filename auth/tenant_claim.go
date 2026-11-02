@@ -30,7 +30,9 @@ func TenantClaim(claim string) server.TenantFunc {
 		panic("auth.TenantClaim: empty claim name")
 	}
 	return func(c server.HandlerContext) (string, error) {
-		p, ok := PrincipalFromContext(c.RequestContext())
+		// Read the value directly: PrincipalFromContext clones Audience per call, and this
+		// per-request step reads only Claims.
+		p, ok := c.RequestContext().Value(keyPrincipal).(Principal)
 		if !ok {
 			return "", errNoPrincipal
 		}
