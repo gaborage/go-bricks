@@ -150,8 +150,8 @@ type routeAdmission struct {
 	mu         sync.Mutex
 	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts  []RouteConflict
-	engine     *echo.Echo // the application engine; set by New
-	probePaths []string   // full health and ready paths on the application listener
+	engine     *echo.Echo // the application engine; written once by New, before any registrar exists
+	probePaths []string   // full health and ready paths on the application listener; written once by New
 	families   []string   // each tenant-owned family's full prefix, in build order
 }
 

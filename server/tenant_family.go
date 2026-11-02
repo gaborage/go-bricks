@@ -13,7 +13,7 @@ type tenantFamily struct {
 
 // tenantOwnedGroup mounts a tenant-owned route family at r's prefix joined with prefix. The
 // family's echo group is built on the application engine at that full prefix, not under r, so
-// no parent group's middleware ever runs on it. It panics at the call site when r was not built
+// no parent group's middleware ever runs on its routes. It panics at the call site when r was not built
 // by a Server, r is already inside a family, p.Tenant is nil, the prefix is empty or "/", the
 // full prefix holds a path parameter or wildcard, multi-tenant mode is off, the full prefix
 // equals or covers the health or ready path, or it equals, covers or sits under another family.
