@@ -723,8 +723,9 @@ func trespassGroup(path string) RouteConflict {
 	}
 }
 
-func trespassRouteLine(path string, handler any) string {
-	return "GET " + path + " — inside a tenant-owned route family at /partner/v2, refused: " +
+// trespassRouteLine is the conflict line for a GET at the family's /orders route.
+func trespassRouteLine(handler any) string {
+	return "GET " + trespassFamily + "/orders" + " — inside a tenant-owned route family at /partner/v2, refused: " +
 		extractHandlerName(handler) + " (" + serverPackagePath + ")"
 }
 
@@ -775,12 +776,12 @@ func TestTenantOwnedTrespassIsRouteConflict(t *testing.T) {
 			act: func(srv *Server, mg RouteRegistrar) {
 				RegisterHandler(NewHandlerRegistry(srv.cfg), mg, http.MethodGet, orders, trespassTyped)
 			},
-			want: trespassRoute(orders, trespassTyped), wantLine: trespassRouteLine(orders, trespassTyped), refusedAfter: true,
+			want: trespassRoute(orders, trespassTyped), wantLine: trespassRouteLine(trespassTyped), refusedAfter: true,
 		},
 		{
 			stem: "raw_add",
 			act:  func(_ *Server, mg RouteRegistrar) { mg.Add(http.MethodGet, orders, trespassRaw) },
-			want: trespassRoute(orders, trespassRaw), wantLine: trespassRouteLine(orders, trespassRaw), refusedAfter: true,
+			want: trespassRoute(orders, trespassRaw), wantLine: trespassRouteLine(trespassRaw), refusedAfter: true,
 		},
 		{
 			stem: "middleware_group",
@@ -877,6 +878,125 @@ func TestTenantOwnedTrespassIsRouteConflict(t *testing.T) {
 			if tt.refused {
 				assert.Empty(t, DefaultRouteRegistry.ByPath(orders), "a refused route is never described")
 			}
+		})
+	}
+}
+
+// requireTrespassPanic fails unless fn panics with the after-Start trespass error refusing want.
+func requireTrespassPanic(t *testing.T, want *RouteConflict, wantLine string, fn func()) {
+	t.Helper()
+	defer func() {
+		err, ok := recover().(error)
+		require.True(t, ok, "expected registration to panic with an error")
+		require.ErrorIs(t, err, ErrDuplicateRoute)
+		var dre *DuplicateRouteError
+		require.ErrorAs(t, err, &dre)
+		assert.Equal(t, []RouteConflict{*want}, dre.Conflicts)
+		assert.Equal(t, "server: registration after Start: route registration refused (1 conflict(s))\n"+wantLine, err.Error())
+	}()
+	fn()
+}
+
+// TestTenantOwnedTrespassAfterStartPanics pins that after Start, a route or a middleware-bearing
+// group at or below a family prefix, not built through the family, panics at registration and
+// adds nothing, while the family and routes outside every family still register.
+func TestTenantOwnedTrespassAfterStartPanics(t *testing.T) {
+	const (
+		orders = trespassFamily + "/orders"
+		admin  = trespassFamily + "/admin"
+	)
+	tests := []struct {
+		name string
+		// register runs after Start through registrars built before it: the module group, the
+		// family, and a plain group at admin. mw records that it ran.
+		register func(srv *Server, mg, family, plain RouteRegistrar, mw MiddlewareFunc)
+		want     RouteConflict // the refused registration; zero when register must not panic
+		wantLine string
+		probe    string // after the panic: a path the family still answers, mw never running
+		served   string // without a panic: a path register added, answered 200 with body
+		body     string
+	}{
+		{
+			name: "trespass_after_start_panics",
+			register: func(_ *Server, mg, _, _ RouteRegistrar, _ MiddlewareFunc) {
+				mg.Add(http.MethodGet, orders, trespassRaw)
+			},
+			want: trespassRoute(orders, trespassRaw), wantLine: trespassRouteLine(trespassRaw), probe: orders,
+		},
+		{
+			name: "trespass_typed_after_start_panics",
+			register: func(srv *Server, mg, _, _ RouteRegistrar, _ MiddlewareFunc) {
+				RegisterHandler(NewHandlerRegistry(srv.cfg), mg, http.MethodGet, orders, trespassTyped)
+			},
+			want: trespassRoute(orders, trespassTyped), wantLine: trespassRouteLine(trespassTyped), probe: orders,
+		},
+		{
+			name: "trespass_root_group_after_start_panics",
+			register: func(srv *Server, _, _, _ RouteRegistrar, _ MiddlewareFunc) {
+				srv.RootGroup().Add(http.MethodGet, orders, trespassRaw)
+			},
+			want: trespassRoute(orders, trespassRaw), wantLine: trespassRouteLine(trespassRaw), probe: orders,
+		},
+		{
+			name:     "trespass_group_after_start_panics",
+			register: func(_ *Server, mg, _, _ RouteRegistrar, mw MiddlewareFunc) { mg.Group(admin, mw) },
+			want:     trespassGroup(admin), wantLine: trespassGroupLine(admin), probe: admin + "/x",
+		},
+		{
+			name:     "trespass_group_at_prefix_after_start_panics",
+			register: func(_ *Server, mg, _, _ RouteRegistrar, mw MiddlewareFunc) { mg.Group(trespassFamily, mw) },
+			want:     trespassGroup(trespassFamily), wantLine: trespassGroupLine(trespassFamily), probe: trespassFamily + "/x",
+		},
+		{
+			name:     "trespass_use_after_start_panics",
+			register: func(_ *Server, _, _, plain RouteRegistrar, mw MiddlewareFunc) { plain.Use(mw) },
+			want:     trespassGroup(admin), wantLine: trespassGroupLine(admin), probe: admin + "/x",
+		},
+		{
+			name: "family_route_after_start_registers",
+			register: func(_ *Server, _, family, _ RouteRegistrar, _ MiddlewareFunc) {
+				family.Add(http.MethodGet, "/late", answerWith("family"))
+			},
+			served: trespassFamily + "/late", body: "family",
+		},
+		{
+			name: "outside_route_after_start_registers",
+			register: func(_ *Server, mg, _, _ RouteRegistrar, _ MiddlewareFunc) {
+				mg.Add(http.MethodGet, "/elsewhere", answerWith("outside"))
+			},
+			served: "/elsewhere", body: "outside",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			mg := srv.ModuleGroup()
+			family := buildTrespassFamily(srv)
+			plain := mg.Group(admin)
+			errCh := startServer(srv)
+			t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+			waitForServerReady(t, srv)
+			mwRan := false
+			mw := func(_ HandlerContext, next func() error) error {
+				mwRan = true
+				return next()
+			}
+			act := func() { tt.register(srv, mg, family, plain, mw) }
+
+			if tt.served != "" {
+				require.NotPanics(t, act)
+				rec := serveFamilyRequest(srv, tt.served)
+				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.Equal(t, tt.body, rec.Body.String())
+				return
+			}
+			requireTrespassPanic(t, &tt.want, tt.wantLine, act)
+			requireTrespassPanic(t, &tt.want, tt.wantLine, act) // a recovered caller's retry is refused too
+			assert.Empty(t, DefaultRouteRegistry.ByPath(tt.want.Path), "a refused registration is never described")
+			rec := serveFamilyRequest(srv, tt.probe)
+			assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+			assert.False(t, mwRan, "a refused registration adds nothing the family's requests can reach")
+			assert.Empty(t, srv.RouteConflicts(), "after Start a trespass panics instead of being recorded")
 		})
 	}
 }

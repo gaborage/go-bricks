@@ -30,7 +30,7 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 | --- | --- |
 | Runs once per request | Registered on the root echo chain (`e.Use`), compiled once, applied to every request. |
 | Cannot be skipped per-route | Registration is framework-controlled; no route-level opt-out exists. |
-| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup) and builds no family after `Start`. |
+| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup). |
 | Skips health/ready | The framework wraps each with the health/ready probe skipper: the exemption is keyed on the route the router matched, so it covers exactly the probe routes the server registered, on `GET`/`HEAD`. |
 | Deterministic ordering | Across modules, middleware composes in module-registration order. |
 

@@ -85,9 +85,14 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 //  5. Middleware added with Use, nested-group middleware, route middleware, binding,
 //     JOSE and the handler, all after the publish.
 //
-// A client fault from steps 1-2 goes to p.Deny. Everything else is framework-rendered.
-// Steps 1-3 also run before step 4's 404, where no route matched, so a Tenant that reads a
-// path parameter finds none there: it must fail on the empty value, which Deny answers.
+// A 4xx from steps 1-2, or a status-less error wrapping multitenant.ErrTenantResolutionFailed
+// or ErrInvalidTenantID, goes to p.Deny, except a 413 and an error wrapping
+// multitenant.ErrNoTenant. A step that commits its own response keeps it. Everything else,
+// including a 5xx, a deadline or a cancel, is framework-rendered.
+// Steps 1-3 also run before step 4's 404. There a Tenant that reads a path parameter finds
+// none on the prefix catch-alls, and the template's own on a wildcard route's not-found
+// catch-all. Either way it must fail on an empty value with an error Deny answers; returning
+// "" with a nil error fails the grammar backstop, a logged framework 500.
 // Use and group middleware on a family, and on its nested groups, attach per route at
 // registration, so they reach only routes registered after the call.
 //
@@ -98,13 +103,14 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 //     tenant resolver could not be built;
 //   - prefix is "" or "/" (the panic names the full prefix);
 //   - the full prefix has a :param or * segment, covers the health or ready path, or
-//     equals, covers or sits under another family's prefix on a segment boundary.
+//     equals, covers or sits under another family's prefix on a segment boundary;
+//   - it is called after Start.
 //
 // A route, or a group carrying middleware, at or below the prefix that was not registered
 // through the family is trespass and fails startup as a RouteConflictReasonTenantOwned
-// conflict. Startup also refuses any installed global middleware beside a family
-// (ErrTenantFamilyWithGlobalMiddleware). Neither guarantee covers a family built after
-// Start.
+// conflict; after Start it panics at registration instead, with an error matching
+// ErrDuplicateRoute. Startup also refuses any installed global middleware beside a family
+// (ErrTenantFamilyWithGlobalMiddleware).
 func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
 	if !ok || rg.admission == nil {
@@ -133,8 +139,8 @@ func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if probe, covered := rg.admission.coveredProbePath(full); covered {
 		panic(tenantFamilyRefusal(full, "it equals or covers the probe path "+strconv.Quote(probe)))
 	}
-	if other, claimed := rg.admission.claimFamily(full); !claimed {
-		panic(tenantFamilyRefusal(full, "it overlaps the tenant-owned family at "+strconv.Quote(other)))
+	if reason, claimed := rg.admission.claimFamily(full); !claimed {
+		panic(tenantFamilyRefusal(full, reason))
 	}
 	// Copied before p is captured, so a later edit to the caller's slice cannot reach the chain.
 	p.Authenticate = slices.Clone(p.Authenticate)

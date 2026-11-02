@@ -35,10 +35,11 @@ func RateLimit(requestsPerSecond int) MiddlewareFunc {
 // The tenant is caller-written, so attach it in the same RouteRegistrar.Group call as
 // auth.Middleware, listed after it, and after whatever check ties the resolved tenant
 // to the caller: auth.Middleware verifies the credential, not the tenant. On a
-// tenant-owned family (TenantOwnedGroup), add it with the family's Use, after the tenant
-// is published, not in TenantPolicy.Authenticate, which runs before any tenant exists. Its
-// X-RateLimit-* headers overwrite the built-in limiter's, so a response's headers
-// describe the innermost limiter that ran.
+// tenant-owned family (TenantOwnedGroup), add it with the family's Use before registering
+// the family's routes, since Use reaches only routes registered after the call. It then
+// runs after the tenant is published, not in TenantPolicy.Authenticate, which runs before
+// any tenant exists. Its X-RateLimit-* headers overwrite the built-in limiter's, so a
+// response's headers describe the innermost limiter that ran.
 func TenantRateLimit(requestsPerSecond int) MiddlewareFunc {
 	return fromEchoMiddleware(rateLimiterEcho(requestsPerSecond, withoutTenant, contextTenant))
 }

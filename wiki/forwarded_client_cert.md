@@ -191,7 +191,8 @@ guard: global middleware runs before group middleware, so with `enabled: false` 
 the identity the guard attaches. On a tenant-owned route family, put both in the family's
 `Authenticate` steps (`server.RequireForwardedClientCert`, then the subject check). A refusal
 there goes to the family's `Deny`. A custom `Deny` must add `WWW-Authenticate`; the default
-`DenyBodyless` does not, so it sends the guard's 401 bare.
+`DenyBodyless` does not, so it sends the guard's 401 bare. Give the family a `Deny` that adds
+a challenge, or one that maps that 401 to 403.
 
 Remember the trust-model boundary above: this recipe is only as strong as the ALB's trust
 store scoping a single partner CA. If your trust store is shared across partners, **fail

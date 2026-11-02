@@ -125,10 +125,11 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 		child.familyNode = &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)}
 		return child
 	}
-	child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
+	// Marked first: echo's group with middleware registers catch-alls a refusal must not leave.
 	if rg.carriesMiddleware || len(middleware) > 0 {
 		child.markMiddleware(getCallerPackage(2))
 	}
+	child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
 	return child
 }
 
@@ -151,8 +152,8 @@ func (rg *routeGroup) markMiddleware(pkg string) {
 	if rg.carriesMiddleware {
 		return
 	}
-	rg.carriesMiddleware = true
 	rg.admission.admitGroup(rg.prefix, pkg)
+	rg.carriesMiddleware = true
 }
 
 // adaptAll converts a slice of flat MiddlewareFunc to echo middleware using the group's config.

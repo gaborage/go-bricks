@@ -502,7 +502,7 @@ func (s *Server) Start() error {
 		s.closeProbeErrs()
 		return s.setupErr
 	}
-	if err := duplicateRouteError(s.RouteConflicts()); err != nil {
+	if err := duplicateRouteError(s.admission.seal()); err != nil {
 		s.closeProbeErrs()
 		return err
 	}

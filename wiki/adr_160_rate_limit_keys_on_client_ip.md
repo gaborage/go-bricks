@@ -6,9 +6,10 @@
 > **Amended (2026-11-02, by [ADR-164](adr_164_tenant_owned_route_family.md)):** on a
 > tenant-owned route family (`server.TenantOwnedGroup`, #2166), `auth.Middleware` sits in
 > `TenantPolicy.Authenticate`, before any tenant exists, so `server.TenantRateLimit` charges
-> nothing there (Decision 3). Add it with the family's `Use`, after the tenant is published,
-> instead of the placement in Decision 4. Root-chain requests of a family key the built-in
-> limiter on the client address.
+> nothing there (Decision 3). Add it with the family's `Use` instead of the placement in
+> Decision 4, before registering the family's routes: `Use` reaches only routes registered
+> after the call, and its middleware runs after the tenant is published. Root-chain requests
+> of a family key the built-in limiter on the client address.
 
 ## Context
 

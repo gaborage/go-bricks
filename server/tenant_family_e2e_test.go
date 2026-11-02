@@ -122,19 +122,28 @@ func TestTenantOwnedGroupServesSmallestFamily(t *testing.T) {
 func startE2EServer(t *testing.T, srv *server.Server) string {
 	t.Helper()
 	errCh := make(chan error, 1)
+	startReturned := false
 	go func() { errCh <- srv.Start() }()
-	select {
-	case <-srv.ReadyCh():
-	case err := <-errCh:
-		t.Fatalf("server stopped before it was ready: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("server was not ready within 5s")
-	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		require.NoError(t, srv.Shutdown(ctx))
-		<-errCh
+		if startReturned {
+			return
+		}
+		select {
+		case <-errCh:
+		case <-time.After(time.Second):
+			t.Error("server did not stop within 1s of Shutdown")
+		}
 	})
+	select {
+	case <-srv.ReadyCh():
+	case err := <-errCh:
+		startReturned = true
+		t.Fatalf("server stopped before it was ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("server was not ready within 5s")
+	}
 	return "http://" + srv.BoundAddr().String()
 }

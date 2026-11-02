@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -176,6 +177,7 @@ type routeAdmission struct {
 	log        logger.Logger            // the Server's logger; written once by New, before any registrar exists
 	probePaths []string                 // full health and ready paths on the application listener; written once by New
 	seated     bool                     // whether New installed the tenant seat; written once by New
+	started    bool                     // set by seal, when Start reads the conflicts
 	families   []string                 // each tenant-owned family's full prefix, in build order
 	owned      atomic.Pointer[[]string] // families, republished copy-on-write for owns
 
@@ -260,13 +262,17 @@ func (a *routeAdmission) admitGroup(path, pkg string) {
 }
 
 // refuseTrespassLocked sets c.FirstPath to the family prefix covering c.Path and records c as a
-// conflict, reporting whether a family covers it. a.mu is held.
+// conflict, reporting whether a family covers it. After Start nothing reads the record, so it
+// panics with c instead. a.mu is held.
 func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
 	family, ok := coveringFamily(c.Path, a.families)
 	if !ok {
 		return false
 	}
 	c.FirstPath = family
+	if a.started {
+		panic(fmt.Errorf("server: registration after Start: %w", duplicateRouteError([]RouteConflict{*c})))
+	}
 	a.conflicts = append(a.conflicts, *c)
 	return true
 }
@@ -329,6 +335,18 @@ func (a *routeAdmission) snapshot() []RouteConflict {
 	return out
 }
 
+// seal marks the Server started and returns the conflicts recorded until then, under one lock,
+// so no registration lands between Start's check and the mark.
+func (a *routeAdmission) seal() []RouteConflict {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.started = true
+	return slices.Clone(a.conflicts)
+}
+
 // coveredProbePath returns the first probe path full equals or covers.
 func (a *routeAdmission) coveredProbePath(full string) (string, bool) {
 	a.mu.Lock()
@@ -341,17 +359,18 @@ func (a *routeAdmission) coveredProbePath(full string) (string, bool) {
 	return "", false
 }
 
-// claimFamily records full as a tenant-owned family's prefix, unless it equals, covers or sits
-// under an existing family's prefix; then it returns that prefix and false, recording nothing.
+// claimFamily records full as a tenant-owned family's prefix, unless the Server has started or
+// full equals, covers or sits under an existing family's prefix; then it returns why and false,
+// recording nothing.
 func (a *routeAdmission) claimFamily(full string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.started {
+		return "build tenant-owned families in RegisterRoutes, before Start", false
+	}
 	for _, f := range a.families {
-		if underPrefix(full, f) {
-			return f, false
-		}
-		if underPrefix(f, full) {
-			return f, false
+		if underPrefix(full, f) || underPrefix(f, full) {
+			return "it overlaps the tenant-owned family at " + strconv.Quote(f), false
 		}
 	}
 	a.families = append(a.families, full)

@@ -280,7 +280,7 @@ func TestPrepareRuntimeWarnsOnEmptyGlobalMiddlewareBesideTenantFamily(t *testing
 }
 
 // TestTenantOwnedFamilyBelongsToOneModule pins that a second module cannot build a family on,
-// or inside, another module's family, and that its route under that family's prefix is
+// inside or over another module's family, and that its route under that family's prefix is
 // refused as trespass.
 func TestTenantOwnedFamilyBelongsToOneModule(t *testing.T) {
 	const refused = "server: tenant-owned group registration failed for "
@@ -292,6 +292,7 @@ func TestTenantOwnedFamilyBelongsToOneModule(t *testing.T) {
 	}{
 		{name: "second_module_same_prefix_panics", prefix: "/api/v1/orgs", want: `"/api/v1/orgs"`},
 		{name: "second_module_nested_prefix_panics", prefix: "/api/v1/orgs/billing", want: `"/api/v1/orgs/billing"`},
+		{name: "second_module_covering_prefix_panics", prefix: "/api/v1", want: `"/api/v1"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-11-02
 **Issue:** #2166
-**Amends:** [ADR-036](adr_036_global_middleware.md)
+**Amends:** [ADR-036](adr_036_global_middleware.md), [ADR-039](adr_039_composite_resolver_order.md), [ADR-160](adr_160_rate_limit_keys_on_client_ip.md)
 
 ## Context
 
@@ -242,7 +242,14 @@ response bytes.
   binaries branches on config;
 - the Server installed no tenant seat, because its tenant resolver could not be built (a
   multitenant config that skipped `config.Validate`). The leaf guard would otherwise refuse
-  every family request.
+  every family request;
+- it is called after `Start`, through a retained registrar. The tenant seat would start skipping
+  plain routes already live under the prefix, which carry no leaf guard.
+
+After `Start`, a route or middleware-bearing group registered from outside a family at or below
+its prefix panics at registration with an error matching `ErrDuplicateRoute`, prefixed
+`server: registration after Start:`, and is never added. `Start` has already read the conflict
+record, so recording it would refuse it silently.
 
 **Each family belongs to one module:** the one whose `RegisterRoutes` built it. A second family on
 an overlapping prefix panics. Any route or middleware-bearing group at or below the prefix that did
@@ -283,7 +290,8 @@ Call-site refusals panic. Trespass and the global-middleware refusal are returne
 each depends on two facts that can arrive in either order. A call-site refusal needs only facts
 that are all known when `TenantOwnedGroup` runs (its arguments, its registrar, the configuration
 and the families already built), so it fails fast where the mistake is written; a two-fact refusal
-cannot be decided by whichever fact arrives first, so it is recorded and refused at startup.
+cannot be decided by whichever fact arrives first, so it is recorded and refused at startup. After
+`Start` no family can be built, so a trespass is decided where it is registered and panics there.
 
 ### Global middleware beside a family
 
@@ -329,9 +337,7 @@ tenant-owned route family with global middleware: 2 family(ies) (/api/v1/orgs, /
 
 **Returned errors.** Both refusals return errors that wrap `ErrTenantFamilyWithGlobalMiddleware`.
 
-**Not caught:** a family built after `Start` through a retained registrar. Routes registered that
-way share the gap today, so the docs limit the guarantee to binaries that build no family after
-`Start`.
+**After `Start`:** `TenantOwnedGroup` panics, so no family is built past this check.
 
 ### Publishes before the tenant exists
 
@@ -364,9 +370,10 @@ On `Tenant`:
   builds no family keeps today's request path and every allocation baseline, and a non-family
   route beside a family allocates exactly what a plain matched route does.
 - **The built-in limiter keys family requests on the client IP,** as it keys every request
-  (ADR-160). A family that wants a per-tenant budget adds `server.TenantRateLimit` with `Use`,
-  after the publish. In `Authenticate` no tenant exists yet, so it would charge nothing (ADR-160
-  Decision 3).
+  (ADR-160). A family that wants a per-tenant budget adds `server.TenantRateLimit` with `Use`
+  before registering the family's routes, since `Use` reaches only routes registered after the
+  call. It then runs after the publish. In `Authenticate` no tenant exists yet, so it would charge
+  nothing (ADR-160 Decision 3).
 - **Pre-publish publishes are documented, not guarded.** A publish from a family's `Authenticate`,
   `Tenant` or `Deny` step is no tenant's event. The framework adds no guard, so such a publish gets
   what its tenancy mode already does with a tenant-less one: an unstamped control-plane event under
@@ -421,7 +428,8 @@ source, is this decision.
 - [ADR-036](adr_036_global_middleware.md): global middleware after tenant resolution; amended here.
 - [ADR-026](adr_026_zero_overhead_request_path.md): the request path the leaf guard keeps
   baton-free.
-- [ADR-039](adr_039_composite_resolver_order.md): root tenant resolution and its composite chain.
+- [ADR-039](adr_039_composite_resolver_order.md): root tenant resolution and its composite chain;
+  amended here.
 - [ADR-109](adr_109_bearer_credential_verification.md): `auth.Middleware` and the `Principal`
   `auth.TenantClaim` reads.
 - [ADR-124](adr_124_server_level_duplicate_route_refusal.md) and
@@ -429,7 +437,7 @@ source, is this decision.
   `*server.DuplicateRouteError`.
 - [ADR-127](adr_127_resource_plan_rule.md): the precedent the multitenant-disabled panic follows.
 - [ADR-160](adr_160_rate_limit_keys_on_client_ip.md): the client-IP limiter key and
-  `server.TenantRateLimit`.
+  `server.TenantRateLimit`; amended here.
 - [ADR-161](adr_161_unknown_tenant_is_a_client_fault.md): `multitenant.ErrUnknownTenant` and
   `server.NewUnknownTenantError`.
 - [ADR-162](adr_162_tenant_id_grammar_is_fixed.md): the tenant-ID grammar the backstop applies.

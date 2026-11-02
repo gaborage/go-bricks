@@ -169,6 +169,7 @@ func TestTenantOwnedGroupPanicsAtCallSite(t *testing.T) {
 		parent    func(srv *Server) RouteRegistrar // the registrar the refused call builds under
 		prefix    string
 		nilTenant bool     // the refused call passes TenantPolicy{} instead of policy
+		started   bool     // the refused call runs after srv.Start, through a registrar built before it
 		want      []string // substrings of the panic message, the full prefix first
 	}{
 		{name: "non_framework_registrar", parent: bare, prefix: "/fam", want: []string{`"/fam"`}},
@@ -183,11 +184,17 @@ func TestTenantOwnedGroupPanicsAtCallSite(t *testing.T) {
 		{name: "equals_other_family", parent: besideFamily, prefix: "/partner/v2", want: []string{`"/partner/v2"`}},
 		{name: "covers_other_family", parent: besideFamily, prefix: "/partner", want: []string{`"/partner"`, `"/partner/v2"`}},
 		{name: "under_other_family", parent: besideFamily, prefix: "/partner/v2/x", want: []string{`"/partner/v2/x"`, `"/partner/v2"`}},
+		{name: "family_after_start_panics", parent: besideFamily, prefix: "/fam", started: true, want: []string{`"/fam"`, "before Start"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTenantFamilyServer(t, tt.basePath)
 			parent := tt.parent(srv)
+			if tt.started {
+				errCh := startServer(srv)
+				t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+				waitForServerReady(t, srv)
+			}
 			p := policy
 			if tt.nilTenant {
 				p = TenantPolicy{}

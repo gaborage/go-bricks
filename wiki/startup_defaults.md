@@ -143,7 +143,7 @@ There is no disable knob — a colliding route is always a startup-blocking bug,
 - **Trespass:** any route, or any group carrying middleware (its own or inherited), at or below a family's prefix that did not come through the family is a `RouteConflictReasonTenantOwned` conflict, the owning module's plain registrar included. It travels in the same `*server.DuplicateRouteError` as [Duplicate Route Detection](#duplicate-route-detection). App startup refuses it before the route table hook, and `server.Start` refuses before binding.
 - **Global middleware:** any installed global middleware beside a family fails startup with `server.ErrTenantFamilyWithGlobalMiddleware` ([global_middleware.md](global_middleware.md#fail-closed-startup)).
 
-A family built after `Start` through a retained registrar is still held to the call-site panics, but skips the trespass and global-middleware checks.
+After `Start`, `TenantOwnedGroup` panics, and a route or middleware-bearing group registered from outside a family at or below its prefix panics at registration with an error matching `server.ErrDuplicateRoute`, instead of being recorded where nothing reads it any more.
 
 ## Route Table Hook
 

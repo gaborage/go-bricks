@@ -296,9 +296,9 @@ _Avoid_: route group (the router mechanism that carries one), API, module
 
 **Tenant-owned family**:
 A route family that resolves its own tenant, after its own authentication
-when it has one, instead of passing the tenant seat. Its own `Deny` answers a
-client fault raised before it publishes the tenant; the framework answers a
-request too large, a deadline, a cancel and every server fault.
+when it has one, instead of passing the tenant seat. Its own `Deny` answers
+most client faults raised before it publishes the tenant, and the framework
+answers a request too large, a deadline, a cancel and every server fault.
 _Avoid_: owned group, tenant group, skip list
 
 **Tenancy**:
