@@ -174,6 +174,7 @@ func TestTenantPolicyResolveForTestReportsDenied(t *testing.T) {
 		var fault *tenantFaultError
 		require.ErrorAs(t, err, &fault)
 		require.NotErrorIs(t, err, multitenant.ErrInvalidTenantID)
+		require.EqualError(t, err, "server: tenant-owned family fault: tenant ID fails the tenant-ID grammar")
 		assert.False(t, denied)
 		assert.Empty(t, id)
 		_, ok := multitenant.GetTenant(c.RequestContext())
