@@ -79,8 +79,9 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 // backstop, a 500. Use and Group middleware inside the family attach per route at registration,
 // never to a catch-all. It panics at the call site when r was not built by a Server, r is already
 // inside a family, p.Tenant is nil, the prefix is empty or "/", the full prefix holds a path
-// parameter or wildcard, multi-tenant mode is off, the full prefix equals or covers the health or
-// ready path, or it equals, covers or sits under another family.
+// parameter or wildcard, multi-tenant mode is off, the Server installed no tenant seat (its
+// tenant resolver could not be built), the full prefix equals or covers the health or ready
+// path, or it equals, covers or sits under another family.
 func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
 	if !ok || rg.admission == nil {

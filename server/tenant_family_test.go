@@ -1205,10 +1205,12 @@ func TestTenantOwnedGuardRequiresSeatSkipEvidence(t *testing.T) {
 		published     context.Context // familyPublishedKey's value; nil sets none
 		requestTenant string
 		wantRun       bool
+		wantReason    string
 	}{
-		{name: "missing_evidence", published: published, requestTenant: familyTenant},
-		{name: "published_context_missing", evidence: true, requestTenant: familyTenant},
-		{name: "neither_context_holds_tenant", evidence: true, published: context.Background()},
+		{name: "missing_evidence", published: published, requestTenant: familyTenant, wantReason: reasonSeatNotSkipped},
+		{name: "published_context_missing", evidence: true, requestTenant: familyTenant, wantReason: reasonTenantReplaced},
+		{name: "neither_context_holds_tenant", evidence: true, published: context.Background(), wantReason: reasonTenantReplaced},
+		{name: "request_holds_another_tenant", evidence: true, published: published, requestTenant: "other-tenant", wantReason: reasonTenantReplaced},
 		{name: "evidence_and_published_tenant_run", evidence: true, published: published, requestTenant: familyTenant, wantRun: true},
 	}
 	for _, tt := range tests {
@@ -1238,6 +1240,7 @@ func TestTenantOwnedGuardRequiresSeatSkipEvidence(t *testing.T) {
 			var fault *tenantFaultError
 			require.ErrorAs(t, err, &fault)
 			assert.Equal(t, http.StatusInternalServerError, fault.HTTPStatus())
+			assert.Equal(t, tt.wantReason, fault.reason)
 		})
 	}
 }
