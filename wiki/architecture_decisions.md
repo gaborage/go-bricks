@@ -531,7 +531,10 @@ route-registration order, dissolving echo's group-scoping/order trap) via a new
 The app invokes it through an optional type assertion, leaving the exported `ServerRunner`
 interface byte-identical — purely additive, apidiff green, `feat:` not `feat!:`. Documented
 limitations: runs after rate-limiting and before JOSE body decryption (header/token/tenant
-auth only), and emits the standard envelope on raw-response routes.
+auth only), and emits the standard envelope on raw-response routes. Amended by ADR-164: startup
+refuses global middleware beside a tenant-owned route family, whose routes the root tenant seat
+skips, so the after-tenant-resolution guarantee holds in every binary that passes the startup
+check and builds no family after `Start`.
 
 **Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved; single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
 
@@ -2784,6 +2787,31 @@ text reaches an operator terminal or CI log unescaped through the source.
 
 ---
 
+### [ADR-164: A Tenant-Owned Route Family Resolves Its Own Tenant](adr_164_tenant_owned_route_family.md)
+
+**Date:** 2026-11-02 | **Status:** Accepted
+
+Tenant resolution was one seat on the root chain, ahead of every group and route middleware, with
+its resolver from `multitenant.resolver.*` only, so no module could name the tenant from a catalog
+lookup built in `Init` or from a claim its own authentication verified, and the seat's 400 answered
+before a family's own authentication. `server.TenantOwnedGroup(r, prefix, server.TenantPolicy{...})`
+mounts a family whose optional `Authenticate` steps run first, whose required `Tenant` step returns
+the tenant ID without writing the response, and whose optional `Deny` (`DenyBodyless` by default)
+is the only writer of client-fault bytes; five ordered rules pick which faults are the client's,
+and server faults and every error after the publish stay framework-rendered. The framework checks the ID
+against the ADR-162 grammar, answering 500 when it fails, and publishes it. The root seat skips
+owned routes and leaves evidence that a leaf guard around every family handler requires, with
+exactly the published tenant. `auth.TenantClaim` reads the tenant from a verified claim. Call-site
+mistakes panic, and a route or middleware-bearing group under an owned prefix that did not come
+through the family is a `RouteConflictReasonTenantOwned` conflict that fails startup.
+Amends ADR-036: startup refuses global middleware beside a tenant-owned family.
+
+**Key Benefits:** a family can name its tenant from a path key, a catalog lookup or a verified claim
+and answer its own client faults in its own bytes, a skipped seat stays fail-closed, and a binary
+without a family keeps its request path and allocations unchanged.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3593,7 +3621,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-163) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-164) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
