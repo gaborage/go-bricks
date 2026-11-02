@@ -78,22 +78,51 @@ func TestTenantClaimResolvesTenant(t *testing.T) {
 
 	resolutionFailed, invalidID := multitenant.ErrTenantResolutionFailed, multitenant.ErrInvalidTenantID
 	over64 := strings.Repeat("a", 65)
+	const grammar = "does not match the tenant-ID grammar"
 	clientFaults := []struct {
 		name      string
 		claims    map[string]any
 		wantIs    error
 		wantNotIs error
+		reason    string
 		value     string
 	}{
-		{name: "claim_absent_is_client_fault", claims: map[string]any{"sub": "client-1"}, wantIs: resolutionFailed, wantNotIs: invalidID},
-		{name: "claim_empty_is_client_fault", claims: map[string]any{tenantClaimName: ""}, wantIs: resolutionFailed, wantNotIs: invalidID},
-		{name: "claim_not_string_is_client_fault", claims: map[string]any{tenantClaimName: float64(4242)}, wantIs: resolutionFailed, wantNotIs: invalidID, value: "4242"},
-		{name: "claim_fails_grammar_is_client_fault", claims: map[string]any{tenantClaimName: "Acme_Corp"}, wantIs: invalidID, wantNotIs: resolutionFailed, value: "Acme_Corp"},
-		{name: "claim_null_is_client_fault", claims: map[string]any{tenantClaimName: nil}, wantIs: resolutionFailed, wantNotIs: invalidID},
-		{name: "claim_object_is_client_fault", claims: map[string]any{tenantClaimName: map[string]any{"id": "acme"}}, wantIs: resolutionFailed, wantNotIs: invalidID, value: "acme"},
-		{name: "claim_with_surrounding_space_is_not_trimmed", claims: map[string]any{tenantClaimName: " acme "}, wantIs: invalidID, wantNotIs: resolutionFailed, value: " acme "},
-		{name: "claim_with_trailing_newline_is_not_trimmed", claims: map[string]any{tenantClaimName: "acme\n"}, wantIs: invalidID, wantNotIs: resolutionFailed, value: "acme\n"},
-		{name: "claim_over_64_bytes_is_client_fault", claims: map[string]any{tenantClaimName: over64}, wantIs: invalidID, wantNotIs: resolutionFailed, value: over64},
+		{
+			name: "claim_absent_is_client_fault", claims: map[string]any{"sub": "client-1"},
+			wantIs: resolutionFailed, wantNotIs: invalidID, reason: "is absent",
+		},
+		{
+			name: "claim_empty_is_client_fault", claims: map[string]any{tenantClaimName: ""},
+			wantIs: resolutionFailed, wantNotIs: invalidID, reason: "is empty",
+		},
+		{
+			name: "claim_not_string_is_client_fault", claims: map[string]any{tenantClaimName: float64(4242)},
+			wantIs: resolutionFailed, wantNotIs: invalidID, reason: "is a float64, not a string", value: "4242",
+		},
+		{
+			name: "claim_fails_grammar_is_client_fault", claims: map[string]any{tenantClaimName: "Acme_Corp"},
+			wantIs: invalidID, wantNotIs: resolutionFailed, reason: grammar, value: "Acme_Corp",
+		},
+		{
+			name: "claim_null_is_client_fault", claims: map[string]any{tenantClaimName: nil},
+			wantIs: resolutionFailed, wantNotIs: invalidID, reason: "is a <nil>, not a string",
+		},
+		{
+			name: "claim_object_is_client_fault", claims: map[string]any{tenantClaimName: map[string]any{"id": "acme"}},
+			wantIs: resolutionFailed, wantNotIs: invalidID, reason: "is a map[string]interface {}, not a string", value: "acme",
+		},
+		{
+			name: "claim_with_surrounding_space_is_not_trimmed", claims: map[string]any{tenantClaimName: " acme "},
+			wantIs: invalidID, wantNotIs: resolutionFailed, reason: grammar, value: " acme ",
+		},
+		{
+			name: "claim_with_trailing_newline_is_not_trimmed", claims: map[string]any{tenantClaimName: "acme\n"},
+			wantIs: invalidID, wantNotIs: resolutionFailed, reason: grammar, value: "acme\n",
+		},
+		{
+			name: "claim_over_64_bytes_is_client_fault", claims: map[string]any{tenantClaimName: over64},
+			wantIs: invalidID, wantNotIs: resolutionFailed, reason: grammar, value: over64,
+		},
 	}
 	for _, tc := range clientFaults {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,6 +135,7 @@ func TestTenantClaimResolvesTenant(t *testing.T) {
 			fault := r.faults[0]
 			require.ErrorIs(t, fault, tc.wantIs)
 			require.NotErrorIs(t, fault, tc.wantNotIs)
+			assert.Contains(t, fault.Error(), tc.reason)
 			if tc.value != "" {
 				assert.NotContains(t, fault.Error(), tc.value, "a fault never carries the claim value")
 			}
