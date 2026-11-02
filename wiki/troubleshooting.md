@@ -413,9 +413,9 @@ on 1.27.
 
 # "route registration refused (N conflict(s))" + "inside a tenant-owned route family"
 # → A route, or a group carrying middleware, sits at or below a server.TenantOwnedGroup
-#   prefix without coming through the family (ADR-164). A family belongs to one module
-# → Register the route through the family's registrar, move it off the prefix, or
-#   drop the group's middleware (ancestor groups, ModuleGroup and RootGroup are fine)
+#   prefix without coming through the family (ADR-164), even from the family's own module
+# → Register it through the family's registrar, or move the route or group off the
+#   prefix (ancestor groups, ModuleGroup and RootGroup are fine)
 
 # "tenant-owned route family with global middleware: ..."
 # → The binary installs global middleware AND builds a server.TenantOwnedGroup family

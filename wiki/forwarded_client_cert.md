@@ -168,7 +168,9 @@ deploy.
 
 The middleware only identifies; enforcing which subjects may call which routes is your
 module's job, typically via `GlobalMiddleware` (ADR-036) so it runs once per request after
-tenant resolution and before handlers. In a binary that builds a tenant-owned route family, startup refuses global middleware, so put the check on each group instead (below):
+tenant resolution and before handlers. A binary that builds a tenant-owned route family
+[cannot use global middleware](global_middleware.md#fail-closed-startup), so put the check on
+each group instead (below):
 
 ```go
 func (m *WebhookModule) GlobalMiddleware() []server.MiddlewareFunc {
@@ -186,7 +188,10 @@ func (m *WebhookModule) GlobalMiddleware() []server.MiddlewareFunc {
 
 Behind `server.RequireForwardedClientCert`, put the subject check in the same group, after the
 guard: global middleware runs before group middleware, so with `enabled: false` it never sees
-the identity the guard attaches. On a tenant-owned route family, put both in the family's `Authenticate` steps (`server.RequireForwardedClientCert`, then the subject check). A refusal there goes to the family's `Deny`, which adds `WWW-Authenticate` if the contract needs one.
+the identity the guard attaches. On a tenant-owned route family, put both in the family's
+`Authenticate` steps (`server.RequireForwardedClientCert`, then the subject check). A refusal
+there goes to the family's `Deny`. A custom `Deny` must add `WWW-Authenticate`; the default
+`DenyBodyless` does not, so it sends the guard's 401 bare.
 
 Remember the trust-model boundary above: this recipe is only as strong as the ALB's trust
 store scoping a single partner CA. If your trust store is shared across partners, **fail

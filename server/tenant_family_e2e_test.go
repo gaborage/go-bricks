@@ -25,10 +25,12 @@ type familyOrdersResp struct {
 	Tenant string `json:"tenant"`
 }
 
-// TestTenantOwnedGroupServesSmallestFamily pins P1: the spec's smallest family, end to end on
+// TestTenantOwnedGroupServesSmallestFamily pins the smallest family from ADR-164, end to end on
 // a real listener. A bearer token's tid claim names the tenant through auth.Middleware and
 // auth.TenantClaim, while the root chain keeps its header tenant seat for every other route.
 func TestTenantOwnedGroupServesSmallestFamily(t *testing.T) {
+	server.DefaultRouteRegistry.Clear()
+	t.Cleanup(server.DefaultRouteRegistry.Clear)
 	iss := authtesting.NewIssuer()
 	verifier, err := auth.NewVerifierWithResolver(auth.Config{
 		Issuer:     iss.IssuerURL(),
@@ -45,7 +47,6 @@ func TestTenantOwnedGroupServesSmallestFamily(t *testing.T) {
 	cfg.Server.Timeout.Write = 5 * time.Second
 	cfg.Multitenant.Enabled = true
 	cfg.Multitenant.Resolver.Type = config.ResolverTypeHeader
-	cfg.Multitenant.Resolver.Header = server.HeaderXTenantID
 	srv := server.New(cfg, logger.New("disabled", true))
 
 	hr := server.NewHandlerRegistry(cfg)
@@ -59,7 +60,7 @@ func TestTenantOwnedGroupServesSmallestFamily(t *testing.T) {
 	})
 	server.GET(hr, partner, "/orders", whoami)
 	server.GET(hr, srv.ModuleGroup(), "/orders", whoami)
-	base := startFamilyServer(t, srv)
+	base := startE2EServer(t, srv)
 
 	acme := "Bearer " + iss.Mint(authtesting.Claims{Extra: map[string]any{"tid": "acme"}})
 	tests := []struct {
@@ -106,7 +107,7 @@ func TestTenantOwnedGroupServesSmallestFamily(t *testing.T) {
 				}
 				require.NoError(t, json.Unmarshal(body, &envelope), string(body))
 				assert.Equal(t, tc.wantTenant, envelope.Data.Tenant)
-			case tc.path != "/orders" && tc.wantStatus != http.StatusNotFound:
+			case tc.wantStatus == http.StatusUnauthorized || tc.wantStatus == http.StatusForbidden:
 				assert.Empty(t, body, "Deny's default answer is bodyless")
 			}
 			if tc.wantStatus == http.StatusUnauthorized {
@@ -116,23 +117,24 @@ func TestTenantOwnedGroupServesSmallestFamily(t *testing.T) {
 	}
 }
 
-// startFamilyServer starts srv on an ephemeral port, shuts it down at cleanup, and returns
-// its base URL.
-func startFamilyServer(t *testing.T, srv *server.Server) string {
+// startE2EServer starts srv on an ephemeral port, shuts it down at cleanup, and returns its
+// base URL.
+func startE2EServer(t *testing.T, srv *server.Server) string {
 	t.Helper()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start() }()
+	select {
+	case <-srv.ReadyCh():
+	case err := <-errCh:
+		t.Fatalf("server stopped before it was ready: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("server was not ready within 5s")
+	}
 	t.Cleanup(func() {
-		require.NoError(t, srv.Shutdown(context.Background()))
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, srv.Shutdown(ctx))
 		<-errCh
 	})
-	require.Eventually(t, func() bool {
-		select {
-		case <-srv.ReadyCh():
-			return true
-		default:
-			return false
-		}
-	}, 5*time.Second, 10*time.Millisecond)
 	return "http://" + srv.BoundAddr().String()
 }

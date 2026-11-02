@@ -3,6 +3,13 @@
 **Status:** Accepted
 **Date:** 2026-10-31
 
+> **Amended (2026-11-02, by [ADR-164](adr_164_tenant_owned_route_family.md)):** on a
+> tenant-owned route family (`server.TenantOwnedGroup`, #2166), `auth.Middleware` sits in
+> `TenantPolicy.Authenticate`, before any tenant exists, so `server.TenantRateLimit` charges
+> nothing there (Decision 3). Add it with the family's `Use`, after the tenant is published,
+> instead of the placement in Decision 4. Root-chain requests of a family key the built-in
+> limiter on the client address.
+
 ## Context
 
 `SetupMiddlewares` installs the built-in rate limiter on the root chain from `app.rate.limit`.
@@ -46,7 +53,7 @@ tenant resolution.
    resolved tenant to the caller. A placement through `GlobalMiddlewareRegisterer`, behind an
    authenticating global middleware, is legal today, but #2280's resolution (an
    [ADR-036](adr_036_global_middleware.md) amendment) refuses global middleware beside a
-   tenant-owned route family once #2166 lands, so it is not a documented placement.
+   tenant-owned route family (#2166), so it is not a documented placement.
 5. **Headers describe the innermost limiter that ran.** Both limiters set echo's `X-RateLimit-*`
    headers, so on a route carrying `TenantRateLimit` the tenant bucket's values overwrite the
    address bucket's.
@@ -63,8 +70,8 @@ tenant resolution.
   traffic from their address, whatever that traffic's tenant, so `server.probes.port`
   ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)) matters more.
 - Limiter memory is bounded by distinct client IPs, not by caller-chosen strings.
-- Root-chain requests of the tenant-owned route families #2166 will mount key on the client IP,
-  consistent with this default.
+- Root-chain requests of a tenant-owned route family (#2166) key on the client IP, consistent
+  with this default.
 - A deployment that relied on a per-tenant budget from the built-in limiter loses it silently.
   See [migrations.md](migrations.md) `[C73.20]`.
 

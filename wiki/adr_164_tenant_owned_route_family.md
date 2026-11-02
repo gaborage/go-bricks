@@ -245,8 +245,8 @@ response bytes.
   every family request.
 
 **Each family belongs to one module:** the one whose `RegisterRoutes` built it. A second family on
-an overlapping prefix panics. Another module's routes or middleware-bearing groups under the
-prefix are trespass.
+an overlapping prefix panics. Any route or middleware-bearing group at or below the prefix that did
+not come through the family is trespass, the owning module's plain registrar included.
 
 **Trespass** is a `RouteConflictReasonTenantOwned` conflict, in either registration order. It
 travels in `*server.DuplicateRouteError`, whose head reads
@@ -383,8 +383,9 @@ On `Tenant`:
   moved gate:
   - Framework routes (`/_sys`, `/debug`) lose the consumer's gate. Their own CIDR and bearer
     checks still apply, and so do the root chain's.
-  - In `Authenticate`, a 4xx goes to the family's `Deny`, not the standard envelope. The default
-    `DenyBodyless` writes no body. A 5xx is still framework-rendered.
+  - In `Authenticate`, a 4xx goes to the family's `Deny`, not the standard envelope, except a 413
+    (framework-rendered) and an error wrapping `multitenant.ErrNoTenant` (a framework 500). The
+    default `DenyBodyless` writes no body. A 5xx, a deadline or a cancel stays framework-rendered.
   - Added with `Use`, it runs after the family's 404, so it never sees an unknown sub-path. It
     also reaches only routes registered after the call.
 

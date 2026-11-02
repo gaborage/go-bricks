@@ -44,6 +44,8 @@ func (s *familyStubServer) TenantFamilyPrefixes() []string {
 		s.reads++
 		return slices.Clone(s.script[min(s.reads, len(s.script))-1])
 	}
+	// attributeFamilies matches this merged list to modules by registration position, so
+	// runFamilyScenario registers sc.families modules before sc.owned ones.
 	return append(slices.Clone(s.families), s.Server.TenantFamilyPrefixes()...)
 }
 
@@ -283,18 +285,22 @@ func TestPrepareRuntimeWarnsOnEmptyGlobalMiddlewareBesideTenantFamily(t *testing
 func TestTenantOwnedFamilyBelongsToOneModule(t *testing.T) {
 	const refused = "server: tenant-owned group registration failed for "
 	orgs := func() *ownedModule { return &ownedModule{name: "orgs", prefixes: []string{"/api/v1/orgs"}} }
-	t.Run("second_module_same_prefix_panics", func(t *testing.T) {
-		sc := familyScenario{owned: []*ownedModule{orgs(), {name: "billing", prefixes: []string{"/api/v1/orgs"}}}}
+	tests := []struct {
+		name   string
+		prefix string
+		want   string
+	}{
+		{name: "second_module_same_prefix_panics", prefix: "/api/v1/orgs", want: `"/api/v1/orgs"`},
+		{name: "second_module_nested_prefix_panics", prefix: "/api/v1/orgs/billing", want: `"/api/v1/orgs/billing"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := familyScenario{owned: []*ownedModule{orgs(), {name: "billing", prefixes: []string{tt.prefix}}}}
 
-		assert.PanicsWithValue(t, refused+`"/api/v1/orgs": it overlaps the tenant-owned family at "/api/v1/orgs"`,
-			func() { runFamilyScenario(t, &sc) })
-	})
-	t.Run("second_module_nested_prefix_panics", func(t *testing.T) {
-		sc := familyScenario{owned: []*ownedModule{orgs(), {name: "billing", prefixes: []string{"/api/v1/orgs/billing"}}}}
-
-		assert.PanicsWithValue(t, refused+`"/api/v1/orgs/billing": it overlaps the tenant-owned family at "/api/v1/orgs"`,
-			func() { runFamilyScenario(t, &sc) })
-	})
+			assert.PanicsWithValue(t, refused+tt.want+`: it overlaps the tenant-owned family at "/api/v1/orgs"`,
+				func() { runFamilyScenario(t, &sc) })
+		})
+	}
 	t.Run("second_module_route_under_prefix_conflicts", func(t *testing.T) {
 		run := runFamilyScenario(t, &familyScenario{owned: []*ownedModule{orgs(), {name: "billing", routes: []string{"/api/v1/orgs/billing"}}}})
 

@@ -137,13 +137,13 @@ There is no disable knob — a colliding route is always a startup-blocking bug,
 
 ## Tenant-Owned Route Families
 
-`server.TenantOwnedGroup` (ADR-164) mounts a route family that resolves its own tenant instead of passing the root tenant seat. Startup holds it to three refusals:
+`server.TenantOwnedGroup` ([ADR-164](adr_164_tenant_owned_route_family.md)) mounts a route family that resolves its own tenant instead of passing the root tenant seat. Startup holds it to three refusals:
 
-- **At the call site** (a panic naming the prefix): a registrar the framework did not build, a nil `Tenant`, multitenant disabled, no tenant seat installed (a multitenant config whose tenant resolver could not be built), a prefix of `""` or `/`, a `:param` or `*` segment, a prefix covering the health or ready path, or a prefix overlapping another family's on a segment boundary (`/partner` overlaps `/partner/v2`; `/partner/v20` does not).
-- **Trespass:** another module's route, or a group carrying middleware, at or below a family's prefix is a `RouteConflictReasonTenantOwned` conflict in the same `*server.DuplicateRouteError` as [Duplicate Route Detection](#duplicate-route-detection). App startup refuses it before the route table hook, and `server.Start` refuses before binding.
+- **At the call site:** `TenantOwnedGroup` panics on a misuse its own registrar, prefix, policy and configuration already show; [ADR-164's boot refusals](adr_164_tenant_owned_route_family.md#boot-refusals) list each one.
+- **Trespass:** any route, or any group carrying middleware (its own or inherited), at or below a family's prefix that did not come through the family is a `RouteConflictReasonTenantOwned` conflict, the owning module's plain registrar included. It travels in the same `*server.DuplicateRouteError` as [Duplicate Route Detection](#duplicate-route-detection). App startup refuses it before the route table hook, and `server.Start` refuses before binding.
 - **Global middleware:** any installed global middleware beside a family fails startup with `server.ErrTenantFamilyWithGlobalMiddleware` ([global_middleware.md](global_middleware.md#fail-closed-startup)).
 
-A family built after `Start` through a retained registrar is outside these checks.
+A family built after `Start` through a retained registrar is still held to the call-site panics, but skips the trespass and global-middleware checks.
 
 ## Route Table Hook
 

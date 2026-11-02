@@ -284,10 +284,8 @@ passes that error on through `server.NewUnknownTenantError`.
 _Avoid_: invalid tenant (that one is malformed), missing tenant
 
 **Client fault**:
-A failure the caller caused before the request's tenant is known, such as no
-credential, a bad credential, or no usable tenant. A tenant-owned family
-answers it in its own words. Its opposite, a _server fault_, is always
-answered by the framework.
+A failure the caller caused, such as no credential, a bad credential, or no
+usable tenant. Its opposite is a _server fault_.
 _Avoid_: deny error, rejection
 
 **Route family**:
@@ -298,8 +296,9 @@ _Avoid_: route group (the router mechanism that carries one), API, module
 
 **Tenant-owned family**:
 A route family that resolves its own tenant, after its own authentication
-when it has one, instead of passing the tenant seat. It answers its callers'
-faults in its own words.
+when it has one, instead of passing the tenant seat. Its own `Deny` answers a
+client fault raised before it publishes the tenant; the framework answers a
+request too large, a deadline, a cancel and every server fault.
 _Avoid_: owned group, tenant group, skip list
 
 **Tenancy**:

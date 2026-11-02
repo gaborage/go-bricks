@@ -80,26 +80,29 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 //  2. p.Tenant, on every request under the prefix.
 //  3. The framework checks the ID with multitenant.ValidateTenantID and publishes it on
 //     the request context.
-//  4. An unknown sub-path or a wrong method under the prefix answers the framework 404.
+//  4. If no family route matches (an unknown sub-path, or a wrong method under the
+//     prefix), the request gets the framework 404 here and step 5 never runs.
 //  5. Middleware added with Use, nested-group middleware, route middleware, binding,
 //     JOSE and the handler, all after the publish.
 //
 // A client fault from steps 1-2 goes to p.Deny. Everything else is framework-rendered.
 // Steps 1-3 also run before step 4's 404, where no route matched, so a Tenant that reads a
 // path parameter finds none there: it must fail on the empty value, which Deny answers.
+// Use and group middleware on a family, and on its nested groups, attach per route at
+// registration, so they reach only routes registered after the call.
 //
 // It panics at the call site when:
 //   - r is not a registrar the framework built, or r is already inside a family;
 //   - p.Tenant is nil;
 //   - multitenant is disabled, or the Server installed no tenant seat because its
 //     tenant resolver could not be built;
-//   - the full prefix is "" or "/", has a :param or * segment, covers the health or
-//     ready path, or equals, covers or sits under another family's prefix on a segment
-//     boundary.
+//   - prefix is "" or "/" (the panic names the full prefix);
+//   - the full prefix has a :param or * segment, covers the health or ready path, or
+//     equals, covers or sits under another family's prefix on a segment boundary.
 //
-// Another module's route, or a middleware-bearing group, at or below the prefix is
-// trespass: startup refuses it as a RouteConflictReasonTenantOwned conflict. Startup
-// also refuses any installed global middleware beside a family
+// A route, or a group carrying middleware, at or below the prefix that was not registered
+// through the family is trespass and fails startup as a RouteConflictReasonTenantOwned
+// conflict. Startup also refuses any installed global middleware beside a family
 // (ErrTenantFamilyWithGlobalMiddleware). Neither guarantee covers a family built after
 // Start.
 func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {

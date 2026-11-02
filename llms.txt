@@ -1372,10 +1372,9 @@ Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) 
   apply); only `/health` and `/ready` are exempt.
 - **Fail-closed**: if the configured server cannot install it (a custom `ServerRunner`),
   startup aborts rather than serving unguarded traffic.
-- **Refused beside a tenant-owned family**: startup aborts
-  (`errors.Is(err, server.ErrTenantFamilyWithGlobalMiddleware)`) when any non-nil global
-  middleware is installed and the binary builds a `server.TenantOwnedGroup` family, in either
-  order (ADR-164). Attach the gate per group instead: the family's `Authenticate` or `Use`.
+- **Refused beside a tenant-owned family**: startup aborts with
+  `server.ErrTenantFamilyWithGlobalMiddleware`; attach the gate per group instead
+  ([ADR-164](wiki/adr_164_tenant_owned_route_family.md#global-middleware-beside-a-family)).
 - **Ordering**: across modules, middleware composes in module-registration order.
 
 ### Route Template & Path Parameters (v0.46.0+)
