@@ -695,3 +695,262 @@ func TestRouteAdmissionRefusedDuplicateIsNotDescribed(t *testing.T) {
 		})
 	}
 }
+
+// trespassFamily is the tenant-owned family the trespass tests build under the module group.
+const trespassFamily = "/partner/v2"
+
+func trespassMiddleware(_ HandlerContext, next func() error) error { return next() }
+
+func trespassTyped(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil }
+
+var trespassRaw = answerWith("")
+
+// trespassRoute is the conflict refusing GET path, registered from this package with handler.
+func trespassRoute(path string, handler any) RouteConflict {
+	return RouteConflict{
+		Method: http.MethodGet, Path: path, FirstPath: trespassFamily,
+		Duplicate: RouteRegistrant{HandlerName: extractHandlerName(handler), Package: serverPackagePath},
+		Reason:    RouteConflictReasonTenantOwned,
+	}
+}
+
+// trespassGroup is the conflict refusing the middleware-bearing group at path, built from this
+// package.
+func trespassGroup(path string) RouteConflict {
+	return RouteConflict{
+		Path: path, FirstPath: trespassFamily, Duplicate: RouteRegistrant{Package: serverPackagePath},
+		Reason: RouteConflictReasonTenantOwned,
+	}
+}
+
+func trespassRouteLine(path string, handler any) string {
+	return "GET " + path + " — inside a tenant-owned route family at /partner/v2, refused: " +
+		extractHandlerName(handler) + " (" + serverPackagePath + ")"
+}
+
+func trespassGroupLine(path string) string {
+	return "group " + path + " — inside a tenant-owned route family at /partner/v2, refused: middleware (" + serverPackagePath + ")"
+}
+
+// newTrespassTestServer returns a multi-tenant Server whose Start binds both listeners, shut down
+// at cleanup, clearing DefaultRouteRegistry before and after the test.
+func newTrespassTestServer(t *testing.T) *Server {
+	t.Helper()
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+	srv := newProbeTestServer(newTenantFamilyConfig(""), &testLogger{})
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	return srv
+}
+
+// buildTrespassFamily mounts the tenant-owned family at trespassFamily under the module group.
+func buildTrespassFamily(srv *Server) RouteRegistrar {
+	return tenantOwnedGroup(srv.ModuleGroup(), trespassFamily, fixedTenantPolicy(familySeatTenant))
+}
+
+// TestTenantOwnedTrespassIsRouteConflict pins that a route or a middleware-bearing group at or
+// below a family prefix, not built through the family, is refused in either registration order.
+func TestTenantOwnedTrespassIsRouteConflict(t *testing.T) {
+	const (
+		orders = trespassFamily + "/orders"
+		admin  = trespassFamily + "/admin"
+	)
+	type trespassCase struct {
+		name     string
+		register func(srv *Server, mg RouteRegistrar, buildFamily func())
+		want     RouteConflict
+		wantLine string
+		refused  bool // registered after the family: never added, so never described
+	}
+	// Each pair acts once before the family is built and once after it.
+	pairs := []struct {
+		stem         string
+		act          func(srv *Server, mg RouteRegistrar)
+		want         RouteConflict
+		wantLine     string
+		refusedAfter bool
+	}{
+		{
+			stem: "typed_route",
+			act: func(srv *Server, mg RouteRegistrar) {
+				RegisterHandler(NewHandlerRegistry(srv.cfg), mg, http.MethodGet, orders, trespassTyped)
+			},
+			want: trespassRoute(orders, trespassTyped), wantLine: trespassRouteLine(orders, trespassTyped), refusedAfter: true,
+		},
+		{
+			stem: "raw_add",
+			act:  func(_ *Server, mg RouteRegistrar) { mg.Add(http.MethodGet, orders, trespassRaw) },
+			want: trespassRoute(orders, trespassRaw), wantLine: trespassRouteLine(orders, trespassRaw), refusedAfter: true,
+		},
+		{
+			stem: "middleware_group",
+			act:  func(_ *Server, mg RouteRegistrar) { mg.Group(admin, trespassMiddleware) },
+			want: trespassGroup(admin), wantLine: trespassGroupLine(admin),
+		},
+		{
+			stem: "middleware_group_at_prefix",
+			act:  func(_ *Server, mg RouteRegistrar) { mg.Group(trespassFamily, trespassMiddleware) },
+			want: trespassGroup(trespassFamily), wantLine: trespassGroupLine(trespassFamily),
+		},
+	}
+	tests := make([]trespassCase, 0, 2*len(pairs)+6)
+	for _, p := range pairs {
+		tests = append(tests,
+			trespassCase{
+				name:     p.stem + "_before_family",
+				register: func(srv *Server, mg RouteRegistrar, buildFamily func()) { p.act(srv, mg); buildFamily() },
+				want:     p.want, wantLine: p.wantLine,
+			},
+			trespassCase{
+				name:     p.stem + "_after_family",
+				register: func(srv *Server, mg RouteRegistrar, buildFamily func()) { buildFamily(); p.act(srv, mg) },
+				want:     p.want, wantLine: p.wantLine, refused: p.refusedAfter,
+			},
+		)
+	}
+	tests = append(tests, []trespassCase{
+		{
+			name: "inherited_middleware_group",
+			register: func(_ *Server, mg RouteRegistrar, buildFamily func()) {
+				partner := mg.Group("/partner", trespassMiddleware)
+				buildFamily()
+				partner.Group("/v2/x")
+			},
+			want: trespassGroup("/partner/v2/x"), wantLine: trespassGroupLine("/partner/v2/x"),
+		},
+		{
+			name: "use_added_later_on_group_under_prefix",
+			register: func(_ *Server, mg RouteRegistrar, buildFamily func()) {
+				plain := mg.Group(admin)
+				buildFamily()
+				plain.Use(trespassMiddleware)
+			},
+			want: trespassGroup(admin), wantLine: trespassGroupLine(admin),
+		},
+		{
+			name: "use_on_plain_group_under_prefix_before_family",
+			register: func(_ *Server, mg RouteRegistrar, buildFamily func()) {
+				mg.Group(admin).Use(trespassMiddleware)
+				buildFamily()
+			},
+			want: trespassGroup(admin), wantLine: trespassGroupLine(admin),
+		},
+		{
+			name: "use_on_plain_group_at_prefix_before_family",
+			register: func(_ *Server, mg RouteRegistrar, buildFamily func()) {
+				mg.Group(trespassFamily).Use(trespassMiddleware)
+				buildFamily()
+			},
+			want: trespassGroup(trespassFamily), wantLine: trespassGroupLine(trespassFamily),
+		},
+		{
+			name: "use_on_plain_group_at_prefix_after_family",
+			register: func(_ *Server, mg RouteRegistrar, buildFamily func()) {
+				plain := mg.Group(trespassFamily)
+				buildFamily()
+				plain.Use(trespassMiddleware)
+			},
+			want: trespassGroup(trespassFamily), wantLine: trespassGroupLine(trespassFamily),
+		},
+		{
+			name: "group_with_middleware_then_use_reported_once",
+			register: func(_ *Server, mg RouteRegistrar, buildFamily func()) {
+				withMiddleware := mg.Group(admin, trespassMiddleware)
+				buildFamily()
+				withMiddleware.Use(trespassMiddleware)
+			},
+			want: trespassGroup(admin), wantLine: trespassGroupLine(admin),
+		},
+	}...)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			tt.register(srv, srv.ModuleGroup(), func() { buildTrespassFamily(srv) })
+
+			err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite a tenant-owned trespass")
+			require.ErrorIs(t, err, ErrDuplicateRoute)
+			var dre *DuplicateRouteError
+			require.ErrorAs(t, err, &dre)
+			require.Len(t, dre.Conflicts, 1)
+			assert.Equal(t, tt.want, dre.Conflicts[0])
+			assert.Equal(t, "route registration refused (1 conflict(s))\n"+tt.wantLine, err.Error())
+			if tt.refused {
+				assert.Empty(t, DefaultRouteRegistry.ByPath(orders), "a refused route is never described")
+			}
+		})
+	}
+}
+
+// TestTenantOwnedTrespassReportsInRegistrationOrder pins that a family built after several
+// trespassers reports them in registration order, routes and groups interleaved.
+func TestTenantOwnedTrespassReportsInRegistrationOrder(t *testing.T) {
+	srv := newTrespassTestServer(t)
+	register := func(mg RouteRegistrar) {
+		mg.Add(http.MethodGet, trespassFamily+"/a", trespassRaw)
+		mg.Group(trespassFamily+"/g", trespassMiddleware)
+		RegisterHandler(NewHandlerRegistry(srv.cfg), mg, http.MethodGet, trespassFamily+"/b", trespassTyped)
+	}
+	register(srv.ModuleGroup())
+	buildTrespassFamily(srv)
+
+	assert.Equal(t, []RouteConflict{
+		trespassRoute(trespassFamily+"/a", trespassRaw),
+		trespassGroup(trespassFamily + "/g"),
+		trespassRoute(trespassFamily+"/b", trespassTyped),
+	}, srv.RouteConflicts())
+}
+
+// TestTenantOwnedTrespassAllowsAncestors pins that groups above a family prefix may carry
+// middleware.
+func TestTenantOwnedTrespassAllowsAncestors(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(srv *Server, mg RouteRegistrar)
+	}{
+		{name: "ancestor_group_with_middleware", register: func(_ *Server, mg RouteRegistrar) { mg.Group("/partner", trespassMiddleware) }},
+		{name: "module_group", register: func(_ *Server, mg RouteRegistrar) { mg.Use(trespassMiddleware) }},
+		{name: "root_group", register: func(srv *Server, _ RouteRegistrar) { srv.RootGroup().Use(trespassMiddleware) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			buildTrespassFamily(srv)
+			tt.register(srv, srv.ModuleGroup())
+			assert.Empty(t, srv.RouteConflicts())
+		})
+	}
+}
+
+// TestTenantOwnedTrespassIgnoresFamilyAndMiddlewareFreeGroups pins that registrations through the
+// family, groups without middleware and segment siblings of the prefix are not trespass.
+func TestTenantOwnedTrespassIgnoresFamilyAndMiddlewareFreeGroups(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(srv *Server, mg, family RouteRegistrar)
+	}{
+		{name: "family_routes_admitted", register: func(srv *Server, _, family RouteRegistrar) {
+			family.Add(http.MethodGet, "/raw", trespassRaw)
+			RegisterHandler(NewHandlerRegistry(srv.cfg), family, http.MethodGet, "/typed", trespassTyped)
+		}},
+		{name: "family_nested_group_with_middleware", register: func(_ *Server, _, family RouteRegistrar) {
+			family.Group("/nested", trespassMiddleware).Add(http.MethodGet, "/leaf", trespassRaw)
+		}},
+		{name: "family_use", register: func(_ *Server, _, family RouteRegistrar) { family.Use(trespassMiddleware) }},
+		{name: "group_without_middleware_under_prefix", register: func(_ *Server, mg, _ RouteRegistrar) {
+			mg.Group(trespassFamily + "/plain")
+		}},
+		{name: "use_with_no_middleware_under_prefix", register: func(_ *Server, mg, _ RouteRegistrar) {
+			mg.Group(trespassFamily + "/plain").Use()
+		}},
+		{name: "segment_sibling_route", register: func(_ *Server, mg, _ RouteRegistrar) {
+			mg.Add(http.MethodGet, "/partner/v20/x", trespassRaw)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			tt.register(srv, srv.ModuleGroup(), buildTrespassFamily(srv))
+			assert.Empty(t, srv.RouteConflicts())
+		})
+	}
+}

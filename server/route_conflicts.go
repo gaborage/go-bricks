@@ -20,13 +20,16 @@ var ErrDuplicateRoute = errors.New("duplicate route registration")
 // RouteConflictReason says why a route registration was refused.
 type RouteConflictReason string
 
-// Reasons carried by RouteConflict.Reason (ADR-155).
+// Reasons carried by RouteConflict.Reason: ADR-155's two, and a third for tenant-owned route families.
 const (
 	// RouteConflictReasonDuplicate is a second registration of a route node; the first keeps it.
 	RouteConflictReasonDuplicate RouteConflictReason = "duplicate"
 	// RouteConflictReasonReservedMethod is a registration with one of echo's sentinel methods,
 	// "echo_route_not_found" or "echo_route_any", which only the engine itself may register.
 	RouteConflictReasonReservedMethod RouteConflictReason = "reserved engine method"
+	// RouteConflictReasonTenantOwned is a route, or a group carrying middleware, at or below a
+	// tenant-owned route family's prefix that did not come through the family.
+	RouteConflictReasonTenantOwned RouteConflictReason = "inside a tenant-owned route family"
 )
 
 // serverPackagePath attributes framework-registered routes (health/ready probes)
@@ -41,19 +44,29 @@ type RouteRegistrant struct {
 	Package     string
 }
 
-// RouteConflict reports one refused registration. For RouteConflictReasonDuplicate, two
-// registrations of the same method + route node: Path is the duplicate's literal path and
-// FirstPath the first registration's; they differ when the two templates name a path parameter
-// or wildcard differently (/users/:id, /users/:uid), which echo's router treats as one route.
-// For RouteConflictReasonReservedMethod, Duplicate is the refused registrant and First and
-// FirstPath are empty.
+// RouteConflict reports one refused registration. What each field means depends on Reason.
 type RouteConflict struct {
-	Method    string
-	Path      string
+	// Method is the refused route's HTTP method. Under RouteConflictReasonTenantOwned it is empty
+	// when the refused registration is a group carrying middleware.
+	Method string
+	// Path is the refused registration's literal full path: the duplicate's under
+	// RouteConflictReasonDuplicate, the refused route's under RouteConflictReasonReservedMethod, and
+	// the route's or the group's full prefix under RouteConflictReasonTenantOwned.
+	Path string
+	// FirstPath under RouteConflictReasonDuplicate is the first registration's literal path; it
+	// differs from Path when the two templates name a path parameter or wildcard differently
+	// (/users/:id, /users/:uid), which echo's router treats as one route. Under
+	// RouteConflictReasonTenantOwned it is the family's prefix. Empty under
+	// RouteConflictReasonReservedMethod.
 	FirstPath string
-	First     RouteRegistrant
+	// First is the registration that keeps the route under RouteConflictReasonDuplicate. Empty under
+	// the other reasons.
+	First RouteRegistrant
+	// Duplicate is the refused registrant under every reason. For a group under
+	// RouteConflictReasonTenantOwned only Package is set: the package that called Group or Use.
 	Duplicate RouteRegistrant
-	Reason    RouteConflictReason
+	// Reason says why the registration was refused.
+	Reason RouteConflictReason
 }
 
 // DuplicateRouteError reports every refused route registration at once.
@@ -114,6 +127,13 @@ func (r RouteRegistrant) label() string {
 
 // line renders one conflict as it appears in DuplicateRouteError's text.
 func (c *RouteConflict) line() string {
+	if c.Reason == RouteConflictReasonTenantOwned {
+		refused := " — " + string(c.Reason) + " at " + c.FirstPath + ", refused: "
+		if c.Method == "" {
+			return "group " + c.Path + refused + "middleware (" + c.Duplicate.Package + ")"
+		}
+		return c.Method + " " + c.Path + refused + c.Duplicate.label()
+	}
 	prefix := c.Method + " " + c.Path + " — "
 	if c.Reason != RouteConflictReasonDuplicate {
 		return prefix + string(c.Reason) + ", refused: " + c.Duplicate.label()
@@ -155,6 +175,11 @@ type routeAdmission struct {
 	log        logger.Logger // the Server's logger; written once by New, before any registrar exists
 	probePaths []string      // full health and ready paths on the application listener; written once by New
 	families   []string      // each tenant-owned family's full prefix, in build order
+
+	// registered is every admitted route (family routes and probes included) and every
+	// middleware-bearing group not built through a family, covered or not, in registration
+	// order, each as its tenant-owned conflict without FirstPath.
+	registered []RouteConflict
 }
 
 // seenRoute is the first registration of a route node, with its literal path.
@@ -163,13 +188,21 @@ type seenRoute struct {
 	path string
 }
 
+// tenantOwnedConflict is the RouteConflictReasonTenantOwned conflict for a route (or, with an
+// empty method, a group), its FirstPath left for the family that refuses it.
+func tenantOwnedConflict(method, path string, reg RouteRegistrant) RouteConflict {
+	return RouteConflict{Method: method, Path: path, Duplicate: reg, Reason: RouteConflictReasonTenantOwned}
+}
+
 func newRouteAdmission() *routeAdmission {
 	return &routeAdmission{seen: make(map[string]seenRoute)}
 }
 
-// admit refuses a reserved engine method, then a duplicate of a claimed echo route node (the first
-// registration keeps it), recording each refusal as a conflict; an admitted route is described in
-// DefaultRouteRegistry, then added through add.
+// admit refuses a reserved engine method, then a route at or below a tenant-owned family's prefix
+// that did not come through the family, then a duplicate of a claimed echo route node (the first
+// registration keeps it), recording each refusal as a conflict; an admitted route is recorded in
+// registration order for a later family's trespass scan, described in DefaultRouteRegistry, then
+// added through add.
 func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	if !a.claim(r) {
 		return
@@ -192,6 +225,10 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		})
 		return false
 	}
+	c := tenantOwnedConflict(r.Method, r.Path, reg)
+	if !r.Descriptor.TenantOwned && a.refuseTrespassLocked(&c) {
+		return false
+	}
 	key := routeNodeKey(r.Method, r.Path)
 	if first, dup := a.seen[key]; dup {
 		a.conflicts = append(a.conflicts, RouteConflict{
@@ -201,7 +238,54 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		return false
 	}
 	a.seen[key] = seenRoute{reg: reg, path: r.Path}
+	a.registered = append(a.registered, c)
 	return true
+}
+
+// admitGroup records a middleware-bearing group not built through a family at its full prefix
+// path, whether or not a family covers it, and records a conflict when one already does. pkg
+// called Group or Use.
+func (a *routeAdmission) admitGroup(path, pkg string) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c := tenantOwnedConflict("", path, RouteRegistrant{Package: pkg})
+	a.registered = append(a.registered, c)
+	a.refuseTrespassLocked(&c)
+}
+
+// refuseTrespassLocked sets c.FirstPath to the family prefix covering c.Path and records c as a
+// conflict, reporting whether a family covers it. a.mu is held.
+func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
+	for _, family := range a.families {
+		if underPrefix(c.Path, family) {
+			c.FirstPath = family
+			a.conflicts = append(a.conflicts, *c)
+			return true
+		}
+	}
+	return false
+}
+
+// reportTrespassLocked records every registered route and group at or below a newly built
+// family's prefix, interleaved in registration order; families never overlap and a family admits
+// no route before its scan, so no family's routes are reported. a.mu is held.
+func (a *routeAdmission) reportTrespassLocked(family string) {
+	for i := range a.registered {
+		if underPrefix(a.registered[i].Path, family) {
+			c := a.registered[i]
+			c.FirstPath = family
+			a.conflicts = append(a.conflicts, c)
+		}
+	}
+}
+
+// underPrefix reports whether path is prefix or continues past it at a "/" segment boundary.
+func underPrefix(path, prefix string) bool {
+	_, ok := pathutil.StripPathPrefix(path, prefix)
+	return ok
 }
 
 // routeNodeKey identifies the echo router node method+path lands on: parameter names are
@@ -237,7 +321,7 @@ func (a *routeAdmission) coveredProbePath(full string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, p := range a.probePaths {
-		if _, ok := pathutil.StripPathPrefix(p, full); ok {
+		if underPrefix(p, full) {
 			return p, true
 		}
 	}
@@ -250,13 +334,15 @@ func (a *routeAdmission) claimFamily(full string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, f := range a.families {
-		_, under := pathutil.StripPathPrefix(full, f)
-		_, covers := pathutil.StripPathPrefix(f, full)
-		if under || covers {
+		if underPrefix(full, f) {
+			return f, false
+		}
+		if underPrefix(f, full) {
 			return f, false
 		}
 	}
 	a.families = append(a.families, full)
+	a.reportTrespassLocked(full)
 	return "", true
 }
 
