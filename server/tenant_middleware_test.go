@@ -324,7 +324,6 @@ func TestTenantSeatRefusesOffGrammarID(t *testing.T) {
 // TestTenantSeatSkipsOwnedPrefix pins P14 through New with the header resolver: the tenant
 // seat skips exactly the requests whose matched route template a tenant-owned family owns,
 // leaving seatSkippedKey for the family to find, and resolves every other route as before.
-// Only non_family_route_resolves sends X-Tenant-ID.
 func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 	const (
 		familyID = "partner-tenant"
@@ -351,11 +350,9 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			testLog := &testLogger{}
-			cfg := newTenantFamilyConfig("")
-			DefaultRouteRegistry.Clear()
-			t.Cleanup(DefaultRouteRegistry.Clear)
-			srv := New(cfg, testLog)
+			srv := newTenantFamilyServer(t, "")
+			testLog, ok := srv.logger.(*testLogger)
+			require.True(t, ok)
 
 			var familyRan, evidence bool
 			policy := TenantPolicy{Tenant: func(c HandlerContext) (string, error) {
@@ -370,14 +367,7 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 			srv.ModuleGroup().Add(http.MethodGet, "/orders", echoTenant)
 			srv.ModuleGroup().Add(http.MethodGet, "/partner/v20", echoTenant)
 
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, http.NoBody)
-			if tc.seatHeader != "" {
-				req.Header.Set(HeaderXTenantID, tc.seatHeader)
-			}
-			rec := httptest.NewRecorder()
-			srv.echo.ServeHTTP(rec, req)
-
-			require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
+			rec := requireObservedStatus(t, srv, observedRequest(http.MethodGet, tc.path, tc.seatHeader, nil), tc.wantStatus)
 			assert.Equal(t, tc.wantFamily, familyRan, "the family's own steps run exactly on its routes")
 			assert.Equal(t, tc.wantFamily, evidence, "the seat leaves its evidence exactly where it skipped")
 			if tc.wantBody != "" {
@@ -387,7 +377,8 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 			if tc.wantStatus == http.StatusBadRequest {
 				wantWarns = 1
 			}
-			assert.Len(t, seatRejections(testLog), wantWarns, "the seat answers, and logs, only a route no family owns")
+			warns, _ := splitTenantRefusalLogs(testLog.logEntries())
+			assert.Len(t, warns, wantWarns, "the seat answers, and logs, only a route no family owns")
 		})
 	}
 }
@@ -396,15 +387,4 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 func echoTenant(c HandlerContext) error {
 	tenantID, _ := multitenant.GetTenant(c.RequestContext())
 	return c.String(http.StatusOK, tenantID)
-}
-
-// seatRejections returns the tenant seat's rejection WARNs log recorded.
-func seatRejections(testLog *testLogger) []testLogEntry {
-	var out []testLogEntry
-	for _, e := range testLog.logEntries() {
-		if e.level == "warn" && strings.Contains(e.msg, "[server.tenant] request rejected") {
-			out = append(out, e)
-		}
-	}
-	return out
 }

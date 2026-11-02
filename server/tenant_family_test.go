@@ -26,8 +26,8 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-// familySeatTenant is the seat's header tenant every request carries. The seat skips a
-// family's routes, so no family stage ever sees it.
+// familySeatTenant is the X-Tenant-ID every serveFamily request carries; the seat skips a
+// family's routes, so it resolves it only off them.
 const familySeatTenant = "seat-tenant"
 
 // newTenantFamilyConfig is newProbeTestConfig with multi-tenant mode on, resolving the tenant

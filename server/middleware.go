@@ -29,9 +29,8 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	setupMiddlewares(e, log, cfg, observabilityEnabled, healthPath, readyPath, nil)
 }
 
-// setupMiddlewares is SetupMiddlewares with the Server's tenant-owned family record: owned
-// reports whether a matched route template belongs to a family, and only the tenant seat reads
-// it (tenantMiddlewareEcho). A nil owned skips nothing.
+// setupMiddlewares is SetupMiddlewares with owned, the Server's tenant-owned family record,
+// which only the tenant seat reads (see tenantMiddlewareEcho).
 func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, owned func(template string) bool) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,

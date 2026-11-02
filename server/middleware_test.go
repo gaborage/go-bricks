@@ -1270,7 +1270,7 @@ func TestOnlyTenantSeatReadsOwnership(t *testing.T) {
 			name: "access_log_records_family_route",
 			check: func(t *testing.T, srv *Server, log *guardLogger) {
 				requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
-				assert.Equal(t, 1, log.entriesContaining(familyOrders), "the access log records the family request once")
+				assert.Equal(t, 1, log.countEntries("", familyOrders), "the access log records the family request once")
 			},
 		},
 		{
@@ -1291,7 +1291,7 @@ func TestOnlyTenantSeatReadsOwnership(t *testing.T) {
 				other.RemoteAddr = "198.51.100.7:1234"
 				third := requireObservedStatus(t, srv, other, http.StatusOK)
 
-				assert.Equal(t, strconv.Itoa(observedOpenLimit*BurstMultiplier), first.Header().Get("X-RateLimit-Limit"),
+				assert.Equal(t, strconv.Itoa(observedOpenLimit*BurstMultiplier), first.Header().Get(middleware.HeaderXRateLimitLimit),
 					"the address limiter, inner to the pre-guard, wrote the headers")
 				assert.Equal(t, remainingTokens(t, first)-1, remainingTokens(t, second), "one address shares one bucket")
 				assert.Equal(t, remainingTokens(t, first), remainingTokens(t, third), "another address has its own bucket")
@@ -1342,7 +1342,7 @@ func requireObservedStatus(t *testing.T, srv *Server, req *http.Request, want in
 // remainingTokens parses rec's X-RateLimit-Remaining.
 func remainingTokens(t *testing.T, rec *httptest.ResponseRecorder) int {
 	t.Helper()
-	n, err := strconv.Atoi(rec.Header().Get("X-RateLimit-Remaining"))
+	n, err := strconv.Atoi(rec.Header().Get(middleware.HeaderXRateLimitRemaining))
 	require.NoError(t, err)
 	return n
 }

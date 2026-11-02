@@ -345,26 +345,19 @@ func (l *guardLogger) entryCount() int {
 }
 
 // warnCount reports how many WARN entries whose message contains msgContains the double
-// recorded, under the lock; an empty msgContains counts every WARN.
+// recorded; an empty msgContains counts every WARN.
 func (l *guardLogger) warnCount(msgContains string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	n := 0
-	for _, e := range l.logs {
-		if e.level == "warn" && strings.Contains(e.msg, msgContains) {
-			n++
-		}
-	}
-	return n
+	return l.countEntries("warn", msgContains)
 }
 
-// entriesContaining reports how many entries, at any level, carry substr in their message.
-func (l *guardLogger) entriesContaining(substr string) int {
+// countEntries reports how many entries at level ("" for any) whose message contains
+// msgContains the double recorded, under the lock.
+func (l *guardLogger) countEntries(level, msgContains string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	n := 0
 	for _, e := range l.logs {
-		if strings.Contains(e.msg, substr) {
+		if (level == "" || e.level == level) && strings.Contains(e.msg, msgContains) {
 			n++
 		}
 	}
@@ -471,11 +464,11 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 const (
 	observedHeaderTenant = "acme"
 	observedPathTenant   = "/t/globex/orders"
-	// observedOpenLimit keeps the pre-guard and the limiter on but out of reach of any
-	// row's request count, so every row except ip_preguard_denied passes both.
+	// observedOpenLimit keeps the limiter on but out of reach of any row's request count.
 	observedOpenLimit = 1_000_000
-	// observedOpenPreGuard is the pre-guard's open threshold. It differs from the limiter's,
-	// so a response's X-RateLimit-* headers name the limiter that wrote them.
+	// observedOpenPreGuard keeps the pre-guard on and out of reach the same way, so every row
+	// except ip_preguard_denied passes both. It differs from the limiter's, so a response's
+	// X-RateLimit-* headers name the limiter that wrote them.
 	observedOpenPreGuard = 2 * observedOpenLimit
 	// observedRuns is AllocsPerRun's measured run count; it adds one warm-up call of its own.
 	observedRuns = 100
