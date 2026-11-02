@@ -16,8 +16,7 @@ var ErrUntrustedForwardedHost = errors.New("multitenant: X-Forwarded-Host from a
 // client fault.
 var ErrUnknownTenant error = &unknownTenantError{}
 
-// unknownTenantError is ErrUnknownTenant's type: its own text, unwrapping to
-// ErrTenantResolutionFailed.
+// unknownTenantError is ErrUnknownTenant's type.
 type unknownTenantError struct{}
 
 func (*unknownTenantError) Error() string { return "multitenant: unknown tenant" }
