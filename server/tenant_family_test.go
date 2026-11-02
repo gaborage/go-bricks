@@ -333,7 +333,10 @@ func (tr *familyTrace) record(stage string, c HandlerContext) {
 
 func (tr *familyTrace) ran(stage string) bool { return slices.Contains(tr.events, stage) }
 
-func (tr *familyTrace) reset() { tr.events = nil }
+func (tr *familyTrace) reset() {
+	tr.events = nil
+	clear(tr.tenants)
+}
 
 // fakeBearerStep stands in for auth.Middleware: 401 without Authorization, next otherwise,
 // returning next's error unchanged.
@@ -377,18 +380,24 @@ func recordingMiddleware(tr *familyTrace) MiddlewareFunc {
 	}
 }
 
-// newRecordingFamily builds a Server holding the tenant-owned family /fam (fakeBearerStep, a
-// Tenant resolving familyTenant, and a Deny writing familyDenyStatus and familyDenyBody, each
-// edit adjusting that policy) with GET /fam/orders answered by recordingHandler.
-func newRecordingFamily(t *testing.T, edits ...func(*TenantPolicy, *familyTrace)) (*Server, RouteRegistrar, *familyTrace) {
-	t.Helper()
-	srv := newTenantFamilyServer(t, "")
-	tr := newFamilyTrace()
-	policy := TenantPolicy{
+// recordingPolicy is the recording family's TenantPolicy: fakeBearerStep, a Tenant resolving
+// familyTenant, and a Deny writing familyDenyStatus and familyDenyBody.
+func recordingPolicy(tr *familyTrace) TenantPolicy {
+	return TenantPolicy{
 		Authenticate: []MiddlewareFunc{fakeBearerStep(tr)},
 		Tenant:       resolveTo(tr, familyTenant, nil),
 		Deny:         recordingDeny(tr, familyDenyStatus, familyDenyBody),
 	}
+}
+
+// newRecordingFamily builds a Server holding the tenant-owned family /fam under
+// recordingPolicy, each edit adjusting that policy, with GET /fam/orders answered by
+// recordingHandler.
+func newRecordingFamily(t *testing.T, edits ...func(*TenantPolicy, *familyTrace)) (*Server, RouteRegistrar, *familyTrace) {
+	t.Helper()
+	srv := newTenantFamilyServer(t, "")
+	tr := newFamilyTrace()
+	policy := recordingPolicy(tr)
 	for _, edit := range edits {
 		edit(&policy, tr)
 	}
@@ -430,9 +439,7 @@ func assertFamilyDenied(t *testing.T, rec *httptest.ResponseRecorder, tr *family
 func assertFrameworkError(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
 	assert.Equal(t, status, rec.Code, rec.Body.String())
-	var envelope struct {
-		Error *APIErrorResponse `json:"error"`
-	}
+	var envelope APIResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope), rec.Body.String())
 	require.NotNil(t, envelope.Error, rec.Body.String())
 	assert.Equal(t, code, envelope.Error.Code)
@@ -444,17 +451,15 @@ func newNotFoundFamilies(t *testing.T) (*Server, *familyTrace) {
 	t.Helper()
 	srv, family, tr := newRecordingFamily(t)
 	family.Group("/sub").Add(http.MethodGet, "/items", recordingHandler(tr))
-	orgFamily := tenantOwnedGroup(srv.ModuleGroup(), "/t", TenantPolicy{
-		Authenticate: []MiddlewareFunc{fakeBearerStep(tr)},
-		Tenant: func(c HandlerContext) (string, error) {
-			tr.record(traceTenant, c)
-			if org := c.Param("org"); org != "" {
-				return org, nil
-			}
-			return "", fmt.Errorf("no org path parameter: %w", multitenant.ErrTenantResolutionFailed)
-		},
-		Deny: recordingDeny(tr, familyDenyStatus, familyDenyBody),
-	})
+	orgPolicy := recordingPolicy(tr)
+	orgPolicy.Tenant = func(c HandlerContext) (string, error) {
+		tr.record(traceTenant, c)
+		if org := c.Param("org"); org != "" {
+			return org, nil
+		}
+		return "", fmt.Errorf("no org path parameter: %w", multitenant.ErrTenantResolutionFailed)
+	}
+	orgFamily := tenantOwnedGroup(srv.ModuleGroup(), "/t", orgPolicy)
 	orgFamily.Add(http.MethodGet, "/:org/orders", recordingHandler(tr))
 	return srv, tr
 }
@@ -685,7 +690,6 @@ func TestTenantOwnedGroupErrorsAfterPublishBypassDeny(t *testing.T) {
 	// use_middleware_returns_403 arrives with per-route Use in a later link.
 	tests := []struct {
 		name       string
-		policy     func(*TenantPolicy, *familyTrace)
 		route      func(srv *Server, family RouteRegistrar, tr *familyTrace)
 		method     string
 		path       string
@@ -720,12 +724,6 @@ func TestTenantOwnedGroupErrorsAfterPublishBypassDeny(t *testing.T) {
 		},
 		{
 			name: "error_returned_through_authenticate_step",
-			policy: func(p *TenantPolicy, tr *familyTrace) {
-				p.Authenticate = []MiddlewareFunc{func(c HandlerContext, next func() error) error {
-					tr.record(traceAuthenticate, c)
-					return next()
-				}}
-			},
 			route: func(_ *Server, family RouteRegistrar, tr *familyTrace) {
 				family.Add(http.MethodGet, "/forbidden", func(c HandlerContext) error {
 					tr.record(traceHandler, c)
@@ -741,11 +739,7 @@ func TestTenantOwnedGroupErrorsAfterPublishBypassDeny(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var edits []func(*TenantPolicy, *familyTrace)
-			if tt.policy != nil {
-				edits = append(edits, tt.policy)
-			}
-			srv, family, tr := newRecordingFamily(t, edits...)
+			srv, family, tr := newRecordingFamily(t)
 			tt.route(srv, family, tr)
 
 			rec := serveFamily(srv, tt.method, tt.path, append(tt.edits, withFamilyCredential)...)
@@ -760,17 +754,24 @@ func TestTenantOwnedGroupForwardedClientCertRequireAnswersFirst(t *testing.T) {
 	cfg.Server.ForwardedClientCert = config.ForwardedClientCertConfig{Enabled: true, Require: true}
 	srv := newTenantFamilyServerWithConfig(t, cfg)
 	tr := newFamilyTrace()
-	tenantOwnedGroup(srv.ModuleGroup(), "/fam", TenantPolicy{
-		Authenticate: []MiddlewareFunc{fakeBearerStep(tr)},
-		Tenant:       resolveTo(tr, familyTenant, nil),
-		Deny:         recordingDeny(tr, familyDenyStatus, familyDenyBody),
-	}).Add(http.MethodGet, "/orders", recordingHandler(tr))
+	tenantOwnedGroup(srv.ModuleGroup(), "/fam", recordingPolicy(tr)).Add(http.MethodGet, "/orders", recordingHandler(tr))
 
 	for _, path := range []string{"/fam/orders", "/fam/nope"} {
 		rec := serveFamily(srv, http.MethodGet, path, withFamilyCredential)
 		assertFrameworkError(t, rec, http.StatusUnauthorized, errCodeUnauthorized)
 	}
 	assert.Empty(t, tr.events, "the root's require answers before any family step")
+}
+
+func TestTenantOwnedGroupCopiesAuthenticateSteps(t *testing.T) {
+	srv := newTenantFamilyServer(t, "")
+	tr := newFamilyTrace()
+	policy := recordingPolicy(tr)
+	tenantOwnedGroup(srv.ModuleGroup(), "/fam", policy).Add(http.MethodGet, "/orders", recordingHandler(tr))
+	policy.Authenticate[0] = recordingMiddleware(tr)
+
+	assertFamilyDenied(t, serveFamily(srv, http.MethodGet, "/fam/orders"), tr)
+	assert.Equal(t, []string{traceAuthenticate, traceDeny}, tr.events, "the family runs the Authenticate step it was built with")
 }
 
 func TestTenantOwnedGroupRegistersOneCatchAllPair(t *testing.T) {

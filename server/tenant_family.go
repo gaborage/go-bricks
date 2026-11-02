@@ -1,11 +1,13 @@
 package server
 
 import (
+	"slices"
 	"strconv"
 
 	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/internal/pathutil"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // tenantFamily is one tenant-owned route family.
@@ -51,13 +53,9 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if other, claimed := rg.admission.claimFamily(full); !claimed {
 		panic(tenantFamilyRefusal(full, "it overlaps the tenant-owned family at "+strconv.Quote(other)))
 	}
-	cfg, log := rg.cfg, rg.admission.log
-	fam := &tenantFamily{prefix: full, steps: func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c *echo.Context) error {
-			_, _, err := p.run(newHandlerContext(c, cfg), log, func() error { return next(c) })
-			return err
-		}
-	}}
+	// Copied before p is captured, so a later edit to the caller's slice cannot reach the chain.
+	p.Authenticate = slices.Clone(p.Authenticate)
+	fam := &tenantFamily{prefix: full, steps: adaptMiddleware(p.middleware(rg.admission.log), rg.cfg)}
 	group := rg.admission.engine.Group(full)
 	// Registered on the engine outside admission, which refuses RouteNotFound (ADR-155).
 	group.RouteNotFound("", familyNotFound, fam.steps)
@@ -68,6 +66,14 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 		cfg:       rg.cfg,
 		admission: rg.admission,
 		family:    fam,
+	}
+}
+
+// middleware runs p as a flat MiddlewareFunc, logging its refusals to l.
+func (p TenantPolicy) middleware(l logger.Logger) MiddlewareFunc {
+	return func(c HandlerContext, next func() error) error {
+		_, _, err := p.run(c, l, next)
+		return err
 	}
 }
 

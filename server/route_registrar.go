@@ -77,7 +77,12 @@ func (rg *routeGroup) routeMiddleware(mw []MiddlewareFunc) []echo.MiddlewareFunc
 	if rg.family == nil {
 		return rg.adaptAll(mw)
 	}
-	return append([]echo.MiddlewareFunc{rg.family.steps}, rg.adaptAll(mw)...)
+	out := make([]echo.MiddlewareFunc, 0, 1+len(mw))
+	out = append(out, rg.family.steps)
+	for _, m := range mw {
+		out = append(out, adaptMiddleware(m, rg.cfg))
+	}
+	return out
 }
 
 // probeListenerDescriptor describes a probe served on the probe listener, at its unprefixed
