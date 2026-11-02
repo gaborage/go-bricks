@@ -2747,7 +2747,7 @@ earns the unknown-tenant 400.
 
 ### [ADR-162: The Tenant-ID Grammar Is Fixed and Enforced at Every Write Door](adr_162_tenant_id_grammar_is_fixed.md)
 
-**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a static `multitenant.tenants` key over 64 bytes fails startup, a publish whose context tenant or replay key fails the grammar returns `multitenant.ErrInvalidTenantID` and sends or persists nothing, and a pending outbox row stored under such a stamp parks at `MaxRetries`
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a static `multitenant.tenants` key over 64 bytes fails startup, a publish whose context tenant or replay key fails the grammar returns an error wrapping `multitenant.ErrInvalidTenantID` and sends or persists nothing, and a pending outbox row stored under such a stamp parks at `MaxRetries`
 
 `^[a-z0-9-]{1,64}$`, applied through `multitenant.ValidateTenantID`, is the one tenant-ID grammar
 and is never configurable. It is the fleet-wide wire contract of the `x-tenant-id` stamp, which

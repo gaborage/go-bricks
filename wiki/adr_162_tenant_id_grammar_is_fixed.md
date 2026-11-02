@@ -6,8 +6,9 @@
 ## Context
 
 `multitenant/tenant_id.go` holds the framework's tenant-ID grammar, `^[a-z0-9-]{1,64}$`, behind
-`multitenant.ValidateTenantID` and `multitenant.DefaultTenantIDPattern()`. `ErrInvalidTenantID`
-carries the byte length only, never the value. No ADR decided it. Its history is four commits:
+`multitenant.ValidateTenantID` and `multitenant.DefaultTenantIDPattern()`. `ValidateTenantID`
+returns an error that wraps `ErrInvalidTenantID` and appends the byte length, never the value. No
+ADR decided it. Its history is four commits:
 
 - #48 introduced the grammar as a configurable pattern.
 - #49 renamed its key to `multitenant.validation.pattern`.
@@ -101,8 +102,9 @@ parameterized. The old wiki rationale ("DB schema names") was wrong.
 - **Breaking.** A static `multitenant.tenants.<id>` key over 64 bytes, a hand-built
   `MultitenantConfig.Tenants` key included, now stops boot. Such a tenant was already unreachable
   over HTTP and unsealable.
-- **Breaking.** A publish under an off-grammar context tenant or replay key returns
-  `multitenant.ErrInvalidTenantID` and sends or persists nothing. Before, it was sent: a
+- **Breaking.** A publish under an off-grammar context tenant or replay key returns an error
+  wrapping `multitenant.ErrInvalidTenantID`, matched with `errors.Is`, and sends or persists
+  nothing. Before, it was sent: a
   shared-tenancy go-bricks consumer refused it, but a per-tenant go-bricks consumer (which ignores
   the stamp) and a consumer outside go-bricks accepted it. Those are the paths that are lost.
 - **Breaking.** A pending outbox row stored under an off-grammar stamp before the upgrade parks at
