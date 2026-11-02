@@ -607,6 +607,40 @@ func TestServerShutdownBeforeStartRefusesStart(t *testing.T) {
 	}
 }
 
+// TestServerStartRefusedEarlySealsRegistration pins that a Start refused before its route
+// checks still seals registration: a later TenantOwnedGroup panics as after any Start.
+func TestServerStartRefusedEarlySealsRegistration(t *testing.T) {
+	errSetup := errors.New("setup failed")
+	tests := []struct {
+		name    string
+		refuse  func(t *testing.T, srv *Server)
+		wantErr error
+	}{
+		{
+			name:    "shutdown_before_start",
+			refuse:  func(t *testing.T, srv *Server) { require.NoError(t, srv.Shutdown(context.Background())) },
+			wantErr: http.ErrServerClosed,
+		},
+		{
+			name:    "setup_error",
+			refuse:  func(_ *testing.T, srv *Server) { srv.setupErr = errSetup },
+			wantErr: errSetup,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTenantFamilyServer(t, "")
+			tt.refuse(t, srv)
+
+			require.ErrorIs(t, srv.Start(), tt.wantErr)
+			assertRegistrationPanics(t, "before Start", func() {
+				TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+			})
+			assert.Empty(t, srv.admission.familyPrefixes())
+		})
+	}
+}
+
 // TestServerOnBeforeServeAppliesConfiguredTimeouts pins the timeouts Start
 // applies to the http.Server, which StartConfig does not expose.
 func TestServerOnBeforeServeAppliesConfiguredTimeouts(t *testing.T) {

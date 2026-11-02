@@ -276,7 +276,7 @@ func TestServerStartRefusesTenantFamilyWithGlobalMiddleware(t *testing.T) {
 		"attach each gate per group instead: in the family's Authenticate (before the tenant) or Use (after it), and on every other group that needs it"
 	mw := func(_ HandlerContext, next func() error) error { return next() }
 	family := func(srv *Server, prefix string) {
-		tenantOwnedGroup(srv.ModuleGroup(), prefix, fixedTenantPolicy(familySeatTenant))
+		TenantOwnedGroup(srv.ModuleGroup(), prefix, fixedTenantPolicy(familySeatTenant))
 	}
 	oneFamily := "tenant-owned route family with global middleware: 1 family(ies) (/api/v1/orgs); 1 global middleware installed; " + tail
 	tests := []struct {
@@ -344,6 +344,54 @@ func TestServerStartAllowsTenantFamilyWithoutGlobalMiddleware(t *testing.T) {
 
 			assert.NotNil(t, srv.BoundAddr())
 			shutdownAndDrain(t, srv, errCh)
+		})
+	}
+}
+
+// TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily pins that after Start, when
+// nothing checks again, global middleware beside a tenant-owned family panics and is never
+// installed, while a call with no family installs and a nil-only call stays a no-op.
+func TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily(t *testing.T) {
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	tests := []struct {
+		name      string
+		family    bool
+		mw        MiddlewareFunc
+		wantCount int
+		wantPanic string
+	}{
+		{
+			name: "beside_family_panics", family: true, mw: mw,
+			wantPanic: "server: global middleware registered after Start: tenant-owned route family with global middleware (" +
+				trespassFamily + "); " + tenantFamilyGlobalMiddlewareHint,
+		},
+		{name: "without_family_installs", mw: mw, wantCount: 1},
+		{name: "nil_beside_family_is_noop", family: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			if tt.family {
+				buildTrespassFamily(srv)
+			}
+			errCh := startProbeServer(t, srv)
+			t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+			register := func() { srv.RegisterGlobalMiddleware(tt.mw) }
+
+			if tt.wantPanic != "" {
+				func() {
+					defer func() {
+						err, ok := recover().(error)
+						require.True(t, ok, "expected registration to panic with an error")
+						require.ErrorIs(t, err, ErrTenantFamilyWithGlobalMiddleware)
+						assert.EqualError(t, err, tt.wantPanic)
+					}()
+					register()
+				}()
+			} else {
+				require.NotPanics(t, register)
+			}
+			assert.Equal(t, tt.wantCount, srv.GlobalMiddlewareCount())
 		})
 	}
 }

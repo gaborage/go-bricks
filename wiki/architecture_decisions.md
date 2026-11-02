@@ -533,8 +533,9 @@ interface byte-identical — purely additive, apidiff green, `feat:` not `feat!:
 limitations: runs after rate-limiting and before JOSE body decryption (header/token/tenant
 auth only), and emits the standard envelope on raw-response routes. Amended by ADR-164: startup
 refuses global middleware beside a tenant-owned route family, whose routes the root tenant seat
-skips, so the after-tenant-resolution guarantee holds in every binary that passes the startup
-check and builds no family after `Start`.
+skips; after `Start`, `TenantOwnedGroup` panics, as does `RegisterGlobalMiddleware` beside a
+family. So the after-tenant-resolution guarantee holds in every binary that passes the startup
+check.
 
 **Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved; single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
 
@@ -591,7 +592,9 @@ to the *recommended* order (`[subdomain, path, header]`) plus a last-resort fall
 `server/middleware.go` for configs that bypassed `config.Validate()` (preventing a fail-open
 zero-sub-resolver composite). Validation rejects unknown/duplicate entries, `order` on a
 non-composite type, and an order naming an unconfigured sub-resolver (`path` needs `path.segment`;
-`subdomain` needs a real `domain`).
+`subdomain` needs a real `domain`). Amended by ADR-164: the root tenant seat, and so the composite
+chain, does not run on a tenant-owned route family's routes; the obligations hold for every route
+the seat still serves.
 
 **Key Benefits:** Precedence becomes an explicit operator decision instead of an unverifiable
 framework bet on the deployment's edge topology; the zero-config header sub-resolver no longer
@@ -2724,7 +2727,9 @@ framework: it goes in the same `RouteRegistrar.Group` call as `auth.Middleware`,
 after the application's tenant-authorization check.
 Every client behind one NAT or gateway now shares a bucket, and `server.trustedproxies` decides the
 key. Closes the tenant-keyed half of F23 that [ADR-057](adr_057_trusted_proxy_ip_extraction.md) left
-open. See [migrations.md](migrations.md) `[C73.20]`.
+open. See [migrations.md](migrations.md) `[C73.20]`. Amended by ADR-164: on a tenant-owned route
+family, `server.TenantRateLimit` goes in the family's `Use`, before the family's routes are
+registered, not beside `auth.Middleware` in `TenantPolicy.Authenticate`, where no tenant exists yet.
 
 **Key Benefits:** no caller-chosen string keys a framework rate-limit bucket by default, limiter memory
 is bounded by client addresses, and a per-tenant budget is an explicit, post-authentication choice.
@@ -2804,7 +2809,9 @@ owned routes and leaves evidence that a leaf guard around every family handler r
 exactly the published tenant. `auth.TenantClaim` reads the tenant from a verified claim. Call-site
 mistakes panic, and a route or middleware-bearing group under an owned prefix that did not come
 through the family is a `RouteConflictReasonTenantOwned` conflict that fails startup.
-Amends ADR-036: startup refuses global middleware beside a tenant-owned family.
+Amends ADR-036 (startup refuses global middleware beside a tenant-owned family), ADR-039 (the root
+seat and its composite chain skip family routes) and ADR-160 (`server.TenantRateLimit` goes in the
+family's `Use`).
 
 **Key Benefits:** a family can name its tenant from a path key, a catalog lookup or a verified claim
 and answer its own client faults in its own bytes, a skipped seat stays fail-closed, and a binary

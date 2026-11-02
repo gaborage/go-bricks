@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-11-02
 **Issue:** #2166
-**Amends:** [ADR-036](adr_036_global_middleware.md)
+**Amends:** [ADR-036](adr_036_global_middleware.md), [ADR-039](adr_039_composite_resolver_order.md), [ADR-160](adr_160_rate_limit_keys_on_client_ip.md)
 
 ## Context
 
@@ -211,13 +211,15 @@ response bytes.
 - **The family is built on the engine at its full prefix**, so parent-registrar middleware never
   runs on it, in either order.
 - **Catch-alls and `Use`.**
-  - The family registers exactly one catch-all pair (`<prefix>`, `<prefix>/*`) carrying steps
-    1-4. Nested groups register none.
+  - The family's catch-alls carry steps 1-4: an any-method route at `<prefix>`, a not-found
+    route at `<prefix>/*`, and a not-found route at each family template ending in a wildcard.
+    Nested groups register none of their own.
   - The family's `Use` and nested-group middleware are stored and attached per route, never
     through echo's `Group.Use`. So `Use` reaches every route registered after the call, including
     routes registered through a nested group created before it, and no route registered before it.
-- **The flag.** Every route a framework `routeGroup` builds sets `TenantOwned = rg.owned`, owned or
-  not, after `RegisterHandler`'s `RouteOption` loop.
+- **The flag.** Every route a framework `routeGroup` builds sets `TenantOwned = rg.family != nil`
+  (true exactly for a route registered through a family), after `RegisterHandler`'s `RouteOption`
+  loop.
   - So no option can forge or clear the flag.
   - A registrar the framework did not build, passed to `RegisterHandler`, is outside the
     guarantee. ADR-155 scopes its own guarantee the same way.
@@ -237,11 +239,25 @@ response bytes.
 - `r` is already inside a family;
 - multitenant is disabled. The panic names the prefix, following
   [ADR-127](adr_127_resource_plan_rule.md)'s precedent. A module shared with single-tenant
-  binaries branches on config.
+  binaries branches on config;
+- the Server installed no tenant seat, because its tenant resolver could not be built (a
+  multitenant config that skipped `config.Validate`). The leaf guard would otherwise refuse
+  every family request;
+- `Start` has been called, whatever registrar the call gets (a retained one or a fresh
+  `ModuleGroup()`) and whether or not `Start` got to serve (a setup error, or a `Shutdown` before
+  `Start`). `Start` seals admission right after it claims its started flag, so a Server builds
+  families only before its one `Start`. The motivating case is a retained registrar on a serving
+  Server: the tenant seat would start skipping plain routes already live under the prefix, which
+  carry no leaf guard.
+
+After `Start`, a route or middleware-bearing group registered from outside a family at or below
+its prefix panics at registration with an error matching `ErrDuplicateRoute`, prefixed
+`server: registration after Start:`, and is never added. `Start` has already read the conflict
+record, so recording it would refuse it silently.
 
 **Each family belongs to one module:** the one whose `RegisterRoutes` built it. A second family on
-an overlapping prefix panics. Another module's routes or middleware-bearing groups under the
-prefix are trespass.
+an overlapping prefix panics. Any route or middleware-bearing group at or below the prefix that did
+not come through the family is trespass, the owning module's plain registrar included.
 
 **Trespass** is a `RouteConflictReasonTenantOwned` conflict, in either registration order. It
 travels in `*server.DuplicateRouteError`, whose head reads
@@ -276,9 +292,11 @@ field doc comments state what each field means under each reason. Under `duplica
 
 Call-site refusals panic. Trespass and the global-middleware refusal are returned errors, because
 each depends on two facts that can arrive in either order. A call-site refusal needs only facts
-that are all known when `TenantOwnedGroup` runs (its arguments, its registrar, the configuration
-and the families already built), so it fails fast where the mistake is written; a two-fact refusal
-cannot be decided by whichever fact arrives first, so it is recorded and refused at startup.
+that are all known when `TenantOwnedGroup` runs (its arguments, its registrar, the configuration,
+the families already built and whether `Start` has been called), so it fails fast where the
+mistake is written; a two-fact refusal cannot be decided by whichever fact arrives first, so it is
+recorded and refused at startup. After `Start` no family can be built, so a trespass is decided
+where it is registered and panics there.
 
 ### Global middleware beside a family
 
@@ -324,9 +342,9 @@ tenant-owned route family with global middleware: 2 family(ies) (/api/v1/orgs, /
 
 **Returned errors.** Both refusals return errors that wrap `ErrTenantFamilyWithGlobalMiddleware`.
 
-**Not caught:** a family built after `Start` through a retained registrar. Routes registered that
-way share the gap today, so the docs limit the guarantee to binaries that build no family after
-`Start`.
+**After `Start`:** `TenantOwnedGroup` panics, so no family is built past this check, and
+`RegisterGlobalMiddleware` beside an existing family panics with an error wrapping
+`ErrTenantFamilyWithGlobalMiddleware`, so no global middleware is installed past it either.
 
 ### Publishes before the tenant exists
 
@@ -359,9 +377,10 @@ On `Tenant`:
   builds no family keeps today's request path and every allocation baseline, and a non-family
   route beside a family allocates exactly what a plain matched route does.
 - **The built-in limiter keys family requests on the client IP,** as it keys every request
-  (ADR-160). A family that wants a per-tenant budget adds `server.TenantRateLimit` with `Use`,
-  after the publish. In `Authenticate` no tenant exists yet, so it would charge nothing (ADR-160
-  Decision 3).
+  (ADR-160). A family that wants a per-tenant budget adds `server.TenantRateLimit` with `Use`
+  before registering the family's routes, since `Use` reaches only routes registered after the
+  call. It then runs after the publish. In `Authenticate` no tenant exists yet, so it would charge
+  nothing (ADR-160 Decision 3).
 - **Pre-publish publishes are documented, not guarded.** A publish from a family's `Authenticate`,
   `Tenant` or `Deny` step is no tenant's event. The framework adds no guard, so such a publish gets
   what its tenancy mode already does with a tenant-less one: an unstamped control-plane event under
@@ -369,8 +388,8 @@ On `Tenant`:
   states each case.
 - **Echo coupling is pinned.** Two echo behaviors carry the design: the seat-skip key is echo's
   matched route path (`c.Path()`), and an unmatched sub-path or method under the prefix lands on
-  the family's one catch-all pair at `<prefix>` and `<prefix>/*`. Pin tests cover both, so an
-  echo upgrade that moves either fails the suite instead of a family. Echo's `Group.Use` re-registers that pair, which is
+  one of the family's catch-alls. Pin tests cover both, so an echo upgrade that moves either
+  fails the suite instead of a family. Echo's `Group.Use` re-registers a catch-all pair, which is
   why the family's `Use` never calls it.
 - **A moved gate changes in three ways.** A binary that builds a family cannot keep global
   middleware, so its gates move to groups: on a family, into `Authenticate` (before the tenant) or
@@ -378,8 +397,9 @@ On `Tenant`:
   moved gate:
   - Framework routes (`/_sys`, `/debug`) lose the consumer's gate. Their own CIDR and bearer
     checks still apply, and so do the root chain's.
-  - In `Authenticate`, a 4xx goes to the family's `Deny`, not the standard envelope. The default
-    `DenyBodyless` writes no body. A 5xx is still framework-rendered.
+  - In `Authenticate`, a 4xx goes to the family's `Deny`, not the standard envelope, except a 413
+    (framework-rendered) and an error wrapping `multitenant.ErrNoTenant` (a framework 500). The
+    default `DenyBodyless` writes no body. A 5xx, a deadline or a cancel stays framework-rendered.
   - Added with `Use`, it runs after the family's 404, so it never sees an unknown sub-path. It
     also reaches only routes registered after the call.
 
@@ -415,7 +435,8 @@ source, is this decision.
 - [ADR-036](adr_036_global_middleware.md): global middleware after tenant resolution; amended here.
 - [ADR-026](adr_026_zero_overhead_request_path.md): the request path the leaf guard keeps
   baton-free.
-- [ADR-039](adr_039_composite_resolver_order.md): root tenant resolution and its composite chain.
+- [ADR-039](adr_039_composite_resolver_order.md): root tenant resolution and its composite chain;
+  amended here.
 - [ADR-109](adr_109_bearer_credential_verification.md): `auth.Middleware` and the `Principal`
   `auth.TenantClaim` reads.
 - [ADR-124](adr_124_server_level_duplicate_route_refusal.md) and
@@ -423,7 +444,7 @@ source, is this decision.
   `*server.DuplicateRouteError`.
 - [ADR-127](adr_127_resource_plan_rule.md): the precedent the multitenant-disabled panic follows.
 - [ADR-160](adr_160_rate_limit_keys_on_client_ip.md): the client-IP limiter key and
-  `server.TenantRateLimit`.
+  `server.TenantRateLimit`; amended here.
 - [ADR-161](adr_161_unknown_tenant_is_a_client_fault.md): `multitenant.ErrUnknownTenant` and
   `server.NewUnknownTenantError`.
 - [ADR-162](adr_162_tenant_id_grammar_is_fixed.md): the tenant-ID grammar the backstop applies.

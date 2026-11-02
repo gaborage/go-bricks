@@ -20,7 +20,8 @@ const tenantFamilyGlobalMiddlewareHint = "global middleware runs before a family
 // runs once per request after every built-in middleware (tenant resolution, rate limiting,
 // recovery, ...) and before the route handler, and skips the health/ready probes. It must
 // be called during startup, before Start(). Start refuses a server that installs one beside
-// a tenant-owned route family (ErrTenantFamilyWithGlobalMiddleware, ADR-164).
+// a tenant-owned route family (ErrTenantFamilyWithGlobalMiddleware, ADR-164), and after Start
+// a call beside a family panics with an error matching it, since nothing checks again.
 func (s *Server) RegisterGlobalMiddleware(mw ...MiddlewareFunc) {
 	skipper := newProbeSkipper(s.buildFullPath(s.healthRoute), s.buildFullPath(s.readyRoute))
 	adapted := make([]echo.MiddlewareFunc, 0, len(mw))
@@ -32,6 +33,12 @@ func (s *Server) RegisterGlobalMiddleware(mw ...MiddlewareFunc) {
 	}
 	if len(adapted) == 0 {
 		return
+	}
+	if s.started.Load() {
+		if families := s.admission.familyPrefixes(); len(families) > 0 {
+			panic(fmt.Errorf("server: global middleware registered after Start: %w (%s); %s",
+				ErrTenantFamilyWithGlobalMiddleware, strings.Join(families, ", "), tenantFamilyGlobalMiddlewareHint))
+		}
 	}
 	s.echo.Use(adapted...)
 	s.globalMiddleware += len(adapted)

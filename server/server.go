@@ -403,7 +403,8 @@ func (s *Server) RootGroup() RouteRegistrar {
 }
 
 // RouteConflicts returns every registration this server's registrars refused (RouteConflict.Reason
-// says why), in registration order. Empty when there are none.
+// says why), in registration order. Empty when there are none. A tenant-owned trespass after
+// Start panics at registration instead and is never recorded.
 func (s *Server) RouteConflicts() []RouteConflict {
 	return s.admission.snapshot()
 }
@@ -494,6 +495,7 @@ func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrServerAlreadyStarted
 	}
+	conflicts := s.admission.seal()
 	if s.stopping.Load() {
 		s.closeProbeErrs()
 		return http.ErrServerClosed
@@ -502,7 +504,7 @@ func (s *Server) Start() error {
 		s.closeProbeErrs()
 		return s.setupErr
 	}
-	if err := duplicateRouteError(s.RouteConflicts()); err != nil {
+	if err := duplicateRouteError(conflicts); err != nil {
 		s.closeProbeErrs()
 		return err
 	}

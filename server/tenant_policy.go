@@ -11,10 +11,8 @@ import (
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
-// TenantPolicy is the per-family tenant policy of a tenant-owned route family. Its routes
-// skip the root tenant seat: the framework runs Authenticate, then Tenant, then checks the
-// ID with multitenant.ValidateTenantID and publishes it on the request context, then the
-// rest of the route.
+// TenantPolicy is the per-family tenant policy of a tenant-owned route family; TenantOwnedGroup
+// lists the order its steps run in on each request.
 type TenantPolicy struct {
 	// Optional; runs first, in order, before any tenant exists.
 	//
