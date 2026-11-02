@@ -360,7 +360,7 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 				evidence, _ = c.Get(seatSkippedKey).(bool)
 				return familyID, nil
 			}}
-			family := tenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy)
+			family := TenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy)
 			for _, path := range []string{"", "/orders", "/orders/:id", "/files/*"} {
 				family.Add(http.MethodGet, path, echoTenant)
 			}

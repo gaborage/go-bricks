@@ -539,7 +539,7 @@ func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Ser
 	admin := srv.ModuleGroup().Group("/admin", func(_ HandlerContext, next func() error) error { return next() })
 	GET(hr, admin, "/status", ok)
 	if family {
-		partner := tenantOwnedGroup(srv.ModuleGroup(), observedFamilyPrefix, observedFamilyPolicy())
+		partner := TenantOwnedGroup(srv.ModuleGroup(), observedFamilyPrefix, observedFamilyPolicy())
 		GET(hr, partner, "/orders", ok)
 		partner.Add(http.MethodGet, "/identity", func(c HandlerContext) error {
 			cert, _ := ForwardedClientCertFromContext(c.RequestContext())

@@ -26,6 +26,9 @@ type TenantPolicy struct {
 	// publish (RunInSharedTx) also goes out unstamped on the control-plane key,
 	// whatever messaging.tenancy says; a stream-targeted one fails with
 	// outbox.ErrStreamTargetRequiresTenant.
+	//
+	// server.TenantRateLimit charges nothing here, because no tenant exists yet. On a
+	// family, add it with Use, after the tenant is published.
 	Authenticate []MiddlewareFunc
 	// Required; returns the tenant ID, never writes the response. It may c.Set values
 	// for the handler and may return a 4xx to authorize.

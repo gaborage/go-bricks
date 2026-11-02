@@ -108,14 +108,14 @@ func TestTenantOwnedGroupIgnoresParentMiddleware(t *testing.T) {
 			name: "parent_middleware_before_family",
 			build: func(srv *Server, parentMW MiddlewareFunc) (parent, family RouteRegistrar) {
 				parent = srv.ModuleGroup().Group("/p", parentMW)
-				return parent, tenantOwnedGroup(parent, "/fam", fixedTenantPolicy("family-tenant"))
+				return parent, TenantOwnedGroup(parent, "/fam", fixedTenantPolicy("family-tenant"))
 			},
 		},
 		{
 			name: "parent_use_after_family",
 			build: func(srv *Server, parentMW MiddlewareFunc) (parent, family RouteRegistrar) {
 				parent = srv.ModuleGroup().Group("/p")
-				family = tenantOwnedGroup(parent, "/fam", fixedTenantPolicy("family-tenant"))
+				family = TenantOwnedGroup(parent, "/fam", fixedTenantPolicy("family-tenant"))
 				parent.Use(parentMW)
 				return parent, family
 			},
@@ -156,11 +156,11 @@ func TestTenantOwnedGroupPanicsAtCallSite(t *testing.T) {
 	ordersGroup := func(srv *Server) RouteRegistrar { return srv.ModuleGroup().Group("/orders") }
 	// inFamily is a plain Group inside the tenant-owned family /fam.
 	inFamily := func(srv *Server) RouteRegistrar {
-		return tenantOwnedGroup(srv.ModuleGroup(), "/fam", policy).Group("/sub")
+		return TenantOwnedGroup(srv.ModuleGroup(), "/fam", policy).Group("/sub")
 	}
 	// besideFamily is the module group of a Server already holding the tenant-owned family /partner/v2.
 	besideFamily := func(srv *Server) RouteRegistrar {
-		tenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy)
+		TenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy)
 		return srv.ModuleGroup()
 	}
 	tests := []struct {
@@ -195,7 +195,7 @@ func TestTenantOwnedGroupPanicsAtCallSite(t *testing.T) {
 			before := srv.admission.familyPrefixes()
 			// Each substring re-runs the refused call; the record must stay unchanged throughout.
 			for _, want := range tt.want {
-				assertRegistrationPanics(t, want, func() { tenantOwnedGroup(parent, tt.prefix, p) })
+				assertRegistrationPanics(t, want, func() { TenantOwnedGroup(parent, tt.prefix, p) })
 			}
 			assert.Equal(t, before, srv.admission.familyPrefixes(), "a refused call records no family")
 		})
@@ -204,7 +204,7 @@ func TestTenantOwnedGroupPanicsAtCallSite(t *testing.T) {
 
 func TestTenantOwnedGroupRefusesWhenMultitenantDisabled(t *testing.T) {
 	srv := newTenantFamilyServerWithConfig(t, newProbeTestConfig("/api"))
-	build := func() { tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("family-tenant")) }
+	build := func() { TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("family-tenant")) }
 
 	assertRegistrationPanics(t, strconv.Quote("/api/fam"), build)
 	assertRegistrationPanics(t, "multitenant.enabled", build)
@@ -218,7 +218,7 @@ func TestTenantOwnedGroupRefusesWithoutTenantSeat(t *testing.T) {
 	cfg := newTenantFamilyConfig("")
 	cfg.Multitenant.Resolver.Type = ""
 	srv := newTenantFamilyServerWithConfig(t, cfg)
-	build := func() { tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant)) }
+	build := func() { TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant)) }
 
 	assertRegistrationPanics(t, "tenant seat is not installed", build)
 	assert.Empty(t, srv.admission.familyPrefixes())
@@ -229,7 +229,7 @@ func TestTenantOwnedGroupAllowsSegmentSiblingPrefix(t *testing.T) {
 	prefixes := []string{"/partner/v2", "/partner/v20"}
 	tenants := []string{"partner-a", "partner-b"}
 	for i, prefix := range prefixes {
-		tenantOwnedGroup(srv.ModuleGroup(), prefix, fixedTenantPolicy(tenants[i])).
+		TenantOwnedGroup(srv.ModuleGroup(), prefix, fixedTenantPolicy(tenants[i])).
 			Add(http.MethodGet, "/orders", answerWith(prefix))
 	}
 
@@ -355,7 +355,7 @@ func newRecordingFamily(t *testing.T, edits ...func(*TenantPolicy, *familyTrace)
 	for _, edit := range edits {
 		edit(&policy, tr)
 	}
-	family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", policy)
+	family := TenantOwnedGroup(srv.ModuleGroup(), "/fam", policy)
 	family.Add(http.MethodGet, "/orders", recordingHandler(tr))
 	return srv, family, tr
 }
@@ -420,9 +420,9 @@ func newNotFoundFamilies(t *testing.T, use bool) (*Server, *familyTrace) {
 		}
 		return "", fmt.Errorf("no org path parameter: %w", multitenant.ErrTenantResolutionFailed)
 	}
-	orgFamily := tenantOwnedGroup(srv.ModuleGroup(), "/t", orgPolicy)
+	orgFamily := TenantOwnedGroup(srv.ModuleGroup(), "/t", orgPolicy)
 	orgFamily.Add(http.MethodGet, "/:org/orders", recordingHandler(tr))
-	tenantOwnedGroup(srv.ModuleGroup(), "/bare", recordingPolicy(tr)).Add(http.MethodGet, "", recordingHandler(tr))
+	TenantOwnedGroup(srv.ModuleGroup(), "/bare", recordingPolicy(tr)).Add(http.MethodGet, "", recordingHandler(tr))
 	foreign := func(c HandlerContext) error {
 		tr.record(traceForeign, c)
 		return c.String(http.StatusOK, "foreign")
@@ -805,7 +805,7 @@ func TestTenantOwnedGroupForwardedClientCertRequireAnswersFirst(t *testing.T) {
 	cfg.Server.ForwardedClientCert = config.ForwardedClientCertConfig{Enabled: true, Require: true}
 	srv := newTenantFamilyServerWithConfig(t, cfg)
 	tr := newFamilyTrace()
-	tenantOwnedGroup(srv.ModuleGroup(), "/fam", recordingPolicy(tr)).Add(http.MethodGet, "/orders", recordingHandler(tr))
+	TenantOwnedGroup(srv.ModuleGroup(), "/fam", recordingPolicy(tr)).Add(http.MethodGet, "/orders", recordingHandler(tr))
 
 	for _, path := range []string{"/fam/orders", "/fam/nope"} {
 		rec := serveFamily(srv, http.MethodGet, path, withFamilyCredential)
@@ -818,7 +818,7 @@ func TestTenantOwnedGroupCopiesAuthenticateSteps(t *testing.T) {
 	srv := newTenantFamilyServer(t, "")
 	tr := newFamilyTrace()
 	policy := recordingPolicy(tr)
-	tenantOwnedGroup(srv.ModuleGroup(), "/fam", policy).Add(http.MethodGet, "/orders", recordingHandler(tr))
+	TenantOwnedGroup(srv.ModuleGroup(), "/fam", policy).Add(http.MethodGet, "/orders", recordingHandler(tr))
 	policy.Authenticate[0] = recordingMiddleware(tr)
 
 	assertFamilyDenied(t, serveFamily(srv, http.MethodGet, "/fam/orders"), tr)
@@ -829,7 +829,7 @@ func TestTenantOwnedGroupRegistersOneCatchAllPair(t *testing.T) {
 	srv := newTenantFamilyServer(t, "")
 	// The parent's middleware gives it its own catch-all pair at /p and /p/*.
 	parent := srv.ModuleGroup().Group("/p", passThrough)
-	family := tenantOwnedGroup(parent, "/fam", fixedTenantPolicy(familyTenant))
+	family := TenantOwnedGroup(parent, "/fam", fixedTenantPolicy(familyTenant))
 	family.Add(http.MethodGet, "/orders", answerWith("orders"))
 	family.Add(http.MethodPost, "/orders", answerWith("created"))
 	family.Group("/sub").Add(http.MethodGet, "/items", answerWith("items"))
@@ -855,7 +855,7 @@ func catchAllRoutes(srv *Server, prefix string) []string {
 
 func TestTenantOwnedGroupRegistersOneCatchAllPerWildcardNode(t *testing.T) {
 	srv := newTenantFamilyServer(t, "")
-	family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+	family := TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
 	require.NotPanics(t, func() {
 		family.Add(http.MethodGet, "/files/*", answerWith("get"))
 		family.Add(http.MethodPost, "/files/*", answerWith("post"))
@@ -883,7 +883,7 @@ func TestTenantOwnedGroupLogsRefusalsToServerLogger(t *testing.T) {
 	t.Cleanup(DefaultRouteRegistry.Clear)
 	testLog := &testLogger{}
 	srv := New(newTenantFamilyConfig(""), testLog)
-	tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("Acme")).Add(http.MethodGet, "/orders", answerWith("orders"))
+	TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("Acme")).Add(http.MethodGet, "/orders", answerWith("orders"))
 
 	assertFrameworkError(t, serveFamilyRequest(srv, "/fam/orders"), http.StatusInternalServerError, errCodeInternalError)
 	refusals := refusalEntries(testLog, reasonGrammarBackstop)
@@ -1184,7 +1184,7 @@ func TestTenantOwnedDescriptorCannotBeForgedOrCleared(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTenantFamilyServer(t, "")
-			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+			family := TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
 			path := tt.register(srv, family)
 
 			routes := DefaultRouteRegistry.ByPath(path)
@@ -1287,7 +1287,7 @@ func TestTenantOwnedGuardRequiresPublishedTenant(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTenantFamilyServer(t, "")
-			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+			family := TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
 			ran := false
 			ok := answerWith("ok")
 			tt.build(family, NewHandlerRegistry(srv.cfg), func(c HandlerContext) error {
@@ -1351,7 +1351,7 @@ func TestTenantOwnedGuardRunsBeforeBindingAndJOSE(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTenantFamilyServer(t, "")
-			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+			family := TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
 			family.Use(replaceFamilyTenant)
 			ran := false
 			tt.build(t, srv, family, &ran)
@@ -1439,7 +1439,7 @@ func TestTenantOwnedRefusalLogsCarryReasonClassOnly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTenantFamilyServer(t, "")
-			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", tt.policy)
+			family := TenantOwnedGroup(srv.ModuleGroup(), "/fam", tt.policy)
 			if tt.use != nil {
 				family.Use(tt.use)
 			}

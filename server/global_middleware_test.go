@@ -276,7 +276,7 @@ func TestServerStartRefusesTenantFamilyWithGlobalMiddleware(t *testing.T) {
 		"attach each gate per group instead: in the family's Authenticate (before the tenant) or Use (after it), and on every other group that needs it"
 	mw := func(_ HandlerContext, next func() error) error { return next() }
 	family := func(srv *Server, prefix string) {
-		tenantOwnedGroup(srv.ModuleGroup(), prefix, fixedTenantPolicy(familySeatTenant))
+		TenantOwnedGroup(srv.ModuleGroup(), prefix, fixedTenantPolicy(familySeatTenant))
 	}
 	oneFamily := "tenant-owned route family with global middleware: 1 family(ies) (/api/v1/orgs); 1 global middleware installed; " + tail
 	tests := []struct {

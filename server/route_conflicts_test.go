@@ -745,7 +745,7 @@ func newTrespassTestServer(t *testing.T) *Server {
 
 // buildTrespassFamily mounts the tenant-owned family at trespassFamily under the module group.
 func buildTrespassFamily(srv *Server) RouteRegistrar {
-	return tenantOwnedGroup(srv.ModuleGroup(), trespassFamily, fixedTenantPolicy(familySeatTenant))
+	return TenantOwnedGroup(srv.ModuleGroup(), trespassFamily, fixedTenantPolicy(familySeatTenant))
 }
 
 // TestTenantOwnedTrespassIsRouteConflict pins that a route or a middleware-bearing group at or

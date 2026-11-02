@@ -68,21 +68,41 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 	return append(n.parent.appendChain(chain), n.mw...)
 }
 
-// tenantOwnedGroup mounts a tenant-owned route family at r's prefix joined with prefix. The
-// family's echo group is built on the application engine at that full prefix, not under r, so
-// no parent group's middleware ever runs on its routes. The family's steps (p.run) run outermost
-// on every family route and on its catch-alls: an any-method route at the prefix, a not-found
-// route at prefix/*, and one at each family template ending in a wildcard. So an unknown
-// sub-path or a wrong method answers the framework 404 only after the tenant is published, and
-// Deny before it. A Tenant reading a path parameter finds none on the prefix catch-alls, so it
-// must fail on the empty value, which Deny answers; returning "" with no error fails the grammar
-// backstop, a 500. Use and Group middleware inside the family attach per route at registration,
-// never to a catch-all. It panics at the call site when r was not built by a Server, r is already
-// inside a family, p.Tenant is nil, the prefix is empty or "/", the full prefix holds a path
-// parameter or wildcard, multi-tenant mode is off, the Server installed no tenant seat (its
-// tenant resolver could not be built), the full prefix equals or covers the health or ready
-// path, or it equals, covers or sits under another family.
-func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
+// TenantOwnedGroup mounts a route family that resolves its own tenant, after its own
+// authentication when it has one, instead of passing the root tenant seat (ADR-164).
+// Call it once per family in Module.RegisterRoutes, after every module Init, so p may
+// close over what Init built. prefix is relative to r. The family is built on the
+// application engine at the full prefix, so no parent group's middleware runs on it.
+//
+// On a family route the root chain runs first, unchanged, and its tenant seat skips
+// the route. Then:
+//  1. p.Authenticate, each step in order. No tenant exists yet.
+//  2. p.Tenant, on every request under the prefix.
+//  3. The framework checks the ID with multitenant.ValidateTenantID and publishes it on
+//     the request context.
+//  4. An unknown sub-path or a wrong method under the prefix answers the framework 404.
+//  5. Middleware added with Use, nested-group middleware, route middleware, binding,
+//     JOSE and the handler, all after the publish.
+//
+// A client fault from steps 1-2 goes to p.Deny. Everything else is framework-rendered.
+// Steps 1-3 also run before step 4's 404, where no route matched, so a Tenant that reads a
+// path parameter finds none there: it must fail on the empty value, which Deny answers.
+//
+// It panics at the call site when:
+//   - r is not a registrar the framework built, or r is already inside a family;
+//   - p.Tenant is nil;
+//   - multitenant is disabled, or the Server installed no tenant seat because its
+//     tenant resolver could not be built;
+//   - the full prefix is "" or "/", has a :param or * segment, covers the health or
+//     ready path, or equals, covers or sits under another family's prefix on a segment
+//     boundary.
+//
+// Another module's route, or a middleware-bearing group, at or below the prefix is
+// trespass: startup refuses it as a RouteConflictReasonTenantOwned conflict. Startup
+// also refuses any installed global middleware beside a family
+// (ErrTenantFamilyWithGlobalMiddleware). Neither guarantee covers a family built after
+// Start.
+func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
 	if !ok || rg.admission == nil {
 		panic(tenantFamilyRefusal(prefix, "the registrar was not built by a Server; use ModuleGroup, RootGroup or a Group under them"))
@@ -170,7 +190,7 @@ func (f *tenantFamily) addWildcardCatchAll(g *echo.Group, relative, full string)
 // catchAllKey identifies the echo route node a family catch-all at full sits on.
 func catchAllKey(full string) string { return routeNodeKey(echo.RouteNotFound, full) }
 
-// tenantFamilyRefusal renders tenantOwnedGroup's call-site panic for prefix.
+// tenantFamilyRefusal renders TenantOwnedGroup's call-site panic for prefix.
 func tenantFamilyRefusal(prefix, reason string) string {
 	return "server: tenant-owned group registration failed for " + strconv.Quote(prefix) + ": " + reason
 }
