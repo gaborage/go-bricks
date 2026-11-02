@@ -44,10 +44,10 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 // Deny before it. A Tenant reading a path parameter finds none on the prefix catch-alls, so it
 // must fail on the empty value, which Deny answers; returning "" with no error fails the grammar
 // backstop, a 500. Use and Group middleware inside the family attach per route at registration,
-// never to a catch-all. It panics at the call site when r was not built
-// by a Server, r is already inside a family, p.Tenant is nil, the prefix is empty or "/", the
-// full prefix holds a path parameter or wildcard, multi-tenant mode is off, the full prefix
-// equals or covers the health or ready path, or it equals, covers or sits under another family.
+// never to a catch-all. It panics at the call site when r was not built by a Server, r is already
+// inside a family, p.Tenant is nil, the prefix is empty or "/", the full prefix holds a path
+// parameter or wildcard, multi-tenant mode is off, the full prefix equals or covers the health or
+// ready path, or it equals, covers or sits under another family.
 func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
 	if !ok || rg.admission == nil {

@@ -40,14 +40,7 @@ func newAdmittingRouteGroup(group *echo.Group, prefix string, cfg *config.Config
 // routeAdmission.admit.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descriptor *RouteDescriptor) {
 	relative := rg.relativePath(path)
-	fullPath := rg.fullPathFromRelative(relative)
-	// After RegisterHandler's RouteOptions, so no option forges or clears it.
-	descriptor.TenantOwned = rg.family != nil
-	rg.admission.admit(admittedRoute{
-		Method:     method,
-		Path:       fullPath,
-		Descriptor: descriptor,
-	}, func() { rg.addAdmitted(method, relative, fullPath, h, nil) })
+	rg.admitRoute(method, relative, rg.fullPathFromRelative(relative), descriptor, h, nil)
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -65,13 +58,14 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 	fullPath := rg.fullPathFromRelative(relative)
 	pkg := getCallerPackage(2) // getCallerPackage → Add → module (best-effort, as typed routes)
 	reg := RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg}
-	descriptor := modellessDescriptor(method, fullPath, reg)
-	descriptor.TenantOwned = rg.family != nil
-	rg.admission.admit(admittedRoute{
-		Method:     method,
-		Path:       fullPath,
-		Descriptor: descriptor,
-	}, func() { rg.addAdmitted(method, relative, fullPath, adaptHandler(handler, rg.cfg), middleware) })
+	rg.admitRoute(method, relative, fullPath, modellessDescriptor(method, fullPath, reg), adaptHandler(handler, rg.cfg), middleware)
+}
+
+// admitRoute stamps TenantOwned (after RegisterHandler's RouteOptions, so no option forges or
+// clears it; before admit, which registers a copy) and admits the route.
+func (rg *routeGroup) admitRoute(method, relative, full string, d *RouteDescriptor, h echo.HandlerFunc, mw []MiddlewareFunc) {
+	d.TenantOwned = rg.family != nil
+	rg.admission.admit(admittedRoute{Method: method, Path: full, Descriptor: d}, func() { rg.addAdmitted(method, relative, full, h, mw) })
 }
 
 // addAdmitted adds an admitted route to rg's echo group at relative, the spelling on it of full.

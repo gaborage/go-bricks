@@ -69,7 +69,7 @@ func (p TenantPolicy) ResolveForTest(c HandlerContext) (tenantID string, denied 
 const (
 	reasonGrammarBackstop   = "tenant ID fails the tenant-ID grammar"
 	reasonNoTenantPublished = "authenticate chain returned without publishing a tenant"
-	reasonStepCommitted     = "authenticate step committed a response"
+	reasonStepCommitted     = "a step before the publish committed a response"
 	reasonNoTenantAccessor  = "per-tenant accessor called before the tenant exists"
 	reasonDenyError         = "deny returned an error"
 	reasonDenyNothing       = "deny returned without committing a response"
