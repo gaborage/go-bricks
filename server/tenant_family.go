@@ -26,8 +26,9 @@ type tenantFamily struct {
 // on every family route and on its catch-alls: an any-method route at the prefix, a not-found
 // route at prefix/*, and one at each family template ending in a wildcard. So an unknown
 // sub-path or a wrong method answers the framework 404 only after the tenant is published, and
-// Deny before it; a Tenant reading a path parameter finds none on the prefix catch-alls, so such
-// a request is denied. It panics at the call site when r was not built
+// Deny before it. A Tenant reading a path parameter finds none on the prefix catch-alls, so it
+// must fail on the empty value, which Deny answers; returning "" with no error fails the grammar
+// backstop, a 500. It panics at the call site when r was not built
 // by a Server, r is already inside a family, p.Tenant is nil, the prefix is empty or "/", the
 // full prefix holds a path parameter or wildcard, multi-tenant mode is off, the full prefix
 // equals or covers the health or ready path, or it equals, covers or sits under another family.
@@ -64,7 +65,7 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	fam := &tenantFamily{
 		prefix:    full,
 		steps:     adaptMiddleware(p.middleware(rg.admission.log), rg.cfg),
-		catchAlls: map[string]struct{}{routeNodeKey(echo.RouteNotFound, full+"/*"): {}},
+		catchAlls: map[string]struct{}{catchAllKey(full + "/*"): {}},
 	}
 	group := rg.admission.engine.Group(full)
 	// Registered on the engine outside admission, which refuses RouteAny and RouteNotFound
@@ -92,21 +93,27 @@ func (p TenantPolicy) middleware(l logger.Logger) MiddlewareFunc {
 // familyNotFound answers a family request no route matched, once the steps let it through.
 func familyNotFound(*echo.Context) error { return echo.ErrNotFound }
 
-// claimWildcardCatchAll reports whether full, an admitted family route's template, ends in a
-// wildcard at an echo route node holding no family catch-all yet, recording that node.
-func (f *tenantFamily) claimWildcardCatchAll(full string) bool {
-	if !endsInWildcard(full) {
-		return false
+// addWildcardCatchAll registers the family's catch-all on g at relative, the spelling on g of
+// full, an admitted family route's template, when full holds a wildcard and its echo route node
+// holds no family catch-all yet: echo never backtracks from a wildcard node to prefix/*, so
+// without it a wrong method gets echo's 405 and no step runs.
+func (f *tenantFamily) addWildcardCatchAll(g *echo.Group, relative, full string) {
+	if !holdsWildcard(full) {
+		return
 	}
-	key := routeNodeKey(echo.RouteNotFound, full)
+	key := catchAllKey(full)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, claimed := f.catchAlls[key]; claimed {
-		return false
+	if _, added := f.catchAlls[key]; added {
+		return
 	}
+	// Steps only, outside admission, which refuses RouteNotFound (ADR-155).
+	g.RouteNotFound(relative, familyNotFound, f.steps)
 	f.catchAlls[key] = struct{}{}
-	return true
 }
+
+// catchAllKey identifies the echo route node a family catch-all at full sits on.
+func catchAllKey(full string) string { return routeNodeKey(echo.RouteNotFound, full) }
 
 // tenantFamilyRefusal renders tenantOwnedGroup's call-site panic for prefix.
 func tenantFamilyRefusal(prefix, reason string) string {
@@ -115,23 +122,22 @@ func tenantFamilyRefusal(prefix, reason string) string {
 
 // isStaticTemplate reports whether path holds no path parameter or wildcard in echo's grammar.
 func isStaticTemplate(path string) bool {
-	static := true
-	walkRouteTemplate(newRouteTemplate(path), func(kind routePartKind, _ string) {
-		if kind != routePartStatic {
-			static = false
-		}
-	})
-	return static
+	return !templateHolds(path, func(kind routePartKind) bool { return kind != routePartStatic })
 }
 
-// endsInWildcard reports whether path holds echo's wildcard; nothing after it counts, so a
-// template holding one ends in it.
-func endsInWildcard(path string) bool {
-	wildcard := false
+// holdsWildcard reports whether path holds echo's wildcard; nothing after it counts, so the
+// template ends there.
+func holdsWildcard(path string) bool {
+	return templateHolds(path, func(kind routePartKind) bool { return kind == routePartWildcard })
+}
+
+// templateHolds reports whether any part of path, in echo's grammar, is of a kind match accepts.
+func templateHolds(path string, match func(routePartKind) bool) bool {
+	held := false
 	walkRouteTemplate(newRouteTemplate(path), func(kind routePartKind, _ string) {
-		if kind == routePartWildcard {
-			wildcard = true
+		if match(kind) {
+			held = true
 		}
 	})
-	return wildcard
+	return held
 }

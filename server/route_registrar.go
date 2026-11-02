@@ -40,11 +40,12 @@ func newAdmittingRouteGroup(group *echo.Group, prefix string, cfg *config.Config
 // routeAdmission.admit.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descriptor *RouteDescriptor) {
 	relative := rg.relativePath(path)
+	fullPath := rg.fullPathFromRelative(relative)
 	rg.admission.admit(admittedRoute{
 		Method:     method,
-		Path:       rg.fullPathFromRelative(relative),
+		Path:       fullPath,
 		Descriptor: descriptor,
-	}, func() { rg.addAdmitted(method, relative, h, nil) })
+	}, func() { rg.addAdmitted(method, relative, fullPath, h, nil) })
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -66,17 +67,16 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 		Method:     method,
 		Path:       fullPath,
 		Descriptor: modellessDescriptor(method, fullPath, reg),
-	}, func() { rg.addAdmitted(method, relative, adaptHandler(handler, rg.cfg), middleware) })
+	}, func() { rg.addAdmitted(method, relative, fullPath, adaptHandler(handler, rg.cfg), middleware) })
 }
 
-// addAdmitted adds an admitted route to rg's echo group. Inside a tenant-owned family, a template
-// ending in a wildcard also gets the family's catch-all at its echo node, once per node: echo never
-// backtracks from that node to prefix/*, so without it a wrong method gets echo's 405, no step run.
-func (rg *routeGroup) addAdmitted(method, relative string, h echo.HandlerFunc, mw []MiddlewareFunc) {
+// addAdmitted adds an admitted route to rg's echo group at relative, the spelling on it of full.
+// Inside a tenant-owned family, a template holding a wildcard also gets the family's catch-all at
+// its echo node (tenantFamily.addWildcardCatchAll).
+func (rg *routeGroup) addAdmitted(method, relative, full string, h echo.HandlerFunc, mw []MiddlewareFunc) {
 	rg.group.Add(method, relative, h, rg.routeMiddleware(mw)...)
-	if rg.family != nil && rg.family.claimWildcardCatchAll(rg.fullPathFromRelative(relative)) {
-		// Steps only, outside admission, which refuses RouteNotFound (ADR-155).
-		rg.group.RouteNotFound(relative, familyNotFound, rg.family.steps)
+	if rg.family != nil {
+		rg.family.addWildcardCatchAll(rg.group, relative, full)
 	}
 }
 
