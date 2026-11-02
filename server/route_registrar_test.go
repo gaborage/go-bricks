@@ -689,12 +689,12 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// The seat skips the family's route, so no X-Tenant-ID: the family's steps publish.
 		{
-			name: "family_route_matched", baseline: 119, family: true, wantStatus: http.StatusOK,
+			name: "family_route_matched", baseline: 118, family: true, wantStatus: http.StatusOK,
 			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", nil),
 		},
 		// Deny answers the client fault with a bodyless 403, which the access logger WARNs.
 		{
-			name: "family_route_denied", baseline: 116, family: true, wantStatus: http.StatusForbidden,
+			name: "family_route_denied", baseline: 115, family: true, wantStatus: http.StatusForbidden,
 			warn: warnAccessLog4xx,
 			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", map[string][]string{
 				observedDenyHeader: {"1"},
@@ -702,7 +702,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// The family's catch-all: the steps publish, then the framework 404.
 		{
-			name: "family_unknown_sub_path_not_found", baseline: 129, family: true, wantStatus: http.StatusNotFound,
+			name: "family_unknown_sub_path_not_found", baseline: 128, family: true, wantStatus: http.StatusNotFound,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodGet, observedFamilyPrefix+"/nowhere", "", nil),
 		},

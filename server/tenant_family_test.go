@@ -211,6 +211,19 @@ func TestTenantOwnedGroupRefusesWhenMultitenantDisabled(t *testing.T) {
 	assert.Empty(t, srv.admission.familyPrefixes())
 }
 
+// TestTenantOwnedGroupRefusesWithoutTenantSeat pins that a family refuses a server whose tenant
+// seat New never installed (here an empty resolver type on a config that skipped Validate):
+// its leaf guard would refuse every request, so registration fails fast instead.
+func TestTenantOwnedGroupRefusesWithoutTenantSeat(t *testing.T) {
+	cfg := newTenantFamilyConfig("")
+	cfg.Multitenant.Resolver.Type = ""
+	srv := newTenantFamilyServerWithConfig(t, cfg)
+	build := func() { tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant)) }
+
+	assertRegistrationPanics(t, "tenant seat is not installed", build)
+	assert.Empty(t, srv.admission.familyPrefixes())
+}
+
 func TestTenantOwnedGroupAllowsSegmentSiblingPrefix(t *testing.T) {
 	srv := newTenantFamilyServer(t, "")
 	prefixes := []string{"/partner/v2", "/partner/v20"}

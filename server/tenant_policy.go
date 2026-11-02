@@ -93,7 +93,9 @@ func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) 
 			backstop = newTenantFault(c, l, reasonGrammarBackstop, nil)
 			return backstop
 		}
-		c.SetRequestContext(multitenant.SetTenant(c.RequestContext(), id))
+		published := multitenant.SetTenant(c.RequestContext(), id)
+		c.SetRequestContext(published)
+		c.Set(familyPublishedKey, published) // the leaf guard's reference tenant
 		tenantID = id
 		return next()
 	})

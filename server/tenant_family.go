@@ -103,6 +103,9 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if !rg.cfg.Multitenant.Enabled {
 		panic(tenantFamilyRefusal(full, "multitenant.enabled is false; a module shared with single-tenant binaries must branch on config"))
 	}
+	if !rg.admission.seated {
+		panic(tenantFamilyRefusal(full, "the tenant seat is not installed: the configured tenant resolver could not be built"))
+	}
 	if probe, covered := rg.admission.coveredProbePath(full); covered {
 		panic(tenantFamilyRefusal(full, "it equals or covers the probe path "+strconv.Quote(probe)))
 	}
@@ -133,14 +136,10 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	}
 }
 
-// middleware runs p as a flat MiddlewareFunc, logging its refusals to l, and records the
-// context it published the tenant on under familyPublishedKey for the leaf guard.
+// middleware runs p as a flat MiddlewareFunc, logging its refusals to l.
 func (p TenantPolicy) middleware(l logger.Logger) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
-		_, _, err := p.run(c, l, func() error {
-			c.Set(familyPublishedKey, c.RequestContext())
-			return next()
-		})
+		_, _, err := p.run(c, l, next)
 		return err
 	}
 }
