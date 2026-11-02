@@ -25,9 +25,6 @@ type ModuleRegistry struct {
 	// framework span; a closing span ends the last module), which attribute ModuleName on
 	// the route table handed to Options.PostRegisterRoutes.
 	routeSpans []routeSpan
-	// tenantFamilies, set by App before RegisterRoutes, lets each span record the server's
-	// tenant-owned family count; nil records 0.
-	tenantFamilies tenantFamilyLister
 	// globalMiddlewareSources are the GlobalMiddleware implementers of the last
 	// CollectGlobalMiddleware, in registration order.
 	globalMiddlewareSources []globalMiddlewareSource
@@ -168,6 +165,12 @@ func (r *ModuleRegistry) checkDatabaseRequirement(module Module) error {
 // meter from deps are also threaded into the registry so JOSE failures get audit-grade
 // structured logs and OTEL telemetry. Routes without jose tags are unaffected.
 func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
+	r.registerRoutes(registrar, nil)
+}
+
+// registerRoutes is RegisterRoutes; each span also records how many tenant-owned families
+// families had built when it began (0 for a nil families).
+func (r *ModuleRegistry) registerRoutes(registrar server.RouteRegistrar, families tenantFamilyLister) {
 	opts := []server.HandlerRegistryOption{}
 	if r.deps.KeyStore != nil {
 		opts = append(opts, server.WithJOSEResolver(jose.NewKeyStoreResolver(r.deps.KeyStore)))
@@ -200,11 +203,11 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 			Str("module", module.Name()).
 			Msg("Registering module routes")
 
-		spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count(), families: r.familyCount()})
+		spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count(), families: familyCount(families)})
 		rr.RegisterRoutes(handlerRegistry, registrar)
 	}
 	// A closing span with no module ends the last module's range where this loop ended.
-	spans = append(spans, routeSpan{start: server.DefaultRouteRegistry.Count(), families: r.familyCount()})
+	spans = append(spans, routeSpan{start: server.DefaultRouteRegistry.Count(), families: familyCount(families)})
 	r.routeSpans = spans[1:]
 
 	if logRoutes {
@@ -244,12 +247,12 @@ type routeSpan struct {
 	families int
 }
 
-// familyCount is how many tenant-owned route families the server has built so far.
-func (r *ModuleRegistry) familyCount() int {
-	if r.tenantFamilies == nil {
+// familyCount is how many tenant-owned route families families has built so far; 0 when nil.
+func familyCount(families tenantFamilyLister) int {
+	if families == nil {
 		return 0
 	}
-	return len(r.tenantFamilies.TenantFamilyPrefixes())
+	return len(families.TenantFamilyPrefixes())
 }
 
 // routeLogEntry is the flattened, logger-free result of resolving spans against

@@ -53,7 +53,9 @@ func (a *App) checkTenantFamilyGlobalMiddleware() error {
 	if count == 0 {
 		return nil
 	}
-	return familyMiddlewareRefusal(attributeFamilies(prefixes, a.registry.routeSpans), modules, count-fromModules)
+	return fmt.Errorf("%w: %s; %s; %s", server.ErrTenantFamilyWithGlobalMiddleware,
+		familyClause(attributeFamilies(prefixes, a.registry.routeSpans)), middlewareClause(modules, count-fromModules),
+		tenantFamilyGlobalMiddlewareHint)
 }
 
 // attributeFamilies pairs each family with its module: family i belongs to span k when
@@ -61,22 +63,14 @@ func (a *App) checkTenantFamilyGlobalMiddleware() error {
 func attributeFamilies(prefixes []string, spans []routeSpan) []attributedFamily {
 	out := make([]attributedFamily, len(prefixes))
 	for i, prefix := range prefixes {
-		out[i] = attributedFamily{prefix: prefix}
-		for k := 0; k+1 < len(spans); k++ {
-			if spans[k].families <= i && i < spans[k+1].families {
-				out[i].module = spans[k].module
-				break
-			}
+		out[i].prefix = prefix
+	}
+	for k := 0; k+1 < len(spans); k++ {
+		for i := spans[k].families; i < spans[k+1].families; i++ {
+			out[i].module = spans[k].module
 		}
 	}
 	return out
-}
-
-// familyMiddlewareRefusal renders the refusal from the families, the modules whose global
-// middleware was installed, and the count registered directly on the server.
-func familyMiddlewareRefusal(families []attributedFamily, modules []string, direct int) error {
-	return fmt.Errorf("%w: %s; %s; %s", server.ErrTenantFamilyWithGlobalMiddleware,
-		familyClause(families), middlewareClause(modules, direct), tenantFamilyGlobalMiddlewareHint)
 }
 
 func familyClause(families []attributedFamily) string {

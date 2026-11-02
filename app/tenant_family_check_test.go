@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,18 +92,9 @@ func runFamilyScenario(t *testing.T, sc *familyScenario) *familyRun {
 		m.srv = run.srv
 		require.NoError(t, a.RegisterModule(&m))
 	}
-	if len(sc.direct) > 0 {
-		run.srv.RegisterGlobalMiddleware(sc.direct...)
-	}
+	run.srv.RegisterGlobalMiddleware(sc.direct...)
 	run.err = a.prepareRuntime(context.Background())
 	return run
-}
-
-// emptyMWWarns returns, in order, the WARN lines naming an implementer that installs none.
-func (r *familyRun) emptyMWWarns() []string {
-	r.log.mu.Lock()
-	defer r.log.mu.Unlock()
-	return slices.DeleteFunc(slices.Clone(r.log.warns), func(w string) bool { return !strings.Contains(w, emptyGlobalMWWarn) })
 }
 
 // TestPrepareRuntimeRefusesGlobalMiddlewareBesideTenantFamily pins the startup refusal
@@ -140,7 +130,7 @@ func TestPrepareRuntimeRefusesGlobalMiddlewareBesideTenantFamily(t *testing.T) {
 			// audit's nil entry is never installed and its other two are, so exactly 1 is direct.
 			name: "module_and_direct_middleware",
 			sc: familyScenario{
-				mwModules: []*globalMWModule{{name: "audit", mws: []server.MiddlewareFunc{passThroughMW, nil, passThroughMW}}},
+				mwModules: []*globalMWModule{mwModule("audit", []server.MiddlewareFunc{passThroughMW, nil, passThroughMW}...)},
 				families:  []familyModule{orgsFamily()},
 				direct:    []server.MiddlewareFunc{passThroughMW},
 			},
@@ -179,8 +169,8 @@ func TestTenantFamilyRefusalCountsOnlyInstalledMiddleware(t *testing.T) {
 		name string
 		sc   familyScenario
 	}{
-		{name: "module_returns_empty_slice", sc: familyScenario{mwModules: []*globalMWModule{{name: "audit", mws: []server.MiddlewareFunc{}}}}},
-		{name: "module_returns_only_nil", sc: familyScenario{mwModules: []*globalMWModule{{name: "audit", mws: []server.MiddlewareFunc{nil, nil}}}}},
+		{name: "module_returns_empty_slice", sc: familyScenario{mwModules: []*globalMWModule{mwModule("audit", []server.MiddlewareFunc{}...)}}},
+		{name: "module_returns_only_nil", sc: familyScenario{mwModules: []*globalMWModule{mwModule("audit", []server.MiddlewareFunc{nil, nil}...)}}},
 		{name: "direct_register_only_nil", sc: familyScenario{direct: []server.MiddlewareFunc{nil}}},
 	}
 	for _, tt := range tests {
@@ -208,12 +198,12 @@ func TestPrepareRuntimeWarnsOnEmptyGlobalMiddlewareBesideTenantFamily(t *testing
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			run := runFamilyScenario(t, &familyScenario{
-				mwModules: []*globalMWModule{{name: "audit", mws: []server.MiddlewareFunc{}}, mwModule("authz", nil)},
+				mwModules: []*globalMWModule{mwModule("audit", []server.MiddlewareFunc{}...), mwModule("authz", nil)},
 				families:  tt.families,
 			})
 
 			require.NoError(t, run.err)
-			warns := run.emptyMWWarns()
+			warns := run.log.warnsContaining(emptyGlobalMWWarn)
 			require.Len(t, warns, len(tt.want))
 			for i, name := range tt.want {
 				assert.Contains(t, warns[i], name)

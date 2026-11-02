@@ -44,7 +44,9 @@ func (s *Server) GlobalMiddlewareCount() int {
 }
 
 // TenantFamilyPrefixes returns each tenant-owned route family's full prefix, in build order,
-// or nil when this server has none.
+// or nil when this server has none. The list is append-only: a built family is never removed
+// or reordered, so index i names the same family in every later call (app attribution relies
+// on it).
 func (s *Server) TenantFamilyPrefixes() []string {
 	return s.admission.familyPrefixes()
 }
