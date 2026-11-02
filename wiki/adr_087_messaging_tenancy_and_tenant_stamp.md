@@ -90,6 +90,14 @@ queue, no user and no permission — it touches the database side only.
    makes publishing for one tenant on another's client correct. Under shared tenancy the key
    is the control-plane `""`, so the context is the only source.
 
+   > **Amended (2026-10-31, #2227, by [ADR-162](adr_162_tenant_id_grammar_is_fixed.md)):** the
+   > decided stamp is checked on write as §6 checks it on read. After the conflict rule, a non-empty
+   > stamp that fails `multitenant.ValidateTenantID` (`^[a-z0-9-]{1,64}$`) is refused with an error
+   > wrapping `multitenant.ErrInvalidTenantID` that carries the byte length, never the value, and
+   > nothing is sent or persisted. An empty stamp is not judged. The sentinel is not re-exported per
+   > lane as §3's is. The outbox relay parks a row whose stored stamp fails the grammar as poison,
+   > since it is refused the same way every cycle.
+
 5. **Check rules.** A `multitenant.tenants.<id>.messaging` block beside shared messaging is a
    contradiction and fails check — nothing would ever read it. The root `messaging:` block
    becomes legal beside static tenants under shared, because it IS the control-plane broker.

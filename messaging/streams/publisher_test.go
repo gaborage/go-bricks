@@ -260,6 +260,18 @@ func TestPublisherPublishRefusesACallerSuppliedStamp(t *testing.T) {
 	assert.Zero(t, handle.sentCount(), "a refused publish never reaches the producer")
 }
 
+func TestStreamsPublishRefusesOffGrammarTenant(t *testing.T) {
+	const tenant = "Acme"
+	handle := openProducer()
+	p := boundPublisher(handle)
+
+	err := p.Publish(multitenant.SetTenant(context.Background(), tenant), &PublishMessage{Data: []byte(testBody)})
+
+	require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+	assert.NotContains(t, err.Error(), tenant)
+	assert.Zero(t, handle.sentCount(), "a refused publish never reaches the producer")
+}
+
 func TestPublisherPublishFailsOnARejectedConfirmation(t *testing.T) {
 	handle := openProducer()
 	p := boundPublisher(handle)

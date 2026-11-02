@@ -24,7 +24,7 @@ func DefaultTenantIDPattern() *regexp.Regexp {
 
 // ErrInvalidTenantID reports a tenant identifier that does not match
 // DefaultTenantIDPattern.
-var ErrInvalidTenantID = errors.New("multitenant: tenant id does not match the default grammar")
+var ErrInvalidTenantID = errors.New("multitenant: tenant id does not match the tenant-ID grammar")
 
 // ValidateTenantID checks an identifier against DefaultTenantIDPattern.
 //

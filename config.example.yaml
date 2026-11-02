@@ -300,8 +300,6 @@ multitenant:
     tenants: 100                 # Maximum number of active tenant connections
     cleanup:
       interval: 5m               # Idle connection cleanup cadence
-  validation:
-    pattern: "^[a-z0-9-]{1,64}$" # Regex pattern for validating tenant IDs
 
 # Phase 2 (example provider data):
 # tenants:

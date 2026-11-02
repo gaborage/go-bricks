@@ -2745,6 +2745,28 @@ the tenant does not exist. The seat still does no existence check. See [migratio
 pages an operator, and a store error that does not wrap `multitenant.ErrUnknownTenant` never
 earns the unknown-tenant 400.
 
+### [ADR-162: The Tenant-ID Grammar Is Fixed and Enforced at Every Write Door](adr_162_tenant_id_grammar_is_fixed.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a static `multitenant.tenants` key over 64 bytes fails startup, a publish whose context tenant or replay key fails the grammar returns an error wrapping `multitenant.ErrInvalidTenantID` and sends or persists nothing, and a pending outbox row stored under such a stamp parks at `MaxRetries`
+
+`^[a-z0-9-]{1,64}$`, applied through `multitenant.ValidateTenantID`, is the one tenant-ID grammar
+and is never configurable. It is the fleet-wide wire contract of the `x-tenant-id` stamp, which
+per-service configuration cannot keep in agreement, and the isolation invariant for the key spaces a
+tenant ID shares: the `named:` database keys, the cache key delimiter `:` (ADR-117) and the 64-byte
+`jose/sealed` `MaxTenantIDLen`. Only the HTTP seat and the stamp read enforced it, so a static key
+over 64 bytes booted unreachable, and a publish stamped an off-grammar tenant that a shared-tenancy
+consumer refused on another service. `checkMultitenantTenantEntry` now applies it after the ADR-090
+section-name check, `tenantstamp.Resolve` applies it to a non-empty decided stamp after the conflict
+rule, and both outbox shippers park a stored off-grammar stamp as poison. A tenant identity that
+does not fit is mapped into the grammar where it is set: at the `multitenant.SetTenant` caller today,
+in a route family's `Tenant` step once #2166 lands. The unread
+`multitenant.validation.pattern` leaves `config.example.yaml`. See [migrations.md](migrations.md)
+`[C73.22]`.
+
+**Key Benefits:** an off-grammar tenant fails where it is written, at startup or at the publish call,
+instead of as a dead letter on the consuming service, and the rule that keeps a tenant ID out of the
+named-database and other tenants' cache key spaces is a recorded contract, not a convention.
+
 ### [ADR-163: Migration Tenant IDs Follow the Framework Grammar](adr_163_migration_tenant_ids_follow_framework_grammar.md)
 
 **Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `SecretsProvider.DBConfig` refuses a tenant ID outside `^[a-z0-9-]{1,64}$` where it admitted `^[A-Za-z0-9_-]{1,128}$`, and `migration.ErrInvalidTenantID` is removed; the HTTP tenant source fails a listing that holds such an ID

@@ -279,3 +279,44 @@ func TestUnknownTenantRefusalNilLoggerFallsBackToStdlib(t *testing.T) {
 	assert.Contains(t, buf.String(), "error_type=*errors.errorString")
 	assert.NotContains(t, buf.String(), "10.0.0.7", "outside debug the error text stays out")
 }
+
+// TestTenantSeatRefusesOffGrammarID pins the seat built by New: a header-resolved ID
+// outside the tenant-ID grammar is refused before any module route runs.
+func TestTenantSeatRefusesOffGrammarID(t *testing.T) {
+	cfg := newTestConfig("", "", "")
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = config.ResolverTypeHeader
+	srv := New(cfg, &testLogger{})
+	srv.echo.GET("/api/orders", okEchoHandler)
+
+	tests := []struct {
+		name       string
+		tenant     string
+		wantStatus int
+	}{
+		{name: "uppercase", tenant: "Acme", wantStatus: http.StatusBadRequest},
+		{name: "underscore", tenant: "acme_1", wantStatus: http.StatusBadRequest},
+		{name: "dot", tenant: "acme.prod", wantStatus: http.StatusBadRequest},
+		{name: "colon", tenant: "named:primary", wantStatus: http.StatusBadRequest},
+		{name: "slash", tenant: "acme/prod", wantStatus: http.StatusBadRequest},
+		{name: "over_64_bytes", tenant: strings.Repeat("a", 65), wantStatus: http.StatusBadRequest},
+		{name: "max_64_bytes", tenant: strings.Repeat("a", 64), wantStatus: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+
+			srv.echo.ServeHTTP(rec, observedRequest(http.MethodGet, "/api/orders", tt.tenant, nil))
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantStatus == http.StatusOK {
+				return
+			}
+			var resp APIResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, "BAD_REQUEST", resp.Error.Code)
+			assert.Equal(t, "Invalid tenant", resp.Error.Message)
+		})
+	}
+}

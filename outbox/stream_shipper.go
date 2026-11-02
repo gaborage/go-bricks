@@ -8,6 +8,7 @@ import (
 
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // streamShipper is the native streams lane's adapter (ADR-088). Its handles are per
@@ -108,9 +109,9 @@ func (s *streamShipper) Ship(ctx context.Context, sh *shipment) verdict {
 		return verdict{Kind: shipDelivered}
 	case errors.Is(err, context.Canceled), errors.Is(err, streams.ErrPublisherClosed):
 		return verdict{Kind: shipAborted}
-	case errors.Is(err, messaging.ErrTenantStampConflict):
-		// Message-intrinsic, as on the AMQP lane: the row will conflict identically
-		// every cycle, so it parks instead of retrying forever.
+	case errors.Is(err, messaging.ErrTenantStampConflict), errors.Is(err, multitenant.ErrInvalidTenantID):
+		// Message-intrinsic, as on the AMQP lane: a conflicting or off-grammar stamp fails
+		// identically every cycle, so the row parks instead of retrying forever.
 		return verdict{Kind: shipPoison, Err: err}
 	case errors.Is(err, streams.ErrPublisherNotStarted), errors.Is(err, context.DeadlineExceeded):
 		// Evidence this stream's producer is not carrying messages right now, not that
