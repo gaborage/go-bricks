@@ -345,13 +345,19 @@ func (l *guardLogger) entryCount() int {
 }
 
 // warnCount reports how many WARN entries whose message contains msgContains the double
-// recorded, under the lock; an empty msgContains counts every WARN.
+// recorded; an empty msgContains counts every WARN.
 func (l *guardLogger) warnCount(msgContains string) int {
+	return l.countEntries("warn", msgContains)
+}
+
+// countEntries reports how many entries at level ("" for any) whose message contains
+// msgContains the double recorded, under the lock.
+func (l *guardLogger) countEntries(level, msgContains string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	n := 0
 	for _, e := range l.logs {
-		if e.level == "warn" && strings.Contains(e.msg, msgContains) {
+		if (level == "" || e.level == level) && strings.Contains(e.msg, msgContains) {
 			n++
 		}
 	}
@@ -458,9 +464,12 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 const (
 	observedHeaderTenant = "acme"
 	observedPathTenant   = "/t/globex/orders"
-	// observedOpenLimit keeps the pre-guard and the limiter on but out of reach of any
-	// row's request count, so every row except ip_preguard_denied passes both.
+	// observedOpenLimit keeps the limiter on but out of reach of any row's request count.
 	observedOpenLimit = 1_000_000
+	// observedOpenPreGuard keeps the pre-guard on and out of reach the same way, so every row
+	// except ip_preguard_denied passes both. It differs from the limiter's, so a response's
+	// X-RateLimit-* headers name the limiter that wrote them.
+	observedOpenPreGuard = 2 * observedOpenLimit
 	// observedRuns is AllocsPerRun's measured run count; it adds one warm-up call of its own.
 	observedRuns = 100
 
@@ -469,6 +478,8 @@ const (
 	warnFCCLeaf        = "[server.forwardedclientcert] leaf certificate not decoded"
 	warnIPPreGuard     = "[server.ip_preguard] request rejected"
 	warnAccessLog4xx   = "with status 4xx" // the request logger's WARN for a 4xx
+
+	observedFamilyPrefix = "/partner" // the tenant-owned family a family server mounts
 )
 
 // newObservedServer builds a server through New the way an observed deployment configures
@@ -476,9 +487,11 @@ const (
 // (header, then path segment 2 under /t) and forwarded-client-cert identity. denyIP drops
 // the pre-guard threshold to 1/s (burst 2) so a client is denied once the burst is spent;
 // the caller freezes the clock (see TestObservedRequestAllocsStable) so no token ever refills.
-func newObservedServer(t *testing.T, log *guardLogger, denyIP bool) *Server {
+// family adds a tenant-owned family at observedFamilyPrefix resolving observedHeaderTenant,
+// with a typed /orders and a raw /identity answering the forwarded-client-cert subject.
+func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Server {
 	t.Helper()
-	preGuard := observedOpenLimit
+	preGuard := observedOpenPreGuard
 	if denyIP {
 		preGuard = 1
 	}
@@ -510,6 +523,14 @@ func newObservedServer(t *testing.T, log *guardLogger, denyIP bool) *Server {
 	// A group with middleware gets Echo's RouteNotFound catch-all for its prefix.
 	admin := srv.ModuleGroup().Group("/admin", func(_ HandlerContext, next func() error) error { return next() })
 	GET(hr, admin, "/status", ok)
+	if family {
+		partner := tenantOwnedGroup(srv.ModuleGroup(), observedFamilyPrefix, fixedTenantPolicy(observedHeaderTenant))
+		GET(hr, partner, "/orders", ok)
+		partner.Add(http.MethodGet, "/identity", func(c HandlerContext) error {
+			cert, _ := ForwardedClientCertFromContext(c.RequestContext())
+			return c.String(http.StatusOK, cert.Subject)
+		})
+	}
 	return srv
 }
 
@@ -533,6 +554,7 @@ type observedRow struct {
 	name       string
 	req        *http.Request
 	denyIP     bool
+	family     bool // build the server with the tenant-owned family (newObservedServer)
 	wantStatus int
 	warn       string // substring of the only WARN sink allowed to fire, once per request
 	baseline   int
@@ -541,7 +563,7 @@ type observedRow struct {
 // measureObservedRow warms, measures and checks one row.
 func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc observedRow) {
 	log := &guardLogger{}
-	srv := newObservedServer(t, log, tc.denyIP)
+	srv := newObservedServer(t, log, tc.denyIP, tc.family)
 	// Warm one-time lazy state (and, for the denied row, spend the burst) before
 	// measuring; the last warm-up proves the row exercises the shape it names.
 	var rec *httptest.ResponseRecorder
@@ -644,6 +666,11 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 				headerClientCertSubject: {"CN=client"},
 				headerClientCertLeaf:    {"not-a-pem"},
 			}),
+		},
+		// A route outside the family on a server with one: the seat's ownership check is free.
+		{
+			name: "non_family_route_beside_family", baseline: 113, family: true, wantStatus: http.StatusOK,
+			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, nil),
 		},
 		// Rate 1/s, burst 2 under a frozen clock: the warm-ups spend the burst and no token
 		// ever refills, so every measured request is denied and WARNs.

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/labstack/echo/v5"
 
@@ -171,10 +172,11 @@ type routeAdmission struct {
 	mu         sync.Mutex
 	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts  []RouteConflict
-	engine     *echo.Echo    // the application engine; written once by New, before any registrar exists
-	log        logger.Logger // the Server's logger; written once by New, before any registrar exists
-	probePaths []string      // full health and ready paths on the application listener; written once by New
-	families   []string      // each tenant-owned family's full prefix, in build order
+	engine     *echo.Echo               // the application engine; written once by New, before any registrar exists
+	log        logger.Logger            // the Server's logger; written once by New, before any registrar exists
+	probePaths []string                 // full health and ready paths on the application listener; written once by New
+	families   []string                 // each tenant-owned family's full prefix, in build order
+	owned      atomic.Pointer[[]string] // families, republished copy-on-write for owns
 
 	// registered is every admitted route (family routes and probes included) and every
 	// middleware-bearing group not built through a family, covered or not, in registration
@@ -259,14 +261,24 @@ func (a *routeAdmission) admitGroup(path, pkg string) {
 // refuseTrespassLocked sets c.FirstPath to the family prefix covering c.Path and records c as a
 // conflict, reporting whether a family covers it. a.mu is held.
 func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
-	for _, family := range a.families {
-		if underPrefix(c.Path, family) {
-			c.FirstPath = family
-			a.conflicts = append(a.conflicts, *c)
-			return true
+	family, ok := coveringFamily(c.Path, a.families)
+	if !ok {
+		return false
+	}
+	c.FirstPath = family
+	a.conflicts = append(a.conflicts, *c)
+	return true
+}
+
+// coveringFamily returns the family prefix in families that path equals or sits under. The
+// trespass refusal and the tenant seat's skip both decide ownership here.
+func coveringFamily(path string, families []string) (string, bool) {
+	for _, f := range families {
+		if underPrefix(path, f) {
+			return f, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // reportTrespassLocked records every registered route and group at or below a newly built
@@ -342,8 +354,22 @@ func (a *routeAdmission) claimFamily(full string) (string, bool) {
 		}
 	}
 	a.families = append(a.families, full)
+	owned := slices.Clone(a.families)
+	a.owned.Store(&owned)
 	a.reportTrespassLocked(full)
 	return "", true
+}
+
+// owns reports whether template, a matched route template, is a tenant-owned family's prefix
+// or sits under one. The tenant seat calls it per request, so it reads the copy claimFamily
+// republishes, without the lock.
+func (a *routeAdmission) owns(template string) bool {
+	families := a.owned.Load()
+	if families == nil {
+		return false
+	}
+	_, ok := coveringFamily(template, *families)
+	return ok
 }
 
 func (a *routeAdmission) familyPrefixes() []string {

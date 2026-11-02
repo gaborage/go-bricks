@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -1250,4 +1252,97 @@ func TestCompositeSubdomainFirstResolvesFoldedHost(t *testing.T) {
 			assert.Equal(t, tt.wantTenant, rec.Body.String())
 		})
 	}
+}
+
+// TestOnlyTenantSeatReadsOwnership pins that on a tenant-owned family's route, which the
+// tenant seat skips, every other reader in the chain New builds behaves as on any route. It
+// fails only if a reader other than the seat starts skipping a family. Every case runs in a
+// synctest bubble, so the limiters' clock stands still and their buckets never refill.
+func TestOnlyTenantSeatReadsOwnership(t *testing.T) {
+	exporter := installTestTracerProvider(t)
+	familyOrders := observedFamilyPrefix + "/orders"
+	tests := []struct {
+		name   string
+		denyIP bool
+		check  func(t *testing.T, srv *Server, log *guardLogger)
+	}{
+		{
+			name: "access_log_records_family_route",
+			check: func(t *testing.T, srv *Server, log *guardLogger) {
+				requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				assert.Equal(t, 1, log.countEntries("", familyOrders), "the access log records the family request once")
+			},
+		},
+		{
+			name: "otel_records_span",
+			check: func(t *testing.T, srv *Server, _ *guardLogger) {
+				requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				spans := exporter.GetSpans()
+				require.Len(t, spans, 1)
+				assert.Equal(t, "GET "+familyOrders, spans[0].Name)
+			},
+		},
+		{
+			name: "rate_limiter_keys_client_address",
+			check: func(t *testing.T, srv *Server, _ *guardLogger) {
+				first := requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				second := requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				other := observedRequest(http.MethodGet, familyOrders, "", nil)
+				other.RemoteAddr = "198.51.100.7:1234"
+				third := requireObservedStatus(t, srv, other, http.StatusOK)
+
+				assert.Equal(t, strconv.Itoa(observedOpenLimit*BurstMultiplier), first.Header().Get(middleware.HeaderXRateLimitLimit),
+					"the address limiter, inner to the pre-guard, wrote the headers")
+				assert.Equal(t, remainingTokens(t, first)-1, remainingTokens(t, second), "one address shares one bucket")
+				assert.Equal(t, remainingTokens(t, first), remainingTokens(t, third), "another address has its own bucket")
+			},
+		},
+		{
+			name:   "ip_preguard_applies",
+			denyIP: true,
+			check: func(t *testing.T, srv *Server, log *guardLogger) {
+				req := observedRequest(http.MethodGet, familyOrders, "", nil)
+				requireObservedStatus(t, srv, req, http.StatusOK)
+				requireObservedStatus(t, srv, req, http.StatusOK)
+				requireObservedStatus(t, srv, req, http.StatusTooManyRequests)
+				assert.Equal(t, 1, log.warnCount(warnIPPreGuard), "the pre-guard refused the family request")
+			},
+		},
+		{
+			name: "forwarded_client_cert_identity_runs",
+			check: func(t *testing.T, srv *Server, _ *guardLogger) {
+				req := observedRequest(http.MethodGet, observedFamilyPrefix+"/identity", "", map[string][]string{
+					headerClientCertSubject: {"CN=partner"},
+				})
+				rec := requireObservedStatus(t, srv, req, http.StatusOK)
+				assert.Equal(t, "CN=partner", rec.Body.String(), "the family handler sees the forwarded identity")
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				exporter.Reset()
+				log := &guardLogger{}
+				tc.check(t, newObservedServer(t, log, tc.denyIP, true), log)
+			})
+		})
+	}
+}
+
+// requireObservedStatus serves req through srv's engine and requires want.
+func requireObservedStatus(t *testing.T, srv *Server, req *http.Request, want int) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	require.Equal(t, want, rec.Code, rec.Body.String())
+	return rec
+}
+
+// remainingTokens parses rec's X-RateLimit-Remaining.
+func remainingTokens(t *testing.T, rec *httptest.ResponseRecorder) int {
+	t.Helper()
+	n, err := strconv.Atoi(rec.Header().Get(middleware.HeaderXRateLimitRemaining))
+	require.NoError(t, err)
+	return n
 }
