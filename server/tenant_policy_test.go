@@ -18,26 +18,28 @@ import (
 )
 
 const (
-	tenantPolicyTestTemplate = "/partner/v2/orders"
+	tenantPolicyTestTemplate = "/partner/v2/orders/:id"
+	tenantPolicyTestPath     = "/partner/v2/orders/ord-secret-9"
 	secretTenantValue        = "secret-tenant-value"
 )
 
-// statusCoderError carries its status only through echo.HTTPStatusCoder, never IAPIError.
-type statusCoderError struct{ code int }
-
-func (e *statusCoderError) Error() string   { return "status coder" }
-func (e *statusCoderError) StatusCode() int { return e.code }
-
 func newTenantPolicyTestContext(t *testing.T) (HandlerContext, *httptest.ResponseRecorder) {
 	t.Helper()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tenantPolicyTestTemplate, http.NoBody)
-	req.Header.Set("X-Tenant-ID", secretTenantValue)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tenantPolicyTestPath, http.NoBody)
+	req.Header.Set(HeaderXTenantID, secretTenantValue)
 	rec := httptest.NewRecorder()
 	return NewHandlerContextForTest(rec, req, &config.Config{}, WithRouteTemplate(tenantPolicyTestTemplate)), rec
 }
 
 func resolvingPolicy(tenantID string, err error) TenantPolicy {
 	return TenantPolicy{Tenant: func(HandlerContext) (string, error) { return tenantID, err }}
+}
+
+func denyMustNotRun(t *testing.T) DenyFunc {
+	return func(HandlerContext, error) error {
+		t.Error("Deny ran")
+		return nil
+	}
 }
 
 func TestTenantPolicyClassifiesFaults(t *testing.T) {
@@ -54,9 +56,9 @@ func TestTenantPolicyClassifiesFaults(t *testing.T) {
 		{"status_401_is_client", NewUnauthorizedError("x"), client},
 		{"status_403_is_client", NewForbiddenError("x"), client},
 		{"status_500_is_server", NewInternalServerError("x"), unchanged},
-		{"echo_status_coder_4xx_is_client", &statusCoderError{code: http.StatusConflict}, client},
+		{"echo_status_coder_4xx_is_client", echo.ErrNotFound, client},
 		{"echo_http_error_413_is_framework", echo.NewHTTPError(http.StatusRequestEntityTooLarge, "x"), unchanged},
-		{"api_error_413_is_framework", NewBaseAPIError("PAYLOAD_TOO_LARGE", "x", http.StatusRequestEntityTooLarge), unchanged},
+		{"api_error_413_is_framework", NewBaseAPIError(statusToErrorCode(http.StatusRequestEntityTooLarge), "x", http.StatusRequestEntityTooLarge), unchanged},
 		{"max_bytes_error_wrapped_in_resolution_failed_is_framework", fmt.Errorf("%w: %w", multitenant.ErrTenantResolutionFailed, &http.MaxBytesError{Limit: 1}), unchanged},
 		{"wrapped_tenant_resolution_failed_is_client", fmt.Errorf("lookup: %w", multitenant.ErrTenantResolutionFailed), client},
 		{"wrapped_invalid_tenant_id_is_client", fmt.Errorf("claim: %w", multitenant.ErrInvalidTenantID), client},
@@ -71,11 +73,10 @@ func TestTenantPolicyClassifiesFaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c, _ := newTenantPolicyTestContext(t)
-			called := false
 			var got error
 			p := resolvingPolicy("", tt.err)
 			p.Deny = func(dc HandlerContext, fault error) error {
-				called, got = true, fault
+				got = fault
 				return dc.ectx.NoContent(http.StatusTeapot)
 			}
 
@@ -85,21 +86,19 @@ func TestTenantPolicyClassifiesFaults(t *testing.T) {
 			switch tt.want {
 			case client:
 				assert.True(t, denied)
-				require.True(t, called)
 				require.Same(t, tt.err, got)
 				require.NoError(t, err)
 			case noTenant:
 				assert.False(t, denied)
-				assert.False(t, called)
+				require.NoError(t, got, "Deny must not run")
 				var fault *tenantFaultError
 				require.ErrorAs(t, err, &fault)
 				require.ErrorIs(t, err, multitenant.ErrNoTenant)
-				var apiErr IAPIError
-				require.ErrorAs(t, err, &apiErr)
-				assert.Equal(t, http.StatusInternalServerError, apiErr.HTTPStatus())
+				require.NotErrorIs(t, err, multitenant.ErrTenantResolutionFailed)
+				assert.Equal(t, http.StatusInternalServerError, fault.HTTPStatus())
 			default:
 				assert.False(t, denied)
-				assert.False(t, called)
+				require.NoError(t, got, "Deny must not run")
 				require.Same(t, tt.err, err)
 			}
 		})
@@ -149,10 +148,12 @@ func TestTenantPolicyResolveForTestReportsDenied(t *testing.T) {
 	})
 
 	t.Run("client_fault_denied", func(t *testing.T) {
-		c, _ := newTenantPolicyTestContext(t)
+		c, rec := newTenantPolicyTestContext(t)
 		_, denied, err := resolvingPolicy("", fmt.Errorf("lookup: %w", multitenant.ErrTenantResolutionFailed)).ResolveForTest(c)
 		require.NoError(t, err)
 		assert.True(t, denied)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.Empty(t, rec.Body.String())
 	})
 
 	t.Run("server_fault_not_denied", func(t *testing.T) {
@@ -165,12 +166,8 @@ func TestTenantPolicyResolveForTestReportsDenied(t *testing.T) {
 
 	t.Run("grammar_backstop_not_denied", func(t *testing.T) {
 		c, _ := newTenantPolicyTestContext(t)
-		denyCalled := false
 		p := resolvingPolicy("Bad_ID", nil)
-		p.Deny = func(HandlerContext, error) error {
-			denyCalled = true
-			return nil
-		}
+		p.Deny = denyMustNotRun(t)
 
 		id, denied, err := p.ResolveForTest(c)
 
@@ -178,11 +175,22 @@ func TestTenantPolicyResolveForTestReportsDenied(t *testing.T) {
 		require.ErrorAs(t, err, &fault)
 		require.NotErrorIs(t, err, multitenant.ErrInvalidTenantID)
 		assert.False(t, denied)
-		assert.False(t, denyCalled)
 		assert.Empty(t, id)
 		_, ok := multitenant.GetTenant(c.RequestContext())
 		assert.False(t, ok)
 	})
+}
+
+func TestTenantPolicyResolveForTestPanicsOnNilTenant(t *testing.T) {
+	c, _ := newTenantPolicyTestContext(t)
+	stepRan := false
+	p := TenantPolicy{Authenticate: []MiddlewareFunc{func(_ HandlerContext, next func() error) error {
+		stepRan = true
+		return next()
+	}}}
+
+	assert.PanicsWithValue(t, "server: TenantPolicy.Tenant is nil", func() { _, _, _ = p.ResolveForTest(c) })
+	assert.False(t, stepRan)
 }
 
 func TestTenantPolicyRunsAuthenticateBeforeTenant(t *testing.T) {
@@ -269,10 +277,7 @@ func TestTenantPolicyDenyWiringFaults(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			const paramTemplate = "/partner/v2/orders/:id"
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/partner/v2/orders/ord-secret-9", http.NoBody)
-			req.Header.Set("X-Tenant-ID", secretTenantValue)
-			c := NewHandlerContextForTest(httptest.NewRecorder(), req, &config.Config{}, WithRouteTemplate(paramTemplate))
+			c, _ := newTenantPolicyTestContext(t)
 			tl := &testLogger{}
 			p := resolvingPolicy("", fmt.Errorf("tenant %s: %w", secretTenantValue, multitenant.ErrTenantResolutionFailed))
 			p.Deny = tt.deny
@@ -286,8 +291,8 @@ func TestTenantPolicyDenyWiringFaults(t *testing.T) {
 			require.Len(t, entries, 1)
 			assert.Equal(t, "error", entries[0].level)
 			assert.Contains(t, entries[0].msg, fmt.Sprintf("reason=%q", tt.reason))
-			assert.Contains(t, entries[0].msg, fmt.Sprintf("path=%q", paramTemplate))
-			assert.Contains(t, entries[0].msg, "status=500")
+			assert.Contains(t, entries[0].msg, fmt.Sprintf("path=%q", tenantPolicyTestTemplate))
+			assert.NotContains(t, entries[0].msg, "status=")
 			assert.NotContains(t, entries[0].msg, secretTenantValue)
 			assert.NotContains(t, entries[0].msg, "ord-secret-9")
 		})
@@ -322,50 +327,29 @@ func TestTenantPolicyReturnsNextErrorUntouched(t *testing.T) {
 	nextErr := NewBadRequestError("x")
 	t.Run("next_error_returned", func(t *testing.T) {
 		c, _ := newTenantPolicyTestContext(t)
-		denyCalled := false
 		p := resolvingPolicy("acme", nil)
-		p.Deny = func(HandlerContext, error) error {
-			denyCalled = true
-			return nil
-		}
+		p.Deny = denyMustNotRun(t)
 
 		id, denied, err := p.run(c, nil, func() error { return nextErr })
 
 		require.Same(t, nextErr, err)
 		assert.False(t, denied)
-		assert.False(t, denyCalled)
 		assert.Equal(t, "acme", id)
 	})
 
 	t.Run("authenticate_step_wraps_next_error", func(t *testing.T) {
 		c, _ := newTenantPolicyTestContext(t)
-		denyCalled := false
 		var stepErr error
 		p := resolvingPolicy("acme", nil)
 		p.Authenticate = []MiddlewareFunc{func(_ HandlerContext, next func() error) error {
 			stepErr = fmt.Errorf("step: %w", next())
 			return stepErr
 		}}
-		p.Deny = func(HandlerContext, error) error {
-			denyCalled = true
-			return nil
-		}
+		p.Deny = denyMustNotRun(t)
 
 		_, denied, err := p.run(c, nil, func() error { return nextErr })
 
 		require.Same(t, stepErr, err)
 		assert.False(t, denied)
-		assert.False(t, denyCalled)
 	})
-}
-
-func TestTenantPolicyDefaultDenyIsBodyless(t *testing.T) {
-	c, rec := newTenantPolicyTestContext(t)
-
-	_, denied, err := resolvingPolicy("", fmt.Errorf("lookup: %w", multitenant.ErrTenantResolutionFailed)).ResolveForTest(c)
-
-	require.NoError(t, err)
-	assert.True(t, denied)
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assert.Empty(t, rec.Body.String())
 }

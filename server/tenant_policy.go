@@ -53,12 +53,16 @@ func DenyBodyless(c HandlerContext, fault error) error {
 	if !isClientStatus(status) {
 		status = http.StatusForbidden
 	}
-	return c.ectx.NoContent(status)
+	return c.echoContext().NoContent(status)
 }
 
 // ResolveForTest runs steps 1-3 and the fault rule on c (from NewHandlerContextForTest)
 // without a router. denied is true only when Deny ran; the backstop's error stays unexported.
+// It panics when p.Tenant is nil, before any Authenticate step runs.
 func (p TenantPolicy) ResolveForTest(c HandlerContext) (tenantID string, denied bool, err error) {
+	if p.Tenant == nil {
+		panic("server: TenantPolicy.Tenant is nil")
+	}
 	return p.run(c, nil, func() error { return nil })
 }
 
@@ -70,44 +74,32 @@ const (
 	reasonDenyNothing       = "deny returned without committing a response"
 )
 
-type tenantStage uint8
-
-const (
-	stageAuthenticate tenantStage = iota
-	stageTenant
-	stageBackstop
-	stagePublished
-)
-
 // run runs Authenticate, Tenant, the grammar check and the publish, then next innermost,
 // so an error from next passes back up through the steps and is returned untouched.
 func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) (tenantID string, denied bool, err error) {
-	stage := stageAuthenticate
-	var published string
 	var backstop *tenantFaultError
 	chainErr := runSteps(c, p.Authenticate, func() error {
-		stage = stageTenant
 		id, tenantErr := p.Tenant(c)
 		if tenantErr != nil {
 			return tenantErr
 		}
 		// Validate before publishing: SetTenant leaves the context unchanged for "".
 		if multitenant.ValidateTenantID(id) != nil {
-			stage, backstop = stageBackstop, newTenantFaultError(reasonGrammarBackstop, nil)
+			backstop = newTenantFault(c, l, reasonGrammarBackstop, nil)
 			return backstop
 		}
 		c.SetRequestContext(multitenant.SetTenant(c.RequestContext(), id))
-		stage, published = stagePublished, id
+		tenantID = id
 		return next()
 	})
-	if stage == stagePublished {
-		return published, false, chainErr
+	if tenantID != "" {
+		return tenantID, false, chainErr
 	}
-	if stage == stageBackstop {
-		return "", false, logTenantFault(c, l, backstop)
+	if backstop != nil {
+		return "", false, backstop
 	}
 	if chainErr == nil {
-		return "", false, logTenantFault(c, l, newTenantFaultError(reasonNoTenantPublished, nil))
+		return "", false, newTenantFault(c, l, reasonNoTenantPublished, nil)
 	}
 	denied, err = p.answer(c, l, chainErr)
 	return "", denied, err
@@ -143,10 +135,10 @@ func classifyTenantFault(err error) tenantFaultClass {
 	if errors.Is(err, multitenant.ErrNoTenant) {
 		return faultNoTenant
 	}
+	if isClientStatus(status) {
+		return faultClient
+	}
 	if status != 0 {
-		if isClientStatus(status) {
-			return faultClient
-		}
 		return faultRendered
 	}
 	if errors.Is(err, multitenant.ErrTenantResolutionFailed) || errors.Is(err, multitenant.ErrInvalidTenantID) {
@@ -161,33 +153,29 @@ func (p TenantPolicy) answer(c HandlerContext, l logger.Logger, fault error) (de
 		return true, p.deny(c, l, fault)
 	}
 	if class == faultNoTenant {
-		return false, logTenantFault(c, l, newTenantFaultError(reasonNoTenantAccessor, fault))
+		return false, newTenantFault(c, l, reasonNoTenantAccessor, multitenant.ErrNoTenant)
 	}
 	return false, fault
 }
 
 func (p TenantPolicy) deny(c HandlerContext, l logger.Logger, fault error) error {
-	ensureTraceParentHeader(c.ectx)
+	ensureTraceParentHeader(c.echoContext())
 	denyFn := p.Deny
 	if denyFn == nil {
 		denyFn = DenyBodyless
 	}
 	if denyErr := denyFn(c, fault); denyErr != nil {
-		status := errorStatus(denyErr)
-		if status == 0 {
-			status = http.StatusInternalServerError
-		}
-		logTenantRefusal(c, l, status, reasonDenyError)
+		logTenantRefusal(c, l, reasonDenyError)
 		return denyErr
 	}
-	if !isResponseCommitted(c.ectx) {
-		return logTenantFault(c, l, newTenantFaultError(reasonDenyNothing, nil))
+	if !isResponseCommitted(c.echoContext()) {
+		return newTenantFault(c, l, reasonDenyNothing, nil)
 	}
 	return nil
 }
 
-// errorStatus reads err's HTTP status in classifyError's order: IAPIError, then
-// *echo.HTTPError, then echo.HTTPStatusCoder; 0 when it carries none.
+// errorStatus returns the HTTP status err carries as an IAPIError or an echo.HTTPStatusCoder
+// (*echo.HTTPError included), or 0.
 func errorStatus(err error) int {
 	var apiErr IAPIError
 	if errors.As(err, &apiErr) {
@@ -201,14 +189,17 @@ func isClientStatus(status int) bool {
 }
 
 // tenantFaultError is a family fault the framework renders as an opaque 500. Its cause is
-// set only for ErrNoTenant, so the grammar backstop never reads as ErrInvalidTenantID.
+// multitenant.ErrNoTenant for rule 2 and nil otherwise, so the backstop never reads as
+// ErrInvalidTenantID.
 type tenantFaultError struct {
 	*BaseAPIError
 	reason string
 	cause  error
 }
 
-func newTenantFaultError(reason string, cause error) *tenantFaultError {
+// newTenantFault builds a tenantFaultError and logs its refusal line.
+func newTenantFault(c HandlerContext, l logger.Logger, reason string, cause error) *tenantFaultError {
+	logTenantRefusal(c, l, reason)
 	return &tenantFaultError{
 		BaseAPIError: NewBaseAPIError(errCodeInternalError, msgInternalErrorProd, http.StatusInternalServerError),
 		reason:       reason,
@@ -220,17 +211,12 @@ func (f *tenantFaultError) Error() string { return "server: tenant-owned family 
 
 func (f *tenantFaultError) Unwrap() error { return f.cause }
 
-func logTenantFault(c HandlerContext, l logger.Logger, f *tenantFaultError) *tenantFaultError {
-	logTenantRefusal(c, l, http.StatusInternalServerError, f.reason)
-	return f
-}
-
 // logTenantRefusal emits one ERROR line per family refusal, carrying the reason class and
 // the matched route template, never a tenant ID, a header value or an error message. With
 // a nil logger it falls back to stdlib log, like logTenantRejection.
-func logTenantRefusal(c HandlerContext, l logger.Logger, status int, reason string) {
-	msg := fmt.Sprintf("[server.tenant] family request refused: method=%s path=%s status=%d reason=%q",
-		logSafeValue(c.Request().Method), logSafeValue(matchedRouteTemplate(c.ectx)), status, reason)
+func logTenantRefusal(c HandlerContext, l logger.Logger, reason string) {
+	msg := fmt.Sprintf("[server.tenant] family request refused: method=%s path=%s reason=%q",
+		logSafeValue(c.Request().Method), logSafeValue(c.RouteTemplate()), reason)
 	if l == nil {
 		log.Printf("ERROR %s", msg)
 		return
