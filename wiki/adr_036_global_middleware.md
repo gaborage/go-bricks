@@ -67,9 +67,10 @@ root chain resolves. A tenant-owned route family (ADR-164) resolves its tenant i
 pipeline, and the root tenant seat skips its routes, so global middleware, which sits on the root
 chain, would run there with no tenant in context. Startup therefore refuses a binary in which at
 least one non-nil global middleware is installed and a tenant-owned family is built, in either
-order. In a binary that passes the startup check, global middleware runs after tenant resolution
-and the Consequences below hold as written. Running global middleware inside a family's pipeline,
-after its tenant is published, would lift the refusal additively, but it would make the
+order. After `Start`, `TenantOwnedGroup` panics, and so does `RegisterGlobalMiddleware` beside a
+family. So in a binary that passes the startup check, global middleware runs after tenant
+resolution and the Consequences below hold as written. Running global middleware inside a family's
+pipeline, after its tenant is published, would lift the refusal additively, but it would make the
 global-middleware seat a second reader of route ownership.
 
 The app invokes the server method through an optional (inline) type assertion rather than

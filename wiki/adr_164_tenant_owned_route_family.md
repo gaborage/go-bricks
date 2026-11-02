@@ -337,7 +337,9 @@ tenant-owned route family with global middleware: 2 family(ies) (/api/v1/orgs, /
 
 **Returned errors.** Both refusals return errors that wrap `ErrTenantFamilyWithGlobalMiddleware`.
 
-**After `Start`:** `TenantOwnedGroup` panics, so no family is built past this check.
+**After `Start`:** `TenantOwnedGroup` panics, so no family is built past this check, and
+`RegisterGlobalMiddleware` beside an existing family panics, so no global middleware is installed
+past it either.
 
 ### Publishes before the tenant exists
 

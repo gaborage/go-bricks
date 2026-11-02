@@ -125,7 +125,7 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 		child.familyNode = &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)}
 		return child
 	}
-	// Marked first: echo's group with middleware registers catch-alls a refusal must not leave.
+	// Marked first, so a trespass after Start panics before echo registers the group's catch-alls.
 	if rg.carriesMiddleware || len(middleware) > 0 {
 		child.markMiddleware(getCallerPackage(2))
 	}

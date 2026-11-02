@@ -347,3 +347,43 @@ func TestServerStartAllowsTenantFamilyWithoutGlobalMiddleware(t *testing.T) {
 		})
 	}
 }
+
+// TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily pins that after Start, when
+// nothing checks again, global middleware beside a tenant-owned family panics and is never
+// installed, while a call with no family installs and a nil-only call stays a no-op.
+func TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily(t *testing.T) {
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	tests := []struct {
+		name      string
+		family    bool
+		mw        MiddlewareFunc
+		wantCount int
+		wantPanic string
+	}{
+		{
+			name: "beside_family_panics", family: true, mw: mw,
+			wantPanic: "server: global middleware registered after Start beside a tenant-owned route family (" +
+				trespassFamily + "); " + tenantFamilyGlobalMiddlewareHint,
+		},
+		{name: "without_family_installs", mw: mw, wantCount: 1},
+		{name: "nil_beside_family_is_noop", family: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			if tt.family {
+				buildTrespassFamily(srv)
+			}
+			errCh := startProbeServer(t, srv)
+			t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+			register := func() { srv.RegisterGlobalMiddleware(tt.mw) }
+
+			if tt.wantPanic != "" {
+				require.PanicsWithValue(t, tt.wantPanic, register)
+			} else {
+				require.NotPanics(t, register)
+			}
+			assert.Equal(t, tt.wantCount, srv.GlobalMiddlewareCount())
+		})
+	}
+}

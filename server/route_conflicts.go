@@ -72,7 +72,8 @@ type RouteConflict struct {
 }
 
 // DuplicateRouteError reports every refused route registration at once.
-// Server.Start and app startup both fail with it; errors.As recovers the conflicts,
+// Server.Start and app startup both fail with it, and a tenant-owned trespass after Start
+// panics with an error wrapping it; errors.As recovers the conflicts,
 // errors.Is(err, ErrDuplicateRoute) holds, and Unwrap returns the head (matching
 // ErrDuplicateRoute) followed by one child per conflict.
 type DuplicateRouteError struct {
@@ -183,7 +184,8 @@ type routeAdmission struct {
 
 	// registered is every admitted route (family routes and probes included) and every
 	// middleware-bearing group not built through a family, covered or not, in registration
-	// order, each as its tenant-owned conflict without FirstPath.
+	// order, each as its tenant-owned conflict without FirstPath. Kept only until seal: after
+	// Start no family is built, so nothing scans it.
 	registered []RouteConflict
 }
 
@@ -243,7 +245,9 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		return false
 	}
 	a.seen[key] = seenRoute{reg: reg, path: r.Path}
-	a.registered = append(a.registered, c)
+	if !a.started {
+		a.registered = append(a.registered, c)
+	}
 	return true
 }
 
@@ -257,7 +261,9 @@ func (a *routeAdmission) admitGroup(path, pkg string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	c := tenantOwnedConflict("", path, RouteRegistrant{Package: pkg})
-	a.registered = append(a.registered, c)
+	if !a.started {
+		a.registered = append(a.registered, c)
+	}
 	a.refuseTrespassLocked(&c)
 }
 
@@ -344,6 +350,7 @@ func (a *routeAdmission) seal() []RouteConflict {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.started = true
+	a.registered = nil
 	return slices.Clone(a.conflicts)
 }
 

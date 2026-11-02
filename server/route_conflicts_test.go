@@ -988,15 +988,19 @@ func TestTenantOwnedTrespassAfterStartPanics(t *testing.T) {
 				rec := serveFamilyRequest(srv, tt.served)
 				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 				assert.Equal(t, tt.body, rec.Body.String())
-				return
+			} else {
+				requireTrespassPanic(t, &tt.want, tt.wantLine, act)
+				requireTrespassPanic(t, &tt.want, tt.wantLine, act) // a recovered caller's retry is refused too
+				assert.Empty(t, DefaultRouteRegistry.ByPath(tt.want.Path), "a refused registration is never described")
+				rec := serveFamilyRequest(srv, tt.probe)
+				assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+				assert.False(t, mwRan, "a refused registration adds nothing the family's requests can reach")
+				assert.Empty(t, srv.RouteConflicts(), "after Start a trespass panics instead of being recorded")
 			}
-			requireTrespassPanic(t, &tt.want, tt.wantLine, act)
-			requireTrespassPanic(t, &tt.want, tt.wantLine, act) // a recovered caller's retry is refused too
-			assert.Empty(t, DefaultRouteRegistry.ByPath(tt.want.Path), "a refused registration is never described")
-			rec := serveFamilyRequest(srv, tt.probe)
-			assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
-			assert.False(t, mwRan, "a refused registration adds nothing the family's requests can reach")
-			assert.Empty(t, srv.RouteConflicts(), "after Start a trespass panics instead of being recorded")
+			srv.admission.mu.Lock()
+			registered := srv.admission.registered
+			srv.admission.mu.Unlock()
+			assert.Empty(t, registered, "after Start no family scans the registration record, so it keeps nothing")
 		})
 	}
 }

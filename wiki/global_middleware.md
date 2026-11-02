@@ -30,7 +30,7 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 | --- | --- |
 | Runs once per request | Registered on the root echo chain (`e.Use`), compiled once, applied to every request. |
 | Cannot be skipped per-route | Registration is framework-controlled; no route-level opt-out exists. |
-| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup). |
+| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup), which registration after `Start` cannot bypass. |
 | Skips health/ready | The framework wraps each with the health/ready probe skipper: the exemption is keyed on the route the router matched, so it covers exactly the probe routes the server registered, on `GET`/`HEAD`. |
 | Deterministic ordering | Across modules, middleware composes in module-registration order. |
 
@@ -147,7 +147,8 @@ order. Root tenant resolution skips a family's routes, and the family resolves i
 after the root chain, so this slot would run there with no tenant in context. The check counts
 only installed middleware: a gate that returns nil when its config flag is off boots, and is
 refused where the flag is on. Startup warns when a module implements `GlobalMiddleware()`,
-returns nothing, and a family exists.
+returns nothing, and a family exists. After `Start`, nothing checks again, so
+`RegisterGlobalMiddleware` beside a family panics, and `TenantOwnedGroup` panics outright.
 
 In such a binary, attach the gate per group instead. On a family, put it in the family's
 `Authenticate` steps (before the tenant) or add it with `Use` (after it). Elsewhere, put it on

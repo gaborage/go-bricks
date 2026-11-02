@@ -533,7 +533,9 @@ interface byte-identical — purely additive, apidiff green, `feat:` not `feat!:
 limitations: runs after rate-limiting and before JOSE body decryption (header/token/tenant
 auth only), and emits the standard envelope on raw-response routes. Amended by ADR-164: startup
 refuses global middleware beside a tenant-owned route family, whose routes the root tenant seat
-skips, so the after-tenant-resolution guarantee holds in every binary that passes the startup check.
+skips; after `Start`, `TenantOwnedGroup` panics, as does `RegisterGlobalMiddleware` beside a
+family. So the after-tenant-resolution guarantee holds in every binary that passes the startup
+check.
 
 **Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved; single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
 
