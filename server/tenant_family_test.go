@@ -1198,20 +1198,20 @@ func TestTenantOwnedDescriptorCannotBeForgedOrCleared(t *testing.T) {
 // runs the handler only with the seat's skip evidence and the tenant the family's steps
 // published; anything else is the framework 500, and the handler never runs.
 func TestTenantOwnedGuardRequiresSeatSkipEvidence(t *testing.T) {
-	published := multitenant.SetTenant(context.Background(), familyTenant)
 	tests := []struct {
-		name          string
-		evidence      bool
-		published     context.Context // familyPublishedKey's value; nil sets none
-		requestTenant string
-		wantRun       bool
-		wantReason    string
+		name            string
+		evidence        bool
+		setPublished    bool   // whether familyPublishedKey is set
+		publishedTenant string // the tenant its context holds; "" holds none
+		requestTenant   string
+		wantRun         bool
+		wantReason      string
 	}{
-		{name: "missing_evidence", published: published, requestTenant: familyTenant, wantReason: reasonSeatNotSkipped},
+		{name: "missing_evidence", setPublished: true, publishedTenant: familyTenant, requestTenant: familyTenant, wantReason: reasonSeatNotSkipped},
 		{name: "published_context_missing", evidence: true, requestTenant: familyTenant, wantReason: reasonTenantReplaced},
-		{name: "neither_context_holds_tenant", evidence: true, published: context.Background(), wantReason: reasonTenantReplaced},
-		{name: "request_holds_another_tenant", evidence: true, published: published, requestTenant: "other-tenant", wantReason: reasonTenantReplaced},
-		{name: "evidence_and_published_tenant_run", evidence: true, published: published, requestTenant: familyTenant, wantRun: true},
+		{name: "neither_context_holds_tenant", evidence: true, setPublished: true, wantReason: reasonTenantReplaced},
+		{name: "request_holds_another_tenant", evidence: true, setPublished: true, publishedTenant: familyTenant, requestTenant: "other-tenant", wantReason: reasonTenantReplaced},
+		{name: "evidence_and_published_tenant_run", evidence: true, setPublished: true, publishedTenant: familyTenant, requestTenant: familyTenant, wantRun: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1224,8 +1224,12 @@ func TestTenantOwnedGuardRequiresSeatSkipEvidence(t *testing.T) {
 			if tt.evidence {
 				hc.Set(seatSkippedKey, true)
 			}
-			if tt.published != nil {
-				hc.Set(familyPublishedKey, tt.published)
+			if tt.setPublished {
+				published := context.Background()
+				if tt.publishedTenant != "" {
+					published = multitenant.SetTenant(published, tt.publishedTenant)
+				}
+				hc.Set(familyPublishedKey, published)
 			}
 
 			ran := false
