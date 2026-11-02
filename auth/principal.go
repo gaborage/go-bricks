@@ -170,9 +170,17 @@ func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
 // request, and whether one was attached. Absence (ok == false) means the request
 // skipped the middleware or carried no credential.
 func PrincipalFromContext(ctx context.Context) (p Principal, ok bool) {
-	p, ok = ctx.Value(keyPrincipal).(Principal)
+	p, ok = principalFrom(ctx)
 	if ok {
 		p.Audience = slices.Clone(p.Audience)
 	}
+	return p, ok
+}
+
+// principalFrom is the one reader of the context key. It returns the stored value
+// as is: Audience aliases the stored slice, so a caller must neither return nor
+// retain it.
+func principalFrom(ctx context.Context) (Principal, bool) {
+	p, ok := ctx.Value(keyPrincipal).(Principal)
 	return p, ok
 }

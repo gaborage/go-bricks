@@ -15,9 +15,11 @@ var errNoPrincipal = errors.New("auth: TenantClaim found no Principal in the req
 // TenantClaim reads the named claim from the Principal auth.Middleware attached in Authenticate.
 //
 // It is a tenant-owned family's TenantPolicy.Tenant: put auth.Middleware(v) in the
-// family's Authenticate steps. The claim must be a JSON string inside the tenant-ID
-// grammar (multitenant.ValidateTenantID, ADR-162). It is never trimmed or mapped, so
-// an issuer identity outside the grammar needs its own TenantFunc. It returns:
+// family's Authenticate steps, not on a parent group, whose middleware never runs on a
+// family route. claim names a top-level claim; a dotted name is a literal key, never a
+// path. The claim must be a JSON string inside the tenant-ID grammar
+// (multitenant.ValidateTenantID, ADR-162). It is never trimmed or mapped, so a nested
+// claim or an issuer identity outside the grammar needs its own TenantFunc. It returns:
 //   - a plain error when the request carries no Principal: a wiring fault, answered 500;
 //   - an error wrapping multitenant.ErrTenantResolutionFailed for an absent, empty or
 //     non-string claim: a client fault, answered by the family's Deny;
@@ -30,9 +32,9 @@ func TenantClaim(claim string) server.TenantFunc {
 		panic("auth.TenantClaim: empty claim name")
 	}
 	return func(c server.HandlerContext) (string, error) {
-		// Read the value directly: PrincipalFromContext clones Audience per call, and this
-		// per-request step reads only Claims.
-		p, ok := c.RequestContext().Value(keyPrincipal).(Principal)
+		// principalFrom skips PrincipalFromContext's per-call Audience clone; this per-request
+		// step reads only Claims.
+		p, ok := principalFrom(c.RequestContext())
 		if !ok {
 			return "", errNoPrincipal
 		}
