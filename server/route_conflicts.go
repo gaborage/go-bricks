@@ -170,12 +170,16 @@ type admittedRoute struct {
 type routeAdmission struct {
 	mu         sync.Mutex
 	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
-	registered []RouteConflict      // every admitted route and every middleware-bearing group outside a family, in registration order, as its tenant-owned conflict without FirstPath
 	conflicts  []RouteConflict
 	engine     *echo.Echo    // the application engine; set by New
 	log        logger.Logger // the Server's logger; set by New
 	probePaths []string      // full health and ready paths on the application listener
 	families   []string      // each tenant-owned family's full prefix, in build order
+
+	// registered is every admitted route (family routes and probes included) and every
+	// middleware-bearing group not built through a family, covered or not, in registration
+	// order, each as its tenant-owned conflict without FirstPath.
+	registered []RouteConflict
 }
 
 // seenRoute is the first registration of a route node, with its literal path.
@@ -221,13 +225,9 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		})
 		return false
 	}
-	if !r.Descriptor.TenantOwned {
-		if family, covered := a.familyCoveringLocked(r.Path); covered {
-			c := tenantOwnedConflict(r.Method, r.Path, reg)
-			c.FirstPath = family
-			a.conflicts = append(a.conflicts, c)
-			return false
-		}
+	c := tenantOwnedConflict(r.Method, r.Path, reg)
+	if !r.Descriptor.TenantOwned && a.refuseTrespassLocked(&c) {
+		return false
 	}
 	key := routeNodeKey(r.Method, r.Path)
 	if first, dup := a.seen[key]; dup {
@@ -238,12 +238,13 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		return false
 	}
 	a.seen[key] = seenRoute{reg: reg, path: r.Path}
-	a.registered = append(a.registered, tenantOwnedConflict(r.Method, r.Path, reg))
+	a.registered = append(a.registered, c)
 	return true
 }
 
-// admitGroup records a middleware-bearing group outside every family at its full prefix path,
-// and records a conflict when a family already covers it. pkg called Group or Use.
+// admitGroup records a middleware-bearing group not built through a family at its full prefix
+// path, whether or not a family covers it, and records a conflict when one already does. pkg
+// called Group or Use.
 func (a *routeAdmission) admitGroup(path, pkg string) {
 	if a == nil {
 		return
@@ -252,24 +253,25 @@ func (a *routeAdmission) admitGroup(path, pkg string) {
 	defer a.mu.Unlock()
 	c := tenantOwnedConflict("", path, RouteRegistrant{Package: pkg})
 	a.registered = append(a.registered, c)
-	if family, covered := a.familyCoveringLocked(path); covered {
-		c.FirstPath = family
-		a.conflicts = append(a.conflicts, c)
-	}
+	a.refuseTrespassLocked(&c)
 }
 
-// familyCoveringLocked returns the first family prefix path is at or below. a.mu is held.
-func (a *routeAdmission) familyCoveringLocked(path string) (string, bool) {
+// refuseTrespassLocked sets c.FirstPath to the family prefix covering c.Path and records c as a
+// conflict, reporting whether a family covers it. a.mu is held.
+func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
 	for _, family := range a.families {
-		if underPrefix(path, family) {
-			return family, true
+		if underPrefix(c.Path, family) {
+			c.FirstPath = family
+			a.conflicts = append(a.conflicts, *c)
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
-// reportTrespassLocked records every earlier route and middleware-bearing group at or below a
-// newly built family's prefix, routes and groups interleaved in registration order. a.mu is held.
+// reportTrespassLocked records every registered route and group at or below a newly built
+// family's prefix, interleaved in registration order; families never overlap and a family admits
+// no route before its scan, so no family's routes are reported. a.mu is held.
 func (a *routeAdmission) reportTrespassLocked(family string) {
 	for i := range a.registered {
 		if underPrefix(a.registered[i].Path, family) {

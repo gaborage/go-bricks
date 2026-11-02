@@ -882,21 +882,21 @@ func TestTenantOwnedTrespassIsRouteConflict(t *testing.T) {
 }
 
 // TestTenantOwnedTrespassReportsInRegistrationOrder pins that a family built after several
-// trespassers reports them in registration order.
+// trespassers reports them in registration order, routes and groups interleaved.
 func TestTenantOwnedTrespassReportsInRegistrationOrder(t *testing.T) {
 	srv := newTrespassTestServer(t)
 	register := func(mg RouteRegistrar) {
 		mg.Add(http.MethodGet, trespassFamily+"/a", trespassRaw)
-		RegisterHandler(NewHandlerRegistry(srv.cfg), mg, http.MethodGet, trespassFamily+"/b", trespassTyped)
 		mg.Group(trespassFamily+"/g", trespassMiddleware)
+		RegisterHandler(NewHandlerRegistry(srv.cfg), mg, http.MethodGet, trespassFamily+"/b", trespassTyped)
 	}
 	register(srv.ModuleGroup())
 	buildTrespassFamily(srv)
 
 	assert.Equal(t, []RouteConflict{
 		trespassRoute(trespassFamily+"/a", trespassRaw),
-		trespassRoute(trespassFamily+"/b", trespassTyped),
 		trespassGroup(trespassFamily + "/g"),
+		trespassRoute(trespassFamily+"/b", trespassTyped),
 	}, srv.RouteConflicts())
 }
 
