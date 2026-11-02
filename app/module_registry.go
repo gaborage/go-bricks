@@ -169,7 +169,7 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 }
 
 // registerRoutes is RegisterRoutes; each span also records how many tenant-owned families
-// families had built when it began (0 for a nil families).
+// `families` had built when it began (0 when `families` is nil).
 func (r *ModuleRegistry) registerRoutes(registrar server.RouteRegistrar, families tenantFamilyLister) {
 	opts := []server.HandlerRegistryOption{}
 	if r.deps.KeyStore != nil {

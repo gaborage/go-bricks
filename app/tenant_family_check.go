@@ -23,11 +23,10 @@ type attributedFamily struct {
 
 // checkTenantFamilyGlobalMiddleware fails startup when global middleware is installed beside a
 // tenant-owned route family (ADR-164). Beside a family it first WARNs once per GlobalMiddleware
-// implementer that installs none. A server missing either door is skipped; *server.Server has
-// both, and its Start refuses the same pair.
-func (a *App) checkTenantFamilyGlobalMiddleware() error {
-	lister, ok := a.server.(tenantFamilyLister)
-	if !ok {
+// implementer that installs none. A nil lister, or a server without the count door, is skipped;
+// *server.Server has both, and its Start refuses the same pair.
+func (a *App) checkTenantFamilyGlobalMiddleware(lister tenantFamilyLister) error {
+	if lister == nil {
 		return nil
 	}
 	counter, ok := a.server.(interface{ GlobalMiddlewareCount() int })
@@ -59,14 +58,16 @@ func (a *App) checkTenantFamilyGlobalMiddleware() error {
 }
 
 // attributeFamilies pairs each family with its module: family i belongs to span k when
-// spans[k].families <= i < spans[k+1].families, and to no module otherwise.
+// spans[k].families <= i < spans[k+1].families, and to no module otherwise. A span past the
+// prefixes (a lister that broke its append-only contract) is clamped, never indexed.
 func attributeFamilies(prefixes []string, spans []routeSpan) []attributedFamily {
 	out := make([]attributedFamily, len(prefixes))
 	for i, prefix := range prefixes {
 		out[i].prefix = prefix
 	}
 	for k := 0; k+1 < len(spans); k++ {
-		for i := spans[k].families; i < spans[k+1].families; i++ {
+		hi := min(spans[k+1].families, len(out))
+		for i := spans[k].families; i < hi; i++ {
 			out[i].module = spans[k].module
 		}
 	}

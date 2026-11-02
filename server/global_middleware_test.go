@@ -316,3 +316,34 @@ func TestServerStartRefusesTenantFamilyWithGlobalMiddleware(t *testing.T) {
 		})
 	}
 }
+
+// TestServerStartAllowsTenantFamilyWithoutGlobalMiddleware is P32's negative control: a family
+// alone, global middleware alone, or only nil global middleware beside a family lets Start serve.
+func TestServerStartAllowsTenantFamilyWithoutGlobalMiddleware(t *testing.T) {
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	tests := []struct {
+		name  string
+		build func(srv *Server)
+	}{
+		{name: "family_without_global_middleware", build: func(srv *Server) { buildTrespassFamily(srv) }},
+		{name: "global_middleware_without_family", build: func(srv *Server) { srv.RegisterGlobalMiddleware(mw) }},
+		{
+			name: "family_with_only_nil_global_middleware",
+			build: func(srv *Server) {
+				buildTrespassFamily(srv)
+				srv.RegisterGlobalMiddleware(nil)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			tt.build(srv)
+
+			errCh := startProbeServer(t, srv)
+
+			assert.NotNil(t, srv.BoundAddr())
+			shutdownAndDrain(t, srv, errCh)
+		})
+	}
+}

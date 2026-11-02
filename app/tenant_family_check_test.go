@@ -28,12 +28,21 @@ func mwModule(name string, mws ...server.MiddlewareFunc) *globalMWModule {
 
 // familyStubServer is a real server whose tenant-owned families a test records by hand; only
 // TenantFamilyPrefixes is stubbed, so the nil filter, count and RouteConflicts are the real ones.
+// A non-nil script replaces families with one answer per call, its last repeating.
 type familyStubServer struct {
 	*server.Server
 	families []string
+	script   [][]string
+	reads    int
 }
 
-func (s *familyStubServer) TenantFamilyPrefixes() []string { return slices.Clone(s.families) }
+func (s *familyStubServer) TenantFamilyPrefixes() []string {
+	if s.script != nil {
+		s.reads++
+		return slices.Clone(s.script[min(s.reads, len(s.script))-1])
+	}
+	return slices.Clone(s.families)
+}
 
 // familyModule builds its tenant-owned families, and registers a raw GET per entry of routes,
 // while its routes register.
@@ -63,6 +72,7 @@ type familyScenario struct {
 	families  []familyModule
 	seeded    []string
 	direct    []server.MiddlewareFunc
+	script    [][]string
 }
 
 type familyRun struct {
@@ -79,7 +89,7 @@ func runFamilyScenario(t *testing.T, sc *familyScenario) *familyRun {
 	t.Cleanup(server.DefaultRouteRegistry.Clear)
 	cfg := minimalAppConfig("")
 	run := &familyRun{log: &capturingLogger{}}
-	run.srv = &familyStubServer{Server: server.New(cfg, logger.New("error", false)), families: slices.Clone(sc.seeded)}
+	run.srv = &familyStubServer{Server: server.New(cfg, logger.New("error", false)), families: slices.Clone(sc.seeded), script: sc.script}
 	a := newConfiguredApp(t, cfg, &Options{Server: run.srv, PostRegisterRoutes: func([]server.RouteDescriptor) error {
 		run.hookCalls++
 		return nil
@@ -140,6 +150,17 @@ func TestPrepareRuntimeRefusesGlobalMiddlewareBesideTenantFamily(t *testing.T) {
 			name: "direct_middleware_only",
 			sc:   familyScenario{families: []familyModule{orgsFamily()}, direct: []server.MiddlewareFunc{passThroughMW, passThroughMW}},
 			want: `family /api/v1/orgs (module "orgs"); global middleware: 2 registered directly on the server; `,
+		},
+		{
+			// A lister breaking its append-only contract: orgs's span and the closing span read 0
+			// and 2 families, the check reads 1.
+			name: "family_list_shrinks_after_registration",
+			sc: familyScenario{
+				mwModules: []*globalMWModule{mwModule("audit", passThroughMW)},
+				families:  []familyModule{{name: "orgs"}},
+				script:    [][]string{nil, {"/a", "/b"}, {"/a"}},
+			},
+			want: `family /a (module "orgs"); global middleware from module(s) "audit"; `,
 		},
 	}
 	for _, tt := range tests {

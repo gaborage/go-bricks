@@ -76,7 +76,7 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.checkRouteConflicts(); err != nil {
 		return err
 	}
-	if err := a.checkTenantFamilyGlobalMiddleware(); err != nil {
+	if err := a.checkTenantFamilyGlobalMiddleware(lister); err != nil {
 		return err
 	}
 
