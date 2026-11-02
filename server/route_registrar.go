@@ -16,7 +16,8 @@ type routeGroup struct {
 	family *tenantFamily
 	// familyNode holds this family registrar's own middleware; nil outside a family.
 	familyNode *familyNode
-	// carriesMiddleware is set when the echo group has middleware, its own or its parent's.
+	// carriesMiddleware is set once the echo group has middleware, its own or its parent's, and
+	// admission has recorded the group (markMiddleware).
 	carriesMiddleware bool
 }
 
@@ -126,14 +127,13 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 		}
 	}
 	child := &routeGroup{
-		group:             rg.group.Group(normalized, rg.adaptAll(middleware)...),
-		prefix:            rg.combinePrefix(normalized),
-		cfg:               rg.cfg,
-		admission:         rg.admission,
-		carriesMiddleware: rg.carriesMiddleware || len(middleware) > 0,
+		group:     rg.group.Group(normalized, rg.adaptAll(middleware)...),
+		prefix:    rg.combinePrefix(normalized),
+		cfg:       rg.cfg,
+		admission: rg.admission,
 	}
-	if child.carriesMiddleware {
-		rg.admission.admitGroup(child.prefix, getCallerPackage(2))
+	if rg.carriesMiddleware || len(middleware) > 0 {
+		child.markMiddleware(getCallerPackage(2))
 	}
 	return child
 }
@@ -146,10 +146,19 @@ func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
 		return
 	}
 	if len(middleware) > 0 {
-		rg.carriesMiddleware = true
-		rg.admission.admitGroup(rg.prefix, getCallerPackage(2))
+		rg.markMiddleware(getCallerPackage(2))
 	}
 	rg.group.Use(rg.adaptAll(middleware)...)
+}
+
+// markMiddleware records rg's group with admission the first time it carries middleware; pkg
+// called Group or Use.
+func (rg *routeGroup) markMiddleware(pkg string) {
+	if rg.carriesMiddleware {
+		return
+	}
+	rg.carriesMiddleware = true
+	rg.admission.admitGroup(rg.prefix, pkg)
 }
 
 // adaptAll converts a slice of flat MiddlewareFunc to echo middleware using the group's config.

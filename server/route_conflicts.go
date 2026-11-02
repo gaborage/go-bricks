@@ -170,34 +170,28 @@ type admittedRoute struct {
 type routeAdmission struct {
 	mu         sync.Mutex
 	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
-	order      []string             // seen's keys, in registration order
-	groups     []admittedGroup      // middleware-bearing groups outside every family, in registration order
 	conflicts  []RouteConflict
 	engine     *echo.Echo    // the application engine; set by New
 	log        logger.Logger // the Server's logger; set by New
 	probePaths []string      // full health and ready paths on the application listener
 	families   []string      // each tenant-owned family's full prefix, in build order
+
+	// registered is every admitted route (family routes and probes included) and every
+	// middleware-bearing group not built through a family, covered or not, in registration
+	// order, each as its tenant-owned conflict without FirstPath.
+	registered []RouteConflict
 }
 
-// seenRoute is the first registration of a route node, with its method and literal path.
+// seenRoute is the first registration of a route node, with its literal path.
 type seenRoute struct {
-	reg    RouteRegistrant
-	method string
-	path   string
-}
-
-// admittedGroup is a middleware-bearing group outside every family: its full prefix and the
-// package that called Group or Use.
-type admittedGroup struct {
+	reg  RouteRegistrant
 	path string
-	pkg  string
 }
 
-func (g admittedGroup) conflict(familyPrefix string) RouteConflict {
-	return RouteConflict{
-		Path: g.path, FirstPath: familyPrefix, Duplicate: RouteRegistrant{Package: g.pkg},
-		Reason: RouteConflictReasonTenantOwned,
-	}
+// tenantOwnedConflict is the RouteConflictReasonTenantOwned conflict for a route (or, with an
+// empty method, a group), its FirstPath left for the family that refuses it.
+func tenantOwnedConflict(method, path string, reg RouteRegistrant) RouteConflict {
+	return RouteConflict{Method: method, Path: path, Duplicate: reg, Reason: RouteConflictReasonTenantOwned}
 }
 
 func newRouteAdmission() *routeAdmission {
@@ -206,8 +200,9 @@ func newRouteAdmission() *routeAdmission {
 
 // admit refuses a reserved engine method, then a route at or below a tenant-owned family's prefix
 // that did not come through the family, then a duplicate of a claimed echo route node (the first
-// registration keeps it), recording each refusal as a conflict; an admitted route is described in
-// DefaultRouteRegistry, then added through add.
+// registration keeps it), recording each refusal as a conflict; an admitted route is recorded in
+// registration order for a later family's trespass scan, described in DefaultRouteRegistry, then
+// added through add.
 func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	if !a.claim(r) {
 		return
@@ -230,13 +225,9 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		})
 		return false
 	}
-	if !r.Descriptor.TenantOwned {
-		if family, covered := a.familyCoveringLocked(r.Path); covered {
-			a.conflicts = append(a.conflicts, RouteConflict{
-				Method: r.Method, Path: r.Path, FirstPath: family, Duplicate: reg, Reason: RouteConflictReasonTenantOwned,
-			})
-			return false
-		}
+	c := tenantOwnedConflict(r.Method, r.Path, reg)
+	if !r.Descriptor.TenantOwned && a.refuseTrespassLocked(&c) {
+		return false
 	}
 	key := routeNodeKey(r.Method, r.Path)
 	if first, dup := a.seen[key]; dup {
@@ -246,49 +237,47 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		})
 		return false
 	}
-	a.seen[key] = seenRoute{reg: reg, method: r.Method, path: r.Path}
-	a.order = append(a.order, key)
+	a.seen[key] = seenRoute{reg: reg, path: r.Path}
+	a.registered = append(a.registered, c)
 	return true
 }
 
-// admitGroup records a middleware-bearing group outside every family at its full prefix path,
-// and records a conflict when a family already covers it. pkg called Group or Use.
+// admitGroup records a middleware-bearing group not built through a family at its full prefix
+// path, whether or not a family covers it, and records a conflict when one already does. pkg
+// called Group or Use.
 func (a *routeAdmission) admitGroup(path, pkg string) {
 	if a == nil {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	g := admittedGroup{path: path, pkg: pkg}
-	a.groups = append(a.groups, g)
-	if family, covered := a.familyCoveringLocked(path); covered {
-		a.conflicts = append(a.conflicts, g.conflict(family))
-	}
+	c := tenantOwnedConflict("", path, RouteRegistrant{Package: pkg})
+	a.registered = append(a.registered, c)
+	a.refuseTrespassLocked(&c)
 }
 
-// familyCoveringLocked returns the first family prefix path is at or below. a.mu is held.
-func (a *routeAdmission) familyCoveringLocked(path string) (string, bool) {
+// refuseTrespassLocked sets c.FirstPath to the family prefix covering c.Path and records c as a
+// conflict, reporting whether a family covers it. a.mu is held.
+func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
 	for _, family := range a.families {
-		if underPrefix(path, family) {
-			return family, true
+		if underPrefix(c.Path, family) {
+			c.FirstPath = family
+			a.conflicts = append(a.conflicts, *c)
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
-// reportTrespassLocked records, in registration order, every earlier route and then every
-// recorded middleware-bearing group at or below a newly built family's prefix. a.mu is held.
+// reportTrespassLocked records every registered route and group at or below a newly built
+// family's prefix, interleaved in registration order; families never overlap and a family admits
+// no route before its scan, so no family's routes are reported. a.mu is held.
 func (a *routeAdmission) reportTrespassLocked(family string) {
-	for _, key := range a.order {
-		if s := a.seen[key]; underPrefix(s.path, family) {
-			a.conflicts = append(a.conflicts, RouteConflict{
-				Method: s.method, Path: s.path, FirstPath: family, Duplicate: s.reg, Reason: RouteConflictReasonTenantOwned,
-			})
-		}
-	}
-	for _, g := range a.groups {
-		if underPrefix(g.path, family) {
-			a.conflicts = append(a.conflicts, g.conflict(family))
+	for i := range a.registered {
+		if underPrefix(a.registered[i].Path, family) {
+			c := a.registered[i]
+			c.FirstPath = family
+			a.conflicts = append(a.conflicts, c)
 		}
 	}
 }
@@ -332,7 +321,7 @@ func (a *routeAdmission) coveredProbePath(full string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, p := range a.probePaths {
-		if _, ok := pathutil.StripPathPrefix(p, full); ok {
+		if underPrefix(p, full) {
 			return p, true
 		}
 	}
@@ -345,10 +334,10 @@ func (a *routeAdmission) claimFamily(full string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, f := range a.families {
-		if _, under := pathutil.StripPathPrefix(full, f); under {
+		if underPrefix(full, f) {
 			return f, false
 		}
-		if _, covers := pathutil.StripPathPrefix(f, full); covers {
+		if underPrefix(f, full) {
 			return f, false
 		}
 	}
