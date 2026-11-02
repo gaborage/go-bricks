@@ -14,6 +14,11 @@
 > in an app-level global middleware (ADR-036), which runs before the per-group
 > `auth.Middleware` and so sees no verified principal; the check now sits after
 > `auth.Middleware` in the same route group.
+>
+> **Amended (2026-11-02, by [ADR-164](adr_164_tenant_owned_route_family.md)):** a
+> tenant-owned route family (`server.TenantOwnedGroup`) resolves its own tenant inside its
+> own pipeline. The root tenant seat, and so the composite chain this ADR orders, does not
+> run on its routes. The obligations below apply to every route the seat still serves.
 
 ## Context
 

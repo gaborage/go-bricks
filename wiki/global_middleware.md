@@ -30,7 +30,7 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 | --- | --- |
 | Runs once per request | Registered on the root echo chain (`e.Use`), compiled once, applied to every request. |
 | Cannot be skipped per-route | Registration is framework-controlled; no route-level opt-out exists. |
-| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`. |
+| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`. Startup refuses a binary that also builds a tenant-owned route family ([Fail-closed startup](#fail-closed-startup)), so this holds in every binary that passes the startup check and builds no family after `Start`. |
 | Skips health/ready | The framework wraps each with the health/ready probe skipper: the exemption is keyed on the route the router matched, so it covers exactly the probe routes the server registered, on `GET`/`HEAD`. |
 | Deterministic ordering | Across modules, middleware composes in module-registration order. |
 
@@ -56,7 +56,7 @@ its guard in one place. `auth` chose the second; a service that wants the first 
 identity, beside the service-wide `server.forwardedclientcert.require` ([forwarded_client_cert.md](forwarded_client_cert.md), ADR-043).
 
 Use this seam for gates that genuinely have no route-shaped exemptions: a drain/maintenance
-gate, a global audit record, a shared API-key check in front of an internal service.
+gate, a global audit record, a shared API-key check in front of an internal service. A binary that builds a tenant-owned route family (`server.TenantOwnedGroup`) cannot use this seam: startup refuses global middleware there ([Fail-closed startup](#fail-closed-startup)).
 
 ## Writing a gate
 
@@ -108,6 +108,8 @@ Global middleware lands at the **innermost slot** of the root chain:
 panic guard → requestID → tenant resolution → logger → Recover → timeout → rate-limit → [GLOBAL MIDDLEWARE] → handler
 ```
 
+On a tenant-owned route family's route, the `tenant resolution` box is skipped. The family resolves its tenant later, inside its own pipeline, which is why startup refuses this slot beside a family.
+
 Consequences:
 
 - Runs **inside `Recover`** — panics are caught. Everything above it runs inside the outermost
@@ -135,3 +137,13 @@ Consequences:
 If a module registers global middleware but the configured server cannot install it (a custom
 `ServerRunner` that is not `*server.Server`), startup **aborts** rather than silently serving
 unguarded traffic — a mis-wired security gate should refuse to start.
+
+Startup also **aborts** (`errors.Is(err, server.ErrTenantFamilyWithGlobalMiddleware)`) when at least one non-nil global middleware is installed and the binary builds a tenant-owned route family (`server.TenantOwnedGroup`, ADR-164), in either order. Root tenant resolution skips a family's routes, and the family resolves its tenant only after the root chain, so this slot would run there with no tenant in context. The check counts only installed middleware: a gate that returns nil when its config flag is off boots, and is refused where the flag is on. Startup warns when a module implements `GlobalMiddleware()`, returns nothing, and a family exists.
+
+In such a binary, attach the gate per group instead. On a family, put it in the family's `Authenticate` steps (before the tenant) or add it with `Use` (after it). Elsewhere, put it on each group that needs it. Three things change for a moved gate:
+
+- Framework routes (`/_sys`, `/debug`) lose the consumer's gate. Their own CIDR and bearer checks still apply, and so do the root chain's.
+- In `Authenticate`, a 4xx goes to the family's `Deny`, not the standard envelope. The default `DenyBodyless` writes no body. A 5xx is still framework-rendered.
+- Added with `Use`, it runs after the family's 404, so it never sees an unknown sub-path. It also reaches only routes registered after the call.
+
+A single-tenant binary is unaffected: it cannot build a family.

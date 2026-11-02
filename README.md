@@ -311,7 +311,8 @@ type MessagingDeclarer interface {
 }
 
 // Optional — implement to contribute app-wide middleware that runs once per
-// request (after tenant resolution, before handlers; no per-route opt-out)
+// request (after tenant resolution, before handlers; no per-route opt-out).
+// Startup refuses it in a binary that builds a tenant-owned route family.
 type GlobalMiddlewareRegisterer interface {
     GlobalMiddleware() []server.MiddlewareFunc
 }

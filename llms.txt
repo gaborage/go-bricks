@@ -1190,7 +1190,7 @@ func (h *Handler) ListOrders(_ NoBodyReq, ctx server.HandlerContext) (server.Res
 | `r.Group("/path", middleware)` | Apply to route subtree | Auth for /admin/* |
 | Skipper function | Conditionally skip | Skip rate limit for /health |
 | Context propagation | Pass data downstream | User ID, tenant ID |
-| `GlobalMiddleware()` (module interface) | App-wide, once; no route opt-out (probes exempt) | Maintenance/drain gate, global audit |
+| `GlobalMiddleware()` (module interface) | App-wide, once; no route opt-out (probes exempt); refused beside a `server.TenantOwnedGroup` family | Maintenance/drain gate, global audit |
 
 ### Bearer Credential Verification (`auth`)
 
@@ -1372,6 +1372,10 @@ Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) 
   apply); only `/health` and `/ready` are exempt.
 - **Fail-closed**: if the configured server cannot install it (a custom `ServerRunner`),
   startup aborts rather than serving unguarded traffic.
+- **Refused beside a tenant-owned family**: startup aborts
+  (`errors.Is(err, server.ErrTenantFamilyWithGlobalMiddleware)`) when any non-nil global
+  middleware is installed and the binary builds a `server.TenantOwnedGroup` family, in either
+  order (ADR-164). Attach the gate per group instead: the family's `Authenticate` or `Use`.
 - **Ordering**: across modules, middleware composes in module-registration order.
 
 ### Route Template & Path Parameters (v0.46.0+)

@@ -211,13 +211,15 @@ response bytes.
 - **The family is built on the engine at its full prefix**, so parent-registrar middleware never
   runs on it, in either order.
 - **Catch-alls and `Use`.**
-  - The family registers exactly one catch-all pair (`<prefix>`, `<prefix>/*`) carrying steps
-    1-4. Nested groups register none.
+  - The family's catch-alls carry steps 1-4: an any-method route at `<prefix>`, a not-found
+    route at `<prefix>/*`, and a not-found route at each family template ending in a wildcard.
+    Nested groups register none of their own.
   - The family's `Use` and nested-group middleware are stored and attached per route, never
     through echo's `Group.Use`. So `Use` reaches every route registered after the call, including
     routes registered through a nested group created before it, and no route registered before it.
-- **The flag.** Every route a framework `routeGroup` builds sets `TenantOwned = rg.owned`, owned or
-  not, after `RegisterHandler`'s `RouteOption` loop.
+- **The flag.** Every route a framework `routeGroup` builds sets `TenantOwned = rg.family != nil`
+  (true exactly for a route registered through a family), after `RegisterHandler`'s `RouteOption`
+  loop.
   - So no option can forge or clear the flag.
   - A registrar the framework did not build, passed to `RegisterHandler`, is outside the
     guarantee. ADR-155 scopes its own guarantee the same way.
@@ -237,7 +239,10 @@ response bytes.
 - `r` is already inside a family;
 - multitenant is disabled. The panic names the prefix, following
   [ADR-127](adr_127_resource_plan_rule.md)'s precedent. A module shared with single-tenant
-  binaries branches on config.
+  binaries branches on config;
+- the Server installed no tenant seat, because its tenant resolver could not be built (a
+  multitenant config that skipped `config.Validate`). The leaf guard would otherwise refuse
+  every family request.
 
 **Each family belongs to one module:** the one whose `RegisterRoutes` built it. A second family on
 an overlapping prefix panics. Another module's routes or middleware-bearing groups under the
@@ -369,8 +374,8 @@ On `Tenant`:
   states each case.
 - **Echo coupling is pinned.** Two echo behaviors carry the design: the seat-skip key is echo's
   matched route path (`c.Path()`), and an unmatched sub-path or method under the prefix lands on
-  the family's one catch-all pair at `<prefix>` and `<prefix>/*`. Pin tests cover both, so an
-  echo upgrade that moves either fails the suite instead of a family. Echo's `Group.Use` re-registers that pair, which is
+  one of the family's catch-alls. Pin tests cover both, so an echo upgrade that moves either
+  fails the suite instead of a family. Echo's `Group.Use` re-registers a catch-all pair, which is
   why the family's `Use` never calls it.
 - **A moved gate changes in three ways.** A binary that builds a family cannot keep global
   middleware, so its gates move to groups: on a family, into `Authenticate` (before the tenant) or

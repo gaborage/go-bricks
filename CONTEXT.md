@@ -267,10 +267,11 @@ _Avoid_: tenant middleware, tenant extractor, tenant provider, resolver (bare:
 the auth package's key resolver is a different thing)
 
 **Tenant seat**:
-Under multitenant, the single point every application request passes where the
-tenant resolver runs and a request without a valid tenant is turned away,
-before any module code sees it. Health and readiness probes skip it; without
-multitenant there is no seat.
+Under multitenant, the point on the root chain where the configured tenant
+resolver runs. It covers every application request outside a tenant-owned
+route family, and it turns away a request without a valid tenant before
+module code sees it. Health and readiness probes and tenant-owned families
+skip it. Without multitenant there is no seat.
 _Avoid_: tenant middleware (names the mechanism, not the role), tenant check,
 tenant gate
 
@@ -282,11 +283,24 @@ accessor refuses it as a client fault when the store's error wraps
 passes that error on through `server.NewUnknownTenantError`.
 _Avoid_: invalid tenant (that one is malformed), missing tenant
 
+**Client fault**:
+A failure the caller caused before the request's tenant is known, such as no
+credential, a bad credential, or no usable tenant. A tenant-owned family
+answers it in its own words. Its opposite, a _server fault_, is always
+answered by the framework.
+_Avoid_: deny error, rejection
+
 **Route family**:
 Routes registered together under one path prefix that share one policy: who
 authenticates them, where their tenant comes from, what their error bodies look
 like. A module may register several.
 _Avoid_: route group (the router mechanism that carries one), API, module
+
+**Tenant-owned family**:
+A route family that resolves its own tenant, after its own authentication
+when it has one, instead of passing the tenant seat. It answers its callers'
+faults in its own words.
+_Avoid_: owned group, tenant group, skip list
 
 **Tenancy**:
 Which key a resource kind is resolved and replayed under when multitenant is

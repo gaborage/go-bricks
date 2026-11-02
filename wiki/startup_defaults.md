@@ -135,6 +135,16 @@ The error is a `*server.DuplicateRouteError` whatever the reasons: `errors.As` r
 
 There is no disable knob — a colliding route is always a startup-blocking bug, never a warning. Fix by removing or renaming the colliding route.
 
+## Tenant-Owned Route Families
+
+`server.TenantOwnedGroup` (ADR-164) mounts a route family that resolves its own tenant instead of passing the root tenant seat. Startup holds it to three refusals:
+
+- **At the call site** (a panic naming the prefix): a registrar the framework did not build, a nil `Tenant`, multitenant disabled, no tenant seat installed (a multitenant config whose tenant resolver could not be built), a prefix of `""` or `/`, a `:param` or `*` segment, a prefix covering the health or ready path, or a prefix overlapping another family's on a segment boundary (`/partner` overlaps `/partner/v2`; `/partner/v20` does not).
+- **Trespass:** another module's route, or a group carrying middleware, at or below a family's prefix is a `RouteConflictReasonTenantOwned` conflict in the same `*server.DuplicateRouteError` as [Duplicate Route Detection](#duplicate-route-detection). App startup refuses it before the route table hook, and `server.Start` refuses before binding.
+- **Global middleware:** any installed global middleware beside a family fails startup with `server.ErrTenantFamilyWithGlobalMiddleware` ([global_middleware.md](global_middleware.md#fail-closed-startup)).
+
+A family built after `Start` through a retained registrar is outside these checks.
+
 ## Route Table Hook
 
 `app.Options.PostRegisterRoutes func([]server.RouteDescriptor) error` lets a service veto its own route table before traffic arrives — for example, reject a route outside the versioned prefix, or a raw route (nil `RequestType`) where only typed handlers are allowed. It runs once per `App.Run`, after every module's `RegisterRoutes`, the route log and the duplicate-route check above, and before either listener opens. A non-nil error aborts startup the same way a route conflict does, wrapped as `app.Options.PostRegisterRoutes rejected the route table: <err>`. A nil hook changes nothing.
