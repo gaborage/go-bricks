@@ -1225,11 +1225,7 @@ func TestTenantOwnedGuardRequiresSeatSkipEvidence(t *testing.T) {
 				hc.Set(seatSkippedKey, true)
 			}
 			if tt.setPublished {
-				published := context.Background()
-				if tt.publishedTenant != "" {
-					published = multitenant.SetTenant(published, tt.publishedTenant)
-				}
-				hc.Set(familyPublishedKey, published)
+				hc.Set(familyPublishedKey, multitenant.SetTenant(context.Background(), tt.publishedTenant))
 			}
 
 			ran := false
