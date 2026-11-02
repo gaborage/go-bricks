@@ -243,8 +243,12 @@ response bytes.
 - the Server installed no tenant seat, because its tenant resolver could not be built (a
   multitenant config that skipped `config.Validate`). The leaf guard would otherwise refuse
   every family request;
-- it is called after `Start`, through a retained registrar. The tenant seat would start skipping
-  plain routes already live under the prefix, which carry no leaf guard.
+- `Start` has been called, whatever registrar the call gets (a retained one or a fresh
+  `ModuleGroup()`) and whether or not `Start` got to serve (a setup error, or a `Shutdown` before
+  `Start`). `Start` seals admission right after it claims its started flag, so a Server builds
+  families only before its one `Start`. The motivating case is a retained registrar on a serving
+  Server: the tenant seat would start skipping plain routes already live under the prefix, which
+  carry no leaf guard.
 
 After `Start`, a route or middleware-bearing group registered from outside a family at or below
 its prefix panics at registration with an error matching `ErrDuplicateRoute`, prefixed
@@ -288,10 +292,11 @@ field doc comments state what each field means under each reason. Under `duplica
 
 Call-site refusals panic. Trespass and the global-middleware refusal are returned errors, because
 each depends on two facts that can arrive in either order. A call-site refusal needs only facts
-that are all known when `TenantOwnedGroup` runs (its arguments, its registrar, the configuration
-and the families already built), so it fails fast where the mistake is written; a two-fact refusal
-cannot be decided by whichever fact arrives first, so it is recorded and refused at startup. After
-`Start` no family can be built, so a trespass is decided where it is registered and panics there.
+that are all known when `TenantOwnedGroup` runs (its arguments, its registrar, the configuration,
+the families already built and whether `Start` has been called), so it fails fast where the
+mistake is written; a two-fact refusal cannot be decided by whichever fact arrives first, so it is
+recorded and refused at startup. After `Start` no family can be built, so a trespass is decided
+where it is registered and panics there.
 
 ### Global middleware beside a family
 
@@ -338,8 +343,8 @@ tenant-owned route family with global middleware: 2 family(ies) (/api/v1/orgs, /
 **Returned errors.** Both refusals return errors that wrap `ErrTenantFamilyWithGlobalMiddleware`.
 
 **After `Start`:** `TenantOwnedGroup` panics, so no family is built past this check, and
-`RegisterGlobalMiddleware` beside an existing family panics, so no global middleware is installed
-past it either.
+`RegisterGlobalMiddleware` beside an existing family panics with an error wrapping
+`ErrTenantFamilyWithGlobalMiddleware`, so no global middleware is installed past it either.
 
 ### Publishes before the tenant exists
 

@@ -423,4 +423,19 @@ on 1.27.
 #   run before the family resolves its tenant
 # → Attach each gate per group instead: the family's Authenticate (before the tenant)
 #   or Use (after it), and every other group that needs it
+
+# "server: registration after Start: route registration refused (N conflict(s))" + "inside a tenant-owned route family"
+# → Panic: a route, or a group carrying middleware, was registered from outside a family
+#   under its prefix after Start (errors.Is(err, server.ErrDuplicateRoute))
+# → Register it before Start through the family's registrar, or off the prefix
+
+# "server: tenant-owned group registration failed for ...: build tenant-owned families in RegisterRoutes, before Start"
+# → Panic: server.TenantOwnedGroup was called after Start (any Start call, even one
+#   that returned an error)
+# → Build it in Module.RegisterRoutes, or before calling Start on a server-only setup
+
+# "server: global middleware registered after Start: tenant-owned route family with global middleware (...)"
+# → Panic: RegisterGlobalMiddleware was called after Start beside a server.TenantOwnedGroup
+#   family (errors.Is(err, server.ErrTenantFamilyWithGlobalMiddleware))
+# → Register global middleware before Start, or attach the gate per group
 ```

@@ -86,9 +86,9 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 //     JOSE and the handler, all after the publish.
 //
 // A 4xx from steps 1-2, or a status-less error wrapping multitenant.ErrTenantResolutionFailed
-// or ErrInvalidTenantID, goes to p.Deny, except a 413 and an error wrapping
-// multitenant.ErrNoTenant. A step that commits its own response keeps it. Everything else,
-// including a 5xx, a deadline or a cancel, is framework-rendered.
+// or ErrInvalidTenantID, goes to p.Deny, except a 413 and an error wrapping a deadline, a
+// cancel, or multitenant.ErrNoTenant. A step that commits its own response keeps it.
+// Everything else, including a 5xx, is framework-rendered.
 // Steps 1-3 also run before step 4's 404. There a Tenant that reads a path parameter finds
 // none on the prefix catch-alls, and the template's own on a wildcard route's not-found
 // catch-all. Either way it must fail on an empty value with an error Deny answers; returning

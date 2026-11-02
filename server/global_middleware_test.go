@@ -362,7 +362,7 @@ func TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily(t *testing.T
 	}{
 		{
 			name: "beside_family_panics", family: true, mw: mw,
-			wantPanic: "server: global middleware registered after Start beside a tenant-owned route family (" +
+			wantPanic: "server: global middleware registered after Start: tenant-owned route family with global middleware (" +
 				trespassFamily + "); " + tenantFamilyGlobalMiddlewareHint,
 		},
 		{name: "without_family_installs", mw: mw, wantCount: 1},
@@ -379,7 +379,15 @@ func TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily(t *testing.T
 			register := func() { srv.RegisterGlobalMiddleware(tt.mw) }
 
 			if tt.wantPanic != "" {
-				require.PanicsWithValue(t, tt.wantPanic, register)
+				func() {
+					defer func() {
+						err, ok := recover().(error)
+						require.True(t, ok, "expected registration to panic with an error")
+						require.ErrorIs(t, err, ErrTenantFamilyWithGlobalMiddleware)
+						assert.EqualError(t, err, tt.wantPanic)
+					}()
+					register()
+				}()
 			} else {
 				require.NotPanics(t, register)
 			}
