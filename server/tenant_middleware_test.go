@@ -321,7 +321,7 @@ func TestTenantSeatRefusesOffGrammarID(t *testing.T) {
 	}
 }
 
-// TestTenantSeatSkipsOwnedPrefix pins P14 through New with the header resolver: the tenant
+// TestTenantSeatSkipsOwnedPrefix pins, through New with the header resolver, that the tenant
 // seat skips exactly the requests whose matched route template a tenant-owned family owns,
 // leaving seatSkippedKey for the family to find, and resolves every other route as before.
 func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {

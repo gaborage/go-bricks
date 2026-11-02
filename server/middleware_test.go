@@ -1254,7 +1254,7 @@ func TestCompositeSubdomainFirstResolvesFoldedHost(t *testing.T) {
 	}
 }
 
-// TestOnlyTenantSeatReadsOwnership pins P15: on a tenant-owned family's route, which the
+// TestOnlyTenantSeatReadsOwnership pins that on a tenant-owned family's route, which the
 // tenant seat skips, every other reader in the chain New builds behaves as on any route. It
 // fails only if a reader other than the seat starts skipping a family. Every case runs in a
 // synctest bubble, so the limiters' clock stands still and their buckets never refill.

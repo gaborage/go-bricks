@@ -261,14 +261,24 @@ func (a *routeAdmission) admitGroup(path, pkg string) {
 // refuseTrespassLocked sets c.FirstPath to the family prefix covering c.Path and records c as a
 // conflict, reporting whether a family covers it. a.mu is held.
 func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
-	for _, family := range a.families {
-		if underPrefix(c.Path, family) {
-			c.FirstPath = family
-			a.conflicts = append(a.conflicts, *c)
-			return true
+	family, ok := coveringFamily(c.Path, a.families)
+	if !ok {
+		return false
+	}
+	c.FirstPath = family
+	a.conflicts = append(a.conflicts, *c)
+	return true
+}
+
+// coveringFamily returns the family prefix in families that path equals or sits under. The
+// trespass refusal and the tenant seat's skip both decide ownership here.
+func coveringFamily(path string, families []string) (string, bool) {
+	for _, f := range families {
+		if underPrefix(path, f) {
+			return f, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // reportTrespassLocked records every registered route and group at or below a newly built
@@ -358,12 +368,8 @@ func (a *routeAdmission) owns(template string) bool {
 	if families == nil {
 		return false
 	}
-	for _, f := range *families {
-		if underPrefix(template, f) {
-			return true
-		}
-	}
-	return false
+	_, ok := coveringFamily(template, *families)
+	return ok
 }
 
 func (a *routeAdmission) familyPrefixes() []string {
