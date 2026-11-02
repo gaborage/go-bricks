@@ -40,14 +40,14 @@ func newAdmittingRouteGroup(group *echo.Group, prefix string, cfg *config.Config
 // routeAdmission.admit.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descriptor *RouteDescriptor) {
 	relative := rg.relativePath(path)
+	fullPath := rg.fullPathFromRelative(relative)
 	// After RegisterHandler's RouteOptions, so no option forges or clears it.
 	descriptor.TenantOwned = rg.family != nil
-	mw := rg.routeMiddleware(nil)
 	rg.admission.admit(admittedRoute{
 		Method:     method,
-		Path:       rg.fullPathFromRelative(relative),
+		Path:       fullPath,
 		Descriptor: descriptor,
-	}, func() { rg.group.Add(method, relative, h, mw...) })
+	}, func() { rg.addAdmitted(method, relative, fullPath, h, nil) })
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -67,14 +67,21 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 	reg := RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg}
 	descriptor := modellessDescriptor(method, fullPath, reg)
 	descriptor.TenantOwned = rg.family != nil
-	mw := rg.routeMiddleware(middleware)
 	rg.admission.admit(admittedRoute{
 		Method:     method,
 		Path:       fullPath,
 		Descriptor: descriptor,
-	}, func() {
-		rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), mw...)
-	})
+	}, func() { rg.addAdmitted(method, relative, fullPath, adaptHandler(handler, rg.cfg), middleware) })
+}
+
+// addAdmitted adds an admitted route to rg's echo group at relative, the spelling on it of full.
+// Inside a tenant-owned family, a template holding a wildcard also gets the family's catch-all at
+// its echo node (tenantFamily.addWildcardCatchAll).
+func (rg *routeGroup) addAdmitted(method, relative, full string, h echo.HandlerFunc, mw []MiddlewareFunc) {
+	rg.group.Add(method, relative, h, rg.routeMiddleware(mw)...)
+	if rg.family != nil {
+		rg.family.addWildcardCatchAll(rg.group, relative, full)
+	}
 }
 
 // routeMiddleware returns a route's echo middleware: mw adapted, and inside a tenant-owned
@@ -111,26 +118,16 @@ func modellessDescriptor(method, path string, reg RouteRegistrant) *RouteDescrip
 
 func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
 	normalized := pathutil.NormalizePrefix(prefix)
+	child := &routeGroup{prefix: rg.combinePrefix(normalized), cfg: rg.cfg, admission: rg.admission, family: rg.family}
 	if rg.family != nil {
 		// Echo's Group with middleware auto-registers a catch-all pair carrying only that
 		// middleware, replacing the family's; the child node keeps it for its routes instead.
-		return &routeGroup{
-			group:      rg.group.Group(normalized),
-			prefix:     rg.combinePrefix(normalized),
-			cfg:        rg.cfg,
-			admission:  rg.admission,
-			family:     rg.family,
-			familyNode: &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)},
-		}
+		child.group = rg.group.Group(normalized)
+		child.familyNode = &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)}
+		return child
 	}
-	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
-
-	return &routeGroup{
-		group:     newGroup,
-		prefix:    rg.combinePrefix(normalized),
-		cfg:       rg.cfg,
-		admission: rg.admission,
-	}
+	child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
+	return child
 }
 
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
