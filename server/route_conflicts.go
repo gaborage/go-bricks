@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/labstack/echo/v5"
 
@@ -171,10 +172,11 @@ type routeAdmission struct {
 	mu         sync.Mutex
 	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts  []RouteConflict
-	engine     *echo.Echo    // the application engine; set by New
-	log        logger.Logger // the Server's logger; set by New
-	probePaths []string      // full health and ready paths on the application listener
-	families   []string      // each tenant-owned family's full prefix, in build order
+	engine     *echo.Echo               // the application engine; set by New
+	log        logger.Logger            // the Server's logger; set by New
+	probePaths []string                 // full health and ready paths on the application listener
+	families   []string                 // each tenant-owned family's full prefix, in build order
+	owned      atomic.Pointer[[]string] // families, republished copy-on-write for owns
 
 	// registered is every admitted route (family routes and probes included) and every
 	// middleware-bearing group not built through a family, covered or not, in registration
@@ -342,8 +344,26 @@ func (a *routeAdmission) claimFamily(full string) (string, bool) {
 		}
 	}
 	a.families = append(a.families, full)
+	owned := slices.Clone(a.families)
+	a.owned.Store(&owned)
 	a.reportTrespassLocked(full)
 	return "", true
+}
+
+// owns reports whether template, a matched route template, is a tenant-owned family's prefix
+// or sits under one. The tenant seat calls it per request, so it reads the copy claimFamily
+// republishes, without the lock.
+func (a *routeAdmission) owns(template string) bool {
+	families := a.owned.Load()
+	if families == nil {
+		return false
+	}
+	for _, f := range *families {
+		if underPrefix(template, f) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *routeAdmission) familyPrefixes() []string {

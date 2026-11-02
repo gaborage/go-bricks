@@ -25,7 +25,7 @@ const msgInvalidTenant = "Invalid tenant"
 // Constructed here with a nil logger — see tenantMiddlewareEcho for the
 // framework-logger form.
 func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc) MiddlewareFunc {
-	return fromEchoMiddleware(tenantMiddlewareEcho(resolver, skipperFromRequest(skipper), nil))
+	return fromEchoMiddleware(tenantMiddlewareEcho(resolver, skipperFromRequest(skipper), nil, nil))
 }
 
 // tenantMiddlewareEcho is the echo-native tenant-resolution middleware constructor.
@@ -33,16 +33,22 @@ func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc) 
 // passes its framework logger so rejected (400) requests leave a structured WARN
 // trail — this middleware is registered outer to the access logger
 // (server/middleware.go), so a short-circuited request never reaches it and would
-// otherwise leave zero server-side trail when observability is disabled. The
+// otherwise leave zero server-side trail when observability is disabled.
 // The skipper is the echo-native form (see probeSkipper): the framework passes the
 // template-keyed probe predicate, and a public SkipperFunc arrives through
-// skipperFromRequest. l may be nil, in which case the warning falls back to the stdlib log
-// package (mirrors corsWarnf).
-func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkipper, l logger.Logger) echo.MiddlewareFunc {
+// skipperFromRequest. owned reports whether a matched route template belongs to a tenant-owned
+// family, whose own steps resolve the tenant: the seat skips it and leaves seatSkippedKey as
+// evidence. A nil owned skips nothing. l may be nil, in which case the warning falls back to
+// the stdlib log package (mirrors corsWarnf).
+func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkipper, owned func(template string) bool, l logger.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			// Skip tenant resolution for specified routes
 			if skipper != nil && skipper(c) {
+				return next(c)
+			}
+			if owned != nil && owned(c.Path()) {
+				c.Set(seatSkippedKey, true)
 				return next(c)
 			}
 
@@ -62,6 +68,10 @@ func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkip
 		}
 	}
 }
+
+// seatSkippedKey marks a request the tenant seat skipped because a tenant-owned family owns its
+// matched route.
+const seatSkippedKey = "_tenant_seat_skipped"
 
 // tenantRejectionReason names the seat's failure class (empty tenant, untrusted
 // X-Forwarded-Host peer, or resolver error), never the resolver error's message.

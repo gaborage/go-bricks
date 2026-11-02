@@ -26,8 +26,8 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-// familySeatTenant is the tenant every request through the root chain carries: the root
-// tenant seat still resolves family routes.
+// familySeatTenant is the seat's header tenant every request carries. The seat skips a
+// family's routes, so no family stage ever sees it.
 const familySeatTenant = "seat-tenant"
 
 // newTenantFamilyConfig is newProbeTestConfig with multi-tenant mode on, resolving the tenant
@@ -576,7 +576,7 @@ func TestTenantOwnedGroupPublishesTenant(t *testing.T) {
 				rec := serveFamily(srv, http.MethodGet, "/fam/orders", withFamilyCredential)
 				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 				assert.Equal(t, familyTenant, tr.tenants[traceHandler])
-				assert.Equal(t, familySeatTenant, tr.tenants[traceAuthenticate], "control: the root seat's tenant until the family publishes")
+				assert.Empty(t, tr.tenants[traceAuthenticate], "the seat skips a family route: no tenant exists until the family publishes")
 			},
 		},
 		{

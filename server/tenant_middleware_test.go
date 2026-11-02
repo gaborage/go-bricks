@@ -73,7 +73,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			capturer := &capturingLogger{}
 			e := newTenantTestEcho()
-			e.Use(tenantMiddlewareEcho(tc.resolver, nil, capturer))
+			e.Use(tenantMiddlewareEcho(tc.resolver, nil, nil, capturer))
 			e.GET("/tenant-check", func(c *echo.Context) error {
 				return c.String(http.StatusOK, "ok")
 			})
@@ -104,7 +104,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 	resolver := &fixedTenantResolver{tenantID: "", err: nil}
 	e := newTenantTestEcho()
-	e.Use(tenantMiddlewareEcho(resolver, nil, nil))
+	e.Use(tenantMiddlewareEcho(resolver, nil, nil, nil))
 	e.GET("/tenant-check", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -319,4 +319,92 @@ func TestTenantSeatRefusesOffGrammarID(t *testing.T) {
 			assert.Equal(t, "Invalid tenant", resp.Error.Message)
 		})
 	}
+}
+
+// TestTenantSeatSkipsOwnedPrefix pins P14 through New with the header resolver: the tenant
+// seat skips exactly the requests whose matched route template a tenant-owned family owns,
+// leaving seatSkippedKey for the family to find, and resolves every other route as before.
+// Only non_family_route_resolves sends X-Tenant-ID.
+func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
+	const (
+		familyID = "partner-tenant"
+		seatID   = "acme"
+	)
+	tests := []struct {
+		name       string
+		path       string
+		seatHeader string
+		wantStatus int
+		wantFamily bool   // the family's Tenant step ran and found the seat's evidence
+		wantBody   string // the tenant the handler saw, when one answered
+	}{
+		{name: "static_route", path: "/partner/v2/orders", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		{name: "param_route", path: "/partner/v2/orders/42", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		{name: "wildcard_route", path: "/partner/v2/files/a/b.txt", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		// The seat keys on the matched template: a spelling no route registers lands in the
+		// family's catch-all, and the family, not the seat, answers 404.
+		{name: "percent_encoded_spelling", path: "/partner/v2/%6Frders", wantStatus: http.StatusNotFound, wantFamily: true},
+		{name: "bare_prefix_route", path: "/partner/v2", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		{name: "unknown_sub_path", path: "/partner/v2/nowhere", wantStatus: http.StatusNotFound, wantFamily: true},
+		{name: "segment_sibling_not_skipped", path: "/partner/v20", wantStatus: http.StatusBadRequest},
+		{name: "non_family_route_resolves", path: "/orders", seatHeader: seatID, wantStatus: http.StatusOK, wantBody: seatID},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testLog := &testLogger{}
+			cfg := newTenantFamilyConfig("")
+			DefaultRouteRegistry.Clear()
+			t.Cleanup(DefaultRouteRegistry.Clear)
+			srv := New(cfg, testLog)
+
+			var familyRan, evidence bool
+			policy := TenantPolicy{Tenant: func(c HandlerContext) (string, error) {
+				familyRan = true
+				evidence, _ = c.Get(seatSkippedKey).(bool)
+				return familyID, nil
+			}}
+			family := tenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy)
+			for _, path := range []string{"", "/orders", "/orders/:id", "/files/*"} {
+				family.Add(http.MethodGet, path, echoTenant)
+			}
+			srv.ModuleGroup().Add(http.MethodGet, "/orders", echoTenant)
+			srv.ModuleGroup().Add(http.MethodGet, "/partner/v20", echoTenant)
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, http.NoBody)
+			if tc.seatHeader != "" {
+				req.Header.Set(HeaderXTenantID, tc.seatHeader)
+			}
+			rec := httptest.NewRecorder()
+			srv.echo.ServeHTTP(rec, req)
+
+			require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
+			assert.Equal(t, tc.wantFamily, familyRan, "the family's own steps run exactly on its routes")
+			assert.Equal(t, tc.wantFamily, evidence, "the seat leaves its evidence exactly where it skipped")
+			if tc.wantBody != "" {
+				assert.Equal(t, tc.wantBody, rec.Body.String())
+			}
+			wantWarns := 0
+			if tc.wantStatus == http.StatusBadRequest {
+				wantWarns = 1
+			}
+			assert.Len(t, seatRejections(testLog), wantWarns, "the seat answers, and logs, only a route no family owns")
+		})
+	}
+}
+
+// echoTenant answers 200 with the tenant on the request context, "" for none.
+func echoTenant(c HandlerContext) error {
+	tenantID, _ := multitenant.GetTenant(c.RequestContext())
+	return c.String(http.StatusOK, tenantID)
+}
+
+// seatRejections returns the tenant seat's rejection WARNs log recorded.
+func seatRejections(testLog *testLogger) []testLogEntry {
+	var out []testLogEntry
+	for _, e := range testLog.logEntries() {
+		if e.level == "warn" && strings.Contains(e.msg, "[server.tenant] request rejected") {
+			out = append(out, e)
+		}
+	}
+	return out
 }
