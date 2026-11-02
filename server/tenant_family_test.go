@@ -235,6 +235,7 @@ const (
 	traceDeny         = "deny"
 	traceMiddleware   = "middleware"
 	traceHandler      = "handler"
+	traceForeign      = "foreign" // a handler outside every family
 
 	familyDenyStatus = http.StatusForbidden
 	familyDenyBody   = "family-deny"
@@ -368,12 +369,15 @@ func assertFrameworkError(t *testing.T, rec *httptest.ResponseRecorder, status i
 	assert.Equal(t, code, envelope.Error.Code)
 }
 
-// newNotFoundFamilies builds the recording family /fam with a nested group, and /t, whose
-// Tenant reads the org path parameter: empty on the family's catch-all.
+// newNotFoundFamilies builds the recording family /fam with a nested group and two wildcard
+// routes; /t, whose Tenant reads the org path parameter: empty on the family's catch-all; and
+// /bare, whose one route is GET at its bare prefix, under a foreign POST, HEAD and OPTIONS /:seg.
 func newNotFoundFamilies(t *testing.T) (*Server, *familyTrace) {
 	t.Helper()
 	srv, family, tr := newRecordingFamily(t)
 	family.Group("/sub").Add(http.MethodGet, "/items", recordingHandler(tr))
+	family.Add(http.MethodGet, "/files/*", recordingHandler(tr))
+	family.Add(http.MethodGet, "/x/:id/*", recordingHandler(tr))
 	orgPolicy := recordingPolicy(tr)
 	orgPolicy.Tenant = func(c HandlerContext) (string, error) {
 		tr.record(traceTenant, c)
@@ -384,20 +388,32 @@ func newNotFoundFamilies(t *testing.T) (*Server, *familyTrace) {
 	}
 	orgFamily := tenantOwnedGroup(srv.ModuleGroup(), "/t", orgPolicy)
 	orgFamily.Add(http.MethodGet, "/:org/orders", recordingHandler(tr))
+	tenantOwnedGroup(srv.ModuleGroup(), "/bare", recordingPolicy(tr)).Add(http.MethodGet, "", recordingHandler(tr))
+	foreign := func(c HandlerContext) error {
+		tr.record(traceForeign, c)
+		return c.String(http.StatusOK, "foreign")
+	}
+	for _, method := range []string{http.MethodPost, http.MethodHead, http.MethodOptions} {
+		srv.ModuleGroup().Add(method, "/:seg", foreign)
+	}
 	return srv, tr
+}
+
+// notFoundCase is one TestTenantOwnedGroupAnswersNotFoundAfterTenant request.
+type notFoundCase struct {
+	name       string
+	method     string
+	path       string
+	credential bool
+	wantDeny   bool     // the family's Deny answers; otherwise the framework 404, after the tenant
+	sameAs     string   // a known path whose anonymous answer this one equals byte for byte
+	control    string   // a known path the same caller resolves, so Deny is not the only answer
+	stepsOn    []string // instead of method: each sent anonymous, then resolved (assertStepsAnswer)
 }
 
 func TestTenantOwnedGroupAnswersNotFoundAfterTenant(t *testing.T) {
 	// The two Use cases arrive with per-route Use in a later link.
-	tests := []struct {
-		name       string
-		method     string
-		path       string
-		credential bool
-		wantDeny   bool   // the family's Deny answers; otherwise the framework 404, after the tenant
-		sameAs     string // a known path whose anonymous answer this one equals byte for byte
-		control    string // a known path the same caller resolves, so Deny is not the only answer
-	}{
+	tests := []notFoundCase{
 		{name: "known_path_anonymous_gets_deny", method: http.MethodGet, path: "/fam/orders", wantDeny: true},
 		{name: "unknown_sub_path_anonymous_gets_same_deny", method: http.MethodGet, path: "/fam/nope", wantDeny: true, sameAs: "/fam/orders"},
 		{name: "bare_prefix_without_route_runs_family", method: http.MethodGet, path: "/fam", wantDeny: true},
@@ -406,33 +422,71 @@ func TestTenantOwnedGroupAnswersNotFoundAfterTenant(t *testing.T) {
 		{name: "nested_group_unknown_path_gets_404", method: http.MethodGet, path: "/fam/sub/nope", credential: true},
 		{name: "nested_group_wrong_method_gets_404", method: http.MethodDelete, path: "/fam/sub/items", credential: true},
 		{name: "path_param_family_denies_on_unknown_sub_path", method: http.MethodGet, path: "/t/acme/nope", credential: true, wantDeny: true, control: "/t/acme/orders"},
+		{name: "wildcard_wrong_method_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodPost}},
+		{name: "wildcard_head_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodHead}},
+		{name: "wildcard_options_runs_steps", path: "/fam/files/a", stepsOn: []string{http.MethodOptions}},
+		{name: "param_wildcard_wrong_method_runs_steps", path: "/fam/x/1/a", stepsOn: []string{http.MethodPost}},
+		{name: "wildcard_bare_prefix_wrong_method_runs_steps", path: "/fam/files", stepsOn: []string{http.MethodPost}},
+		{name: "bare_prefix_wrong_method_runs_steps", path: "/bare", stepsOn: []string{http.MethodPost}},
+		{name: "bare_prefix_head_and_options_run_steps", path: "/bare", stepsOn: []string{http.MethodHead, http.MethodOptions}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv, tr := newNotFoundFamilies(t)
-			var edits []func(*http.Request)
-			if tt.credential {
-				edits = append(edits, withFamilyCredential)
+			if len(tt.stepsOn) > 0 {
+				assertStepsAnswer(t, srv, tr, tt.path, tt.stepsOn)
+				return
 			}
-
-			rec := serveFamily(srv, tt.method, tt.path, edits...)
-			if tt.wantDeny {
-				assertFamilyDenied(t, rec, tr)
-			} else {
-				assertFrameworkError(t, rec, http.StatusNotFound, errCodeNotFound)
-				assert.Equal(t, []string{traceAuthenticate, traceTenant}, tr.events, "the 404 answers after Authenticate and Tenant")
-			}
-			if tt.sameAs != "" {
-				known := serveFamily(srv, http.MethodGet, tt.sameAs)
-				assert.Equal(t, known.Code, rec.Code)
-				assert.Equal(t, known.Body.Bytes(), rec.Body.Bytes(), "an unknown sub-path's anonymous answer equals a known path's")
-			}
-			if tt.control != "" {
-				known := serveFamily(srv, http.MethodGet, tt.control, edits...)
-				assert.Equal(t, http.StatusOK, known.Code, known.Body.String())
-				assert.Equal(t, "acme", tr.tenants[traceHandler])
-			}
+			assertNotFoundCase(t, srv, tr, &tt)
 		})
+	}
+}
+
+// assertNotFoundCase sends tt's one request and asserts its answer.
+func assertNotFoundCase(t *testing.T, srv *Server, tr *familyTrace, tt *notFoundCase) {
+	t.Helper()
+	var edits []func(*http.Request)
+	if tt.credential {
+		edits = append(edits, withFamilyCredential)
+	}
+
+	rec := serveFamily(srv, tt.method, tt.path, edits...)
+	if tt.wantDeny {
+		assertFamilyDenied(t, rec, tr)
+	} else {
+		assertFrameworkError(t, rec, http.StatusNotFound, errCodeNotFound)
+		assert.Equal(t, []string{traceAuthenticate, traceTenant}, tr.events, "the 404 answers after Authenticate and Tenant")
+	}
+	if tt.sameAs != "" {
+		known := serveFamily(srv, http.MethodGet, tt.sameAs)
+		assert.Equal(t, known.Code, rec.Code)
+		assert.Equal(t, known.Body.Bytes(), rec.Body.Bytes(), "an unknown sub-path's anonymous answer equals a known path's")
+	}
+	if tt.control != "" {
+		known := serveFamily(srv, http.MethodGet, tt.control, edits...)
+		assert.Equal(t, http.StatusOK, known.Code, known.Body.String())
+		assert.Equal(t, "acme", tr.tenants[traceHandler])
+	}
+}
+
+// assertStepsAnswer sends each method to path anonymous, then resolved: the family's steps answer
+// both, Deny the first and the framework 404 the second, no route's handler runs and neither
+// carries an Allow header.
+func assertStepsAnswer(t *testing.T, srv *Server, tr *familyTrace, path string, methods []string) {
+	t.Helper()
+	for _, method := range methods {
+		tr.reset()
+		anonymous := serveFamily(srv, method, path)
+		assert.Equal(t, familyDenyStatus, anonymous.Code, method)
+		assert.Equal(t, familyDenyBody, anonymous.Body.String(), method)
+		assert.Equal(t, []string{traceAuthenticate, traceDeny}, tr.events, method)
+		assert.Empty(t, anonymous.Header().Get(echo.HeaderAllow), method)
+
+		tr.reset()
+		resolved := serveFamily(srv, method, path, withFamilyCredential)
+		assertFrameworkError(t, resolved, http.StatusNotFound, errCodeNotFound)
+		assert.Equal(t, []string{traceAuthenticate, traceTenant}, tr.events, method)
+		assert.Empty(t, resolved.Header().Get(echo.HeaderAllow), method)
 	}
 }
 
@@ -707,16 +761,67 @@ func TestTenantOwnedGroupRegistersOneCatchAllPair(t *testing.T) {
 	family.Add(http.MethodPost, "/orders", answerWith("created"))
 	family.Group("/sub").Add(http.MethodGet, "/items", answerWith("items"))
 
-	var family404s, all404s []string
+	assert.ElementsMatch(t, []string{echo.RouteAny + " /p/fam", echo.RouteNotFound + " /p/fam/*"}, catchAllRoutes(srv, "/p/fam"))
+	assert.Contains(t, catchAllRoutes(srv, "/p"), echo.RouteNotFound+" /p/*", "control: the parent's own pair stays outside the family")
+}
+
+// catchAllRoutes lists srv's RouteAny and RouteNotFound routes at or under prefix, each as
+// "method path".
+func catchAllRoutes(srv *Server, prefix string) []string {
+	var out []string
 	for _, r := range srv.echo.Router().Routes() {
-		if r.Method != echo.RouteNotFound {
+		if r.Method != echo.RouteAny && r.Method != echo.RouteNotFound {
 			continue
 		}
-		all404s = append(all404s, r.Path)
-		if _, under := pathutil.StripPathPrefix(r.Path, "/p/fam"); under {
-			family404s = append(family404s, r.Path)
+		if _, under := pathutil.StripPathPrefix(r.Path, prefix); under {
+			out = append(out, r.Method+" "+r.Path)
 		}
 	}
-	assert.ElementsMatch(t, []string{"/p/fam", "/p/fam/*"}, family404s)
-	assert.Contains(t, all404s, "/p/*", "control: the parent's own pair stays outside the family")
+	return out
+}
+
+func TestTenantOwnedGroupRegistersOneCatchAllPerWildcardNode(t *testing.T) {
+	srv := newTenantFamilyServer(t, "")
+	family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+	require.NotPanics(t, func() {
+		family.Add(http.MethodGet, "/files/*", answerWith("get"))
+		family.Add(http.MethodPost, "/files/*", answerWith("post"))
+		family.Add(http.MethodGet, "/x/:id/*", answerWith("id"))
+		// The same echo node as /x/:id/* under another method, so admission takes it too.
+		family.Add(http.MethodPost, "/x/:org/*", answerWith("org"))
+		family.Group("/sub").Add(http.MethodGet, "/*", answerWith("sub"))
+		family.Add(http.MethodGet, "/*", answerWith("root")) // the node of the prefix's own catch-all
+		GET(NewHandlerRegistry(srv.cfg), family, "/typed/*", func(req familyOrderRequest, _ HandlerContext) (familyOrderResponse, IAPIError) {
+			return familyOrderResponse(req), nil
+		})
+	})
+
+	assert.ElementsMatch(t, []string{
+		echo.RouteAny + " /fam",
+		echo.RouteNotFound + " /fam/*",
+		echo.RouteNotFound + " /fam/files/*",
+		echo.RouteNotFound + " /fam/x/:id/*",
+		echo.RouteNotFound + " /fam/sub/*",
+		echo.RouteNotFound + " /fam/typed/*",
+	}, catchAllRoutes(srv, "/fam"))
+	assert.Empty(t, srv.admission.snapshot(), "admission refuses none of them")
+}
+
+func TestTenantOwnedGroupLogsRefusalsToServerLogger(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+	testLog := &testLogger{}
+	srv := New(newTenantFamilyConfig(""), testLog)
+	tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("Acme")).Add(http.MethodGet, "/orders", answerWith("orders"))
+
+	assertFrameworkError(t, serveFamilyRequest(srv, "/fam/orders"), http.StatusInternalServerError, errCodeInternalError)
+	var refusals []testLogEntry
+	for _, entry := range testLog.logEntries() {
+		if strings.Contains(entry.msg, "family request refused") {
+			refusals = append(refusals, entry)
+		}
+	}
+	require.Len(t, refusals, 1, "the grammar backstop's refusal reaches the Server's logger")
+	assert.Equal(t, "error", refusals[0].level)
+	assert.Contains(t, refusals[0].msg, "reason="+strconv.Quote(reasonGrammarBackstop))
 }

@@ -44,7 +44,7 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descripto
 		Method:     method,
 		Path:       rg.fullPathFromRelative(relative),
 		Descriptor: descriptor,
-	}, func() { rg.group.Add(method, relative, h, rg.routeMiddleware(nil)...) })
+	}, func() { rg.addAdmitted(method, relative, h, nil) })
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -66,9 +66,18 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 		Method:     method,
 		Path:       fullPath,
 		Descriptor: modellessDescriptor(method, fullPath, reg),
-	}, func() {
-		rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.routeMiddleware(middleware)...)
-	})
+	}, func() { rg.addAdmitted(method, relative, adaptHandler(handler, rg.cfg), middleware) })
+}
+
+// addAdmitted adds an admitted route to rg's echo group. Inside a tenant-owned family, a template
+// ending in a wildcard also gets the family's catch-all at its echo node, once per node: echo never
+// backtracks from that node to prefix/*, so without it a wrong method gets echo's 405, no step run.
+func (rg *routeGroup) addAdmitted(method, relative string, h echo.HandlerFunc, mw []MiddlewareFunc) {
+	rg.group.Add(method, relative, h, rg.routeMiddleware(mw)...)
+	if rg.family != nil && rg.family.claimWildcardCatchAll(rg.fullPathFromRelative(relative)) {
+		// Steps only, outside admission, which refuses RouteNotFound (ADR-155).
+		rg.group.RouteNotFound(relative, familyNotFound, rg.family.steps)
+	}
 }
 
 // routeMiddleware returns a route's echo middleware: mw adapted, behind the family's steps
@@ -77,12 +86,7 @@ func (rg *routeGroup) routeMiddleware(mw []MiddlewareFunc) []echo.MiddlewareFunc
 	if rg.family == nil {
 		return rg.adaptAll(mw)
 	}
-	out := make([]echo.MiddlewareFunc, 0, 1+len(mw))
-	out = append(out, rg.family.steps)
-	for _, m := range mw {
-		out = append(out, adaptMiddleware(m, rg.cfg))
-	}
-	return out
+	return append([]echo.MiddlewareFunc{rg.family.steps}, rg.adaptAll(mw)...)
 }
 
 // probeListenerDescriptor describes a probe served on the probe listener, at its unprefixed
