@@ -71,8 +71,14 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
+	if tf, ok := a.server.(tenantFamilyLister); ok {
+		a.registry.tenantFamilies = tf
+	}
 	a.registry.RegisterRoutes(a.server.ModuleGroup())
 	if err := a.checkRouteConflicts(); err != nil {
+		return err
+	}
+	if err := a.checkTenantFamilyGlobalMiddleware(); err != nil {
 		return err
 	}
 
