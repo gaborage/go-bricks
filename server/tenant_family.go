@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"slices"
 	"strconv"
 	"sync"
@@ -9,15 +10,50 @@ import (
 
 	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // tenantFamily is one tenant-owned route family.
 type tenantFamily struct {
 	prefix string              // the full template the family's echo group mounts at
 	steps  echo.MiddlewareFunc // Authenticate, Tenant, the grammar check and the publish
+	log    logger.Logger       // the Server's logger, for the leaf guard's refusals
 
 	mu        sync.Mutex
 	catchAlls map[string]struct{} // routeNodeKey(echo.RouteNotFound, full path) of each not-found catch-all
+}
+
+// familyPublishedKey holds the request context a family's steps published the tenant on.
+const familyPublishedKey = "_tenant_family_published"
+
+// guard wraps a family route's leaf handler h. It sits inside the route's middleware and
+// around the typed leaf, so binding and JOSE run after it. h runs only on a request the
+// tenant seat skipped (seatSkippedKey) whose tenant is still exactly the one the family's
+// steps published. Anything else is a wiring fault: the framework 500, logged once, and h
+// never runs. It guards wiring, not a security boundary: HandlerContext.Set can write the
+// evidence it reads. Outside a family (nil f) it returns h.
+func (f *tenantFamily) guard(h echo.HandlerFunc) echo.HandlerFunc {
+	if f == nil {
+		return h
+	}
+	return func(c *echo.Context) error {
+		if skipped, _ := c.Get(seatSkippedKey).(bool); !skipped {
+			return newTenantFault(newHandlerContext(c, nil), f.log, reasonSeatNotSkipped, nil)
+		}
+		if !holdsPublishedTenant(c) {
+			return newTenantFault(newHandlerContext(c, nil), f.log, reasonTenantReplaced, nil)
+		}
+		return h(c)
+	}
+}
+
+// holdsPublishedTenant reports whether c's request carries exactly the tenant the family's
+// steps published. GetTenant answers false for a missing (nil) published context.
+func holdsPublishedTenant(c *echo.Context) bool {
+	published, _ := c.Get(familyPublishedKey).(context.Context)
+	want, ok := multitenant.GetTenant(published)
+	got, _ := multitenant.GetTenant(c.Request().Context())
+	return ok && got == want
 }
 
 // familyNode is one family registrar's own middleware: the family root's (nil parent) or a
@@ -80,6 +116,7 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	p.Authenticate = slices.Clone(p.Authenticate)
 	fam := &tenantFamily{
 		prefix:    full,
+		log:       rg.admission.log,
 		steps:     adaptMiddleware(p.middleware(rg.admission.log), rg.cfg),
 		catchAlls: map[string]struct{}{catchAllKey(full + "/*"): {}},
 	}
@@ -102,7 +139,10 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 // middleware runs p as a flat MiddlewareFunc, logging its refusals to l.
 func (p TenantPolicy) middleware(l logger.Logger) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
-		_, _, err := p.run(c, l, next)
+		_, _, err := p.run(c, l, func() error {
+			c.Set(familyPublishedKey, c.RequestContext())
+			return next()
+		})
 		return err
 	}
 }

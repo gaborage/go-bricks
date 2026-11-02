@@ -1180,3 +1180,284 @@ func TestTenantOwnedDescriptorCannotBeForgedOrCleared(t *testing.T) {
 		})
 	}
 }
+
+// TestTenantOwnedGuardRequiresSeatSkipEvidence pins, white-box, that a family's leaf guard
+// runs the handler only with the seat's skip evidence and the tenant the family's steps
+// published; anything else is the framework 500, and the handler never runs.
+func TestTenantOwnedGuardRequiresSeatSkipEvidence(t *testing.T) {
+	published := multitenant.SetTenant(context.Background(), familyTenant)
+	tests := []struct {
+		name          string
+		evidence      bool
+		published     context.Context // familyPublishedKey's value; nil sets none
+		requestTenant string
+		wantRun       bool
+	}{
+		{name: "missing_evidence", published: published, requestTenant: familyTenant},
+		{name: "published_context_missing", evidence: true, requestTenant: familyTenant},
+		{name: "neither_context_holds_tenant", evidence: true, published: context.Background()},
+		{name: "evidence_and_published_tenant_run", evidence: true, published: published, requestTenant: familyTenant, wantRun: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.requestTenant != "" {
+				ctx = multitenant.SetTenant(ctx, tc.requestTenant)
+			}
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/fam/orders", http.NoBody)
+			hc := NewHandlerContextForTest(httptest.NewRecorder(), req, newTenantFamilyConfig(""), WithRouteTemplate("/fam/orders"))
+			if tc.evidence {
+				hc.Set(seatSkippedKey, true)
+			}
+			if tc.published != nil {
+				hc.Set(familyPublishedKey, tc.published)
+			}
+
+			ran := false
+			fam := &tenantFamily{log: &testLogger{}}
+			err := fam.guard(func(*echo.Context) error { ran = true; return nil })(hc.ectx)
+
+			assert.Equal(t, tc.wantRun, ran)
+			if tc.wantRun {
+				require.NoError(t, err)
+				return
+			}
+			var fault *tenantFaultError
+			require.ErrorAs(t, err, &fault)
+			assert.Equal(t, http.StatusInternalServerError, fault.HTTPStatus())
+		})
+	}
+}
+
+// TestTenantOwnedGuardRequiresPublishedTenant pins that on every kind of family route, a
+// middleware that replaces the published tenant gets the framework 500 and the handler never
+// runs. A middleware that only enriches the context keeps the tenant and runs it.
+func TestTenantOwnedGuardRequiresPublishedTenant(t *testing.T) {
+	replace := replaceFamilyTenant
+	enrich := func(c HandlerContext, next func() error) error {
+		c.SetRequestContext(context.WithValue(c.RequestContext(), enrichKey{}, "value"))
+		return next()
+	}
+	tests := []struct {
+		name    string
+		path    string
+		build   func(family RouteRegistrar, hr *HandlerRegistry, h Handler)
+		wantRun bool
+	}{
+		{name: "use_middleware_replaces_tenant", path: "/fam/x", build: func(f RouteRegistrar, _ *HandlerRegistry, h Handler) {
+			f.Use(replace)
+			f.Add(http.MethodGet, "/x", h)
+		}},
+		{name: "route_middleware_replaces_tenant", path: "/fam/x", build: func(f RouteRegistrar, _ *HandlerRegistry, h Handler) {
+			f.Add(http.MethodGet, "/x", h, replace)
+		}},
+		{name: "typed_route", path: "/fam/typed/x", build: func(f RouteRegistrar, hr *HandlerRegistry, h Handler) {
+			GET(hr, f.Group("/typed", replace), "/x", func(_ EmptyRequest, c HandlerContext) (helloResp, IAPIError) {
+				_ = h(c)
+				return helloResp{}, nil
+			})
+		}},
+		{name: "raw_add_route", path: "/fam/raw/x", build: func(f RouteRegistrar, _ *HandlerRegistry, h Handler) {
+			f.Group("/raw", replace).Add(http.MethodGet, "/x", h)
+		}},
+		{name: "nested_group_route", path: "/fam/a/b/x", build: func(f RouteRegistrar, _ *HandlerRegistry, h Handler) {
+			f.Group("/a").Group("/b", replace).Add(http.MethodGet, "/x", h)
+		}},
+		{name: "enriched_context_runs", path: "/fam/x", wantRun: true, build: func(f RouteRegistrar, _ *HandlerRegistry, h Handler) {
+			f.Use(enrich)
+			f.Add(http.MethodGet, "/x", h)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTenantFamilyServer(t, "")
+			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+			ran := false
+			tc.build(family, NewHandlerRegistry(srv.cfg), func(c HandlerContext) error {
+				ran = true
+				return c.String(http.StatusOK, "ok")
+			})
+
+			rec := serveFamilyRequest(srv, tc.path)
+
+			assert.Equal(t, tc.wantRun, ran)
+			if tc.wantRun {
+				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				return
+			}
+			assertFrameworkError(t, rec, http.StatusInternalServerError, errCodeInternalError)
+			refusals := familyRefusals(srv)
+			require.Len(t, refusals, 1)
+			assert.Contains(t, refusals[0], strconv.Quote(reasonTenantReplaced))
+		})
+	}
+}
+
+type enrichKey struct{}
+
+// replaceFamilyTenant is a middleware that replaces the tenant the family's steps published.
+func replaceFamilyTenant(c HandlerContext, next func() error) error {
+	c.SetRequestContext(multitenant.SetTenant(c.RequestContext(), "other-tenant"))
+	return next()
+}
+
+// TestTenantOwnedGuardRunsBeforeBindingAndJOSE pins that the leaf guard sits outside the typed
+// leaf: with the published tenant replaced, a body that fails binding and an envelope JOSE
+// refuses both get the guard's framework 500, never binding's or JOSE's 400, and the handler
+// never runs.
+func TestTenantOwnedGuardRunsBeforeBindingAndJOSE(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		body  func(*http.Request)
+		build func(t *testing.T, srv *Server, family RouteRegistrar, ran *bool)
+	}{
+		{
+			name: "guard_runs_before_binding",
+			path: "/fam/typed",
+			body: withMalformedJSON,
+			build: func(_ *testing.T, srv *Server, family RouteRegistrar, ran *bool) {
+				POST(NewHandlerRegistry(srv.cfg), family, "/typed", func(req familyOrderRequest, _ HandlerContext) (familyOrderResponse, IAPIError) {
+					*ran = true
+					return familyOrderResponse(req), nil
+				})
+			},
+		},
+		{
+			name: "guard_runs_before_jose",
+			path: "/fam/tokens",
+			body: withFamilyBody(jose.ContentType, "not-a-jwe"),
+			build: func(t *testing.T, srv *Server, family RouteRegistrar, ran *bool) {
+				hr := NewHandlerRegistry(srv.cfg, WithJOSEResolver(newJOSEFixture(t).resolver))
+				POST(hr, family, "/tokens", func(_ taggedReq, _ HandlerContext) (taggedResp, IAPIError) {
+					*ran = true
+					return taggedResp{}, nil
+				})
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTenantFamilyServer(t, "")
+			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant))
+			family.Use(replaceFamilyTenant)
+			ran := false
+			tc.build(t, srv, family, &ran)
+
+			rec := serveFamily(srv, http.MethodPost, tc.path, tc.body)
+
+			assert.False(t, ran, "the handler never runs")
+			assertFrameworkError(t, rec, http.StatusInternalServerError, errCodeInternalError)
+			refusals := familyRefusals(srv)
+			require.Len(t, refusals, 1)
+			assert.Contains(t, refusals[0], strconv.Quote(reasonTenantReplaced))
+		})
+	}
+}
+
+// TestTenantOwnedRefusalLogsCarryReasonClassOnly pins that every family refusal logs one
+// line carrying its reason class and the matched template, and never the tenant or a
+// request header's bytes.
+func TestTenantOwnedRefusalLogsCarryReasonClassOnly(t *testing.T) {
+	const (
+		secretTenant = "p18-tenant-secret"
+		secretHeader = "p18-header-secret"
+	)
+	clientFault := func(HandlerContext) (string, error) {
+		return "", fmt.Errorf("%w: %s", multitenant.ErrTenantResolutionFailed, secretHeader)
+	}
+	tests := []struct {
+		name       string
+		policy     TenantPolicy
+		use        MiddlewareFunc // the family's own middleware; nil for none
+		wantStatus int
+		reason     string
+	}{
+		{
+			name:   "guard_missing_evidence",
+			policy: fixedTenantPolicy(secretTenant),
+			use: func(c HandlerContext, next func() error) error {
+				c.Set(seatSkippedKey, false)
+				return next()
+			},
+			wantStatus: http.StatusInternalServerError, reason: reasonSeatNotSkipped,
+		},
+		{
+			name:   "guard_replaced_tenant",
+			policy: fixedTenantPolicy(secretTenant),
+			use: func(c HandlerContext, next func() error) error {
+				c.SetRequestContext(multitenant.SetTenant(c.RequestContext(), secretTenant+"-other"))
+				return next()
+			},
+			wantStatus: http.StatusInternalServerError, reason: reasonTenantReplaced,
+		},
+		{
+			name:       "grammar_backstop",
+			policy:     fixedTenantPolicy(secretTenant + " fails the grammar"),
+			wantStatus: http.StatusInternalServerError, reason: reasonGrammarBackstop,
+		},
+		{
+			name: "deny_returned_error",
+			policy: TenantPolicy{Tenant: clientFault, Deny: func(HandlerContext, error) error {
+				return NewForbiddenError(secretHeader)
+			}},
+			wantStatus: http.StatusForbidden, reason: reasonDenyError,
+		},
+		{
+			name:       "deny_committed_nothing",
+			policy:     TenantPolicy{Tenant: clientFault, Deny: func(HandlerContext, error) error { return nil }},
+			wantStatus: http.StatusInternalServerError, reason: reasonDenyNothing,
+		},
+		{
+			name: "authenticate_committed_response",
+			policy: TenantPolicy{Tenant: clientFault, Authenticate: []MiddlewareFunc{func(c HandlerContext, next func() error) error {
+				if err := c.String(http.StatusUnauthorized, ""); err != nil {
+					return err
+				}
+				return next()
+			}}},
+			wantStatus: http.StatusUnauthorized, reason: reasonStepCommitted,
+		},
+		{
+			name: "authenticate_committed_nothing",
+			policy: TenantPolicy{Tenant: clientFault, Authenticate: []MiddlewareFunc{func(HandlerContext, func() error) error {
+				return nil
+			}}},
+			wantStatus: http.StatusInternalServerError, reason: reasonNoTenantPublished,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTenantFamilyServer(t, "")
+			family := tenantOwnedGroup(srv.ModuleGroup(), "/fam", tc.policy)
+			if tc.use != nil {
+				family.Use(tc.use)
+			}
+			family.Add(http.MethodGet, "/orders/:id", func(c HandlerContext) error { return c.String(http.StatusOK, "ok") })
+
+			rec := serveFamily(srv, http.MethodGet, "/fam/orders/42", func(req *http.Request) {
+				req.Header.Set(HeaderXTenantID, secretHeader)
+				req.Header.Set(echo.HeaderAuthorization, "Bearer "+secretHeader)
+			})
+
+			assert.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
+			refusals := familyRefusals(srv)
+			require.Len(t, refusals, 1, "one refusal line per request")
+			assert.Contains(t, refusals[0], "reason="+strconv.Quote(tc.reason))
+			assert.Contains(t, refusals[0], `path="/fam/orders/:id"`)
+			assert.NotContains(t, refusals[0], secretTenant)
+			assert.NotContains(t, refusals[0], secretHeader)
+		})
+	}
+}
+
+// familyRefusals returns the family refusal lines srv's logger recorded.
+func familyRefusals(srv *Server) []string {
+	var out []string
+	for _, e := range srv.admission.log.(*testLogger).logEntries() {
+		if strings.Contains(e.msg, "[server.tenant] family request refused") {
+			out = append(out, e.msg)
+		}
+	}
+	return out
+}

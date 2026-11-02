@@ -75,6 +75,8 @@ const (
 	reasonNoTenantAccessor  = "per-tenant accessor called before the tenant exists"
 	reasonDenyError         = "deny returned an error"
 	reasonDenyNothing       = "deny returned without committing a response"
+	reasonSeatNotSkipped    = "family route reached without the tenant seat's skip"
+	reasonTenantReplaced    = "tenant replaced after the family published it"
 )
 
 // run runs Authenticate, Tenant, the grammar check and the publish, then next innermost,
