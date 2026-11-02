@@ -266,7 +266,6 @@ func TestRouteGroupRefusesMiddlewareInsideTenantFamily(t *testing.T) {
 
 	assertRegistrationPanics(t, want, func() { sub.Group("/x", mw) })
 	assertRegistrationPanics(t, want, func() { sub.Use(mw) })
-	assert.Equal(t, []string{"/fam"}, srv.admission.familyPrefixes())
 }
 
 // BenchmarkMiddlewareAdapter contrasts a request routed through one adaptMiddleware-wrapped

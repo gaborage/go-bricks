@@ -145,140 +145,63 @@ func TestTenantOwnedGroupIgnoresParentMiddleware(t *testing.T) {
 
 func TestTenantOwnedGroupPanicsAtCallSite(t *testing.T) {
 	policy := fixedTenantPolicy("family-tenant")
-	q := strconv.Quote
-	// existingFamily is a server already holding the tenant-owned family /partner/v2.
-	existingFamily := func(t *testing.T) *Server {
-		srv := newTenantFamilyServer(t, "")
+	// bare is a group no Server built: it carries no admission.
+	bare := func(*Server) RouteRegistrar {
+		return newRouteGroup(echo.New().Group(""), "", newTenantFamilyConfig(""))
+	}
+	moduleGroup := (*Server).ModuleGroup
+	rootGroup := (*Server).RootGroup
+	ordersGroup := func(srv *Server) RouteRegistrar { return srv.ModuleGroup().Group("/orders") }
+	// inFamily is a plain Group inside the tenant-owned family /fam.
+	inFamily := func(srv *Server) RouteRegistrar {
+		return tenantOwnedGroup(srv.ModuleGroup(), "/fam", policy).Group("/sub")
+	}
+	// besideFamily is the module group of a Server already holding the tenant-owned family /partner/v2.
+	besideFamily := func(srv *Server) RouteRegistrar {
 		tenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy)
-		return srv
+		return srv.ModuleGroup()
 	}
 	tests := []struct {
-		name string
-		// fixture returns the refused call and the Server backing it (nil when none does).
-		fixture func(t *testing.T) (call func(), srv *Server)
-		want    []string // substrings of the panic message, the full prefix first
+		name      string
+		basePath  string
+		parent    func(srv *Server) RouteRegistrar // the registrar the refused call builds under
+		prefix    string
+		nilTenant bool     // the refused call passes TenantPolicy{} instead of policy
+		want      []string // substrings of the panic message, the full prefix first
 	}{
-		{
-			name: "non_framework_registrar",
-			fixture: func(*testing.T) (func(), *Server) {
-				bare := newRouteGroup(echo.New().Group(""), "", newTenantFamilyConfig(""))
-				return func() { tenantOwnedGroup(bare, "/fam", policy) }, nil
-			},
-			want: []string{q("/fam")},
-		},
-		{
-			name: "nil_tenant",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "")
-				return func() { tenantOwnedGroup(srv.ModuleGroup(), "/fam", TenantPolicy{}) }, srv
-			},
-			want: []string{q("/fam")},
-		},
-		{
-			name: "nested_in_family",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "")
-				sub := tenantOwnedGroup(srv.ModuleGroup(), "/fam", policy).Group("/sub")
-				return func() { tenantOwnedGroup(sub, "/inner", policy) }, srv
-			},
-			want: []string{q("/fam/sub/inner"), q("/fam")},
-		},
-		{
-			name: "empty_prefix",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "")
-				parent := srv.ModuleGroup().Group("/orders")
-				return func() { tenantOwnedGroup(parent, "", policy) }, srv
-			},
-			want: []string{q("/orders")},
-		},
-		{
-			name: "root_prefix",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "")
-				parent := srv.ModuleGroup().Group("/orders")
-				return func() { tenantOwnedGroup(parent, "/", policy) }, srv
-			},
-			want: []string{q("/orders")},
-		},
-		{
-			name: "param_segment",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "")
-				return func() { tenantOwnedGroup(srv.ModuleGroup(), "/orgs/:org", policy) }, srv
-			},
-			want: []string{q("/orgs/:org")},
-		},
-		{
-			name: "wildcard_segment",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "")
-				return func() { tenantOwnedGroup(srv.ModuleGroup(), "/files/*", policy) }, srv
-			},
-			want: []string{q("/files/*")},
-		},
-		{
-			name: "covers_health_path",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "/api")
-				return func() { tenantOwnedGroup(srv.RootGroup(), "/api", policy) }, srv
-			},
-			want: []string{q("/api"), q("/api/health")},
-		},
-		{
-			name: "covers_ready_path",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := newTenantFamilyServer(t, "")
-				return func() { tenantOwnedGroup(srv.RootGroup(), "/ready", policy) }, srv
-			},
-			want: []string{q("/ready")},
-		},
-		{
-			name: "equals_other_family",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := existingFamily(t)
-				return func() { tenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy) }, srv
-			},
-			want: []string{q("/partner/v2")},
-		},
-		{
-			name: "covers_other_family",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := existingFamily(t)
-				return func() { tenantOwnedGroup(srv.ModuleGroup(), "/partner", policy) }, srv
-			},
-			want: []string{q("/partner"), q("/partner/v2")},
-		},
-		{
-			name: "under_other_family",
-			fixture: func(t *testing.T) (func(), *Server) {
-				srv := existingFamily(t)
-				return func() { tenantOwnedGroup(srv.ModuleGroup(), "/partner/v2/x", policy) }, srv
-			},
-			want: []string{q("/partner/v2/x"), q("/partner/v2")},
-		},
+		{name: "non_framework_registrar", parent: bare, prefix: "/fam", want: []string{`"/fam"`}},
+		{name: "nil_tenant", parent: moduleGroup, prefix: "/fam", nilTenant: true, want: []string{`"/fam"`}},
+		{name: "nested_in_family", parent: inFamily, prefix: "/inner", want: []string{`"/fam/sub/inner"`, `"/fam"`}},
+		{name: "empty_prefix", parent: ordersGroup, prefix: "", want: []string{`"/orders"`}},
+		{name: "root_prefix", parent: ordersGroup, prefix: "/", want: []string{`"/orders"`}},
+		{name: "param_segment", parent: moduleGroup, prefix: "/orgs/:org", want: []string{`"/orgs/:org"`}},
+		{name: "wildcard_segment", parent: moduleGroup, prefix: "/files/*", want: []string{`"/files/*"`}},
+		{name: "covers_health_path", basePath: "/api", parent: rootGroup, prefix: "/api", want: []string{`"/api"`, `"/api/health"`}},
+		{name: "covers_ready_path", parent: rootGroup, prefix: "/ready", want: []string{`"/ready"`}},
+		{name: "equals_other_family", parent: besideFamily, prefix: "/partner/v2", want: []string{`"/partner/v2"`}},
+		{name: "covers_other_family", parent: besideFamily, prefix: "/partner", want: []string{`"/partner"`, `"/partner/v2"`}},
+		{name: "under_other_family", parent: besideFamily, prefix: "/partner/v2/x", want: []string{`"/partner/v2/x"`, `"/partner/v2"`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			call, srv := tt.fixture(t)
-			var admission *routeAdmission
-			if srv != nil {
-				admission = srv.admission
+			srv := newTenantFamilyServer(t, tt.basePath)
+			parent := tt.parent(srv)
+			p := policy
+			if tt.nilTenant {
+				p = TenantPolicy{}
 			}
-			before := admission.familyPrefixes()
+			before := srv.admission.familyPrefixes()
 			// Each substring re-runs the refused call; the record must stay unchanged throughout.
 			for _, want := range tt.want {
-				assertRegistrationPanics(t, want, call)
+				assertRegistrationPanics(t, want, func() { tenantOwnedGroup(parent, tt.prefix, p) })
 			}
-			assert.Equal(t, before, admission.familyPrefixes(), "a refused call records no family")
+			assert.Equal(t, before, srv.admission.familyPrefixes(), "a refused call records no family")
 		})
 	}
 }
 
 func TestTenantOwnedGroupRefusesWhenMultitenantDisabled(t *testing.T) {
-	DefaultRouteRegistry.Clear()
-	t.Cleanup(DefaultRouteRegistry.Clear)
-	srv := New(newProbeTestConfig("/api"), &testLogger{})
+	srv := newTenantFamilyServerWithConfig(t, newProbeTestConfig("/api"))
 	build := func() { tenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("family-tenant")) }
 
 	assertRegistrationPanics(t, strconv.Quote("/api/fam"), build)

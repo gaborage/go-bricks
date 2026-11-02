@@ -151,9 +151,9 @@ type routeAdmission struct {
 	mu         sync.Mutex
 	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts  []RouteConflict
-	engine     *echo.Echo    // the application engine; set by New
-	log        logger.Logger // the Server's logger; set by New
-	probePaths []string      // full health and ready paths on the application listener
+	engine     *echo.Echo    // the application engine; written once by New, before any registrar exists
+	log        logger.Logger // the Server's logger; written once by New, before any registrar exists
+	probePaths []string      // full health and ready paths on the application listener; written once by New
 	families   []string      // each tenant-owned family's full prefix, in build order
 }
 
@@ -250,10 +250,9 @@ func (a *routeAdmission) claimFamily(full string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, f := range a.families {
-		if _, under := pathutil.StripPathPrefix(full, f); under {
-			return f, false
-		}
-		if _, covers := pathutil.StripPathPrefix(f, full); covers {
+		_, under := pathutil.StripPathPrefix(full, f)
+		_, covers := pathutil.StripPathPrefix(f, full)
+		if under || covers {
 			return f, false
 		}
 	}

@@ -18,8 +18,8 @@ type tenantFamily struct {
 
 // tenantOwnedGroup mounts a tenant-owned route family at r's prefix joined with prefix. The
 // family's echo group is built on the application engine at that full prefix, not under r, so
-// no parent group's middleware ever runs on it. The family's steps (p.run) run outermost on
-// every family route and on the one catch-all pair at the prefix and prefix/*, so an unknown
+// no parent group's middleware ever runs on its routes. The family's steps (p.run) run outermost
+// on every family route and on the one catch-all pair at the prefix and prefix/*, so an unknown
 // sub-path or a wrong method answers the framework 404 only after the tenant is published, and
 // Deny before it. It panics at the call site when r was not built
 // by a Server, r is already inside a family, p.Tenant is nil, the prefix is empty or "/", the
@@ -27,7 +27,7 @@ type tenantFamily struct {
 // equals or covers the health or ready path, or it equals, covers or sits under another family.
 func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
-	if !ok || rg.admission == nil || rg.admission.engine == nil {
+	if !ok || rg.admission == nil {
 		panic(tenantFamilyRefusal(prefix, "the registrar was not built by a Server; use ModuleGroup, RootGroup or a Group under them"))
 	}
 	relative := pathutil.NormalizePrefix(prefix)
@@ -44,7 +44,7 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if !isStaticTemplate(full) {
 		panic(tenantFamilyRefusal(full, "a family prefix cannot hold a path parameter or wildcard"))
 	}
-	if rg.cfg == nil || !rg.cfg.Multitenant.Enabled {
+	if !rg.cfg.Multitenant.Enabled {
 		panic(tenantFamilyRefusal(full, "multitenant.enabled is false; a module shared with single-tenant binaries must branch on config"))
 	}
 	if probe, covered := rg.admission.coveredProbePath(full); covered {

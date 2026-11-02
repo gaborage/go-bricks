@@ -108,6 +108,7 @@ func modellessDescriptor(method, path string, reg RouteRegistrant) *RouteDescrip
 
 func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
 	normalized := pathutil.NormalizePrefix(prefix)
+	child := &routeGroup{prefix: rg.combinePrefix(normalized), cfg: rg.cfg, admission: rg.admission, family: rg.family}
 	if rg.family != nil {
 		// Echo's Group with middleware auto-registers a catch-all pair, so family middleware
 		// never reaches echo; until it is attached per route, refuse it.
@@ -115,22 +116,11 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 			panic("server: Group middleware inside the tenant-owned family at " + strconv.Quote(rg.family.prefix) +
 				" is not supported yet; pass it per route to Add")
 		}
-		return &routeGroup{
-			group:     rg.group.Group(normalized),
-			prefix:    rg.combinePrefix(normalized),
-			cfg:       rg.cfg,
-			admission: rg.admission,
-			family:    rg.family,
-		}
+		child.group = rg.group.Group(normalized)
+		return child
 	}
-	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
-
-	return &routeGroup{
-		group:     newGroup,
-		prefix:    rg.combinePrefix(normalized),
-		cfg:       rg.cfg,
-		admission: rg.admission,
-	}
+	child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
+	return child
 }
 
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
