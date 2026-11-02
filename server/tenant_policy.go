@@ -58,7 +58,9 @@ func DenyBodyless(c HandlerContext, fault error) error {
 
 // ResolveForTest runs steps 1-3 and the fault rule on c (from NewHandlerContextForTest)
 // without a router. denied is true only when Deny ran; the backstop's error stays unexported.
-// It panics when p.Tenant is nil, before any Authenticate step runs.
+// When a step commits a response it returns no tenant, denied false and the chain's error as
+// the step returned it (nil when it returned nil). It panics when p.Tenant is nil, before any
+// Authenticate step runs.
 func (p TenantPolicy) ResolveForTest(c HandlerContext) (tenantID string, denied bool, err error) {
 	if p.Tenant == nil {
 		panic("server: TenantPolicy.Tenant is nil")
@@ -96,10 +98,11 @@ func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) 
 	if tenantID != "" {
 		return tenantID, false, chainErr
 	}
-	// Deny is the only byte writer: committed bytes stand, and the fault is only logged.
+	// Deny is the only byte writer: committed bytes stand, the fault is logged, and the chain's
+	// error is returned untouched (the framework renders nothing over a committed response).
 	if isResponseCommitted(c.echoContext()) {
 		logTenantRefusal(c, l, reasonStepCommitted)
-		return "", false, nil
+		return "", false, chainErr
 	}
 	if backstop != nil {
 		return "", false, backstop
