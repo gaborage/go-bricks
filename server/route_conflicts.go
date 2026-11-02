@@ -175,6 +175,7 @@ type routeAdmission struct {
 	engine     *echo.Echo               // the application engine; written once by New, before any registrar exists
 	log        logger.Logger            // the Server's logger; written once by New, before any registrar exists
 	probePaths []string                 // full health and ready paths on the application listener; written once by New
+	seated     bool                     // whether New installed the tenant seat; written once by New
 	families   []string                 // each tenant-owned family's full prefix, in build order
 	owned      atomic.Pointer[[]string] // families, republished copy-on-write for owns
 

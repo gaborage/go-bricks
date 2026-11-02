@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"slices"
 	"strconv"
 	"sync"
@@ -9,15 +10,47 @@ import (
 
 	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // tenantFamily is one tenant-owned route family.
 type tenantFamily struct {
 	prefix string              // the full template the family's echo group mounts at
 	steps  echo.MiddlewareFunc // Authenticate, Tenant, the grammar check and the publish
+	log    logger.Logger       // the Server's logger, for the leaf guard's refusals
 
 	mu        sync.Mutex
 	catchAlls map[string]struct{} // routeNodeKey(echo.RouteNotFound, full path) of each not-found catch-all
+}
+
+// familyPublishedKey holds the request context a family's steps published the tenant on.
+const familyPublishedKey = "_tenant_family_published"
+
+// guard is a family route's innermost middleware (routeMiddleware): it wraps the leaf handler
+// h, around the typed leaf, so binding and JOSE run after it. h runs only on a request the
+// tenant seat skipped (seatSkippedKey) whose tenant is still exactly the one the family's
+// steps published. Anything else is a wiring fault: the framework 500, logged once, and h
+// never runs. It guards wiring, not a security boundary: HandlerContext.Set can write the
+// evidence it reads.
+func (f *tenantFamily) guard(h echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if skipped, _ := c.Get(seatSkippedKey).(bool); !skipped {
+			return newTenantFault(newHandlerContext(c, nil), f.log, reasonSeatNotSkipped, nil)
+		}
+		if !holdsPublishedTenant(c) {
+			return newTenantFault(newHandlerContext(c, nil), f.log, reasonTenantReplaced, nil)
+		}
+		return h(c)
+	}
+}
+
+// holdsPublishedTenant reports whether c's request carries exactly the tenant the family's
+// steps published. GetTenant answers false for a missing (nil) published context.
+func holdsPublishedTenant(c *echo.Context) bool {
+	published, _ := c.Get(familyPublishedKey).(context.Context)
+	want, ok := multitenant.GetTenant(published)
+	got, _ := multitenant.GetTenant(c.Request().Context())
+	return ok && got == want
 }
 
 // familyNode is one family registrar's own middleware: the family root's (nil parent) or a
@@ -46,8 +79,9 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 // backstop, a 500. Use and Group middleware inside the family attach per route at registration,
 // never to a catch-all. It panics at the call site when r was not built by a Server, r is already
 // inside a family, p.Tenant is nil, the prefix is empty or "/", the full prefix holds a path
-// parameter or wildcard, multi-tenant mode is off, the full prefix equals or covers the health or
-// ready path, or it equals, covers or sits under another family.
+// parameter or wildcard, multi-tenant mode is off, the Server installed no tenant seat (its
+// tenant resolver could not be built), the full prefix equals or covers the health or ready
+// path, or it equals, covers or sits under another family.
 func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegistrar {
 	rg, ok := r.(*routeGroup)
 	if !ok || rg.admission == nil {
@@ -70,6 +104,9 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if !rg.cfg.Multitenant.Enabled {
 		panic(tenantFamilyRefusal(full, "multitenant.enabled is false; a module shared with single-tenant binaries must branch on config"))
 	}
+	if !rg.admission.seated {
+		panic(tenantFamilyRefusal(full, "the tenant seat is not installed: the configured tenant resolver could not be built"))
+	}
 	if probe, covered := rg.admission.coveredProbePath(full); covered {
 		panic(tenantFamilyRefusal(full, "it equals or covers the probe path "+strconv.Quote(probe)))
 	}
@@ -80,6 +117,7 @@ func tenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	p.Authenticate = slices.Clone(p.Authenticate)
 	fam := &tenantFamily{
 		prefix:    full,
+		log:       rg.admission.log,
 		steps:     adaptMiddleware(p.middleware(rg.admission.log), rg.cfg),
 		catchAlls: map[string]struct{}{catchAllKey(full + "/*"): {}},
 	}

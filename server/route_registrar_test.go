@@ -20,6 +20,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/racedetect"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -479,16 +480,30 @@ const (
 	warnIPPreGuard     = "[server.ip_preguard] request rejected"
 	warnAccessLog4xx   = "with status 4xx" // the request logger's WARN for a 4xx
 
-	observedFamilyPrefix = "/partner" // the tenant-owned family a family server mounts
+	observedFamilyPrefix = "/partner"        // the tenant-owned family a family server mounts
+	observedDenyHeader   = "X-Observed-Deny" // makes observedFamilyPolicy deny
 )
+
+var errObservedDeny = fmt.Errorf("observed family: %w", multitenant.ErrTenantResolutionFailed)
+
+// observedFamilyPolicy resolves observedHeaderTenant, or refuses a request carrying
+// observedDenyHeader with DenyBodyless's 403.
+func observedFamilyPolicy() TenantPolicy {
+	return TenantPolicy{Tenant: func(c HandlerContext) (string, error) {
+		if c.RequestHeader(observedDenyHeader) != "" {
+			return "", errObservedDeny
+		}
+		return observedHeaderTenant, nil
+	}}
+}
 
 // newObservedServer builds a server through New the way an observed deployment configures
 // it: OTel tracing on, the IP pre-guard and the limiter on, composite tenant resolution
 // (header, then path segment 2 under /t) and forwarded-client-cert identity. denyIP drops
 // the pre-guard threshold to 1/s (burst 2) so a client is denied once the burst is spent;
 // the caller freezes the clock (see TestObservedRequestAllocsStable) so no token ever refills.
-// family adds a tenant-owned family at observedFamilyPrefix resolving observedHeaderTenant,
-// with a typed /orders and a raw /identity answering the forwarded-client-cert subject.
+// family adds a tenant-owned family at observedFamilyPrefix (observedFamilyPolicy), with a
+// typed /orders and a raw /identity answering the forwarded-client-cert subject.
 func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Server {
 	t.Helper()
 	preGuard := observedOpenPreGuard
@@ -524,7 +539,7 @@ func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Ser
 	admin := srv.ModuleGroup().Group("/admin", func(_ HandlerContext, next func() error) error { return next() })
 	GET(hr, admin, "/status", ok)
 	if family {
-		partner := tenantOwnedGroup(srv.ModuleGroup(), observedFamilyPrefix, fixedTenantPolicy(observedHeaderTenant))
+		partner := tenantOwnedGroup(srv.ModuleGroup(), observedFamilyPrefix, observedFamilyPolicy())
 		GET(hr, partner, "/orders", ok)
 		partner.Add(http.MethodGet, "/identity", func(c HandlerContext) error {
 			cert, _ := ForwardedClientCertFromContext(c.RequestContext())
@@ -671,6 +686,25 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		{
 			name: "non_family_route_beside_family", baseline: 113, family: true, wantStatus: http.StatusOK,
 			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, nil),
+		},
+		// The seat skips the family's route, so no X-Tenant-ID: the family's steps publish.
+		{
+			name: "family_route_matched", baseline: 118, family: true, wantStatus: http.StatusOK,
+			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", nil),
+		},
+		// Deny answers the client fault with a bodyless 403, which the access logger WARNs.
+		{
+			name: "family_route_denied", baseline: 115, family: true, wantStatus: http.StatusForbidden,
+			warn: warnAccessLog4xx,
+			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", map[string][]string{
+				observedDenyHeader: {"1"},
+			}),
+		},
+		// The family's catch-all: the steps publish, then the framework 404.
+		{
+			name: "family_unknown_sub_path_not_found", baseline: 128, family: true, wantStatus: http.StatusNotFound,
+			warn: warnAccessLog4xx,
+			req:  observedRequest(http.MethodGet, observedFamilyPrefix+"/nowhere", "", nil),
 		},
 		// Rate 1/s, burst 2 under a frozen clock: the warm-ups spend the burst and no token
 		// ever refills, so every measured request is denied and WARNs.

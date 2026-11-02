@@ -83,13 +83,15 @@ func (rg *routeGroup) addAdmitted(method, relative, full string, h echo.HandlerF
 
 // routeMiddleware returns a route's echo middleware: mw adapted, and inside a tenant-owned
 // family behind the family's steps (outermost), then each family registrar's own middleware
-// from the family root down to rg, all read now, at registration.
+// from the family root down to rg, all read now, at registration, and before the family's
+// leaf guard (innermost).
 func (rg *routeGroup) routeMiddleware(mw []MiddlewareFunc) []echo.MiddlewareFunc {
 	if rg.family == nil {
 		return rg.adaptAll(mw)
 	}
 	chain := rg.familyNode.appendChain([]echo.MiddlewareFunc{rg.family.steps})
-	return append(chain, rg.adaptAll(mw)...)
+	chain = append(chain, rg.adaptAll(mw)...)
+	return append(chain, rg.family.guard)
 }
 
 // probeListenerDescriptor describes a probe served on the probe listener, at its unprefixed
