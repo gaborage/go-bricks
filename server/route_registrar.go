@@ -40,11 +40,12 @@ func newAdmittingRouteGroup(group *echo.Group, prefix string, cfg *config.Config
 // routeAdmission.admit.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descriptor *RouteDescriptor) {
 	relative := rg.relativePath(path)
+	fullPath := rg.fullPathFromRelative(relative)
 	rg.admission.admit(admittedRoute{
 		Method:     method,
-		Path:       rg.fullPathFromRelative(relative),
+		Path:       fullPath,
 		Descriptor: descriptor,
-	}, func() { rg.group.Add(method, relative, h) })
+	}, func() { rg.addAdmitted(method, relative, fullPath, h, nil) })
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -66,7 +67,26 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 		Method:     method,
 		Path:       fullPath,
 		Descriptor: modellessDescriptor(method, fullPath, reg),
-	}, func() { rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...) })
+	}, func() { rg.addAdmitted(method, relative, fullPath, adaptHandler(handler, rg.cfg), middleware) })
+}
+
+// addAdmitted adds an admitted route to rg's echo group at relative, the spelling on it of full.
+// Inside a tenant-owned family, a template holding a wildcard also gets the family's catch-all at
+// its echo node (tenantFamily.addWildcardCatchAll).
+func (rg *routeGroup) addAdmitted(method, relative, full string, h echo.HandlerFunc, mw []MiddlewareFunc) {
+	rg.group.Add(method, relative, h, rg.routeMiddleware(mw)...)
+	if rg.family != nil {
+		rg.family.addWildcardCatchAll(rg.group, relative, full)
+	}
+}
+
+// routeMiddleware returns a route's echo middleware: mw adapted, behind the family's steps
+// (outermost) inside a tenant-owned family.
+func (rg *routeGroup) routeMiddleware(mw []MiddlewareFunc) []echo.MiddlewareFunc {
+	if rg.family == nil {
+		return rg.adaptAll(mw)
+	}
+	return append([]echo.MiddlewareFunc{rg.family.steps}, rg.adaptAll(mw)...)
 }
 
 // probeListenerDescriptor describes a probe served on the probe listener, at its unprefixed

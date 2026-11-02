@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/internal/pathutil"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // ErrDuplicateRoute is what every *DuplicateRouteError matches, whatever the Reason of its
@@ -144,15 +145,16 @@ type admittedRoute struct {
 // routeAdmission is the one admission step every go-bricks route door on a Server goes
 // through; see admit. One instance per Server; a nil admission admits everything (bare
 // newRouteGroup construction in tests). It also holds the Server's tenant-owned family
-// record: the engine families are built on, the probe paths they may not cover, and each
-// family's full prefix (claimFamily).
+// record: the engine families are built on, the logger their refusals go to, the probe paths
+// they may not cover, and each family's full prefix (claimFamily).
 type routeAdmission struct {
 	mu         sync.Mutex
 	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts  []RouteConflict
-	engine     *echo.Echo // the application engine; written once by New, before any registrar exists
-	probePaths []string   // full health and ready paths on the application listener; written once by New
-	families   []string   // each tenant-owned family's full prefix, in build order
+	engine     *echo.Echo    // the application engine; written once by New, before any registrar exists
+	log        logger.Logger // the Server's logger; written once by New, before any registrar exists
+	probePaths []string      // full health and ready paths on the application listener; written once by New
+	families   []string      // each tenant-owned family's full prefix, in build order
 }
 
 // seenRoute is the first registration of a route node, with its literal path.
