@@ -466,8 +466,8 @@ jobs:
           # Pin the SHA256 and verify before extracting (fail-closed) so a
           # tampered or swapped tarball aborts the job — never pipe curl|tar.
           # Keep in sync with .github/workflows/ci-v2.yml (source of truth for these pins).
-          FLYWAY_VERSION=13.11.1
-          FLYWAY_SHA256=c5397ad1c58dbbac94682f29322ec54896f15e9827c5dc3e02ca40240077d3f7
+          FLYWAY_VERSION=13.12.0
+          FLYWAY_SHA256=d11627e1c5f81e08fd4cdb4a0a36ad262a2c6282d054c1412dab7bc903a246c6
           url="https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
           curl -fsSL "$url" -o flyway.tar.gz
           echo "${FLYWAY_SHA256}  flyway.tar.gz" | sha256sum -c -
