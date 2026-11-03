@@ -52,7 +52,7 @@ func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 		otel.SetTextMapPropagator(originalProp)
 	})
 
-	e := echo.New()
+	e := newEngine()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{App: config.AppConfig{Name: testServiceName}}
 	// observabilityEnabled = false → the echo-otel middleware must not be registered.
@@ -86,7 +86,7 @@ func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryEx
 	exporter := installTestTracerProvider(t)
 
 	// Create Echo instance with middleware
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{
 		App: config.AppConfig{
 			Name: testServiceName,
@@ -527,7 +527,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 		otel.SetTextMapPropagator(originalPropagator)
 	})
 
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{
 		App: config.AppConfig{
 			Name: testServiceName,
@@ -580,7 +580,7 @@ func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProv
 		otel.SetMeterProvider(originalMP)
 	})
 
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{
 		App: config.AppConfig{
 			Name: testServiceName,
@@ -760,7 +760,7 @@ func TestOTelMiddlewareNeverRecordsAPanicValue(t *testing.T) {
 
 	t.Run("middleware_between_otel_and_recover", func(t *testing.T) {
 		exporter := installTestTracerProvider(t)
-		e := echo.New()
+		e := newEngine()
 		useOTelMiddleware(e, &config.Config{App: config.AppConfig{Name: testServiceName}},
 			func(*echo.Context) bool { return false })
 		e.Use(func(echo.HandlerFunc) echo.HandlerFunc {

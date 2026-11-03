@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
@@ -38,7 +37,7 @@ func TestRouteMetadataCapture(t *testing.T) {
 	// Create test setup
 	cfg := &config.Config{}
 	registry := NewHandlerRegistry(cfg)
-	e := echo.New()
+	e := newEngine()
 	registrar := newRouteGroup(e.Group(""), "", nil)
 
 	// Register a route with metadata
@@ -115,7 +114,7 @@ func TestBackwardCompatibility(t *testing.T) {
 	// Create test setup
 	cfg := &config.Config{}
 	registry := NewHandlerRegistry(cfg)
-	e := echo.New()
+	e := newEngine()
 	registrar := newRouteGroup(e.Group(""), "", nil)
 
 	// Register route without options (backward compatible)

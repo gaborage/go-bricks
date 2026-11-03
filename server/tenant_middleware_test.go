@@ -28,7 +28,7 @@ import (
 // its real HTTP status instead of Echo's default 500 for non-*echo.HTTPError
 // errors. Mirrors the pattern in errors_test.go.
 func newTenantTestEcho() *echo.Echo {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: config.EnvDevelopment}}
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
 		customErrorHandler(c, err, cfg, &testLogger{})
@@ -271,7 +271,7 @@ func TestUnknownTenantRefusalNilLoggerFallsBackToStdlib(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(prev) })
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/orders", http.NoBody)
-	c := echo.New().NewContext(req, httptest.NewRecorder())
+	c := newEngine().NewContext(req, httptest.NewRecorder())
 
 	logUnknownTenantRefusal(NewUnknownTenantError(errors.New("dial tcp 10.0.0.7: refused")), c, nil, false)
 

@@ -76,7 +76,7 @@ func TestIPPreGuard(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// Create fresh Echo instance for each test to avoid interference
-			e := echo.New()
+			e := newEngine()
 			e.Use(ipPreGuardEcho(tt.requestsPerSec, nil))
 
 			e.GET("/test", func(c *echo.Context) error {
@@ -114,7 +114,7 @@ func TestIPPreGuard(t *testing.T) {
 }
 
 func TestIPPreGuardDifferentIPs(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(ipPreGuardEcho(2, nil)) // Very low limit to trigger easily
 
 	e.GET("/test", func(c *echo.Context) error {
@@ -154,7 +154,7 @@ func TestIPPreGuardDifferentIPs(t *testing.T) {
 }
 
 func TestIPPreGuardErrorResponse(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(ipPreGuardEcho(1, nil)) // Very restrictive limit
 
 	e.GET("/test", func(c *echo.Context) error {
@@ -196,7 +196,7 @@ func TestIPPreGuardErrorResponse(t *testing.T) {
 }
 
 func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 
 	// Test that IPPreGuard works correctly when combined with other middleware
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -259,7 +259,7 @@ func TestIPPreGuardLogsRejection(t *testing.T) {
 // rejects with 429 and does not panic — guards against a future refactor
 // reintroducing an unconditional l.Warn() call.
 func TestIPPreGuardNilLoggerDoesNotPanic(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(ipPreGuardEcho(1, nil))
 
 	e.GET("/test", func(c *echo.Context) error {
@@ -346,7 +346,7 @@ func TestIPPreGuardRejectionLogEscapesRequestValues(t *testing.T) {
 // then asserts the captured output is exactly one line and returns it.
 func tripIPPreGuard(t *testing.T, l logger.Logger, path, ip string, lines func() []string) string {
 	t.Helper()
-	e := echo.New()
+	e := newEngine()
 	// Echo's default RealIP is the peer address only; a deployment's IPExtractor
 	// (server.go wires ExtractIPFromXFFHeader) is what makes it header-derived.
 	// A raw-header extractor models the worst case: the value reaches the log

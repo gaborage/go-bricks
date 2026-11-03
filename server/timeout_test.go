@@ -52,8 +52,7 @@ func TestTimeoutHandling(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup
-			e := echo.New()
-			e.Validator = NewValidator()
+			e := newValidatedEngine(t)
 			cfg := &config.Config{
 				App: config.AppConfig{
 					Env: config.EnvDevelopment,
@@ -104,8 +103,7 @@ func TestTimeoutHandling(t *testing.T) {
 
 // TestContextDeadlineDetectionBeforeBinding tests early context deadline detection
 func TestContextDeadlineDetectionBeforeBinding(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	cfg := &config.Config{
 		App: config.AppConfig{
 			Env: config.EnvDevelopment,
@@ -142,7 +140,7 @@ func TestContextDeadlineDetectionBeforeBinding(t *testing.T) {
 
 // TestCustomErrorHandlerTimeoutDetection tests that the custom error handler properly handles context.DeadlineExceeded
 func TestCustomErrorHandlerTimeoutDetection(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{
 		App: config.AppConfig{
 			Env: config.EnvDevelopment,
@@ -171,15 +169,12 @@ func TestCustomErrorHandlerTimeoutDetection(t *testing.T) {
 
 // TestTimeoutDuringValidation tests timeout detection after binding but before handler execution
 func TestTimeoutDuringValidation(t *testing.T) {
-	e := echo.New()
+	e := newValidatedEngine(t)
 	cfg := &config.Config{
 		App: config.AppConfig{
 			Env: config.EnvDevelopment,
 		},
 	}
-
-	// Set up validator
-	e.Validator = NewValidator()
 
 	hr := NewHandlerRegistry(cfg)
 	registrar := newRouteGroup(e.Group(""), "", nil)
@@ -227,8 +222,7 @@ func TestTimeoutDuringValidation(t *testing.T) {
 // during handler execution returns a structured 503 ServiceUnavailable response
 // instead of a raw context error.
 func TestContextCancellationDuringHandlerExecution(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	cfg := &config.Config{
 		App: config.AppConfig{
 			Env: config.EnvDevelopment,
@@ -276,7 +270,7 @@ func TestContextCancellationDuringHandlerExecution(t *testing.T) {
 // timeout + logger middleware attempting to log response status after deadline exceeded.
 // This test ensures the custom Timeout middleware prevents response invalidation.
 func TestTimeoutWithLoggerMiddleware(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
 			Timeout: config.TimeoutConfig{
@@ -337,7 +331,7 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 // TestTimeoutWithLoggerHighConcurrency simulates the production load test scenario
 // with multiple concurrent requests timing out to ensure no panics occur.
 func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
 			Timeout: config.TimeoutConfig{

@@ -62,7 +62,7 @@ func TestValidateRequestIDRejectsUnsafeValues(t *testing.T) {
 }
 
 func TestSafeGetRequestIDPrefersResponseHeader(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	// Caller-controlled junk on the request — should NOT be returned because the
 	// framework-set response header takes precedence.
@@ -75,7 +75,7 @@ func TestSafeGetRequestIDPrefersResponseHeader(t *testing.T) {
 }
 
 func TestSafeGetRequestIDValidatesInboundFallback(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, "junk with spaces")
 	rec := httptest.NewRecorder()
@@ -88,7 +88,7 @@ func TestSafeGetRequestIDValidatesInboundFallback(t *testing.T) {
 }
 
 func TestSafeGetRequestIDPassesValidInboundFallback(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, "valid-inbound-id")
 	rec := httptest.NewRecorder()
@@ -103,7 +103,7 @@ func TestSafeGetRequestIDPassesValidInboundFallback(t *testing.T) {
 // middleware (or any other that does verbatim echo), validateRequestID
 // must still reject the response-header value rather than trusting it.
 func TestSafeGetRequestIDValidatesResponseHeaderToo(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -116,7 +116,7 @@ func TestSafeGetRequestIDValidatesResponseHeaderToo(t *testing.T) {
 }
 
 func TestRequestIDMiddlewareValidInboundIsEchoed(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	mw := requestIDMiddlewareEcho()
 	handler := mw(func(_ *echo.Context) error { return nil })
 
@@ -140,7 +140,7 @@ func TestRequestIDMiddlewareInvalidInboundReplacedWithUUID(t *testing.T) {
 	}
 	for name, junk := range cases {
 		t.Run(name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			mw := requestIDMiddlewareEcho()
 			handler := mw(func(_ *echo.Context) error { return nil })
 
@@ -159,7 +159,7 @@ func TestRequestIDMiddlewareInvalidInboundReplacedWithUUID(t *testing.T) {
 }
 
 func TestRequestIDMiddlewareMissingInboundGeneratesUUID(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	mw := requestIDMiddlewareEcho()
 	handler := mw(func(_ *echo.Context) error { return nil })
 
@@ -207,7 +207,7 @@ func assertRejectionLogEscapesRequestValues(t *testing.T, emit func(l logger.Log
 		forgedIP   = "10.0.0.202\nclient=1.1.1.1"
 	)
 	newCtx := func() *echo.Context {
-		e := echo.New()
+		e := newEngine()
 		e.IPExtractor = func(r *http.Request) string { return r.Header.Get(HeaderXRealIP) }
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		req.URL.Path = forgedPath // NewRequest rejects control bytes in the target; set the path directly

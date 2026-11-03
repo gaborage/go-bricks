@@ -41,7 +41,7 @@ func TestTiming(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			e.Use(timingEcho())
 
 			e.GET("/test", func(c *echo.Context) error {
@@ -89,7 +89,7 @@ func TestTiming(t *testing.T) {
 }
 
 func TestTimingErrorHandler(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(timingEcho())
 
 	// Handler that returns an error
@@ -118,7 +118,7 @@ func TestTimingErrorHandler(t *testing.T) {
 }
 
 func TestTimingPanicHandler(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 
 	e.Use(timingEcho())
 
@@ -159,7 +159,7 @@ func TestTimingPanicHandler(t *testing.T) {
 }
 
 func TestTimingConcurrentRequests(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(timingEcho())
 
 	e.GET("/test", func(c *echo.Context) error {
@@ -221,7 +221,7 @@ func TestTimingConcurrentRequests(t *testing.T) {
 }
 
 func TestTimingHeaderFormat(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(timingEcho())
 
 	e.GET("/test", func(c *echo.Context) error {
@@ -254,7 +254,7 @@ func TestTimingHeaderFormat(t *testing.T) {
 }
 
 func TestTimingWithOtherMiddleware(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 
 	// Add timing with other middleware to test interaction
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {

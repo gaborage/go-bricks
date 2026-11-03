@@ -151,7 +151,7 @@ func TestStackTraceInErrorResponse(t *testing.T) {
 	withStackCapture(t, true)
 
 	t.Run("included_in_dev", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		e.HTTPErrorHandler = func(c *echo.Context, err error) {
 			customErrorHandler(c, err, &config.Config{
 				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
@@ -209,7 +209,7 @@ func TestStackTraceInErrorResponse(t *testing.T) {
 	})
 
 	t.Run("omitted_in_production", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		e.HTTPErrorHandler = func(c *echo.Context, err error) {
 			customErrorHandler(c, err, &config.Config{
 				App: config.AppConfig{Env: config.EnvProduction},
@@ -463,7 +463,7 @@ func TestCustomErrorHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -555,7 +555,7 @@ func TestIsRequestTooLarge(t *testing.T) {
 }
 
 func TestErrorResponseFormatting(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
 		customErrorHandler(c, err, &config.Config{
 			App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
@@ -601,7 +601,7 @@ func TestErrorResponseFormatting(t *testing.T) {
 // testLogger) rather than Echo's stock logger.
 func TestErrorHandlerLogging(t *testing.T) {
 	testLog := &testLogger{}
-	e := echo.New()
+	e := newEngine()
 
 	cfg := &config.Config{
 		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
@@ -667,7 +667,7 @@ func TestErrorChaining(t *testing.T) {
 	originalErr := errors.New("database connection failed")
 	wrappedErr := fmt.Errorf("failed to create user: %w", originalErr)
 
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -698,7 +698,7 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 	// This test verifies that the error handler respects Response.Committed
 	// to prevent double-writes when invoked after a response was written (a handler that
 	// wrote and then returned an error, or a middleware that called HTTPErrorHandler itself)
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{
 		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 	}

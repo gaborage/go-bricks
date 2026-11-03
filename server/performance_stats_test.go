@@ -84,7 +84,7 @@ func TestPerformanceStats(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup
-			e := echo.New()
+			e := newEngine()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -144,7 +144,7 @@ func TestPerformanceStats(t *testing.T) {
 }
 
 func TestPerformanceStatsContextInitialization(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -186,7 +186,7 @@ func TestPerformanceStatsContextInitialization(t *testing.T) {
 }
 
 func TestPerformanceStatsConcurrentAccess(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -242,7 +242,7 @@ func TestPerformanceStatsConcurrentAccess(t *testing.T) {
 }
 
 func TestPerformanceStatsMiddlewareChaining(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)

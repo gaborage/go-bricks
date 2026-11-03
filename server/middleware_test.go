@@ -84,7 +84,7 @@ func TestSetupMiddlewares(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			log := logger.New("disabled", false)
 
 			// Setup middlewares
@@ -142,7 +142,7 @@ func TestSetupMiddlewaresResponseTimeHeader(t *testing.T) {
 	}
 
 	t.Run("disabled_by_default_omits_header", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		log := logger.New("disabled", false)
 		SetupMiddlewares(e, log, newCfg(false), true, testHealthPath, testReadyPath)
 		e.GET("/test", func(c *echo.Context) error {
@@ -159,7 +159,7 @@ func TestSetupMiddlewaresResponseTimeHeader(t *testing.T) {
 	})
 
 	t.Run("enabled_sets_header", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		log := logger.New("disabled", false)
 		SetupMiddlewares(e, log, newCfg(true), true, testHealthPath, testReadyPath)
 		e.GET("/test", func(c *echo.Context) error {
@@ -349,7 +349,7 @@ func TestBuildCompositeResolverWiresEveryOrderEntry(t *testing.T) {
 }
 
 func TestMiddlewareOrder(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
@@ -417,7 +417,7 @@ func TestMiddlewareOrder(t *testing.T) {
 }
 
 func TestMiddlewareBodyLimit(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
@@ -463,8 +463,8 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 	log := logger.New("disabled", false)
 
-	newEngine := func(limit int64) *echo.Echo {
-		e := echo.New()
+	buildEngine := func(limit int64) *echo.Echo {
+		e := newEngine()
 		cfg := &config.Config{
 			App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
 			Server: config.ServerConfig{
@@ -489,7 +489,7 @@ func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 	}
 
 	t.Run("configured_limit_is_enforced", func(t *testing.T) {
-		e := newEngine(1024) // 1 KB
+		e := buildEngine(1024) // 1 KB
 		assert.Equal(t, http.StatusOK, post(e, 512))
 		assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, 2048))
 	})
@@ -506,7 +506,7 @@ func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 		underDefault := int(config.DefaultBodyLimitBytes) - 1024
 		overDefault := int(config.DefaultBodyLimitBytes) + 1024
 		for _, limit := range []int64{0, -1} {
-			e := newEngine(limit)
+			e := buildEngine(limit)
 			assert.Equal(t, http.StatusOK, post(e, underDefault),
 				"limit %d must fall back to the 10 MB default (accepts an under-default body)", limit)
 			assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, overDefault),
@@ -516,7 +516,7 @@ func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 }
 
 func TestGzipMiddleware(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
@@ -568,7 +568,7 @@ func TestGzipMiddleware(t *testing.T) {
 // TestGzipMiddlewareMinLength verifies the server.gzip.minlength wiring: responses
 // smaller than the configured threshold are sent uncompressed, larger ones gzipped.
 func TestGzipMiddlewareMinLength(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
@@ -606,7 +606,7 @@ func TestGzipMiddlewareMinLength(t *testing.T) {
 }
 
 func TestRecoveryMiddleware(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	log := logger.New("debug", false) // Enable logging to capture panic logs
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
@@ -638,7 +638,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	log := logger.New("disabled", false)
 	cfg := &config.Config{
 		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
@@ -859,7 +859,7 @@ func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
 			cfg.App.Name = "panic-span"
 			cfg.App.Env = "production"
 
-			e := echo.New()
+			e := newEngine()
 			SetupMiddlewares(e, logger.New("disabled", true), cfg, true, "/health", "/ready")
 			e.GET("/boom", func(*echo.Context) error { panic(tt.panicVal) })
 
@@ -922,7 +922,7 @@ func TestSanitizePanicValuePreservesTheAbortContract(t *testing.T) {
 // to emit its structured "Panic recovered" line with the stack. Sanitizing must
 // not break that, or the panic log silently stops.
 func TestSanitizePanicValueStillYieldsAPanicStackError(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{}
 	cfg.App.Name = "panic-shape"
 	SetupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready")
@@ -958,7 +958,7 @@ func TestSanitizePanicValueStillYieldsAPanicStackError(t *testing.T) {
 // only the sanitizer, and a test that merely checks the secret is absent would
 // pass while the panic site had become unfindable.
 func TestSanitizePanicValueKeepsTheOriginalFrameInTheStack(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{}
 	cfg.App.Name = "panic-stack"
 	SetupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready")

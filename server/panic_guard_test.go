@@ -29,7 +29,7 @@ func guardTestConfig() *config.Config {
 // guard answers with the framework's own 500 envelope instead.
 func TestOutermostRecoverRendersTheStandardEnvelope(t *testing.T) {
 	frameworkLog := &testLogger{}
-	e := echo.New()
+	e := newEngine()
 	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
 	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
@@ -50,7 +50,7 @@ func TestOutermostRecoverRendersTheStandardEnvelope(t *testing.T) {
 // consumer-chosen, so the sensitive-data filter cannot help — appears nowhere.
 func TestOutermostRecoverLogsTheTypeNotTheValue(t *testing.T) {
 	frameworkLog := &testLogger{}
-	e := echo.New()
+	e := newEngine()
 	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
 	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
@@ -74,7 +74,7 @@ func TestOutermostRecoverLogsTheTypeNotTheValue(t *testing.T) {
 // a response, exactly as sanitizePanicValue does one layer down.
 func TestOutermostRecoverRepanicsAbortHandler(t *testing.T) {
 	frameworkLog := &testLogger{}
-	e := echo.New()
+	e := newEngine()
 	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
 	e.GET("/abort", func(*echo.Context) error { panic(http.ErrAbortHandler) })
 
@@ -107,7 +107,7 @@ func TestOutermostRecoverStopsAPreRecoverPanicReachingNetHTTP(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(previous) })
 
 	frameworkLog := &testLogger{}
-	e := echo.New()
+	e := newEngine()
 	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
 	e.Use(tenantMiddlewareEcho(panicTenantResolver{}, nil, nil, frameworkLog))
 	e.GET("/tenant", func(c *echo.Context) error { return c.String(http.StatusOK, "unreachable") })
@@ -158,7 +158,7 @@ func TestOutermostRecoverMessageMatchesTheStandardFiveHundred(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{App: config.AppConfig{Name: "test", Env: "production", Debug: tt.debug}}
-			e := echo.New()
+			e := newEngine()
 			e.Use(outermostRecoverEcho(&testLogger{}, cfg))
 			e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
@@ -187,7 +187,7 @@ func (l *panickingLogger) Error() logger.LogEvent { panic("logger exploded") }
 // would unwind past Echo into net/http — printing the LOGGER's panic value and
 // dropping the connection. The request must still get its 500 envelope.
 func TestOutermostRecoverSurvivesAPanickingLogger(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(outermostRecoverEcho(&panickingLogger{}, guardTestConfig()))
 	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 

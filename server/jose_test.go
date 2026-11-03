@@ -125,8 +125,7 @@ func newJOSETestServerWithConfig(t *testing.T, f *joseFixture, cfg *config.Confi
 // supplied by the caller, so a test can read what a failure left on the log and counter.
 func newJOSETestServerWithObs(t *testing.T, f *joseFixture, cfg *config.Config, obs *joseObservability, handler HandlerFunc[joseTokenReq, joseTokenResp]) (*echo.Echo, echo.HandlerFunc) {
 	t.Helper()
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 
 	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
 	wrapped := wrapHandlerWithJOSE(handler, NewRequestBinder(), cfg, nil, false, joseCfg)
@@ -260,8 +259,7 @@ func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
 	// error path already produces an envelope. Vanilla Result[R] continues to seal bare
 	// data (see TestJOSEHappyPathRoundtrip).
 	f := newJOSEFixture(t)
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	obs := newJOSEObservability(nil, nil, nil)
 	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
@@ -318,8 +316,7 @@ func TestJOSEResultWithMetaReservedKeyDroppedInsideSeal(t *testing.T) {
 	// overridden by the framework before the body is sealed, so peers receive the
 	// authoritative trace correlation rather than handler-controlled values.
 	f := newJOSEFixture(t)
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	obs := newJOSEObservability(nil, nil, nil)
 	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: obs}
@@ -497,8 +494,7 @@ func TestRoutesCloneDoesNotMutateLiveJOSEPolicy(t *testing.T) {
 	t.Cleanup(DefaultRouteRegistry.Clear)
 
 	f := newJOSEFixture(t)
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	hr := NewHandlerRegistry(&config.Config{App: config.AppConfig{Env: "development"}}, WithJOSEResolver(f.resolver))
 	registrar := newRouteGroup(e.Group(""), "", nil)
 	POST(hr, registrar, "/tokens", func(req taggedReq, _ HandlerContext) (taggedResp, IAPIError) {
@@ -739,7 +735,7 @@ func TestMatchedRouteTemplate(t *testing.T) {
 		captured    bool
 	)
 
-	e := echo.New()
+	e := newEngine()
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec *echo.Context) error {
 			gotTemplate, gotPath, captured = matchedRouteTemplate(ec), ec.Path(), true
@@ -888,7 +884,7 @@ func TestJOSEFailureOmitsRouteWhenNoTemplate(t *testing.T) {
 	// Straight from NewContext, so the router never ran: no matched route, and a concrete
 	// request path that must not be substituted for the missing template.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens/42", http.NoBody)
-	c := echo.New().NewContext(req, httptest.NewRecorder())
+	c := newEngine().NewContext(req, httptest.NewRecorder())
 	require.Empty(t, c.Path(), "premise: an unrouted context carries no route template")
 
 	obs.recordFailure(context.Background(), c, "inbound",

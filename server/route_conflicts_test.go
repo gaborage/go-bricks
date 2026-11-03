@@ -308,7 +308,7 @@ func TestRouteNodeKeyAgreesWithEchoSweep(t *testing.T) {
 // it) and reports whether request reaches second's handler.
 func echoReachesLast(t *testing.T, first, second, request string) bool {
 	t.Helper()
-	e := echo.New()
+	e := newEngine()
 	e.GET(first, func(c *echo.Context) error { return c.String(http.StatusOK, "first") })
 	e.GET(second, func(c *echo.Context) error { return c.String(http.StatusOK, "second") })
 	rec := serveEngine(e, http.MethodGet, request)
