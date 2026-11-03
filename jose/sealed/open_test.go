@@ -623,21 +623,20 @@ func TestDoorsRefuseJSONSerialization(t *testing.T) {
 	k := loadVectorKeys(t)
 	jws := strings.Split(k.build(t, mutation{}), ".")
 	jwe := strings.Split(k.inner, ".")
-	subject, err := json.Marshal(fmt.Sprintf(`{"protected":%q,"encrypted_key":%q,"iv":%q,"ciphertext":%q,"tag":%q}`, jwe[0], jwe[1], jwe[2], jwe[3], jwe[4]))
-	require.NoError(t, err)
-	jsonSubject := func(doc string) string { return strings.Replace(doc, `"`+k.inner+`"`, string(subject), 1) }
+	subject := fmt.Sprintf(`{"protected":%q,"encrypted_key":%q,"iv":%q,"ciphertext":%q,"tag":%q}`, jwe[0], jwe[1], jwe[2], jwe[3], jwe[4])
+	jsonSubject := func(doc string) string { return strings.Replace(doc, `"`+k.inner+`"`, fmt.Sprintf("%q", subject), 1) }
 
 	cases := []struct {
 		name string
 		body string
-		want vector
+		want *vector
 	}{
-		{"outer_jws", fmt.Sprintf(`{"protected":%q,"payload":%q,"signature":%q}`, jws[0], jws[1], jws[2]), vector{Code: sealed.CodeNotSealed, Rule: 1}},
-		{"subject_jwe", k.build(t, mutation{doc: jsonSubject}), vector{Code: sealed.CodePayloadUndecodable, Rule: 10}},
+		{"outer_jws", fmt.Sprintf(`{"protected":%q,"payload":%q,"signature":%q}`, jws[0], jws[1], jws[2]), &vector{Code: sealed.CodeNotSealed, Rule: 1}},
+		{"subject_jwe", k.build(t, mutation{doc: jsonSubject}), &vector{Code: sealed.CodePayloadUndecodable, Rule: 10}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			requireDoorsRefuse(t, k, []byte(tc.body), &tc.want)
+			requireDoorsRefuse(t, k, []byte(tc.body), tc.want)
 		})
 	}
 }
