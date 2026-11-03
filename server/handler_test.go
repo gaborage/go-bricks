@@ -40,14 +40,24 @@ type helloResp struct {
 	Message string `json:"message"`
 }
 
-func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	require.NotNil(t, v)
-	e.Validator = v
+// newValidatedEngine returns an engine built by newEngine carrying the
+// framework validator, as the typed pipeline (which calls c.Validate) needs.
+func newValidatedEngine(tb testing.TB) *echo.Echo {
+	tb.Helper()
+	e := newEngine()
+	e.Validator = NewValidator()
+	return e
+}
 
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+// newTypedPipeline returns newValidatedEngine's engine with the request binder
+// and the development/debug config the WrapHandler tests share.
+func newTypedPipeline(tb testing.TB) (e *echo.Echo, binder *RequestBinder, cfg *config.Config) {
+	tb.Helper()
+	return newValidatedEngine(tb), NewRequestBinder(), &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+}
+
+func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -74,12 +84,7 @@ func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
 }
 
 func TestWrapHandlerSuccessCustomStatusWithResult(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
@@ -101,12 +106,7 @@ func TestWrapHandlerSuccessCustomStatusWithResult(t *testing.T) {
 }
 
 func TestWrapHandlerValidationError(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -157,12 +157,7 @@ type numericRequest struct {
 }
 
 func TestRequestBinderAdvancedBinding(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
 		return req, nil
@@ -205,11 +200,7 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 // body last); go-bricks' post-body param overlay is what makes the URL win.
 // See wiki/handler_patterns.md#binding-source-precedence.
 func TestRequestBinderPrecedencePathParamOverridesBody(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen advancedBindReq
 	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -236,11 +227,7 @@ func TestRequestBinderPrecedencePathParamOverridesBody(t *testing.T) {
 // inside that step the body clobbers the query value — go-bricks' overlay is what
 // restores it. See wiki/handler_patterns.md#binding-source-precedence.
 func TestRequestBinderPrecedenceQueryParamOverridesBody(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen numericRequest
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
@@ -264,11 +251,7 @@ func TestRequestBinderPrecedenceQueryParamOverridesBody(t *testing.T) {
 // no headers at all in DefaultBinder.Bind, so this arm exists only in go-bricks'
 // overlay loop.
 func TestRequestBinderPrecedenceHeaderOverridesBody(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen advancedBindReq
 	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -296,11 +279,7 @@ func TestRequestBinderPrecedenceHeaderOverridesBody(t *testing.T) {
 // so an absent query param leaves the JSON body value in place. A change that
 // made URL-wins unconditional would break this test.
 func TestRequestBinderPrecedenceAbsentQueryParamKeepsBody(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen numericRequest
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
@@ -327,10 +306,7 @@ func TestRequestBinderPrecedenceAbsentQueryParamKeepsBody(t *testing.T) {
 // that is the only way the empty-segment match arises.
 // See wiki/handler_patterns.md#binding-source-precedence.
 func TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen advancedBindReq
 	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -352,10 +328,7 @@ func TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody(t *testing.T) {
 // key (?limit=), which is distinct from the absent key covered above: bindQueryValue
 // guards on the VALUE being non-empty, so both cases leave the body value in place.
 func TestRequestBinderPrecedenceEmptyQueryParamKeepsBody(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen numericRequest
 	h := WrapHandler(func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
@@ -376,10 +349,7 @@ func TestRequestBinderPrecedenceEmptyQueryParamKeepsBody(t *testing.T) {
 // TestRequestBinderPrecedenceAbsentHeaderKeepsBody pins the header side of the guard:
 // bindHeaderValue returns early when the header is absent, so the body value survives.
 func TestRequestBinderPrecedenceAbsentHeaderKeepsBody(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen advancedBindReq
 	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -405,10 +375,7 @@ func TestRequestBinderPrecedenceAbsentHeaderKeepsBody(t *testing.T) {
 // []string field is cleared rather than left holding the body value. Pinned, not endorsed:
 // changing it is a behavior change and belongs in its own PR.
 func TestRequestBinderPrecedenceEmptyHeaderClearsSliceField(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	var seen advancedBindReq
 	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -428,13 +395,7 @@ func TestRequestBinderPrecedenceEmptyHeaderClearsSliceField(t *testing.T) {
 }
 
 func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	require.NotNil(t, v)
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
 		return req, nil
@@ -467,13 +428,7 @@ func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 }
 
 func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	require.NotNil(t, v)
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
 		return req, nil
@@ -509,7 +464,7 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 }
 
 func TestEnsureTraceParentHeaderPreservesExistingResponseHeader(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.Header.Set(gobrickstrace.HeaderTraceParent, "00-11111111111111111111111111111111-2222222222222222-01")
 	rec := httptest.NewRecorder()
@@ -524,12 +479,7 @@ func TestEnsureTraceParentHeaderPreservesExistingResponseHeader(t *testing.T) {
 }
 
 func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -555,12 +505,7 @@ func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
 }
 
 func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -588,7 +533,7 @@ func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 }
 
 func TestFormatSuccessResponseWithStatusDefaultsWhenZero(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -617,9 +562,7 @@ type failingValidator struct{ err error }
 func (v failingValidator) Validate(_ any) error { return v.err }
 
 func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
+	e := newValidatedEngine(t)
 
 	binder := NewRequestBinder()
 	cfg := &config.Config{App: config.AppConfig{Env: "production"}}
@@ -648,7 +591,7 @@ func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
 }
 
 func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Validator = failingValidator{err: errors.New("boom")} // not a ValidationError
 
 	binder := NewRequestBinder()
@@ -682,12 +625,7 @@ func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 }
 
 func TestWrapHandlerNoContentResult(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	// Handler returns explicit NoContent result
 	handler := func(_ helloReq, _ HandlerContext) (NoContentResult, IAPIError) {
@@ -722,12 +660,7 @@ func TestResultHelpers(t *testing.T) {
 }
 
 func TestWrapHandlerResultAddsHeaders(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
 		r := NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name})
@@ -751,12 +684,7 @@ func TestWrapHandlerResultAddsHeaders(t *testing.T) {
 }
 
 func TestWrapHandlerSuccessMetaTimestampAndTraceIdFromResponseHeader(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -789,12 +717,7 @@ func TestWrapHandlerSuccessMetaTimestampAndTraceIdFromResponseHeader(t *testing.
 }
 
 func TestWrapHandlerErrorMetaTimestampAndTraceIdFromResponseHeader(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -833,10 +756,7 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 	hr := NewHandlerRegistry(cfg)
 	require.NotNil(t, hr)
 
-	e := echo.New()
-	v := NewValidator()
-	require.NotNil(t, v)
-	e.Validator = v
+	e := newValidatedEngine(t)
 	registrar := newRouteGroup(e.Group(""), "", nil)
 
 	type emptyReq struct{}
@@ -1101,12 +1021,7 @@ type pointerResp struct {
 
 // TestWrapHandlerPointerRequestType tests that WrapHandler can handle pointer request types
 func TestWrapHandlerPointerRequestType(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 		// Verify we received a non-nil pointer
@@ -1140,12 +1055,7 @@ func TestWrapHandlerPointerRequestType(t *testing.T) {
 
 // TestWrapHandlerPointerRequestTypeWithQueryParams tests that WrapHandler can bind pointer request types from query parameters
 func TestWrapHandlerPointerRequestTypeWithQueryParams(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	type ptrQueryReq struct {
 		Name string `query:"name" validate:"required"`
@@ -1179,12 +1089,7 @@ func TestWrapHandlerPointerRequestTypeWithQueryParams(t *testing.T) {
 
 // TestWrapHandlerPointerResponseType tests that WrapHandler can handle pointer response types
 func TestWrapHandlerPointerResponseType(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (*pointerResp, IAPIError) {
 		// Return pointer to large response (avoids copy)
@@ -1219,12 +1124,7 @@ func TestWrapHandlerPointerResponseType(t *testing.T) {
 
 // TestWrapHandlerPointerResponseType tests that WrapHandler can handle pointer response types
 func TestWrapHandlerBothPointerTypes(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req *pointerReq, _ HandlerContext) (*pointerResp, IAPIError) {
 		require.NotNil(t, req)
@@ -1259,12 +1159,7 @@ func TestWrapHandlerBothPointerTypes(t *testing.T) {
 // TestWrapHandlerMixedPointerValue tests that WrapHandler can handle mixed pointer and value types
 func TestWrapHandlerMixedPointerValue(t *testing.T) {
 	t.Run("pointer request, value response", func(t *testing.T) {
-		e := echo.New()
-		v := NewValidator()
-		e.Validator = v
-
-		binder := NewRequestBinder()
-		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+		e, binder, cfg := newTypedPipeline(t)
 
 		handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 			require.NotNil(t, req)
@@ -1285,12 +1180,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 	})
 
 	t.Run("value request, pointer response", func(t *testing.T) {
-		e := echo.New()
-		v := NewValidator()
-		e.Validator = v
-
-		binder := NewRequestBinder()
-		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+		e, binder, cfg := newTypedPipeline(t)
 
 		handler := func(req helloReq, _ HandlerContext) (*helloResp, IAPIError) {
 			return &helloResp{Message: testResponse + req.Name}, nil
@@ -1310,12 +1200,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 
 // TestWrapHandlerPointerRequestType tests that WrapHandler can handle pointer request types
 func TestWrapHandlerLargePayloadPointer(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	type largeBulkReq struct {
 		Records []string `json:"records"` // Simulates bulk data import
@@ -1365,12 +1250,7 @@ func TestWrapHandlerLargePayloadPointer(t *testing.T) {
 
 // TestWrapHandlerPointerRequestValidationError tests that validation errors are handled correctly for pointer request types
 func TestWrapHandlerPointerRequestValidationError(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -1397,12 +1277,7 @@ func TestWrapHandlerPointerRequestValidationError(t *testing.T) {
 
 // TestWrapHandlerPointerRequestValidationError tests that validation errors are handled correctly for pointer request types
 func TestWrapHandlerPointerRequestWithResult(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req *pointerReq, _ HandlerContext) (Result[pointerResp], IAPIError) {
 		require.NotNil(t, req)
@@ -1431,12 +1306,7 @@ func TestWrapHandlerPointerRequestWithResult(t *testing.T) {
 
 // TestWrapHandlerPointerRequestValidationError tests that validation errors are handled correctly for pointer request types
 func TestWrapHandlerPointerFieldsInStruct(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	type reqWithPointerFields struct {
 		Name   *string `json:"name" validate:"omitempty,min=3"`
@@ -1497,12 +1367,7 @@ func TestWrapHandlerNilPointerRejection(t *testing.T) {
 	// In real scenarios, JSON unmarshaling to a pointer type always allocates,
 	// so we verify the logic exists by checking the code path with reflection.
 
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 		// In normal operation, this should never receive nil due to our check
@@ -1530,12 +1395,7 @@ func TestWrapHandlerNilPointerRejection(t *testing.T) {
 // TestWrapHandlerEmptyJSONPointerRequest tests that an empty JSON object produces a valid pointer with zero values
 func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 	// Test that empty JSON object creates a valid (non-nil) pointer with zero values
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	type optionalFieldsReq struct {
 		Name  string `json:"name"`
@@ -1577,13 +1437,7 @@ func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 // ==================== Raw Response Mode Tests ====================
 
 func TestWrapHandlerRawResponseSuccess(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	require.NotNil(t, v)
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -1618,12 +1472,7 @@ func TestWrapHandlerRawResponseSuccess(t *testing.T) {
 }
 
 func TestWrapHandlerRawResponseWithResult(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
@@ -1646,12 +1495,7 @@ func TestWrapHandlerRawResponseWithResult(t *testing.T) {
 }
 
 func TestWrapHandlerRawResponseError(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{}, NewNotFoundError("User")
@@ -1681,12 +1525,7 @@ func TestWrapHandlerRawResponseError(t *testing.T) {
 }
 
 func TestWrapHandlerRawResponseValidationError(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -1714,12 +1553,7 @@ func TestWrapHandlerRawResponseValidationError(t *testing.T) {
 }
 
 func TestWrapHandlerRawResponseNoContent(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (NoContentResult, IAPIError) {
 		return NoContent(), nil
@@ -1738,9 +1572,7 @@ func TestWrapHandlerRawResponseNoContent(t *testing.T) {
 }
 
 func TestWrapHandlerRawResponseErrorProdOmitsDetails(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	e.Validator = v
+	e := newValidatedEngine(t)
 
 	binder := NewRequestBinder()
 	cfg := &config.Config{App: config.AppConfig{Env: "production"}}
@@ -1801,10 +1633,7 @@ func TestNewResultWithMetaConstructor(t *testing.T) {
 }
 
 func TestWrapHandlerMergesEnvelopeMeta(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
 		return ResultWithMeta[helloResp]{
@@ -1886,10 +1715,7 @@ func (e *levelRecEvent) Bool(_ string, _ bool) logger.LogEvent         { return 
 func (e *levelRecEvent) Enabled() bool                                 { return true }
 
 func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 	rec := &levelRecLogger{}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
@@ -1944,10 +1770,7 @@ func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
 }
 
 func TestWrapHandlerEnvelopeMetaReservedKeyNilLoggerSilentlyDrops(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
 		return ResultWithMeta[helloResp]{
@@ -1973,10 +1796,7 @@ func TestWrapHandlerEnvelopeMetaReservedKeyNilLoggerSilentlyDrops(t *testing.T) 
 }
 
 func TestWrapHandlerEnvelopeMetaPropagatesHeadersAndStatus(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
 		r := ResultWithMeta[helloResp]{
@@ -2000,10 +1820,7 @@ func TestWrapHandlerEnvelopeMetaPropagatesHeadersAndStatus(t *testing.T) {
 }
 
 func TestWrapHandlerRawResponseDropsEnvelopeMeta(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 	rec := &recLogger{}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
@@ -2049,7 +1866,7 @@ func TestWithLoggerOptionSetsField(t *testing.T) {
 }
 
 func TestGetTraceIDPassesValidInboundHeader(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, "valid-trace-id-123")
 	rec := httptest.NewRecorder()
@@ -2072,7 +1889,7 @@ func TestGetTraceIDRejectsInvalidInboundHeader(t *testing.T) {
 		// against unsanitized junk would fail to match the intended scope.
 		label := strings.ReplaceAll(junk[:min(len(junk), 12)], "/", "_")
 		t.Run("rejects_"+label, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 			req.Header.Set(echo.HeaderXRequestID, junk)
 			rec := httptest.NewRecorder()
@@ -2139,7 +1956,7 @@ func TestFrameworkEnvelopeWireParity(t *testing.T) {
 	metaOrderRe := `"meta":{"timestamp":`
 
 	t.Run("formatSuccessResponse_emits_typed_envelope", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
@@ -2165,7 +1982,7 @@ func TestFrameworkEnvelopeWireParity(t *testing.T) {
 	})
 
 	t.Run("formatErrorResponse_emits_typed_envelope", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testRoute, http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
@@ -2199,7 +2016,7 @@ func TestFrameworkEnvelopeWireParity(t *testing.T) {
 // Query/RequestHeader/Get/Set/JSON/String. It builds the context in-package via
 // newHandlerContext so path params can be seeded.
 func TestHandlerContextAccessors(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/widgets/42?q=hello", http.NoBody)
@@ -2301,7 +2118,7 @@ func TestHandlerContextSetRequest(t *testing.T) {
 // runs synchronously on the test goroutine, so fn may use require/assert directly.
 func withGroupRoutedHandlerContext(t *testing.T, groupPrefix, routePath, requestURL string, fn func(c HandlerContext)) {
 	t.Helper()
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	handlerRan := false
 	handler := func(ec *echo.Context) error {
@@ -2457,7 +2274,7 @@ func TestHandlerContextPathParams(t *testing.T) {
 	})
 
 	t.Run("empty_on_method_not_allowed", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		e.GET("/users/:userId", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
 		e.GET("/cards/:cardId/status", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
 		obs := observeUnmatchedRoute(e, echo.MethodNotAllowedRouteName)
@@ -2483,7 +2300,7 @@ func TestHandlerContextPathParams(t *testing.T) {
 	})
 
 	t.Run("empty_on_not_found", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		e.GET("/users/:userId", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
 		obs := observeUnmatchedRoute(e, echo.NotFoundRouteName)
 
@@ -2538,13 +2355,7 @@ func TestHandlerContextSetPathParams(t *testing.T) {
 	})
 
 	t.Run("struct_tag_binding_observes_injected_params", func(t *testing.T) {
-		e := echo.New()
-		v := NewValidator()
-		require.NotNil(t, v)
-		e.Validator = v
-
-		binder := NewRequestBinder()
-		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+		e, binder, cfg := newTypedPipeline(t)
 
 		var bound setPathParamsBindReq
 		handler := func(req setPathParamsBindReq, _ HandlerContext) (setPathParamsBindReq, IAPIError) {
@@ -2605,7 +2416,7 @@ func TestNewHandlerContextForTestSmoke(t *testing.T) {
 // TestAdaptHandlerRoundTrip proves a go-bricks Handler adapted to echo runs and writes
 // its own response.
 func TestAdaptHandlerRoundTrip(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	eh := adaptHandler(func(c HandlerContext) error {
@@ -2622,7 +2433,7 @@ func TestAdaptHandlerRoundTrip(t *testing.T) {
 // TestAdaptMiddlewareChainsThrough verifies a flat MiddlewareFunc that calls next()
 // runs its logic and chains to the wrapped handler.
 func TestAdaptMiddlewareChainsThrough(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	em := adaptMiddleware(func(c HandlerContext, next func() error) error {
@@ -2649,7 +2460,7 @@ func TestAdaptMiddlewareChainsThrough(t *testing.T) {
 // error handler (producing the usual envelope).
 func TestAdaptMiddlewareAbortPropagatesError(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
-	e := echo.New()
+	e := newEngine()
 	e.HTTPErrorHandler = func(c *echo.Context, err error) { customErrorHandler(c, err, cfg, &testLogger{}) }
 
 	rg := newRouteGroup(e.Group(""), "", cfg)
@@ -2678,7 +2489,7 @@ func TestAdaptMiddlewareAbortPropagatesError(t *testing.T) {
 // TestFromEchoMiddlewareRunsAndChains proves the inverse adapter: an echo-native
 // middleware exposed as a flat MiddlewareFunc still runs its echo logic and chains.
 func TestFromEchoMiddlewareRunsAndChains(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	flat := fromEchoMiddleware(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -2707,7 +2518,7 @@ func TestFromEchoMiddlewareRunsAndChains(t *testing.T) {
 func TestPublicMiddlewareConstructorsReturnFlatForm(t *testing.T) {
 	t.Setenv("CORS_DEV_WILDCARD", "true")
 
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	rg := newRouteGroup(e.Group(""), "", cfg)
 
@@ -2785,7 +2596,7 @@ func TestRegisterHandlerFallbackForNonEchoRegistrar(t *testing.T) {
 }
 
 func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	rg := newRouteGroup(e.Group(""), "", cfg)
 
@@ -2812,8 +2623,7 @@ func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
 // via addEcho) so benchmarks/alloc tests measure the ADR-026 hot path.
 func newTypedPathServer(tb testing.TB) (*echo.Echo, *http.Request) {
 	tb.Helper()
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(tb)
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	hr := NewHandlerRegistry(cfg)
 	rg := newRouteGroup(e.Group(""), "", cfg)
@@ -2878,7 +2688,7 @@ func TestHandlerContextGroupCatchAllUnmatched(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	obs := &unmatchedRouteObservation{}
 
-	e := echo.New()
+	e := newEngine()
 	// Pass-through group middleware mirroring scheduler/module.go's sysGroup.Use(...): its
 	// presence is what makes echo register the implicit catch-all, and being group-level it
 	// runs (and captures) even when no real route matched.
@@ -2963,7 +2773,7 @@ func TestHandlerContextGlobalUnmatchedTemplate(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	obs := &unmatchedRouteObservation{}
 
-	e := echo.New()
+	e := newEngine()
 	// Global middleware runs on every request incl. the global 404/405 fallbacks.
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec *echo.Context) error {
@@ -3012,13 +2822,7 @@ type trailingBytesReq struct {
 // 400 bind error (v5.2.1 silently ignored it), while trailing whitespace — a newline from a
 // CLI/`curl`, say — is still accepted because json.Unmarshal ignores it.
 func TestBindJSONBodyTrailingContent(t *testing.T) {
-	e := echo.New()
-	v := NewValidator()
-	require.NotNil(t, v)
-	e.Validator = v
-
-	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
+	e, binder, cfg := newTypedPipeline(t)
 	handler := func(req trailingBytesReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: req.Name}, nil
 	}
@@ -3080,8 +2884,7 @@ type bodyDecodeCall struct {
 // handler bound and the Content-Type header it saw.
 func serveBodyDecode[T any](t *testing.T, call *bodyDecodeCall) (bound T, contentType string, rec *httptest.ResponseRecorder) {
 	t.Helper()
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	h := WrapHandler(func(req T, ctx HandlerContext) (helloResp, IAPIError) {
 		bound = req
 		contentType = ctx.RequestHeader(echo.HeaderContentType)
@@ -3270,7 +3073,7 @@ func BenchmarkBindRequestPlanned(b *testing.B) {
 	plan := buildBindingPlan(reflect.TypeOf(wideJSONOnlyRequest{}))
 	require.Empty(b, plan, "wide JSON-only struct carries no binding tags")
 
-	e := echo.New()
+	e := newEngine()
 	b.ReportAllocs()
 	for range b.N {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(wideJSONOnlyRequestBody))
@@ -3282,8 +3085,7 @@ func BenchmarkBindRequestPlanned(b *testing.B) {
 }
 
 func BenchmarkBindRequestJSONOnlyWideStruct(b *testing.B) {
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(b)
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	hr := NewHandlerRegistry(cfg)
 	rg := newRouteGroup(e.Group(""), "", cfg)
@@ -3375,7 +3177,7 @@ func TestBindingPlanShapeAndBoundValues(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			binder := NewRequestBinder()
 
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/items/9", http.NoBody)
@@ -3414,7 +3216,7 @@ func TestBuildBindingPlanWithinFieldOrderAndLastWriteWins(t *testing.T) {
 	}, plan, "each tag on a field appends one entry, param before query before header")
 
 	newCtx := func() *echo.Context {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x?v=Q&t=Q", http.NoBody)
 		req.Header.Set("X-T", "H")
 		c := e.NewContext(req, httptest.NewRecorder())
@@ -3539,7 +3341,7 @@ func TestRegisterHandlerRejectsUnbindableRequestTypes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			rg := newRouteGroup(e.Group("/api"), "/api", cfg)
 			before := DefaultRouteRegistry.Count()
 
@@ -3570,8 +3372,7 @@ func TestRegisterHandlerAcceptsStructRequestTypes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := echo.New()
-			e.Validator = NewValidator()
+			e := newValidatedEngine(t)
 			rg := newRouteGroup(e.Group("/api"), "/api", cfg)
 			require.NotPanics(t, func() { tc.register(NewHandlerRegistry(cfg), rg, "/"+tc.name) })
 
@@ -3666,7 +3467,7 @@ func TestBindNamedStringSliceElementType(t *testing.T) {
 	binder := NewRequestBinder()
 
 	newCtx := func(setup func(*http.Request)) *echo.Context {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
 		setup(req)
 		return e.NewContext(req, httptest.NewRecorder())
@@ -3685,8 +3486,7 @@ func TestBindNamedStringSliceElementType(t *testing.T) {
 // carrying the header reaches the handler and returns 200 instead of panicking. WrapHandler
 // installs no recover of its own, so a regression surfaces here as a panic in this test.
 func TestWrapHandlerNamedStringSliceHeaderReturns200(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	binder := NewRequestBinder()
 
@@ -3736,7 +3536,7 @@ func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T)
 
 	for name, respondWith := range respond {
 		t.Run(name+"_mints_over_an_invalid_inbound_traceparent", func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 			req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 			rec := httptest.NewRecorder()
@@ -3753,7 +3553,7 @@ func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T)
 			// The early return reads the response header, which an earlier middleware
 			// may have populated by reflecting the inbound value verbatim. That read
 			// is validated too, symmetrically with the access-log reader.
-			e := echo.New()
+			e := newEngine()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -3767,7 +3567,7 @@ func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T)
 		})
 
 		t.Run(name+"_still_reflects_a_valid_inbound_traceparent", func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 			req.Header.Set(gobrickstrace.HeaderTraceParent, testTraceparent)
 			rec := httptest.NewRecorder()

@@ -29,7 +29,7 @@ const (
 )
 
 func TestRouteGroupAddNormalizesPaths(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	rg := newRouteGroup(e.Group("/api"), "/api", nil)
 
 	var hits int
@@ -71,7 +71,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 }
 
 func TestRouteGroupGroupCreatesNestedRegistrar(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	parent := newRouteGroup(e.Group("/api"), "/api", nil)
 
 	child := parent.Group("/v1")
@@ -104,8 +104,24 @@ func TestRouteGroupGroupCreatesNestedRegistrar(t *testing.T) {
 	assert.Equal(t, 2, hits)
 }
 
+// A nested registrar's routes, spelled relative or with the full prefix, are learned by the
+// test engine's maskingRouter under the template echo matches.
+func TestRouteGroupRoutesRenderMaskedPaths(t *testing.T) {
+	e := newEngine()
+	masked := recordMaskedPaths(e)
+	child := newRouteGroup(e.Group("/api"), "/api", nil).Group("/v1")
+	ok := func(c HandlerContext) error { return c.String(http.StatusOK, "") }
+	child.Add(http.MethodGet, "/cards/:pan", ok)
+	child.Add(http.MethodGet, "/api/v1/files/:id/*", ok)
+
+	for _, target := range []string{"/api/v1/cards/" + parityPAN, "/api/v1/files/7/" + parityPAN} {
+		assert.Equal(t, http.StatusOK, serveEngine(e, http.MethodGet, target).Code, target)
+	}
+	assert.Equal(t, []string{"/api/v1/cards/REDACTED", "/api/v1/files/REDACTED/REDACTED"}, *masked)
+}
+
 func TestRouteGroupUseAppliesMiddleware(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	rg := newRouteGroup(e.Group(""), "", nil)
 
 	var called bool
@@ -180,7 +196,7 @@ func TestRouteGroupAddEmitsRouteDescriptor(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	defer DefaultRouteRegistry.Clear()
 
-	e := echo.New()
+	e := newEngine()
 	base := newRouteGroup(e.Group("/api"), "/api", nil)
 
 	base.Add(http.MethodGet, "/raw-widgets", func(c HandlerContext) error {
@@ -217,7 +233,7 @@ func TestRouteGroupAddDescriptorUsesFullPath(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	defer DefaultRouteRegistry.Clear()
 
-	e := echo.New()
+	e := newEngine()
 	base := newRouteGroup(e.Group("/api"), "/api", nil)
 	child := base.Group("/v1")
 
@@ -233,7 +249,7 @@ func TestRouteGroupAddDescriptorUsesFullPath(t *testing.T) {
 // TestRouteGroupGroupAppliesFlatMiddleware verifies Group(prefix, ...MiddlewareFunc) wires
 // flat middleware onto the nested registrar and a raw Handler registered via Add runs.
 func TestRouteGroupGroupAppliesFlatMiddleware(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	base := newRouteGroup(e.Group(""), "", cfg)
 
@@ -265,7 +281,7 @@ func BenchmarkMiddlewareAdapter(b *testing.B) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 
 	build := func(flat bool) (*echo.Echo, *http.Request) {
-		e := echo.New()
+		e := newEngine()
 		rg := newRouteGroup(e.Group(""), "", cfg)
 		if flat {
 			rg.Use(func(_ HandlerContext, next func() error) error { return next() })

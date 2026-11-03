@@ -42,6 +42,19 @@ func assertMaskedPath(t *testing.T, newE func() *echo.Echo, want string, measure
 	}
 }
 
+// recordMaskedPaths makes the test engine e record, for each request it routes, the maskedPath
+// a sink would print, in serve order. The slice is unguarded: serve sequentially.
+func recordMaskedPaths(e *echo.Echo) *[]string {
+	got := new([]string)
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			*got = append(*got, maskedPath(c))
+			return next(c)
+		}
+	})
+	return got
+}
+
 func TestMaskedPathRendersTemplate(t *testing.T) {
 	assertMaskedPath(t, newEngine, "/cards/REDACTED", false)
 }
