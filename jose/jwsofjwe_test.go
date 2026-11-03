@@ -60,7 +60,7 @@ func newJWSofJWEFixture(t *testing.T) *jwsOfJWEFixture {
 // compact inner JWE.
 func innerJWE(t *testing.T, compact string, signKey *rsa.PrivateKey) string {
 	t.Helper()
-	jws, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.PS256})
+	jws, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.PS256})
 	require.NoError(t, err)
 	inner, err := jws.Verify(&signKey.PublicKey)
 	require.NoError(t, err)
@@ -253,6 +253,9 @@ func TestOpenJWSofJWERefusals(t *testing.T) {
 		flip = 'B'
 	}
 	tampered := sealed[:sigByte] + string(flip) + sealed[sigByte+1:]
+	inner := innerJWE(t, sealed, f.signPriv)
+	jsonInner, err := cryptoadapter.Sign([]byte(jsonJWE(inner)), f.signPriv, validOuter())
+	require.NoError(t, err)
 
 	tests := []struct {
 		name     string
@@ -268,7 +271,9 @@ func TestOpenJWSofJWERefusals(t *testing.T) {
 		{"disallowed_signature_algorithm", outer(func(o *cryptoadapter.SignOptions) { o.SigAlg = jose.RS256 }), codeAlgorithmDisallowed},
 		{"outer_without_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "" }), codeCtyRejected},
 		{"outer_with_other_cty", outer(func(o *cryptoadapter.SignOptions) { o.Cty = "JWS" }), codeCtyRejected},
-		{"jwe_outer_body", innerJWE(t, sealed, f.signPriv), codeOuterNotJWS},
+		{"jwe_outer_body", inner, codeOuterNotJWS},
+		{"json_serialized_outer_jws", jsonJWS(sealed), codeOuterNotJWS},
+		{"json_serialized_inner_jwe", jsonInner, codeMalformed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

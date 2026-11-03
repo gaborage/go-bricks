@@ -376,7 +376,7 @@ func TestEncryptOmitKid(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, !tt.omit, present)
 			assert.Equal(t, tt.wantKid, hdr.Kid)
-			obj, err := jose.ParseEncrypted(compact,
+			obj, err := jose.ParseEncryptedCompact(compact,
 				[]jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantKid, obj.Header.KeyID)

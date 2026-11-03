@@ -118,7 +118,7 @@ func topLevelKeys(t *testing.T, doc []byte) []string {
 // the parsed document; the inner JWE is returned as its compact string.
 func openWire(t *testing.T, wire []byte, verify *rsa.PublicKey) (payload []byte, doc map[string]json.RawMessage, innerJWE string) {
 	t.Helper()
-	jws, err := jose.ParseSigned(string(wire), []jose.SignatureAlgorithm{jose.PS256})
+	jws, err := jose.ParseSignedCompact(string(wire), []jose.SignatureAlgorithm{jose.PS256})
 	require.NoError(t, err)
 	payload, err = jws.Verify(verify)
 	require.NoError(t, err, "PS256 signature must verify over the exact payload bytes")
@@ -176,7 +176,7 @@ func TestSealProducesTheDecidedWire(t *testing.T) {
 	}
 
 	// The audience decrypts with the encrypt PRIVATE and gets the Subject's own serialization.
-	jwe, err := jose.ParseEncrypted(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
+	jwe, err := jose.ParseEncryptedCompact(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
 	require.NoError(t, err)
 	plain, err := jwe.Decrypt(k.encPriv)
 	require.NoError(t, err)
@@ -202,7 +202,7 @@ func TestSealNilSubjectIsJWEOfNull(t *testing.T) {
 	assert.Equal(t, []any{"card"}, outer["sp"], "sp is constant per type, nil subject included")
 	payload, _, innerJWE := openWire(t, wire, &k.signPriv.PublicKey)
 	assert.Equal(t, []string{"orderId", "card", "amount"}, topLevelKeys(t, payload), "subject member present on nil")
-	jwe, err := jose.ParseEncrypted(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
+	jwe, err := jose.ParseEncryptedCompact(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
 	require.NoError(t, err)
 	plain, err := jwe.Decrypt(k.encPriv)
 	require.NoError(t, err)
@@ -513,7 +513,7 @@ func TestSealSealsOnlyTheTopLevelSubjectMember(t *testing.T) {
 	assert.JSONEq(t, `{"card":"nested-clear-value","z":"\"card\":\"decoy\""}`, string(doc["meta"]), "nested namesake stays clear and untouched")
 	assert.Equal(t, `"{\"card\":\"another decoy\"}"`, string(doc["note"]), "a string member that spells the subject is untouched")
 	assert.NotContains(t, string(payload), testPAN)
-	jwe, err := jose.ParseEncrypted(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
+	jwe, err := jose.ParseEncryptedCompact(innerJWE, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A256GCM})
 	require.NoError(t, err)
 	plain, err := jwe.Decrypt(k.encPriv)
 	require.NoError(t, err)

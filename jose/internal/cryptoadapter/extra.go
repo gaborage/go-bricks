@@ -29,8 +29,8 @@ var (
 	// the class is deliberately not logged.
 	ErrHeaderTooLarge = errors.New("cryptoadapter: protected header exceeds bound")
 	// ErrNotCompact names the refusal of a body that is not a compact serialization — a JSON
-	// serialization, most importantly, which go-jose accepts and whose dot-delimited runs say
-	// nothing about the size of its protected member.
+	// serialization, most importantly, whose dot-delimited runs say nothing about the size of
+	// its protected member.
 	ErrNotCompact = errors.New("cryptoadapter: not a compact serialization")
 )
 
@@ -149,10 +149,10 @@ func CompactSegments(compact string) ([]string, error) {
 // boundedSegments prepares a compact for parsing and refuses it on three grounds, in
 // increasing cost: a part count that is not 3 or 5, an encoded segment 0 past
 // maxPeekHeaderBytes, and any segment that is not base64url. Every door that parses a
-// compact — Peek, Decrypt, Verify — runs this first. go-jose rejects a wrong part count
-// itself but imposes no size bound, and it accepts the JSON serialization too, whose
-// dot-delimited runs say nothing about the size of its protected member — so the charset
-// gate is what keeps the size bound meaningful. Surrounding whitespace is trimmed rather
+// compact — Peek, Decrypt, Verify — runs this first. go-jose's compact parsers reject a wrong
+// part count themselves but impose no size bound, and a JSON serialization's dot-delimited
+// runs say nothing about the size of its protected member — so the charset gate is what keeps
+// the size bound meaningful. Surrounding whitespace is trimmed rather
 // than refused, matching the stripWhitespace go-jose applies before its own parse; interior
 // whitespace is refused, which is stricter. It RETURNS the trimmed body: Decrypt and Verify
 // parse that, not the caller's string, so go-jose and parsedHeader see exactly the bytes this

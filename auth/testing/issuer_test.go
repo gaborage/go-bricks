@@ -50,7 +50,7 @@ func verify(t *testing.T, iss *Issuer, compact string) []byte {
 	key := iss.PublicKey(kid)
 	require.NotNil(t, key, "no public key for kid %q", kid)
 
-	obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
+	obj, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
 	require.NoError(t, err)
 	payload, err := obj.Verify(key)
 	require.NoError(t, err)
@@ -280,7 +280,7 @@ func TestIssuerSingleShapeMintersProduceTheirShape(t *testing.T) {
 			assert.Equal(t, DefaultSubject, payload["sub"])
 			tt.assert(t, header, payload)
 
-			obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
+			obj, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
 			require.NoError(t, err, "wire shape stays a parseable compact JWS")
 			_, err = obj.Verify(iss.PublicKey(DefaultKeyID))
 			assert.NoError(t, err, "signed by the active key")
@@ -299,7 +299,7 @@ func TestIssuerMintAlgNone(t *testing.T) {
 	assert.Equal(t, "none", decodeHeader(t, compact)["alg"])
 	assert.Equal(t, DefaultSubject, decodePayload(t, compact)["sub"])
 
-	_, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
+	_, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
 	assert.Error(t, err, "the framework allowlist must refuse alg=none")
 }
 
@@ -310,12 +310,12 @@ func TestIssuerMintES256(t *testing.T) {
 
 	assert.Equal(t, "ES256", decodeHeader(t, compact)["alg"])
 
-	obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.ES256})
+	obj, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.ES256})
 	require.NoError(t, err)
 	_, err = obj.Verify(&iss.ecdsaKey().PublicKey)
 	require.NoError(t, err)
 
-	_, err = jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
+	_, err = jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.RS256, jose.PS256})
 	assert.Error(t, err, "the framework allowlist must refuse ES256")
 }
 
@@ -335,7 +335,7 @@ func TestIssuerMintBadSignature(t *testing.T) {
 
 	header := decodeHeader(t, compact)
 	assert.Equal(t, DefaultKeyID, header["kid"], "claims the active kid")
-	obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256})
+	obj, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.RS256})
 	require.NoError(t, err, "wire shape stays valid")
 	_, err = obj.Verify(iss.PublicKey(DefaultKeyID))
 	assert.Error(t, err, "signed by a key the verifier does not hold")
@@ -347,7 +347,7 @@ func TestIssuerMintCorruptSignature(t *testing.T) {
 
 	compact := iss.MintCorruptSignature()
 
-	obj, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.RS256})
+	obj, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.RS256})
 	require.NoError(t, err)
 	_, err = obj.Verify(iss.PublicKey(DefaultKeyID))
 	require.Error(t, err)

@@ -70,7 +70,7 @@ func Decrypt(compact string, key *rsa.PrivateKey, opts *DecryptOptions) ([]byte,
 	if boundErr != nil {
 		return nil, Header{}, fmt.Errorf("%w: %w", ErrParseEncrypted, boundErr)
 	}
-	jwe, err := jose.ParseEncrypted(compact, opts.AllowedKeyAlgs, opts.AllowedContentEnc)
+	jwe, err := jose.ParseEncryptedCompact(compact, opts.AllowedKeyAlgs, opts.AllowedContentEnc)
 	if err != nil {
 		return nil, Header{}, ErrParseEncrypted
 	}
@@ -114,7 +114,7 @@ func Verify(compact string, key *rsa.PublicKey, opts *VerifyOptions) ([]byte, He
 	if boundErr != nil {
 		return nil, Header{}, fmt.Errorf("%w: %w", ErrParseSigned, boundErr)
 	}
-	jws, err := jose.ParseSigned(compact, opts.AllowedSigAlgs)
+	jws, err := jose.ParseSignedCompact(compact, opts.AllowedSigAlgs)
 	if err != nil {
 		return nil, Header{}, ErrParseSigned
 	}

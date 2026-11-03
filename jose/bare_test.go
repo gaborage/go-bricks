@@ -70,7 +70,7 @@ func peekHeader(t *testing.T, compact string) cryptoadapter.Header {
 // of the package's own Open path.
 func decryptWithGoJose(t *testing.T, compact string, key *rsa.PrivateKey, enc jose.ContentEncryption) []byte {
 	t.Helper()
-	obj, err := jose.ParseEncrypted(compact,
+	obj, err := jose.ParseEncryptedCompact(compact,
 		[]jose.KeyAlgorithm{jose.RSA_OAEP_256},
 		[]jose.ContentEncryption{enc})
 	require.NoError(t, err)
@@ -753,7 +753,7 @@ func headerParams(t *testing.T, compact string) map[string]any {
 // goJoseKeyID is the kid go-jose's own parse reports, checked independently of the map.
 func goJoseKeyID(t *testing.T, compact string) string {
 	t.Helper()
-	obj, err := jose.ParseEncrypted(compact, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A128GCM})
+	obj, err := jose.ParseEncryptedCompact(compact, []jose.KeyAlgorithm{jose.RSA_OAEP_256}, []jose.ContentEncryption{jose.A128GCM})
 	require.NoError(t, err)
 	return obj.Header.KeyID
 }

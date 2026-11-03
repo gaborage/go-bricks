@@ -139,7 +139,7 @@ func fakeVisaEndpoint(t *testing.T, f *visaFixture, calls chan<- visaCall, respo
 		}
 		// Restricting the accepted algorithms here is the assertion that the transport
 		// used RSA-OAEP-256 + A128GCM: anything else fails to parse.
-		obj, err := jose.ParseEncrypted(envelope.EncData,
+		obj, err := jose.ParseEncryptedCompact(envelope.EncData,
 			[]jose.KeyAlgorithm{jose.RSA_OAEP_256},
 			[]jose.ContentEncryption{jose.A128GCM})
 		if err != nil {
