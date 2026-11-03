@@ -444,6 +444,30 @@ func TestRateLimitPublicKeysOnClientIP(t *testing.T) {
 		"server.RateLimit keys on client IP like the built-in limiter")
 }
 
+// TestRateLimitKeysOnRealIPNotTheMemo pins that the exported server.RateLimit keys on
+// c.RealIP() for each request, not on the access line's memoized client address (A1m): an
+// earlier middleware that filled the memo with one fixed address must not merge distinct
+// clients into one bucket.
+func TestRateLimitKeysOnRealIPNotTheMemo(t *testing.T) {
+	const pinned = "192.0.2.1"
+	pinMemo := func(c HandlerContext, next func() error) error {
+		reqCtx := getRequestLogContext(c.ectx)
+		require.NotNil(t, reqCtx, "the access logger must plant the memo's home")
+		reqCtx.mu.Lock()
+		reqCtx.clientAddr, reqCtx.hasClientAddr = pinned, true
+		reqCtx.mu.Unlock()
+		return next()
+	}
+	srv, path := newLimitedGroup(0, false, "/public", pinMemo, RateLimit(1))
+
+	codes := make([]int, 0, 4)
+	for _, addr := range []string{"198.51.100.7:443", "198.51.100.8:443", "198.51.100.9:443", "198.51.100.10:443"} {
+		codes = append(codes, serveLimited(srv, path, addr, "", false).Code)
+	}
+	assert.Equal(t, []int{http.StatusOK, http.StatusOK, http.StatusOK, http.StatusOK}, codes,
+		"each client address must draw on its own bucket whatever the memo holds")
+}
+
 func TestTenantRateLimitAfterAuthChargesOnlyAuthenticated(t *testing.T) {
 	srv, path := newLimitedGroup(0, true, "/tenant", blockUnlessAuthorized, TenantRateLimit(1))
 
@@ -494,4 +518,77 @@ func TestTenantRateLimitPassesThrough(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRateLimitClientAddressExtractedOncePerRequest pins the client-address memo (A1m): with
+// the limiter and the access logger both on, the IP extractor runs once per request, and the
+// access line's client.address is the address the limiter keyed on. Each request carries a
+// different X-Forwarded-For through the same engine, so a memo that outlived its request
+// (pooled with the echo.Context) would hand the second request the first one's address.
+func TestRateLimitClientAddressExtractedOncePerRequest(t *testing.T) {
+	cfg := newTestConfig("", "", "")
+	cfg.App.Rate.Limit = 1000
+	log := &testLogger{}
+	srv := New(cfg, log)
+	hr := NewHandlerRegistry(srv.cfg)
+	GET(hr, srv.ModuleGroup(), "/memo", func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: "ok"}, nil
+	})
+
+	extract := srv.echo.IPExtractor
+	calls := 0
+	srv.echo.IPExtractor = func(r *http.Request) string {
+		calls++
+		return extract(r)
+	}
+
+	clients := []string{"203.0.113.7", "198.51.100.9"}
+	for i, client := range clients {
+		req := viaTrustedProxy(httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/memo", http.NoBody))
+		req.Header.Set(HeaderXForwardedFor, client)
+		rec := httptest.NewRecorder()
+		srv.echo.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.NotEmpty(t, rec.Header().Get("X-RateLimit-Limit"), "the limiter must run for the memo to be filled by it")
+		assert.Equal(t, i+1, calls, "the client address was not extracted exactly once on request %d", i+1)
+	}
+
+	assert.Equal(t, clients, actionLogValues(log, "client.address"),
+		"each request's access line must carry its own client address")
+}
+
+// TestClientAddressWithoutRequestLogContext covers the fallback: outside the access logger
+// there is no memo, so every call extracts afresh.
+func TestClientAddressWithoutRequestLogContext(t *testing.T) {
+	e := newEngine()
+	calls := 0
+	e.IPExtractor = func(*http.Request) string {
+		calls++
+		return testIP
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	c := e.NewContext(req, httptest.NewRecorder())
+
+	assert.Equal(t, testIP, clientAddress(c))
+	assert.Equal(t, testIP, clientAddress(c))
+	assert.Equal(t, 2, calls, "with no requestLogContext there is nothing to memoize into")
+}
+
+// TestClientAddressEmptyIsStillMemoized pins why the memo carries hasClientAddr rather than
+// testing clientAddr == "": an extractor that yields "" (no usable peer address) must still run
+// once per request, not once per caller.
+func TestClientAddressEmptyIsStillMemoized(t *testing.T) {
+	e := newEngine()
+	calls := 0
+	e.IPExtractor = func(*http.Request) string {
+		calls++
+		return ""
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	c := e.NewContext(req, httptest.NewRecorder())
+	c.Set(RequestLogContextKey, newRequestLogContext())
+
+	assert.Empty(t, clientAddress(c))
+	assert.Empty(t, clientAddress(c))
+	assert.Equal(t, 1, calls, "an empty address must be memoized like any other")
 }

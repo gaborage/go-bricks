@@ -19,9 +19,11 @@ const RequestLogContextKey = "_request_log_ctx"
 // Thread-safety: All fields are protected by mu to allow concurrent access from
 // multiple goroutines (e.g., severity hook callbacks, async request handlers).
 type requestLogContext struct {
-	mu           sync.Mutex    // Protects all fields below
-	startTime    time.Time     // Request start time
-	peakSeverity zerolog.Level // Highest level escalated to during the request
+	mu            sync.Mutex    // Protects all fields below
+	startTime     time.Time     // Request start time
+	peakSeverity  zerolog.Level // Highest level escalated to during the request
+	clientAddr    string        // c.RealIP(), memoized by clientAddress
+	hasClientAddr bool          // True once clientAddr is filled
 }
 
 func newRequestLogContext() *requestLogContext {
@@ -40,6 +42,27 @@ func getRequestLogContext(c *echo.Context) *requestLogContext {
 		}
 	}
 	return nil
+}
+
+// clientAddress returns c.RealIP(), extracted at most once per request. The access logger
+// plants a fresh requestLogContext per request before the limiter runs, so the limiter
+// fills the memo and the access line's client.address reuses it instead of walking
+// X-Forwarded-For a second time. The memo lives on that per-request value, never on the
+// pooled echo.Context, so no request can read another's address. Outside the access logger
+// (no requestLogContext) it is a plain c.RealIP(). A new client-address read downstream of
+// the access logger should call this, not c.RealIP(), or it pays a second extraction.
+func clientAddress(c *echo.Context) string {
+	reqCtx := getRequestLogContext(c)
+	if reqCtx == nil {
+		return c.RealIP()
+	}
+	reqCtx.mu.Lock()
+	defer reqCtx.mu.Unlock()
+	if !reqCtx.hasClientAddr {
+		reqCtx.clientAddr = c.RealIP()
+		reqCtx.hasClientAddr = true
+	}
+	return reqCtx.clientAddr
 }
 
 // escalateSeverity raises the peak severity to level when level is higher. It is called by
