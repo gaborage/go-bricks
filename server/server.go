@@ -229,7 +229,7 @@ func withOptions(opts Options) serverOption {
 func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Server {
 	SetCaptureStackTraces(cfg.App.IsDevelopment())
 
-	e := echo.New()
+	e := newEngine()
 	e.HTTPErrorHandler = httpErrorHandler(cfg, log)
 
 	// Derive RealIP() by walking X-Forwarded-For right-to-left and returning the
@@ -333,7 +333,7 @@ func httpErrorHandler(cfg *config.Config, log logger.Logger) echo.HTTPErrorHandl
 // client.address by the same trusted-proxy walk, and its scheme extractor so the probe
 // chain's HSTS header trusts the same proxies; it gets its own minimal chain.
 func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healthRoute, readyRoute string) *echo.Echo {
-	pe := echo.New()
+	pe := newEngine()
 	pe.HTTPErrorHandler = app.HTTPErrorHandler
 	pe.IPExtractor = app.IPExtractor
 	pe.SchemeExtractor = app.SchemeExtractor

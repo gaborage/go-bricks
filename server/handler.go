@@ -133,7 +133,7 @@ func WithRouteTemplate(template string) TestContextOption {
 // values (e.g. WithRouteTemplate) seed routing state the synthetic context would otherwise
 // leave empty.
 func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *config.Config, opts ...TestContextOption) HandlerContext {
-	e := echo.New()
+	e := newEngine()
 	// Register the framework validator so contexts built here drive the typed pipeline
 	// (which calls c.Validate) exactly as a live request would.
 	e.Validator = NewValidator()

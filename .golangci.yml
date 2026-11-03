@@ -18,7 +18,7 @@ linters:
     - errname                   # checks that error variables/types follow the errFoo/FooError convention
     - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
     - exhaustive                # checks exhaustiveness of enum switch statements
-    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083; the global LoggerProvider)
+    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083; the global LoggerProvider; echo engines outside server.newEngine (#2212))
     - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present
@@ -81,6 +81,11 @@ linters:
           msg: build the exception event through observability.RecordErrorByType (ADR-083) rather than assembling semconv exception attributes by hand.
         - pattern: ^otel\.(Logger|GetLoggerProvider|SetLoggerProvider)$
           msg: GoBricks registers no global LoggerProvider (observability/CLAUDE.md) — otel.Logger/GetLoggerProvider are a no-op here and drop records, and otel.SetLoggerProvider would let foreign records bypass SensitiveDataFilter; log through logger.Logger.
+        # pkg pins echo v5's import path, so a package merely named echo cannot match.
+        # server/router.go's newEngine is the one allowed call, marked by its nolint.
+        - pattern: ^echo\.New(WithConfig)?$
+          pkg: ^github\.com/labstack/echo/v5$
+          msg: build echo engines through server.newEngine (#2212) — a foreign engine has no maskingRouter, so every path it serves renders as the bare REDACTED.
     gocognit:
       min-complexity: 15
     goconst:
@@ -215,6 +220,14 @@ linters:
           - ineffassign
           - rowserrcheck
         path: _test\.go
+      # Test engines stay on echo.New until #2212's L2t moves them: the exemption covers ALL
+      # _test.go until L2t narrows it to server/router_test\.go, whose parity oracle needs a
+      # plain echo engine regardless. It keys off the forbid rule's identifier, not its msg
+      # prose, so the ADR-083 and otel patterns still fire in tests.
+      - linters:
+          - forbidigo
+        path: _test\.go
+        text: 'use of `echo\.New'
       - linters:
           - lll
         source: '^//go:generate '

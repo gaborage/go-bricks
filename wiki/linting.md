@@ -59,8 +59,10 @@ Pick the order that moves you *toward* your existing convention, not away from i
 Every entry under `linters.exclusions.rules` is a GoBricks path and means nothing in your
 repo — `logger/adapter.go` (zerologlint), `cmd/seal-payload/` (an importas carve-out), and
 a few rules scoped to `_test.go`. Delete them all and add your own as findings justify.
-Drop the two ADR-083 `forbidigo` patterns too (`trace.Span.RecordError`, `semconv.Exception*`):
-they enforce a GoBricks architecture decision and mean nothing outside this repo. Keep the
+Drop the GoBricks-internal `forbidigo` patterns too: the two ADR-083 ones
+(`trace.Span.RecordError`, `semconv.Exception*`) and `echo.New(WithConfig)` (#2212, whose
+`msg` points at the unexported `server.newEngine`). They enforce GoBricks architecture
+decisions and mean nothing outside this repo. Keep the
 `otel.(Logger|GetLoggerProvider|SetLoggerProvider)` pattern, with `analyze-types: true`, if
 your app logs through GoBricks. GoBricks registers no global LoggerProvider, so records emitted
 through `otel.Logger` or a logger from `otel.GetLoggerProvider` are dropped, and
@@ -165,6 +167,9 @@ direction. GoBricks carried two `text: "var-naming: avoid package names"` stanza
 dead from revive v1.15.0 onward, when that check moved to a separate rule and the wording
 changed. Those two stanzas were suppressing nothing, and nothing said so — deleting them
 changed no findings. Prefer scoping by `path` and `linters` over matching message text.
+GoBricks' one exception is its `_test.go` `forbidigo` stanza, which keys off the forbidden
+identifier because scoping by linter alone would also exempt the ADR-083 and otel patterns
+in tests.
 
 Keep the `presets` list (`comments`, `common-false-positives`, `legacy`,
 `std-error-handling`) — those are generic.
