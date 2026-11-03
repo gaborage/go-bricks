@@ -2748,8 +2748,9 @@ as `path`, never the tenant ID. Typed handlers reach the same answer through
 `server.NewUnknownTenantError(err)`, which is fail-closed: any cause that is not the sentinel answers
 500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
 JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
-the tenant does not exist. The seat still does no existence check. See [migrations.md](migrations.md)
-`[C73.21]`.
+the tenant does not exist. The seat still does no existence check. Amended by ADR-167: the WARN's
+`path` is the masked template rendering (`/REDACTED/orders`), not the template. See
+[migrations.md](migrations.md) `[C73.21]`.
 
 **Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
 pages an operator, and a store error that does not wrap `multitenant.ErrUnknownTenant` never
@@ -2856,6 +2857,27 @@ See [migrations.md](migrations.md) `[C73.28]`.
 calls to `SetupMiddlewares` fail to compile instead of rendering unusable paths at run time. An
 engine a consumer builds directly with `echo.New()` still runs, without the masking router or the
 framework chain, so it is outside the framework's guarantees.
+
+---
+
+### [ADR-167: Inbound Paths Render From the Matched Route Template](adr_167_inbound_paths_render_from_route_template.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path
+
+A request path is caller-written, so a card number in a segment reached the access log's
+`url.path` and message, the span's `url.path` and six framework WARN and ERROR lines as sent; the
+log filter matches field names and cannot catch it. Every one of those sinks now prints
+`maskedPath(c)`: the matched template with each parameter and the wildcard tail replaced by
+`REDACTED` (`GET /cards/<PAN>` prints `/cards/REDACTED`), the bare `REDACTED` when no template
+matched. The unknown-tenant WARN (ADR-161) and the family refusal ERROR (ADR-164) print the same
+rendering instead of the template. Each engine logs one `[server.paths]` INFO line at startup
+naming the rule, the listener and the token. `http.route` is unchanged. The probe skip keeps its raw-path comparison key inline, and the helper
+that also fed the access log and span is deleted. See [migrations.md](migrations.md) `[C73.29]`.
+
+**Key Benefits:** no request path byte reaches a framework-owned inbound sink, at zero allocations,
+and every seat prints one rendering. Out of scope, and unchanged: consumer reads of `Request().URL`
+or `HandlerContext.Param`, consumer error text, the request method token, and path-read tenant IDs
+(later #2212 links).
 
 ---
 
@@ -3668,7 +3690,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-166) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-167) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -817,7 +817,9 @@ func TestServerProbeEngineRequestLoggerSkipsOnlyItsProbePaths(t *testing.T) {
 	serveEngine(srv.probeEcho, http.MethodGet, testReadyRoute) // 503 before ReadyCh: a WARN if it were logged
 	serveEngine(srv.probeEcho, http.MethodGet, probeTestBase+testReadyRoute)
 
-	assert.Equal(t, []string{probeTestBase + testReadyRoute}, actionLogValues(log, "url.path"))
+	// The base-prefixed spelling is no route on the probe engine: a 404, logged with the bare
+	// mask token because no template matched (#2212).
+	assert.Equal(t, []string{maskToken}, actionLogValues(log, "url.path"))
 }
 
 // TestServerProbeEngineSharesTheClientIPExtractor pins that the probe access log resolves

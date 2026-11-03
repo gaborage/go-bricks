@@ -342,9 +342,9 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 
 	return requestMetadata{
 		Method: c.Request().Method,
-		// url.path must name the path the ROUTER keyed on, so it and http.route below describe
-		// the same request (routerPath, probe_skip.go).
-		URLPath:     routerPath(c.Request()),
+		// url.path is the matched template with each parameter value and the wildcard tail
+		// masked, never request bytes (#2212): a PAN in a segment cannot reach the line.
+		URLPath:     maskedPath(c),
 		Route:       c.Path(), // Echo route pattern (e.g., /api/users/:id)
 		RequestID:   requestID,
 		TraceID:     getTraceID(c),

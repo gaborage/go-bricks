@@ -85,7 +85,7 @@ func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryEx
 
 	exporter := installTestTracerProvider(t)
 
-	// Create Echo instance with middleware
+	// Create a framework engine with middleware
 	e := newEngine()
 	cfg := &config.Config{
 		App: config.AppConfig{
@@ -714,22 +714,42 @@ func TestOTelMiddlewareMetricAttributesProxyScheme(t *testing.T) {
 	}
 }
 
-// TestOTelMiddlewareSpanURLPathIsTheRoutedPath pins the incoming-request span's url.path to the
-// path the router keyed on (routerPath), so it agrees with the http.route on the same span and
-// with the access log; echo-otel's own value is the decoded r.URL.Path (#1817).
-func TestOTelMiddlewareSpanURLPathIsTheRoutedPath(t *testing.T) {
-	e, exporter := setupTestServerWithTracing(t)
+// TestOTelMiddlewareSpanURLPathIsTheMaskedTemplate pins the incoming-request span's url.path to
+// the matched template with each parameter value masked (#2212), whether the value arrives plain
+// or percent-encoded, so it agrees with the access log; echo-otel's own value is the decoded
+// r.URL.Path. http.route stays the template. A CORS preflight (OPTIONS with
+// Access-Control-Request-Method) to the same path renders the same way.
+func TestOTelMiddlewareSpanURLPathIsTheMaskedTemplate(t *testing.T) {
+	for _, tc := range maskedPathTargets {
+		t.Run(tc.name, func(t *testing.T) {
+			e, exporter := setupTestServerWithTracing(t)
+			e.GET(probeSkipHealth, okEchoHandler)
+			e.GET(probeSkipModuleRoute, okEchoHandler)
 
-	e.GET(probeSkipHealth, okEchoHandler)
-	e.GET(probeSkipModuleRoute, okEchoHandler)
+			require.Equal(t, http.StatusOK, serveEngine(e, http.MethodGet, tc.target).Code)
+			assertSpanURLPathIsMaskedTemplate(t, exporter)
+		})
+	}
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, probeSkipEncodedHlth, http.NoBody)
-	require.Equal(t, probeSkipEncodedHlth, req.URL.RawPath, "precondition: the raw path keeps the encoding the router matches")
-	require.NotEqual(t, probeSkipEncodedHlth, req.URL.Path, "precondition: the decoded path differs, which is the trap")
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, req)
+	t.Run("cors_preflight", func(t *testing.T) {
+		e, exporter := setupTestServerWithTracing(t)
+		e.GET(probeSkipHealth, okEchoHandler)
+		e.GET(probeSkipModuleRoute, okEchoHandler)
 
-	require.Equal(t, http.StatusOK, rec.Code)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, maskedPathTargets[0].target, http.NoBody)
+		req.Header.Set(echo.HeaderOrigin, "https://app.example.com")
+		req.Header.Set(HeaderAccessControlRequestMethod, http.MethodGet)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusNoContent, rec.Code, "the CORS middleware must answer the preflight")
+		assertSpanURLPathIsMaskedTemplate(t, exporter)
+	})
+}
+
+// assertSpanURLPathIsMaskedTemplate asserts the one exported span carries exactly one url.path,
+// the masked module-route template, and http.route equal to that template.
+func assertSpanURLPathIsMaskedTemplate(t *testing.T, exporter *tracetest.InMemoryExporter) {
+	t.Helper()
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 
@@ -745,8 +765,7 @@ func TestOTelMiddlewareSpanURLPathIsTheRoutedPath(t *testing.T) {
 	}
 
 	require.Len(t, urlPaths, 1, "the span carries exactly one url.path")
-	assert.Equal(t, probeSkipEncodedHlth, urlPaths[0], "url.path must be the path the router keyed on")
-	assert.NotEqual(t, req.URL.Path, urlPaths[0], "url.path must not name the route the decoded path would have matched")
+	assert.Equal(t, probeSkipBase+"/"+maskToken, urlPaths[0], "url.path must be the masked matched template")
 	assert.Equal(t, probeSkipModuleRoute, route, "http.route must be the template this same request matched")
 }
 

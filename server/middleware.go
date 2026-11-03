@@ -193,11 +193,11 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 	e.Use(sanitizePanicValue())
 }
 
-// overrideSpanURLPath rewrites the incoming-request span's url.path to the path the ROUTER
-// keyed on — the same value the access log records (routerPath, probe_skip.go). The library
-// fills url.path from r.URL.Path (echo-otel extractor.go), the DECODED spelling, so a
-// percent-encoded request would otherwise pair a path it never reached with the http.route on
-// that very span.
+// overrideSpanURLPath rewrites the incoming-request span's url.path to the matched template
+// with each parameter value and the wildcard tail masked (maskedPath) — the same value the
+// access log records. The library fills url.path from r.URL.Path (echo-otel extractor.go),
+// caller-written bytes, so a PAN in a path segment would otherwise reach the span (#2212). The
+// CORS preflight span is this span, so it renders the same way.
 //
 // Replaced in place rather than appended. The duplicate url.scheme in MetricAttributes above is
 // safe because the metric path resolves its attributes through attribute.NewSet; a duplicate
@@ -211,7 +211,7 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 func overrideSpanURLPath(c *echo.Context, _ *echootel.Values, attrs []attribute.KeyValue) []attribute.KeyValue {
 	for i := range attrs {
 		if attrs[i].Key == semconv.URLPathKey {
-			attrs[i].Value = attribute.StringValue(routerPath(c.Request()))
+			attrs[i].Value = attribute.StringValue(maskedPath(c))
 			break
 		}
 	}

@@ -1102,7 +1102,7 @@ func LoggingMiddleware(log logger.Logger) server.MiddlewareFunc {
 		err := next()
 		log.Info().
 			Str("method", c.Request().Method).
-			Str("path", c.Request().URL.Path).
+			Str("route", c.RouteTemplate()). // the template, never the URL: a path value can be card data
 			Dur("duration", time.Since(start)).
 			Msg("Request completed")
 		return err

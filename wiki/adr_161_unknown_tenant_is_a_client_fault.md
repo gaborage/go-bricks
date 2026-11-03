@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-10-31
 
+> **Amended by [ADR-167](adr_167_inbound_paths_render_from_route_template.md) (#2212):** the
+> unknown-tenant WARN's `path` is the masked rendering of the matched template (`maskedPath`:
+> `/:tenant/orders` prints `/REDACTED/orders`), not the bare template, the rendering every
+> framework inbound sink prints.
+
 ## Context
 
 Under multitenant, the tenant seat (`server/tenant_middleware.go` `tenantMiddlewareEcho`) checks
