@@ -103,7 +103,7 @@ func TestIsProbeRequestKeyedOnMatchedTemplate(t *testing.T) {
 			name: "non_probe_method_on_probe_route", method: http.MethodPost, url: probeSkipReady, template: probeSkipReady,
 			healthPath: probeSkipHealth, readyPath: probeSkipReady, want: false,
 		},
-		// SetupMiddlewares and CreateProbeSkipper both accept an empty probe path; it must never
+		// setupMiddlewares and CreateProbeSkipper both accept an empty probe path; it must never
 		// turn an unmatched request (empty template) into a probe.
 		{
 			name: "empty_configured_paths_exempt_nothing", method: http.MethodGet, url: probeSkipHealth, template: "",

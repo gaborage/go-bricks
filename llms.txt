@@ -6115,7 +6115,7 @@ config.Load()
                 → otel.SetTracerProvider(tp)  // Global provider set HERE
                 → otel.SetTextMapPropagator() // W3C traceparent propagation
         → server.New(cfg, logger)
-            → SetupMiddlewares()
+            → setupMiddlewares()  // unexported (ADR-166)
                 → echootel.NewMiddlewareWithConfig(echootel.Config{ServerName: cfg.App.Name, TracerProvider: otel.GetTracerProvider(), ...})
                     // ↑ Captures the global provider — creates spans for ALL incoming HTTP requests
                     // (package: github.com/labstack/echo-otel/v5, ADR-132)

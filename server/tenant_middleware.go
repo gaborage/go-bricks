@@ -20,7 +20,7 @@ const msgInvalidTenant = "Invalid tenant"
 // If skipper is nil, all routes will undergo tenant resolution.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in tenantMiddlewareEcho, which SetupMiddlewares wires
+// echo-native logic lives in tenantMiddlewareEcho, which setupMiddlewares wires
 // directly on the default request path (ADR-026, no per-request baton).
 // Constructed here with a nil logger — see tenantMiddlewareEcho for the
 // framework-logger form.
@@ -29,7 +29,7 @@ func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc) 
 }
 
 // tenantMiddlewareEcho is the echo-native tenant-resolution middleware constructor.
-// Public callers use TenantMiddleware (echo-free, nil logger); SetupMiddlewares
+// Public callers use TenantMiddleware (echo-free, nil logger); setupMiddlewares
 // passes its framework logger so rejected (400) requests leave a structured WARN
 // trail — this middleware is registered outer to the access logger
 // (server/middleware.go), so a short-circuited request never reaches it and would

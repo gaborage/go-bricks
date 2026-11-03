@@ -180,7 +180,7 @@ func parseForwardedLeaf(encoded string) (*x509.Certificate, error) {
 	return leaf, nil
 }
 
-// forwardedClientCertMiddlewareEcho is the echo-native middleware SetupMiddlewares
+// forwardedClientCertMiddlewareEcho is the echo-native middleware setupMiddlewares
 // wires behind cfg.Server.ForwardedClientCert.Enabled. skipper bypasses parsing for
 // health/ready probes (ALB health checks present no client certificate, so a
 // non-exempt Require would take the target group down on deploy). l may be

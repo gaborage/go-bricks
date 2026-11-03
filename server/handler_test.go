@@ -2151,8 +2151,8 @@ type unmatchedRouteObservation struct {
 }
 
 // observeUnmatchedRoute installs engine-level middleware (which, unlike group
-// middleware, also runs on 404/405 — what a SetupMiddlewares escape-hatch
-// consumer would observe) capturing PathParams/RouteTemplate whenever the
+// middleware, also runs on 404/405 — what a framework-chain middleware installed by
+// setupMiddlewares observes) capturing PathParams/RouteTemplate whenever the
 // request resolved to the given sentinel route name.
 func observeUnmatchedRoute(e *echo.Echo, sentinelRouteName string) *unmatchedRouteObservation {
 	obs := &unmatchedRouteObservation{}

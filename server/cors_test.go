@@ -413,14 +413,14 @@ func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 }
 
 // TestCORSEnvOverrideHonorsConfigValue verifies that the variadic
-// envOverride parameter (passed by SetupMiddlewares from cfg.App.Env)
+// envOverride parameter (passed by setupMiddlewares from cfg.App.Env)
 // takes precedence over APP_ENV from the OS env. This ensures the
 // common `go run` workflow — which relies on Koanf's EnvDevelopment
 // default plus CORS_DEV_WILDCARD=true (ADR-038) — gets the dev wildcard
 // rather than fail-closed CORS.
 func TestCORSEnvOverrideHonorsConfigValue(t *testing.T) {
 	// Deliberately unset APP_ENV — caller passes "development" via the
-	// variadic override (simulates SetupMiddlewares passing cfg.App.Env
+	// variadic override (simulates setupMiddlewares passing cfg.App.Env
 	// when the operator relies on the Koanf default).
 	unsetEnvForTest(t, "APP_ENV")
 	unsetEnvForTest(t, "CORS_ORIGINS")

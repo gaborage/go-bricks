@@ -2831,9 +2831,23 @@ interface takes (ADR-013), and only package `server` can implement it. `WithRout
 `NewHandlerContextForTest` keep their names and behavior and now spell the new type. See
 [migrations.md](migrations.md) `[C73.27]`.
 
-**Key Benefits:** the framework can change how an option seeds the synthetic context without
-breaking a consumer, `WithRouteTemplate` is the whole option surface, and the S8196 rename rides
-the break this change already makes.
+---
+
+### [ADR-166: `server.SetupMiddlewares` Is Unexported](adr_166_setup_middlewares_unexported.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** `server.SetupMiddlewares` is removed, so a call fails to compile
+
+`server.SetupMiddlewares` installed the framework chain on any `*echo.Echo`, so a consumer could
+build an engine without the masking router every framework engine carries, where each inbound path
+would render as the bare `REDACTED` (#2212). It is removed with no replacement export: only
+`server.New`, and so the App, installs the chain, through the unexported `setupMiddlewares` on an
+engine `newEngine` built. The chain, its order and every consumer middleware door are unchanged.
+See [migrations.md](migrations.md) `[C73.28]`.
+
+**Key Benefits:** the last exported signature taking `*echo.Echo` leaves the consumer surface;
+calls to `SetupMiddlewares` fail to compile instead of rendering unusable paths at run time. An
+engine a consumer builds directly with `echo.New()` still runs, without the masking router or the
+framework chain, so it is outside the framework's guarantees.
 
 ---
 
@@ -3646,7 +3660,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-165) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-166) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

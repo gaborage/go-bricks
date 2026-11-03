@@ -323,7 +323,7 @@ func adaptMiddleware(m MiddlewareFunc, cfg *config.Config) echo.MiddlewareFunc {
 
 // fromEchoMiddleware exposes an echo-native middleware as a flat MiddlewareFunc so the
 // framework's own middleware constructors keep an echo-free public signature while their
-// logic stays echo-native (and baton-free) on the default path inside SetupMiddlewares.
+// logic stays echo-native (and baton-free) on the default path inside setupMiddlewares.
 func fromEchoMiddleware(em echo.MiddlewareFunc) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
 		h := em(func(*echo.Context) error { return next() })

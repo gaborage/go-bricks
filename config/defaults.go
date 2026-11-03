@@ -69,7 +69,7 @@ const (
 	// server.bodylimit is unset. Single source of truth: the normalize fill applies
 	// it (normalizeServer) and the koanf default derives from that fill rather than
 	// rendering it a second time (derivedDefaultKeys). The <=0 guard in
-	// server.SetupMiddlewares is a backstop for callers that never run Validate.
+	// server.setupMiddlewares is a backstop for callers that never run Validate.
 	DefaultBodyLimitBytes int64 = 10 * 1024 * 1024
 
 	// DefaultKeyStoreSecretMinLength is the byte floor for symmetric keystore

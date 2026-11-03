@@ -159,8 +159,8 @@ got through and the deployment posture above needs attention.
 
 ## Probe exemption
 
-Health and ready probe paths (the same `healthPath`/`readyPath` passed into
-`server.SetupMiddlewares`) always skip the engine-level middleware. ALB health checks present
+Health and ready probe paths (the same `healthPath`/`readyPath` the server's middleware
+chain is built with) always skip the engine-level middleware. ALB health checks present
 no client certificate, so a non-exempt `Require` would take the target group down on every
 deploy.
 

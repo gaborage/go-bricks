@@ -21,7 +21,7 @@ const (
 // If requestsPerSecond is 0 or negative, rate limiting is disabled.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in rateLimitEcho, which SetupMiddlewares wires directly
+// echo-native logic lives in rateLimitEcho, which setupMiddlewares wires directly
 // on the default request path (ADR-026, no per-request baton).
 func RateLimit(requestsPerSecond int) MiddlewareFunc {
 	return fromEchoMiddleware(rateLimitEcho(requestsPerSecond))
@@ -45,7 +45,7 @@ func TenantRateLimit(requestsPerSecond int) MiddlewareFunc {
 }
 
 // rateLimitEcho is the echo-native rate-limiting middleware constructor. Public
-// callers use RateLimit (echo-free); SetupMiddlewares uses this form to keep the
+// callers use RateLimit (echo-free); setupMiddlewares uses this form to keep the
 // default chain baton-free.
 func rateLimitEcho(requestsPerSecond int) echo.MiddlewareFunc {
 	return rateLimiterEcho(requestsPerSecond, middleware.DefaultSkipper, (*echo.Context).RealIP)
