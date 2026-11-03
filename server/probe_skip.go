@@ -97,8 +97,7 @@ func matchesProbePath(path, healthPath, readyPath string) bool {
 // middleware while consumer code ran. The method check closes the same mismatch on the method
 // axis: registration is per method+path, so a module may legally own a non-probe method on the
 // probe path. (Despite its name, echo's RouterConfig.UseEscapedPathForMatching set true
-// matches the DECODED path, as its v5.4.4 doc comment states. Flipping it never makes this
-// skipper exempt more.)
+// matches the DECODED path, as its v5.4.4 doc comment states.)
 //
 // Allocates nothing per request.
 func CreateProbeSkipper(healthPath, readyPath string) SkipperFunc {
