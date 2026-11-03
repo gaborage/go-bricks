@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -142,7 +143,7 @@ func TestLogActionSummarySkipsWhenLevelDisabled(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	dl := &disabledLogger{ev: &disabledEvent{}}
-	logActionSummary(c, dl, LoggerConfig{SlowRequestThreshold: time.Second}, 10*time.Millisecond, 200, nil)
+	logActionSummary(c, dl, LoggerConfig{SlowRequestThreshold: time.Second}, 10*time.Millisecond, 200, nil, zerolog.InfoLevel)
 
 	assert.False(t, dl.ev.msgCalled, "action summary must not emit when the level is disabled")
 }
@@ -316,35 +317,150 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 	}
 }
 
-// TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged verifies that
-// if a WARN+ log is explicitly emitted during request execution, the final
-// action summary is suppressed (since trace logs already captured the issue).
-func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T) {
-	e := newEngine()
-	recLog := &recLogger{}
-	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
-		HealthPath:           testHealthPath,
-		ReadyPath:            testReadyPath,
-		SlowRequestThreshold: 1 * time.Second,
-	}))
+// TestRequestLoggerKeepsActionLogWhenSeverityEscalates pins #2212: a WARN+ line written
+// through the request context (the handler's own, enabled by log.level or not) and
+// EscalateSeverity raise the access line's level; none of them replaces it. The framework's
+// JOSE failure and meta-key collision lines are not bound to the request context: they leave
+// the access line status-derived and join it through their correlation instead. The loggers
+// are real so the severity hook under test is the production one.
+func TestRequestLoggerKeepsActionLogWhenSeverityEscalates(t *testing.T) {
+	const (
+		handlerLine = "handler line"
+		requestID   = "req-l5b-escalation"
+	)
+	tests := []struct {
+		name      string
+		escalate  func(c *echo.Context, log logger.Logger)
+		status    int // the handler's answer; 0 is 200
+		wantLevel string
+		wantCode  string
+		wantLine  string // a line the request wrote that must sit beside the access line
+		// wantCorrelated: wantLine carries the access line's request_id and http.route.
+		wantCorrelated bool
+	}{
+		{
+			name: "handler_warn_line",
+			escalate: func(c *echo.Context, log logger.Logger) {
+				log.WithContext(c.Request().Context()).Warn().Msg(handlerLine)
+			},
+			wantLevel: "warn", wantCode: "WARN", wantLine: handlerLine,
+		},
+		{
+			name: "framework_meta_key_warn_on_a_200_stays_info",
+			escalate: func(c *echo.Context, log logger.Logger) {
+				mergeEnvelopeMeta(c, map[string]any{fieldTimestamp: "x"}, log)
+			},
+			wantLevel: "info", wantCode: "INFO",
+			wantLine:       "envelope meta key collides with framework-managed key; handler value dropped",
+			wantCorrelated: true,
+		},
+		{
+			// A plaintext POST to a JOSE route: the failure line is ERROR, the access line
+			// stays the 415's WARN.
+			name: "jose_failure_on_a_415_stays_warn",
+			escalate: func(c *echo.Context, log logger.Logger) {
+				newJOSEObservability(log, nil, nil).recordFailure(c.Request().Context(), c, "inbound",
+					&joseAPIError{code: errCodeJOSEPlaintextRejected, message: "Request must be application/jose", status: http.StatusUnsupportedMediaType})
+			},
+			status:    http.StatusUnsupportedMediaType,
+			wantLevel: "warn", wantCode: "WARN",
+			wantLine: "jose: operation failed", wantCorrelated: true,
+		},
+		{
+			name: "warn_disabled_by_log_level",
+			escalate: func(c *echo.Context, _ logger.Logger) {
+				logger.New("error", false).WithContext(c.Request().Context()).Warn().Msg(handlerLine)
+			},
+			wantLevel: "warn", wantCode: "WARN",
+		},
+		{
+			name: "handler_error_line",
+			escalate: func(c *echo.Context, log logger.Logger) {
+				log.WithContext(c.Request().Context()).Error().Msg(handlerLine)
+			},
+			wantLevel: "error", wantCode: "ERROR", wantLine: handlerLine,
+		},
+		{
+			name: "escalate_severity_warn",
+			escalate: func(c *echo.Context, _ logger.Logger) {
+				newHandlerContext(c, nil).EscalateSeverity(zerolog.WarnLevel)
+			},
+			wantLevel: "warn", wantCode: "WARN",
+		},
+		{
+			name: "escalate_severity_error",
+			escalate: func(c *echo.Context, _ logger.Logger) {
+				newHandlerContext(c, nil).EscalateSeverity(zerolog.ErrorLevel)
+			},
+			wantLevel: "error", wantCode: "ERROR",
+		},
+		{
+			name: "escalate_severity_below_warn",
+			escalate: func(c *echo.Context, _ logger.Logger) {
+				newHandlerContext(c, nil).EscalateSeverity(zerolog.DebugLevel)
+			},
+			wantLevel: "info", wantCode: "INFO",
+		},
+		{
+			name: "escalate_severity_disabled_is_not_a_severity",
+			escalate: func(c *echo.Context, _ logger.Logger) {
+				newHandlerContext(c, nil).EscalateSeverity(zerolog.Disabled)
+			},
+			wantLevel: "info", wantCode: "INFO",
+		},
+	}
 
-	// Handler explicitly logs a warning, then returns 200
-	e.GET("/explicit-warn", func(c *echo.Context) error {
-		reqCtx := getRequestLogContext(c)
-		// Simulate an explicit WARN log being emitted during request
-		reqCtx.escalateSeverity(zerolog.WarnLevel)
-		return c.JSON(http.StatusOK, map[string]string{"ok": "yes"})
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				log := logger.New("info", false)
+				e := newEngine()
+				e.Use(loggerWithConfigEcho(log, LoggerConfig{SlowRequestThreshold: time.Minute}))
+				e.GET("/escalate", func(c *echo.Context) error {
+					tt.escalate(c, log)
+					return c.JSON(cmp.Or(tt.status, http.StatusOK), map[string]string{"ok": "yes"})
+				})
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/escalate", http.NoBody)
+				req.Header.Set(echo.HeaderXRequestID, requestID)
+				rec := httptest.NewRecorder()
+				e.ServeHTTP(rec, req)
+				require.Equal(t, cmp.Or(tt.status, http.StatusOK), rec.Code)
+			})
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/explicit-warn", http.NoBody)
-	rec := httptest.NewRecorder()
+			access := findActionLine(t, out)
+			assert.Equal(t, tt.wantLevel, access["level"], logLevelMismatchMsg)
+			assert.Equal(t, tt.wantCode, access["result_code"], resultCodeMismatch)
+			if tt.wantLine != "" {
+				line := findLoggedLine(t, out, tt.wantLine)
+				if tt.wantCorrelated {
+					assert.Equal(t, requestID, access[fieldRequestID])
+					assert.Equal(t, access[fieldRequestID], line[fieldRequestID])
+					assert.Equal(t, access[fieldRequestID], line[logger.FieldCorrelationID])
+					assert.Equal(t, access[fieldHTTPRoute], line[fieldHTTPRoute])
+				}
+			}
+		})
+	}
+}
 
-	recLog.last = nil
-	e.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	// Since an explicit WARN was logged, action summary should be suppressed
-	require.Nil(t, recLog.last, "action log should be suppressed when explicit WARN+ log occurred")
+// findActionLine returns the one access line (log.type=action) in out.
+func findActionLine(t *testing.T, out string) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for _, raw := range strings.Split(strings.TrimSpace(out), "\n") {
+		if raw == "" {
+			continue
+		}
+		var line map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &line), "log line is not JSON: %s", raw)
+		if line[otelLogType] != "action" {
+			continue
+		}
+		require.Nil(t, found, "more than one access line in:\n%s", out)
+		found = line
+	}
+	require.NotNil(t, found, "no access line in:\n%s", out)
+	return found
 }
 
 // TestRequestLoggerHandlesEchoNotFoundError verifies that the logger middleware
@@ -420,12 +536,8 @@ func TestRequestLogContextConcurrency(t *testing.T) {
 			defer func() { done <- struct{}{} }()
 
 			for j := range numIterations {
-				// Alternate between different severity levels and explicit/status escalations
-				if j%2 == 0 {
-					reqCtx.escalateSeverity(zerolog.WarnLevel)
-				} else {
-					reqCtx.escalateSeverityFromStatus(zerolog.ErrorLevel)
-				}
+				// Alternate between different severity levels
+				reqCtx.escalateSeverity([...]zerolog.Level{zerolog.WarnLevel, zerolog.ErrorLevel}[j%2])
 			}
 		}()
 	}
@@ -438,7 +550,7 @@ func TestRequestLogContextConcurrency(t *testing.T) {
 			for range numIterations {
 				// Read operations that would race without proper locking
 				_ = reqCtx.getStartTime()
-				_ = reqCtx.hadExplicitWarningOccurred()
+				_ = reqCtx.getPeakSeverity()
 			}
 		}()
 	}
@@ -449,7 +561,7 @@ func TestRequestLogContextConcurrency(t *testing.T) {
 	}
 
 	// Verify state is consistent after all concurrent operations
-	require.True(t, reqCtx.hadExplicitWarningOccurred(), "Should have explicit warning after concurrent escalations")
+	require.Equal(t, zerolog.ErrorLevel, reqCtx.getPeakSeverity(), "peak must be the highest level escalated to")
 }
 
 // TestHandlerContextEscalateSeverity verifies the public HandlerContext.EscalateSeverity
@@ -466,7 +578,7 @@ func TestHandlerContextEscalateSeverity(t *testing.T) {
 	reqCtx := newRequestLogContext()
 	c.Set(RequestLogContextKey, reqCtx)
 	c.EscalateSeverity(zerolog.WarnLevel)
-	require.True(t, reqCtx.hadExplicitWarningOccurred(),
+	require.Equal(t, zerolog.WarnLevel, reqCtx.getPeakSeverity(),
 		"HandlerContext.EscalateSeverity must escalate the request-log context via the public boundary")
 }
 
@@ -542,7 +654,7 @@ func TestDetermineSeveritySlowRequestDisabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(200, tt.latency, tt.threshold, nil)
+			level, code := determineSeverity(200, tt.latency, tt.threshold, nil, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -588,7 +700,7 @@ func TestDetermineSeveritySlowRequestEnabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(200, tt.latency, threshold, nil)
+			level, code := determineSeverity(200, tt.latency, threshold, nil, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -633,7 +745,37 @@ func TestDetermineSeverityPrecedence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(tt.status, slowLatency, threshold, tt.err)
+			level, code := determineSeverity(tt.status, slowLatency, threshold, tt.err, zerolog.InfoLevel)
+			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
+			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
+		})
+	}
+}
+
+// TestDetermineSeverityEscalation verifies that the request's peak severity raises the
+// status-derived level and result_code and never lowers them.
+func TestDetermineSeverityEscalation(t *testing.T) {
+	const threshold = 100 * time.Millisecond
+	tests := []struct {
+		name      string
+		status    int
+		latency   time.Duration
+		peak      zerolog.Level
+		wantLevel string
+		wantCode  string
+	}{
+		{name: "warn_peak_raises_2xx", status: 200, peak: zerolog.WarnLevel, wantLevel: "warn", wantCode: "WARN"},
+		{name: "error_peak_raises_2xx", status: 200, peak: zerolog.ErrorLevel, wantLevel: "error", wantCode: "ERROR"},
+		{name: "fatal_peak_reads_as_error", status: 200, peak: zerolog.FatalLevel, wantLevel: "error", wantCode: "ERROR"},
+		{name: "error_peak_raises_4xx", status: 404, peak: zerolog.ErrorLevel, wantLevel: "error", wantCode: "ERROR"},
+		{name: "warn_peak_raises_slow_request", status: 200, latency: time.Second, peak: zerolog.WarnLevel, wantLevel: "warn", wantCode: "WARN"},
+		{name: "warn_peak_keeps_5xx", status: 500, peak: zerolog.WarnLevel, wantLevel: "error", wantCode: "ERROR"},
+		{name: "info_peak_keeps_2xx", status: 200, peak: zerolog.InfoLevel, wantLevel: "info", wantCode: "INFO"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			level, code := determineSeverity(tt.status, tt.latency, threshold, nil, tt.peak)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -1503,7 +1645,7 @@ func TestActionLogForgedPathStaysOnOneLine(t *testing.T) {
 				req.URL.Path = "/test\n[FORGED] level=info msg=owned"
 				req.Header.Set("User-Agent", "ua\nforged-agent")
 				c := e.NewContext(req, httptest.NewRecorder())
-				logActionSummary(c, logger.New("info", pretty), LoggerConfig{SlowRequestThreshold: time.Second}, 5*time.Millisecond, 200, nil)
+				logActionSummary(c, logger.New("info", pretty), LoggerConfig{SlowRequestThreshold: time.Second}, 5*time.Millisecond, 200, nil, zerolog.InfoLevel)
 			})
 			lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 			require.Len(t, lines, 1, "one request must emit one line, got: %q", out)
@@ -1538,4 +1680,14 @@ func TestAccessLogRecordsMaskedPath(t *testing.T) {
 			assert.NotContains(t, recLog.last.message, parityPAN[8:], "no path value may reach the message")
 		})
 	}
+}
+
+// TestMetaKeyCollisionWarnSkipsADisabledLevel pins logMetaKeyCollision's openWarn gate: a
+// disabled WARN level writes nothing, though the handler value is still dropped.
+func TestMetaKeyCollisionWarnSkipsADisabledLevel(t *testing.T) {
+	dl := &disabledLogger{ev: &disabledEvent{}}
+	c := newEngine().NewContext(httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody), httptest.NewRecorder())
+	out := mergeEnvelopeMeta(c, map[string]any{fieldTimestamp: "x"}, dl)
+	assert.False(t, dl.ev.msgCalled, "a disabled WARN level must write no collision line")
+	assert.NotEqual(t, "x", out[fieldTimestamp], "the framework key stays authoritative")
 }

@@ -82,7 +82,8 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 		reqCtx := newRequestLogContext()
 		c.Set(RequestLogContextKey, reqCtx)
 
-		// Attach severity hook to request context so WARN+ logs suppress action summaries
+		// Attach the severity hook so a WARN+ line logged through the request context
+		// raises the access line's level
 		ctxWithHook := logger.WithSeverityHook(c.Request().Context(), reqCtx.escalateSeverity)
 		c.SetRequest(c.Request().WithContext(ctxWithHook))
 
@@ -98,13 +99,10 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 
 		status := rl.extractStatus(c, err)
 
-		updateSeverityFromStatus(reqCtx, status, err)
-
-		// Emit action log summary if no explicit WARN+ logs occurred
-		shouldLogActionSummary := !reqCtx.hadExplicitWarningOccurred()
-		if shouldLogActionSummary {
-			logActionSummary(c, rl.logger, rl.config, latency, status, err)
-		}
+		// Always write the access line (#2212); escalation only raises its level.
+		// logActionSummary still drops it when log.level disables the level it lands
+		// at (an INFO line under log.level: warn).
+		logActionSummary(c, rl.logger, rl.config, latency, status, err, reqCtx.getPeakSeverity())
 
 		return err
 	}
@@ -141,13 +139,11 @@ func (rl *requestLogger) extractStatus(c *echo.Context, err error) int {
 }
 
 // LoggerWithConfig returns a request logging middleware with custom configuration.
-// It implements dual-mode logging:
-//   - Action logs (log.type="action"): Request summaries for INFO-level requests
-//   - Trace logs (log.type="trace"): Application debug logs (WARN+ only)
-//
-// The middleware tracks request-scoped severity escalation. If any log during the request
-// lifecycle reaches WARN+, the request is logged as a trace log. Otherwise, a synthesized
-// action log summary is emitted at request completion.
+// Every request the middleware does not skip as a probe gets one action log summary at
+// completion. The middleware tracks request-scoped severity escalation: a WARN+ line logged
+// through the request context during the request (enabled by log.level or not), or
+// HandlerContext.EscalateSeverity, raises the summary's level and result_code; it never
+// replaces the summary.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
 // echo-native logic lives in loggerWithConfigEcho, which setupMiddlewares wires
@@ -164,18 +160,8 @@ func loggerWithConfigEcho(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFu
 	return rl.Handle
 }
 
-// updateSeverityFromStatus escalates severity based on HTTP status code and error.
-// Uses escalateSeverityFromStatus to avoid marking status-derived warnings as explicit.
-func updateSeverityFromStatus(reqCtx *requestLogContext, status int, err error) {
-	if status >= 500 || (err != nil && status == 0) {
-		reqCtx.escalateSeverityFromStatus(zerolog.ErrorLevel)
-	} else if status >= 400 {
-		reqCtx.escalateSeverityFromStatus(zerolog.WarnLevel)
-	}
-}
-
 // logActionSummary emits a synthesized action log with OpenTelemetry semantic conventions.
-// This provides a high-level request summary (100% sampling) for healthy requests.
+// This provides a high-level request summary (100% sampling) for every non-probe request.
 func logActionSummary(
 	c *echo.Context,
 	log logger.Logger,
@@ -183,6 +169,7 @@ func logActionSummary(
 	latency time.Duration,
 	status int,
 	err error,
+	peak zerolog.Level,
 ) {
 	ctx := c.Request().Context()
 
@@ -191,7 +178,7 @@ func logActionSummary(
 	// is disabled (e.g. LOG_LEVEL=warn on a healthy 2xx request). WithContext must
 	// run before the check: a context-bound logger may carry a different level, so
 	// enablement is only accurate after binding.
-	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, err)
+	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, err, peak)
 	event := createLogEvent(log.WithContext(ctx), logLevel)
 	if !event.Enabled() {
 		return
@@ -248,12 +235,14 @@ func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEven
 		Str("traceparent", params.metadata.Traceparent)
 }
 
-// determineSeverity calculates log severity and result_code based on HTTP status, latency, and errors.
-// Returns (logLevel, resultCode) tuple.
+// determineSeverity calculates log severity and result_code based on HTTP status, latency,
+// errors, and peak, the highest level the request escalated to (zerolog.InfoLevel when it
+// did not). Returns (logLevel, resultCode) tuple.
 func determineSeverity(
 	status int,
 	latency, threshold time.Duration,
 	err error,
+	peak zerolog.Level,
 ) (logLevel, resultCode string) {
 	const (
 		codeError = "ERROR"
@@ -261,13 +250,13 @@ func determineSeverity(
 		codeInfo  = "INFO"
 	)
 
-	// ERROR: 5xx status or unhandled error
-	if status >= 500 || (err != nil && status == 0) {
+	// ERROR: 5xx status, unhandled error, or an escalation to ERROR+
+	if status >= 500 || (err != nil && status == 0) || peak >= zerolog.ErrorLevel {
 		return logger.LevelError, codeError
 	}
 
-	// WARN: 4xx status
-	if status >= 400 {
+	// WARN: 4xx status or an escalation to WARN
+	if status >= 400 || peak >= zerolog.WarnLevel {
 		return logger.LevelWarn, codeWarn
 	}
 

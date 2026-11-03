@@ -12,26 +12,22 @@ import (
 // This allows external code to access or modify request logging state if needed.
 const RequestLogContextKey = "_request_log_ctx"
 
-// requestLogContext tracks request-scoped logging state for dual-mode logging.
-// It's stored in Echo's context (via c.Set/c.Get) to track severity escalation
-// and determine whether to emit an action log summary or let trace logs flow.
+// requestLogContext tracks request-scoped logging state.
+// It's stored in Echo's context (via c.Set/c.Get) to track severity escalation, which
+// raises the level of the request's action log summary.
 //
 // Thread-safety: All fields are protected by mu to allow concurrent access from
 // multiple goroutines (e.g., severity hook callbacks, async request handlers).
 type requestLogContext struct {
-	mu                 sync.Mutex    // Protects all fields below
-	startTime          time.Time     // Request start time
-	peakSeverity       zerolog.Level // Highest severity observed during request lifecycle
-	hasWarning         bool          // Quick flag: true if any WARN+ log emitted
-	hadExplicitWarning bool          // True if WARN+ log was explicitly emitted during request execution
+	mu           sync.Mutex    // Protects all fields below
+	startTime    time.Time     // Request start time
+	peakSeverity zerolog.Level // Highest level escalated to during the request
 }
 
 func newRequestLogContext() *requestLogContext {
 	return &requestLogContext{
-		startTime:          time.Now(),
-		peakSeverity:       zerolog.InfoLevel, // Start at INFO
-		hasWarning:         false,
-		hadExplicitWarning: false,
+		startTime:    time.Now(),
+		peakSeverity: zerolog.InfoLevel, // Start at INFO
 	}
 }
 
@@ -46,36 +42,19 @@ func getRequestLogContext(c *echo.Context) *requestLogContext {
 	return nil
 }
 
-// escalateSeverity updates the peak severity if the new severity is higher.
-// Automatically sets hasWarning=true for WARN+ levels.
-// This is called by the severity hook during request execution for explicit logs.
-func (r *requestLogContext) escalateSeverity(level zerolog.Level) {
-	r.escalateSeverityInternal(level, true)
-}
-
-// escalateSeverityFromStatus updates severity based on HTTP status without marking as explicit warning.
-// This allows us to distinguish between explicit WARN+ logs during request execution
-// and warnings derived from final HTTP status codes.
-func (r *requestLogContext) escalateSeverityFromStatus(level zerolog.Level) {
-	r.escalateSeverityInternal(level, false)
-}
-
-// escalateSeverityInternal is the internal implementation of severity escalation.
+// escalateSeverity raises the peak severity to level when level is higher. It is called by
+// the severity hook for every WARN+ line logged through the request context, and by
+// EscalateSeverity. zerolog.NoLevel and zerolog.Disabled sit above PanicLevel without being
+// severities, so they are ignored rather than read as an escalation to ERROR.
 // Thread-safe: Protected by mutex to handle concurrent calls from multiple goroutines.
-func (r *requestLogContext) escalateSeverityInternal(level zerolog.Level, isExplicit bool) {
+func (r *requestLogContext) escalateSeverity(level zerolog.Level) {
+	if level > zerolog.PanicLevel {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	if level > r.peakSeverity {
 		r.peakSeverity = level
-	}
-
-	// Mark as having warning if severity is WARN or higher
-	if level >= zerolog.WarnLevel {
-		r.hasWarning = true
-		if isExplicit {
-			r.hadExplicitWarning = true // Track that an explicit WARN+ log occurred
-		}
 	}
 }
 
@@ -86,15 +65,17 @@ func (r *requestLogContext) getStartTime() time.Time {
 	return r.startTime
 }
 
-// hadExplicitWarningOccurred returns whether an explicit WARN+ log was emitted in a thread-safe manner.
-func (r *requestLogContext) hadExplicitWarningOccurred() bool {
+// getPeakSeverity returns the highest level the request escalated to in a thread-safe manner.
+func (r *requestLogContext) getPeakSeverity() zerolog.Level {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.hadExplicitWarning
+	return r.peakSeverity
 }
 
-// EscalateSeverity allows application code to explicitly escalate request severity.
-// Useful for non-logging events that should trigger WARN+ action logs (e.g., rate limiting).
+// EscalateSeverity allows application code to explicitly escalate request severity: the
+// request's action log summary is emitted at level (WARN or ERROR) even on a 2xx response.
+// Useful for non-logging events that should surface the request (e.g., rate limiting).
+// Severity is monotonic, and a level below WARN changes nothing.
 //
 // Example:
 //

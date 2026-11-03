@@ -219,3 +219,16 @@ func TestUnhandledErrorFallbackCorrelatesItsLine(t *testing.T) {
 	line := strings.TrimSuffix(buf.String(), "\n")
 	assert.True(t, strings.HasSuffix(line, "ERROR unhandled error error_type=*errors.errorString"+correlationSuffix), "got %q", line)
 }
+
+// TestLineCorrelationOmitsAnEmptyRoute pins that no template never becomes an empty
+// http.route on either renderer (the JOSE failure line's rule, #1816).
+func TestLineCorrelationOmitsAnEmptyRoute(t *testing.T) {
+	lc := lineCorrelation{requestID: correlationRequestID}
+	assert.Equal(t, ` request_id="`+correlationRequestID+`" correlation_id="`+correlationRequestID+`"`, lc.text())
+
+	l := &testLogger{}
+	lc.stamp(l.Warn()).Msg("no route")
+	entries := l.logEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, []string{fieldRequestID, logger.FieldCorrelationID}, entries[0].fields)
+}

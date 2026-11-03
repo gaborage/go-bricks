@@ -47,7 +47,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 **Reserved log attribute namespaces:** a record attribute deliberately wins over the attribute a processor would stamp on key collision, so the OTel bridge reserves the resource-identity namespaces at the boundary where zerolog field names become record attributes. A top-level log field whose key starts with `service.` or `telemetry.sdk.`, or equals `deployment.environment.name`, is remapped under the `app.` prefix with its value preserved (`service.name` → `app.service.name`), and the first remap per bridge instance (one bridge per process in practice) emits a one-time WARN record (`reserved.keys` names the offending keys — never their values). `log.type` is intentionally not reserved. `app.*` keys are caller-supplied and unauthenticated — never treat them as service identity. Nested map values are not remapped: they flatten under their parent key and cannot collide with bare resource keys. See [ADR-055](adr_055_reserved_log_attribute_namespaces.md).
 
-**Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `c.EscalateSeverity(zerolog.WarnLevel)` (the `HandlerContext` method). Configure `observability.logs.slowrequestthreshold` for slow request detection.
+**Request Logging:** every HTTP request that is not a probe writes one access line (the action log summary), at the level its status and escalation give it; `log.level` still drops a line below it, so under `log.level: warn` a healthy fast 2xx writes none. HTTP requests track severity escalation via `requestLogContext`, which sets that line's level and `result_code`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `c.EscalateSeverity(zerolog.WarnLevel)` (the `HandlerContext` method; a level below WARN changes nothing). A WARN or ERROR line logged through the request context during the request (your own `log.WithContext(ctx).Warn()`, or a database query-tracking line such as a slow-query WARN) escalates the same way, even when `log.level` disables that line. None of them replaces the access line. The framework's own correlated lines (the JOSE failure line, the envelope meta-key WARN, and the lines in [Correlation Fields](#correlation-fields-and-exemplars)) are not bound to the request context, so they leave the access line status-derived: a plaintext POST to a JOSE route logs its access line at WARN for the 415. Configure `observability.logs.slowrequestthreshold` for slow request detection.
 
 **Testing:** Use `observability/testing` package:
 
@@ -304,8 +304,9 @@ the value you see.
 The framework's own lines about one HTTP request that are correlated (the
 `[server.tenant]` rejection WARN; the `[server.ip_preguard]` WARN; the three
 `[server.forwardedclientcert]` WARNs; both `Panic recovered` ERRORs, the error
-handler's for a handler panic and the outermost panic guard's; and the error
-handler's `unhandled error`) carry the same correlation: `http.route`,
+handler's for a handler panic and the outermost panic guard's; the error
+handler's `unhandled error`; the JOSE failure line `jose: operation failed`; and
+the envelope meta-key collision WARN) carry the same correlation: `http.route`,
 `request_id`, `correlation_id`, and `trace_id`/`span_id` when the request's
 span context is valid, so each joins its request's span and the response's
 `X-Request-ID`. The tenant seat and the outermost panic guard run outside the
@@ -314,7 +315,7 @@ lines report a panic or error that passed through the access logger, and a
 handler's `server.NewUnknownTenantError` refusal comes from inside it, so they
 also join that request's access line. On these lines `http.route` is the
 registered route template (`/cards/:id`), the same value the access line and
-the JOSE failure line carry, so one filter on it finds all of them; the lines
+the JOSE failure line carry, so one filter on it finds all of them (the JOSE line omits it where no template matched, as its failure counter does); the lines
 that carry a `path` field (the tenant WARN and the guard's line) carry the
 masked rendering
 (`/cards/REDACTED`, [ADR-167](adr_167_inbound_paths_render_from_route_template.md)).
@@ -329,7 +330,38 @@ pre-guard and forwarded-client-cert WARNs under `IPPreGuard` and
 `RequireForwardedClientCert(nil)`. A WARN whose level is disabled returns before
 it is formatted or reads the client address. The forwarded-client-cert WARNs
 print `client=` as the access line's `client.address` (behind a trusted proxy,
-the `X-Forwarded-For` client) and `peer=` as the TCP peer.
+the `X-Forwarded-For` client) and `peer=` as the TCP peer. None of these lines is bound to the request context, so
+none raises the request's access line (see Request Logging above).
+
+### Runbook: from a framework line to its request
+
+Paths are masked in every framework sink
+([ADR-167](adr_167_inbound_paths_render_from_route_template.md)), so on-call joins
+lines by identifier, not by path:
+
+1. **Start from the framework line** (a `[server.tenant]`, `[server.ip_preguard]`
+   or `[server.forwardedclientcert]` WARN, a `Panic recovered` or `unhandled error`
+   ERROR, a `jose: operation failed` line, or the meta-key WARN). `http.route`
+   names the route; `path` shows its shape with every value `REDACTED`.
+2. **Find the access line** (`log.type=action`) with the same `request_id`
+   (`correlation_id` holds the same value). Every non-probe request that reaches
+   the access logger writes one, at the level its status and escalation give it;
+   no framework line replaces it or raises its level. Two cases have none: a
+   request the IP pre-guard refused (429), which runs outer to the access logger,
+   and a request whose access line `log.level` disables (an INFO line under
+   `log.level: warn`, such as a 200 that only drew a forwarded-client-cert WARN).
+   A `Panic recovered` line written by the outermost guard has no access line
+   either (its `request_id` is the inbound `X-Request-ID` when valid, empty
+   otherwise).
+3. **Follow `trace_id` to the span** when tracing is on: every correlated line
+   carries the span's `trace_id`/`span_id` when the request's span context is
+   valid.
+4. **Identify the caller** from the access line's `client.address` and
+   `user_agent.original`, or the WARN's `client=`; on a forwarded-client-cert WARN
+   `peer=` is the load balancer, not the caller.
+5. **Need the concrete path?** Read it at the edge (load balancer or WAF access
+   logs) by timestamp and client address, under the same data controls as any
+   card-data store; the framework keeps no copy.
 
 The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
 run's framework id: a UUID minted once per run and shared by the normal-return and
