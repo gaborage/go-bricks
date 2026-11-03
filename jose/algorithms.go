@@ -16,7 +16,7 @@ const (
 // allowedSigAlgs is the strict allowlist of JWS signature algorithms accepted on inbound
 // payloads and selectable for outbound. Symmetric algorithms (HS*) are forbidden because
 // the framework's key model is asymmetric (RSA keypairs in keystore). alg=none is forbidden
-// at the parser level by passing this allowlist into go-jose's ParseSigned.
+// at the parser level by passing this allowlist into go-jose's ParseSignedCompact.
 //
 // ES256 is intentionally absent: the keystore module returns *rsa.PrivateKey/PublicKey
 // only, so an ES256 selection would crash at runtime when the cryptoadapter passes the
@@ -87,7 +87,7 @@ func IsAllowedEncFor(mode SealMode, enc jose.ContentEncryption) bool {
 }
 
 // AllowedContentEncsFor returns a copy of the content-encryption allowlist for the given
-// seal mode, for callers threading it into go-jose primitives (e.g. jose.ParseEncrypted).
+// seal mode, for callers threading it into go-jose primitives (e.g. jose.ParseEncryptedCompact).
 // An unknown mode yields an empty list, which rejects every token.
 func AllowedContentEncsFor(mode SealMode) []jose.ContentEncryption {
 	return slices.Clone(contentEncsForMode(mode))
@@ -133,7 +133,7 @@ func IsAllowedEnc(enc jose.ContentEncryption) bool {
 }
 
 // AllowedSigAlgs returns a copy of the signature-algorithm allowlist for callers that
-// need to pass it to go-jose primitives (e.g., jose.ParseSigned). Returning a copy
+// need to pass it to go-jose primitives (e.g., jose.ParseSignedCompact). Returning a copy
 // prevents external mutation.
 func AllowedSigAlgs() []jose.SignatureAlgorithm {
 	return slices.Clone(allowedSigAlgs)

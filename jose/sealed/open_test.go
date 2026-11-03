@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -611,24 +612,54 @@ func TestDoorsRefuseSubjectCaseFoldTwin(t *testing.T) {
 	want := &vector{Code: sealed.CodePayloadUndecodable, Rule: 10}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := []byte(k.build(t, mutation{doc: tc.doc}))
-			opts := vectorOptions(k, nil)
-
-			var evt paymentAuthorized
-			env, err := sealed.Open(body, testSpec(t), opts, &evt)
-			assert.Nil(t, env)
-			assert.Zero(t, evt)
-			requireVectorRefusal(t, err, want)
-
-			opened, err := sealed.OpenDocument(body, documentSpec(t), opts)
-			assert.Nil(t, opened)
-			requireVectorRefusal(t, err, want)
-
-			env, err = sealed.Verify(body, testSpec(t), verifyOptions(t, k, nil))
-			assert.Nil(t, env)
-			requireVectorRefusal(t, err, want)
+			requireDoorsRefuse(t, k, []byte(k.build(t, mutation{doc: tc.doc})), want)
 		})
 	}
+}
+
+// TestDoorsRefuseJSONSerialization pins the documented compact wire format at both layers: the
+// outer JWS and the Subject JWE, each re-serialized as flattened JSON from its untouched segments.
+func TestDoorsRefuseJSONSerialization(t *testing.T) {
+	k := loadVectorKeys(t)
+	jws := strings.Split(k.build(t, mutation{}), ".")
+	jwe := strings.Split(k.inner, ".")
+	subject, err := json.Marshal(fmt.Sprintf(`{"protected":%q,"encrypted_key":%q,"iv":%q,"ciphertext":%q,"tag":%q}`, jwe[0], jwe[1], jwe[2], jwe[3], jwe[4]))
+	require.NoError(t, err)
+	jsonSubject := func(doc string) string { return strings.Replace(doc, `"`+k.inner+`"`, string(subject), 1) }
+
+	cases := []struct {
+		name string
+		body string
+		want vector
+	}{
+		{"outer_jws", fmt.Sprintf(`{"protected":%q,"payload":%q,"signature":%q}`, jws[0], jws[1], jws[2]), vector{Code: sealed.CodeNotSealed, Rule: 1}},
+		{"subject_jwe", k.build(t, mutation{doc: jsonSubject}), vector{Code: sealed.CodePayloadUndecodable, Rule: 10}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireDoorsRefuse(t, k, []byte(tc.body), &tc.want)
+		})
+	}
+}
+
+// requireDoorsRefuse asserts that Open, OpenDocument and Verify refuse body identically.
+func requireDoorsRefuse(t *testing.T, k *vectorKeys, body []byte, want *vector) {
+	t.Helper()
+	opts := vectorOptions(k, nil)
+
+	var evt paymentAuthorized
+	env, err := sealed.Open(body, testSpec(t), opts, &evt)
+	assert.Nil(t, env)
+	assert.Zero(t, evt)
+	requireVectorRefusal(t, err, want)
+
+	opened, err := sealed.OpenDocument(body, documentSpec(t), opts)
+	assert.Nil(t, opened)
+	requireVectorRefusal(t, err, want)
+
+	env, err = sealed.Verify(body, testSpec(t), verifyOptions(t, k, nil))
+	assert.Nil(t, env)
+	requireVectorRefusal(t, err, want)
 }
 
 // TestEveryCodeNamesItsRules pins the identity contract: callers match on the code, so the
