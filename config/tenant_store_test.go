@@ -283,6 +283,7 @@ func TestTenantStoreTenants(t *testing.T) {
 func TestTenantStoreHasTenant(t *testing.T) {
 	cfg := &Config{
 		Database:  DatabaseConfig{},
+		Databases: map[string]DatabaseConfig{"reporting": {Type: PostgreSQL}},
 		Messaging: MessagingConfig{},
 		Multitenant: MultitenantConfig{
 			Enabled: true,
@@ -303,6 +304,8 @@ func TestTenantStoreHasTenant(t *testing.T) {
 	// Non-existent tenant
 	assert.False(t, store.HasTenant("non-existent"))
 	assert.False(t, store.HasTenant(""))
+	// A named-database key is a resource key, not a tenant id (multitenant.TenantChecker).
+	assert.False(t, store.HasTenant(NamedDatabasePrefix+"reporting"))
 }
 
 func TestTenantStoreIsDynamic(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/gaborage/go-bricks/internal/pathutil"
@@ -158,26 +159,30 @@ type CompositeResolver struct {
 
 // ResolveTenant implements TenantResolver.
 func (r *CompositeResolver) ResolveTenant(ctx context.Context, req *http.Request) (string, error) {
+	tenantID, _, err := r.resolve(ctx, req)
+	return tenantID, err
+}
+
+// resolve is ResolveTenant plus the winning member's path provenance (see Resolve).
+func (r *CompositeResolver) resolve(ctx context.Context, req *http.Request) (tenantID string, fromPath bool, err error) {
 	if r == nil {
-		return "", ErrTenantResolutionFailed
+		return "", false, ErrTenantResolutionFailed
 	}
 	for _, resolver := range r.Resolvers {
-		if resolver == nil {
-			continue
-		}
-		tenantID, err := resolver.ResolveTenant(ctx, req)
+		// A nil member fails in Resolve, so the loop moves past it.
+		tenantID, fromPath, err = Resolve(ctx, resolver, req)
 		if errors.Is(err, ErrUntrustedForwardedHost) {
-			return "", err
+			return "", false, err
 		}
 		if err == nil && tenantID != "" {
 			// Validate tenant ID against pattern if configured
 			if r.TenantRegex != nil && !r.TenantRegex.MatchString(tenantID) {
 				continue
 			}
-			return tenantID, nil
+			return tenantID, fromPath, nil
 		}
 	}
-	return "", ErrTenantResolutionFailed
+	return "", false, ErrTenantResolutionFailed
 }
 
 // ValidatingResolver wraps any resolver with tenant ID validation.
@@ -188,21 +193,27 @@ type ValidatingResolver struct {
 
 // ResolveTenant implements TenantResolver with validation.
 func (r *ValidatingResolver) ResolveTenant(ctx context.Context, req *http.Request) (string, error) {
-	if r == nil || r.Resolver == nil {
-		return "", ErrTenantResolutionFailed
+	tenantID, _, err := r.resolve(ctx, req)
+	return tenantID, err
+}
+
+// resolve is ResolveTenant plus the wrapped resolver's path provenance (see Resolve).
+func (r *ValidatingResolver) resolve(ctx context.Context, req *http.Request) (tenantID string, fromPath bool, err error) {
+	if r == nil {
+		return "", false, ErrTenantResolutionFailed
 	}
 
-	tenantID, err := r.Resolver.ResolveTenant(ctx, req)
+	tenantID, fromPath, err = Resolve(ctx, r.Resolver, req) // a nil Resolver fails here
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	// Validate tenant ID format if regex is provided
 	if r.TenantRegex != nil && !r.TenantRegex.MatchString(tenantID) {
-		return "", ErrTenantResolutionFailed
+		return "", false, ErrTenantResolutionFailed
 	}
 
-	return tenantID, nil
+	return tenantID, fromPath, nil
 }
 
 // PathResolver extracts the tenant identifier from a path segment.
@@ -253,4 +264,104 @@ func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (st
 		return "", ErrTenantResolutionFailed
 	}
 	return tenantID, nil
+}
+
+// TenantChecker reports whether a tenant id names a tenant the deployment holds;
+// *config.TenantStore implements it. The check is in memory, a stated Context-First
+// exception: no context, no I/O, no blocking. A source backed by a remote catalog refreshes
+// its own set out of band and answers from it.
+//
+// The contract every implementation must keep:
+//
+//   - tenantID may be an unadmitted request value: the framework calls HasTenant to decide
+//     whether to admit it. An implementation must never log it, echo it, put it in an error,
+//     send it outbound, pass it to a deps.* call, or use it as a cache, store or metric key.
+//     It may only compare it against the set it holds.
+//   - HasTenant answers false for "" and for any key that is not a tenant id, including a
+//     config.NamedDatabasePrefix key.
+//   - HasTenant is safe for concurrent use.
+//   - The complete tenant set is held before app.New: no first call may answer false for a
+//     tenant only because a load is still in flight.
+//   - On a failed refresh the implementation keeps the last good set; it never shrinks to
+//     empty because a refresh failed.
+//   - HasTenant never panics.
+//   - The answer is existence, not authorization: true says the deployment holds the tenant,
+//     not that the caller may act for it.
+type TenantChecker interface {
+	HasTenant(tenantID string) bool
+}
+
+// Resolve resolves the tenant as resolver.ResolveTenant does, with the same error and, when
+// err is nil, the same id; on error the id is always empty and fromPath false. It reports
+// whether the id may have come from the request path: fromPath is true when a *PathResolver
+// produced it, or a resolver whose provenance is unknown. Provenance is judged on the concrete
+// framework types alone, so any other type, including one embedding or wrapping a framework
+// resolver, counts as unknown.
+func Resolve(ctx context.Context, resolver TenantResolver, req *http.Request) (tenantID string, fromPath bool, err error) {
+	switch r := resolver.(type) {
+	case nil:
+		return "", false, ErrTenantResolutionFailed
+	case *HeaderResolver:
+		tenantID, err = r.ResolveTenant(ctx, req)
+		return tenantID, false, err
+	case *SubdomainResolver:
+		tenantID, err = r.ResolveTenant(ctx, req)
+		return tenantID, false, err
+	case *CompositeResolver:
+		return r.resolve(ctx, req)
+	case *ValidatingResolver:
+		return r.resolve(ctx, req)
+	}
+	tenantID, err = resolver.ResolveTenant(ctx, req)
+	if err != nil {
+		return "", false, err
+	}
+	return tenantID, true, nil
+}
+
+// MayReadPath reports whether Resolve can answer fromPath true for resolver: it is false only
+// when every member able to produce an id is a *HeaderResolver or a *SubdomainResolver. It
+// walks the resolver tree, so call it once at setup and keep the answer. A cycle (a
+// *CompositeResolver or *ValidatingResolver reachable from itself) fails closed: the walk
+// answers true rather than recurse without end.
+func MayReadPath(resolver TenantResolver) bool {
+	return mayReadPath(resolver, nil)
+}
+
+// mayReadPath is MayReadPath's walk. onPath holds the wrapper resolvers on the current
+// descent, so meeting one again is a cycle; a resolver shared by two branches is not.
+func mayReadPath(resolver TenantResolver, onPath map[TenantResolver]struct{}) bool {
+	switch r := resolver.(type) {
+	case nil, *HeaderResolver, *SubdomainResolver:
+		return false
+	case *CompositeResolver:
+		if r == nil {
+			return false
+		}
+		return descend(r, onPath, func(onPath map[TenantResolver]struct{}) bool {
+			return slices.ContainsFunc(r.Resolvers, func(m TenantResolver) bool { return mayReadPath(m, onPath) })
+		})
+	case *ValidatingResolver:
+		if r == nil {
+			return false
+		}
+		return descend(r, onPath, func(onPath map[TenantResolver]struct{}) bool {
+			return mayReadPath(r.Resolver, onPath)
+		})
+	}
+	return true
+}
+
+// descend runs walk with wrapper marked on the path, answering true without walking when
+// wrapper is already on it (a cycle).
+func descend(wrapper TenantResolver, onPath map[TenantResolver]struct{}, walk func(map[TenantResolver]struct{}) bool) bool {
+	if _, cycle := onPath[wrapper]; cycle {
+		return true
+	}
+	if onPath == nil {
+		onPath = make(map[TenantResolver]struct{})
+	}
+	onPath[wrapper] = struct{}{}
+	defer delete(onPath, wrapper)
+	return walk(onPath)
 }

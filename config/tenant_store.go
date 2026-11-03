@@ -44,6 +44,9 @@ type TenantStore struct {
 	mu      sync.RWMutex
 }
 
+// The built-in store is the reference multitenant.TenantChecker.
+var _ multitenant.TenantChecker = (*TenantStore)(nil)
+
 // NewTenantStore creates a config-backed tenant store
 func NewTenantStore(cfg *Config) *TenantStore {
 	source := &TenantStore{
