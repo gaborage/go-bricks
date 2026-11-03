@@ -487,7 +487,7 @@ middleware moves to the flat shape and `HandlerContext.Echo` field accesses move
 typed handler hot path stays echo-direct via an unexported `addEcho` seam (ADR-026
 preserved); only middleware routes pay a bounded +1 baton alloc. Amended by ADR-133:
 `NewHandlerContextForTest` takes `...TestContextOption`, and `NewHandlerContextForTestWithOptions`
-is removed.
+is removed; amended by ADR-165: the option type is now the sealed `TestContextSeeder`.
 
 **Key Benefits:** No `echo.*` symbol on the consumer path, downstream services decoupled from Echo's version, security improvement (no spoofable `RealIP()` accessor), uniform flat middleware shape
 
@@ -2819,6 +2819,24 @@ without a family keeps its request path and allocations unchanged.
 
 ---
 
+### [ADR-165: `server.TestContextOption` Becomes the Sealed `server.TestContextSeeder`](adr_165_test_context_seeder_opaque.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** `server.TestContextOption` is removed for `server.TestContextSeeder`, an interface with one unexported method, so every spelling of the old name, a consumer-written option, a conversion `server.TestContextOption(f)` or a direct call `opt(&c)` fails to compile
+
+The option type behind `NewHandlerContextForTest` was a public func type, so a consumer could write
+its own option, although one could do nothing a caller cannot do through `cfg` or on the returned
+context, and the framework could not change how an option seeds the synthetic context without breaking
+consumers. The type is renamed `TestContextSeeder`, the -er name an exported single-method
+interface takes (ADR-013), and only package `server` can implement it. `WithRouteTemplate` and
+`NewHandlerContextForTest` keep their names and behavior and now spell the new type. See
+[migrations.md](migrations.md) `[C73.27]`.
+
+**Key Benefits:** the framework can change how an option seeds the synthetic context without
+breaking a consumer, `WithRouteTemplate` is the whole option surface, and the S8196 rename rides
+the break this change already makes.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3628,7 +3646,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-164) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-165) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

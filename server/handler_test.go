@@ -2414,6 +2414,22 @@ func TestNewHandlerContextForTestWithRouteTemplate(t *testing.T) {
 		assert.Equal(t, "/api/orders/:id", c.RouteTemplate())
 		assert.Equal(t, "42", c.Param("id"))
 	})
+
+	t.Run("last_option_wins", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/orders/42", http.NoBody)
+		c := NewHandlerContextForTest(httptest.NewRecorder(), req, cfg,
+			WithRouteTemplate("/api/carts/:id"), WithRouteTemplate("/api/orders/:id"))
+		assert.Equal(t, "/api/orders/:id", c.RouteTemplate())
+		assert.Equal(t, "/api/orders/:id", c.Request().Pattern)
+	})
+}
+
+// TestTestContextSeederIsOpaque pins ADR-165: TestContextSeeder is an interface with one unexported method.
+func TestTestContextSeederIsOpaque(t *testing.T) {
+	typ := reflect.TypeFor[TestContextSeeder]()
+	require.Equal(t, reflect.Interface, typ.Kind())
+	require.Equal(t, 1, typ.NumMethod())
+	assert.False(t, typ.Method(0).IsExported())
 }
 
 // TestHandlerContextPathParams verifies PathParams returns the matched parameters in
