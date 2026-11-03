@@ -531,7 +531,11 @@ route-registration order, dissolving echo's group-scoping/order trap) via a new
 The app invokes it through an optional type assertion, leaving the exported `ServerRunner`
 interface byte-identical — purely additive, apidiff green, `feat:` not `feat!:`. Documented
 limitations: runs after rate-limiting and before JOSE body decryption (header/token/tenant
-auth only), and emits the standard envelope on raw-response routes.
+auth only), and emits the standard envelope on raw-response routes. Amended by ADR-164: startup
+refuses global middleware beside a tenant-owned route family, whose routes the root tenant seat
+skips; after `Start`, `TenantOwnedGroup` panics, as does `RegisterGlobalMiddleware` beside a
+family. So the after-tenant-resolution guarantee holds in every binary that passes the startup
+check.
 
 **Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved; single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
 
@@ -588,7 +592,9 @@ to the *recommended* order (`[subdomain, path, header]`) plus a last-resort fall
 `server/middleware.go` for configs that bypassed `config.Validate()` (preventing a fail-open
 zero-sub-resolver composite). Validation rejects unknown/duplicate entries, `order` on a
 non-composite type, and an order naming an unconfigured sub-resolver (`path` needs `path.segment`;
-`subdomain` needs a real `domain`).
+`subdomain` needs a real `domain`). Amended by ADR-164: the root tenant seat, and so the composite
+chain, does not run on a tenant-owned route family's routes; the obligations hold for every route
+the seat still serves.
 
 **Key Benefits:** Precedence becomes an explicit operator decision instead of an unverifiable
 framework bet on the deployment's edge topology; the zero-config header sub-resolver no longer
@@ -702,6 +708,8 @@ Amended 2026-09-14 (#1611): a route family requires the identity with
 `server.RequireForwardedClientCert` mounted on its group — it re-parses the headers under any
 `enabled` setting, refuses on the same two conditions with the same 401, and exempts no probe;
 YAML scoping of `require` was rejected (polymorphic bool, raw-path matching, client-written `Host`).
+Corrected 2026-10-31 (#2221): the middleware runs on the root `e.Use` chain after routing, not
+before it, so the raw-path reason does not hold; the other two are unaffected.
 
 **Key Benefits:** Replaces per-service hand-rolled header parsing (and its URL-decoding
 trap) with one audited implementation; corrects the ALB-stripping assumption ADR-042's
@@ -1130,7 +1138,7 @@ strengthening [ADR-055](adr_055_reserved_log_attribute_namespaces.md). Fixes
 
 ### [ADR-057: The client IP is derived through trusted proxies, not raw `X-Forwarded-For`](adr_057_trusted_proxy_ip_extraction.md)
 
-**Date:** 2026-08-10 | **Status:** Accepted
+**Date:** 2026-08-10 (amended 2026-10-31, #2167) | **Status:** Accepted
 
 [ADR-015](adr_015_echo_v5_migration.md) installed `echo.LegacyIPExtractor()` to restore v4-compatible
 `RealIP()` across the echo v5 hop and recorded replacing it with trusted-proxy-aware extraction as a
@@ -1158,8 +1166,9 @@ used the safe `server.ClientIP` path. **Watch:** rate-limit buckets and the clie
 five `RealIP()` sites change value; a proxy on a public address now needs a `server.trustedproxies`
 entry; and a proxy that writes a non-IP XFF entry (AWS ALB's `routing.http.xff_client_port.enabled`)
 makes echo abandon the chain and key the whole fleet on the load balancer — a deployment-side fix that
-`server.trustedproxies` cannot rescue. The tenant-keyed half of F23 remains open. See
-[migrations.md](migrations.md) `[C59.1]`.
+`server.trustedproxies` cannot rescue. The tenant-keyed half of F23 is closed by
+[ADR-160](adr_160_rate_limit_keys_on_client_ip.md), which keys the global limiter on the client IP
+alone. See [migrations.md](migrations.md) `[C59.1]`.
 
 ### [ADR-058: Consumers carry per-consumer AMQP arguments, at the cost of struct comparability](adr_058_consumer_scoped_amqp_arguments.md)
 
@@ -2704,6 +2713,110 @@ scheme separator renders `xxxxx`. Refusing a misparsed URL before the dial is le
 **Key Benefits:** a password that url.Parse misreads as host, port or path no longer reaches error
 text, and the query, a lone username and a non-URL DSN are masked with it.
 
+### [ADR-160: The Global Rate Limiter Keys on the Client IP Only](adr_160_rate_limit_keys_on_client_ip.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `app.rate.limit` becomes a per-client-IP budget for every request, whether or not a tenant resolved (before, a resolved tenant had its own bucket); `server.RateLimit` keys the same way
+
+The built-in limiter keyed on the resolved tenant when there was one, and the tenant is whatever the
+caller wrote. Rotating tenant values bought one address a fresh bucket per value, naming a victim
+tenant drained its bucket and read its `X-RateLimit-Remaining`, and the store grew by one entry per
+value. The built-in limiter and `server.RateLimit` now key on `RealIP()` alone; burst, cleanup and
+`<= 0` disabling are unchanged. The new `server.TenantRateLimit` limits per context tenant with the
+same derivation, passes a tenant-less request through uncharged, and is never installed by the
+framework: it goes in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after it and
+after the application's tenant-authorization check.
+Every client behind one NAT or gateway now shares a bucket, and `server.trustedproxies` decides the
+key. Closes the tenant-keyed half of F23 that [ADR-057](adr_057_trusted_proxy_ip_extraction.md) left
+open. See [migrations.md](migrations.md) `[C73.20]`. Amended by ADR-164: on a tenant-owned route
+family, `server.TenantRateLimit` goes in the family's `Use`, before the family's routes are
+registered, not beside `auth.Middleware` in `TenantPolicy.Authenticate`, where no tenant exists yet.
+
+**Key Benefits:** no caller-chosen string keys a framework rate-limit bucket by default, limiter memory
+is bounded by client addresses, and a per-tenant budget is an explicit, post-authentication choice.
+
+### [ADR-161: An Unknown Tenant Is a Client Fault](adr_161_unknown_tenant_is_a_client_fault.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a well-formed tenant absent from the built-in store answers 400 `BAD_REQUEST` "Invalid tenant" plus a WARN at its first per-tenant accessor, from a raw handler or a middleware, instead of 500 `INTERNAL_ERROR` and `ERROR "unhandled error"`
+
+The tenant seat checks form, not existence, so a well-formed unknown tenant reached the handler, and
+the built-in store's error for it, a `*config.ConfigError` no sentinel matched, became a 500. The store
+now joins `multitenant.ErrUnknownTenant` on its absent-key branch only, and `classifyError` answers it
+with the seat's malformed-tenant 400 and one WARN with `reason="unknown tenant"` and the route template
+as `path`, never the tenant ID. Typed handlers reach the same answer through
+`server.NewUnknownTenantError(err)`, which is fail-closed: any cause that is not the sentinel answers
+500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
+JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
+the tenant does not exist. The seat still does no existence check. See [migrations.md](migrations.md)
+`[C73.21]`.
+
+**Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
+pages an operator, and a store error that does not wrap `multitenant.ErrUnknownTenant` never
+earns the unknown-tenant 400.
+
+### [ADR-162: The Tenant-ID Grammar Is Fixed and Enforced at Every Write Door](adr_162_tenant_id_grammar_is_fixed.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** a static `multitenant.tenants` key over 64 bytes fails startup, a publish whose context tenant or replay key fails the grammar returns an error wrapping `multitenant.ErrInvalidTenantID` and sends or persists nothing, and a pending outbox row stored under such a stamp parks at `MaxRetries`
+
+`^[a-z0-9-]{1,64}$`, applied through `multitenant.ValidateTenantID`, is the one tenant-ID grammar
+and is never configurable. It is the fleet-wide wire contract of the `x-tenant-id` stamp, which
+per-service configuration cannot keep in agreement, and the isolation invariant for the key spaces a
+tenant ID shares: the `named:` database keys, the cache key delimiter `:` (ADR-117) and the 64-byte
+`jose/sealed` `MaxTenantIDLen`. Only the HTTP seat and the stamp read enforced it, so a static key
+over 64 bytes booted unreachable, and a publish stamped an off-grammar tenant that a shared-tenancy
+consumer refused on another service. `checkMultitenantTenantEntry` now applies it after the ADR-090
+section-name check, `tenantstamp.Resolve` applies it to a non-empty decided stamp after the conflict
+rule, and both outbox shippers park a stored off-grammar stamp as poison. A tenant identity that
+does not fit is mapped into the grammar where it is set: at the `multitenant.SetTenant` caller today,
+in a route family's `Tenant` step once #2166 lands. The unread
+`multitenant.validation.pattern` leaves `config.example.yaml`. See [migrations.md](migrations.md)
+`[C73.22]`.
+
+**Key Benefits:** an off-grammar tenant fails where it is written, at startup or at the publish call,
+instead of as a dead letter on the consuming service, and the rule that keeps a tenant ID out of the
+named-database and other tenants' cache key spaces is a recorded contract, not a convention.
+
+### [ADR-163: Migration Tenant IDs Follow the Framework Grammar](adr_163_migration_tenant_ids_follow_framework_grammar.md)
+
+**Date:** 2026-10-31 | **Status:** Accepted | **Breaking:** `SecretsProvider.DBConfig` refuses a tenant ID outside `^[a-z0-9-]{1,64}$` where it admitted `^[A-Za-z0-9_-]{1,128}$`, and `migration.ErrInvalidTenantID` is removed; the HTTP tenant source fails a listing that holds such an ID
+
+Migration checked tenant IDs with its own, wider rule, so a run provisioned tenants the HTTP seat and
+the stamp reader refuse, and the HTTP tenant source passed whatever the control plane listed. Both
+doors now call `multitenant.ValidateTenantID`: the secrets provider before `NameFor` or `Fetch`, the
+source per non-blank trimmed `id`, failing the whole listing with the page and entry, never the
+value, so `MigrateAll` dispatches nothing. `ContractError.Error()` quotes the envelope's `code` and
+`message`. Amends [ADR-018](adr_018_multi_tenant_migration_cli.md). See
+[migrations.md](migrations.md) `[C73.23]`.
+
+**Key Benefits:** migration provisions only tenants the runtime can resolve, and no control-plane
+text reaches an operator terminal or CI log unescaped through the source.
+
+---
+
+### [ADR-164: A Tenant-Owned Route Family Resolves Its Own Tenant](adr_164_tenant_owned_route_family.md)
+
+**Date:** 2026-11-02 | **Status:** Accepted
+
+Tenant resolution was one seat on the root chain, ahead of every group and route middleware, with
+its resolver from `multitenant.resolver.*` only, so no module could name the tenant from a catalog
+lookup built in `Init` or from a claim its own authentication verified, and the seat's 400 answered
+before a family's own authentication. `server.TenantOwnedGroup(r, prefix, server.TenantPolicy{...})`
+mounts a family whose optional `Authenticate` steps run first, whose required `Tenant` step returns
+the tenant ID without writing the response, and whose optional `Deny` (`DenyBodyless` by default)
+is the only writer of client-fault bytes; five ordered rules pick which faults are the client's,
+and server faults and every error after the publish stay framework-rendered. The framework checks the ID
+against the ADR-162 grammar, answering 500 when it fails, and publishes it. The root seat skips
+owned routes and leaves evidence that a leaf guard around every family handler requires, with
+exactly the published tenant. `auth.TenantClaim` reads the tenant from a verified claim. Call-site
+mistakes panic, and a route or middleware-bearing group under an owned prefix that did not come
+through the family is a `RouteConflictReasonTenantOwned` conflict that fails startup.
+Amends ADR-036 (startup refuses global middleware beside a tenant-owned family), ADR-039 (the root
+seat and its composite chain skip family routes) and ADR-160 (`server.TenantRateLimit` goes in the
+family's `Use`).
+
+**Key Benefits:** a family can name its tenant from a path key, a catalog lookup or a verified claim
+and answer its own client faults in its own bytes, a skipped seat stays fail-closed, and a binary
+without a family keeps its request path and allocations unchanged.
+
 ---
 
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
@@ -3515,7 +3628,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-159) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-164) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

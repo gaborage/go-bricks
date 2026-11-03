@@ -26,6 +26,13 @@ import (
 // like healthPath/readyPath, so the decision is made by the caller from observability.enabled).
 // healthPath and readyPath are used by the tenant middleware skipper to bypass probe endpoints.
 func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string) {
+	setupMiddlewares(e, log, cfg, observabilityEnabled, healthPath, readyPath, nil)
+}
+
+// setupMiddlewares is SetupMiddlewares with owned, the Server's tenant-owned family record,
+// which only the tenant seat reads (see tenantMiddlewareEcho). It reports whether it installed
+// the tenant seat.
+func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, owned func(template string) bool) (seated bool) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,
 	// only covers what is downstream of ITSELF, and the eight middlewares
@@ -79,7 +86,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold, log))
 	}
 
-	setupIdentityMiddlewares(e, log, cfg, skipProbe)
+	seated = setupIdentityMiddlewares(e, log, cfg, skipProbe, owned)
 
 	// Logger middleware with zerolog
 	e.Use(requestLoggerEcho(log, healthPath, readyPath))
@@ -122,6 +129,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	if cfg.Server.ResponseTime.Enabled {
 		e.Use(timingEcho())
 	}
+	return seated
 }
 
 // otelServerNameError reports why name cannot be the instrumentation's ServerName.
@@ -268,14 +276,16 @@ func secureHeadersEcho() echo.MiddlewareFunc {
 // setupIdentityMiddlewares registers the identity-establishing middlewares
 // (tenant resolution, ALB forwarded-client-cert). Both run before the access
 // logger so their rejection paths can leave their own WARN trail, and both
-// honor the shared probe skipper.
-func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper) {
+// honor the shared probe skipper. Only the tenant seat reads owned. It reports whether it
+// installed the tenant seat.
+func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper, owned func(template string) bool) (seated bool) {
 	// Multi-tenant tenant resolver middleware (if enabled)
 	if cfg.Multitenant.Enabled {
 		resolver := buildTenantResolver(cfg)
 		if resolver != nil {
 			// Use skipper-aware middleware to bypass tenant resolution for health probes
-			e.Use(tenantMiddlewareEcho(resolver, skipProbe, log))
+			e.Use(tenantMiddlewareEcho(resolver, skipProbe, owned, log))
+			seated = true
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
@@ -301,6 +311,7 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 		}
 		e.Use(forwardedClientCertMiddlewareEcho(fcc, skipProbe, log))
 	}
+	return seated
 }
 
 func newHeaderResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {

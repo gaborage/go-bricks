@@ -981,6 +981,34 @@ func TestPublisherPublishRefusesACallerSuppliedTenantStamp(t *testing.T) {
 	}
 }
 
+func TestOutboxPublishRefusesOffGrammarTenant(t *testing.T) {
+	const tenant = "Acme"
+	tests := []struct {
+		name   string
+		stream string
+	}{
+		{name: "amqp_lane_uppercase"},
+		{name: "stream_lane_uppercase", stream: "customers"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &mockStore{}
+			pub := newPublisher(store, "", []string{"customers"})
+			ctx := multitenant.SetTenant(context.Background(), tenant)
+
+			_, err := pub.Publish(ctx, &mockTx{}, &app.OutboxEvent{
+				EventType:   eventTypeTest,
+				AggregateID: aggregateTest,
+				Stream:      tt.stream,
+			})
+
+			require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+			assert.NotContains(t, err.Error(), tenant)
+			assert.Empty(t, store.insertedRecords, "a refused publish never reaches the ledger")
+		})
+	}
+}
+
 // TestPublisherPublishStampsBesideTheTraceKeys pins that the stamp and the trace keys share
 // one persisted map: neither snapshot evicts the other.
 func TestPublisherPublishStampsBesideTheTraceKeys(t *testing.T) {

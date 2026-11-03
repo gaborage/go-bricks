@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -1142,20 +1144,13 @@ func TestCompositeTenantResolutionStopsOnUntrustedForwardedHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			log := &testLogger{}
-			srv := New(forwardedHostConfig(config.ResolverTypeComposite, tt.trustedProxies...), log)
-			srv.echo.GET("/forwarded", func(c *echo.Context) error {
-				tenantID, _ := multitenant.GetTenant(c.Request().Context())
-				return c.String(http.StatusOK, tenantID)
-			})
-
 			req := forwardedRequest(tt.remoteAddr)
 			if !tt.forwardedHost {
 				req.Header.Del(HeaderXForwardedHost)
 			}
 			req.Header.Set(HeaderXTenantID, "bravo")
-			rec := httptest.NewRecorder()
-			srv.echo.ServeHTTP(rec, req)
+			log := &testLogger{}
+			rec := serveSeatTenant(t, forwardedHostConfig(config.ResolverTypeComposite, tt.trustedProxies...), log, req)
 
 			require.Equal(t, tt.wantStatus, rec.Code)
 			if tt.wantTenant != "" {
@@ -1174,4 +1169,180 @@ func TestCompositeTenantResolutionStopsOnUntrustedForwardedHost(t *testing.T) {
 			assert.NotContains(t, warns[0], multitenant.ErrUntrustedForwardedHost.Error(), "the resolver error message is never logged")
 		})
 	}
+}
+
+// serveSeatTenant serves req through the tenant seat New installs from cfg and returns the
+// recorder; the route echoes the resolved tenant.
+func serveSeatTenant(t *testing.T, cfg *config.Config, log *testLogger, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	srv := New(cfg, log)
+	srv.echo.GET("/forwarded", func(c *echo.Context) error {
+		tenantID, _ := multitenant.GetTenant(c.Request().Context())
+		return c.String(http.StatusOK, tenantID)
+	})
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestSubdomainSeatFoldsHostCase pins the case fold through the seat: a host or a configured
+// domain differing only in ASCII case resolves the lowercase tenant, and a non-ASCII byte
+// still fails the grammar.
+func TestSubdomainSeatFoldsHostCase(t *testing.T) {
+	tests := []struct {
+		name       string
+		domain     string
+		host       string
+		forwarded  string
+		wantTenant string // empty: the seat answers 400
+	}{
+		{name: "mixed_case_host_resolves", domain: testDomain, host: "Acme." + testDomain, wantTenant: "acme"},
+		{name: "upper_case_host_resolves", domain: testDomain, host: "ACME.EXAMPLE.COM", wantTenant: "acme"},
+		{name: "mixed_case_configured_domain_resolves", domain: "Example.COM", host: "acme." + testDomain, wantTenant: "acme"},
+		{name: "kelvin_sign_forwarded_host_refused", domain: testDomain, forwarded: "\u212Ailo." + testDomain},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := forwardedHostConfig(config.ResolverTypeSubdomain)
+			cfg.Multitenant.Resolver.Domain = tt.domain
+			req := forwardedRequest("10.0.0.1:443")
+			req.Header.Del(HeaderXForwardedHost)
+			if tt.forwarded != "" {
+				req.Header.Set(HeaderXForwardedHost, tt.forwarded)
+			} else {
+				req.Host = tt.host
+			}
+
+			rec := serveSeatTenant(t, cfg, &testLogger{}, req)
+
+			if tt.wantTenant == "" {
+				assert.Equal(t, http.StatusBadRequest, rec.Code)
+				return
+			}
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantTenant, rec.Body.String())
+		})
+	}
+}
+
+// TestCompositeSubdomainFirstResolvesFoldedHost pins the precedence the fold restores: with
+// subdomain ahead of the header, a mixed-case host resolves its own tenant instead of falling
+// through, and an apex host still falls through to the header.
+func TestCompositeSubdomainFirstResolvesFoldedHost(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       string
+		wantTenant string
+	}{
+		{name: "mixed_case_host_beats_header", host: "Acme." + testDomain, wantTenant: "acme"},
+		{name: "apex_host_falls_through_to_header", host: "Example.COM", wantTenant: "beta"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := forwardedRequest("10.0.0.1:443")
+			req.Header.Del(HeaderXForwardedHost)
+			req.Host = tt.host
+			req.Header.Set(HeaderXTenantID, "beta")
+
+			rec := serveSeatTenant(t, forwardedHostConfig(config.ResolverTypeComposite), &testLogger{}, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantTenant, rec.Body.String())
+		})
+	}
+}
+
+// TestOnlyTenantSeatReadsOwnership pins that on a tenant-owned family's route, which the
+// tenant seat skips, every other reader in the chain New builds behaves as on any route. It
+// fails only if a reader other than the seat starts skipping a family. Every case runs in a
+// synctest bubble, so the limiters' clock stands still and their buckets never refill.
+func TestOnlyTenantSeatReadsOwnership(t *testing.T) {
+	exporter := installTestTracerProvider(t)
+	familyOrders := observedFamilyPrefix + "/orders"
+	tests := []struct {
+		name   string
+		denyIP bool
+		check  func(t *testing.T, srv *Server, log *guardLogger)
+	}{
+		{
+			name: "access_log_records_family_route",
+			check: func(t *testing.T, srv *Server, log *guardLogger) {
+				requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				assert.Equal(t, 1, log.countEntries("", familyOrders), "the access log records the family request once")
+			},
+		},
+		{
+			name: "otel_records_span",
+			check: func(t *testing.T, srv *Server, _ *guardLogger) {
+				requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				spans := exporter.GetSpans()
+				require.Len(t, spans, 1)
+				assert.Equal(t, "GET "+familyOrders, spans[0].Name)
+			},
+		},
+		{
+			name: "rate_limiter_keys_client_address",
+			check: func(t *testing.T, srv *Server, _ *guardLogger) {
+				first := requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				second := requireObservedStatus(t, srv, observedRequest(http.MethodGet, familyOrders, "", nil), http.StatusOK)
+				other := observedRequest(http.MethodGet, familyOrders, "", nil)
+				other.RemoteAddr = "198.51.100.7:1234"
+				third := requireObservedStatus(t, srv, other, http.StatusOK)
+
+				assert.Equal(t, strconv.Itoa(observedOpenLimit*BurstMultiplier), first.Header().Get(middleware.HeaderXRateLimitLimit),
+					"the address limiter, inner to the pre-guard, wrote the headers")
+				assert.Equal(t, remainingTokens(t, first)-1, remainingTokens(t, second), "one address shares one bucket")
+				assert.Equal(t, remainingTokens(t, first), remainingTokens(t, third), "another address has its own bucket")
+			},
+		},
+		{
+			name:   "ip_preguard_applies",
+			denyIP: true,
+			check: func(t *testing.T, srv *Server, log *guardLogger) {
+				req := observedRequest(http.MethodGet, familyOrders, "", nil)
+				requireObservedStatus(t, srv, req, http.StatusOK)
+				requireObservedStatus(t, srv, req, http.StatusOK)
+				requireObservedStatus(t, srv, req, http.StatusTooManyRequests)
+				assert.Equal(t, 1, log.warnCount(warnIPPreGuard), "the pre-guard refused the family request")
+			},
+		},
+		{
+			name: "forwarded_client_cert_identity_runs",
+			check: func(t *testing.T, srv *Server, _ *guardLogger) {
+				req := observedRequest(http.MethodGet, observedFamilyPrefix+"/identity", "", map[string][]string{
+					headerClientCertSubject: {"CN=partner"},
+				})
+				rec := requireObservedStatus(t, srv, req, http.StatusOK)
+				assert.Equal(t, "CN=partner", rec.Body.String(), "the family handler sees the forwarded identity")
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				exporter.Reset()
+				log := &guardLogger{}
+				tc.check(t, newObservedServer(t, log, tc.denyIP, true), log)
+			})
+		})
+	}
+}
+
+// requireObservedStatus serves req through srv's engine and requires want.
+func requireObservedStatus(t *testing.T, srv *Server, req *http.Request, want int) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+	require.Equal(t, want, rec.Code, rec.Body.String())
+	return rec
+}
+
+// remainingTokens parses rec's X-RateLimit-Remaining.
+func remainingTokens(t *testing.T, rec *httptest.ResponseRecorder) int {
+	t.Helper()
+	n, err := strconv.Atoi(rec.Header().Get(middleware.HeaderXRateLimitRemaining))
+	require.NoError(t, err)
+	return n
 }

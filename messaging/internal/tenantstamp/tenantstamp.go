@@ -48,18 +48,28 @@ func ResolveForPublish(ctx context.Context, callerHeaders map[string]any, replay
 // refused is the two disagreeing: that is a caller publishing for one tenant on
 // another's client, which no precedence can make correct.
 //
+// A non-empty decided stamp must also pass multitenant.ValidateTenantID, checked after
+// the conflict, so a stamp the consumer's Read would refuse fails here, at the publish.
+//
 // An empty return with a nil error means no tenant is in play at all: a
 // control-plane event, which carries no stamp.
 func Resolve(ctx context.Context, replayKey string) (string, error) {
 	ctxID, ok := multitenant.GetTenant(ctx)
+	var stamp string
 	switch {
 	case !ok:
-		return replayKey, nil
+		stamp = replayKey
 	case replayKey == "" || replayKey == ctxID:
-		return ctxID, nil
+		stamp = ctxID
 	default:
 		return "", ErrConflict
 	}
+	if stamp != "" {
+		if err := multitenant.ValidateTenantID(stamp); err != nil {
+			return "", fmt.Errorf("messaging: tenant stamp: %w", err)
+		}
+	}
+	return stamp, nil
 }
 
 // Write stamps id through set. An empty id writes nothing.

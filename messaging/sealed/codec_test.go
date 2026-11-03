@@ -362,6 +362,22 @@ func TestSealerRefusesAConflictingTenant(t *testing.T) {
 	assert.Equal(t, "tenant-b", env.TenantID)
 }
 
+// TestSealRefusesOffGrammarTenant enters the codec's sealer directly: the typed door
+// resolves the tenant before it, so only this seam reaches the codec's own check.
+func TestSealRefusesOffGrammarTenant(t *testing.T) {
+	const tenant = "Acme"
+	rt, _ := meteredProducerRuntime(t, sealruntime.TenancyPerTenant)
+	sealer, err := sealruntime.Registered().NewSealer(spec(t), eventType, rt)
+	require.NoError(t, err)
+
+	data, jti, err := sealer.Seal(multitenant.SetTenant(context.Background(), tenant), doorEvent())
+
+	require.ErrorIs(t, err, multitenant.ErrInvalidTenantID)
+	assert.NotContains(t, err.Error(), tenant)
+	assert.Nil(t, data, "a refused seal returns no bytes")
+	assert.Empty(t, jti)
+}
+
 // pooledClient mimics a per-tenant pooled client: it exposes the pool key the stamping
 // wrapper would stamp with. The typed door reads it through messaging's unexported
 // replayKeyProvider seam via this method name.

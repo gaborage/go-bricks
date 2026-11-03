@@ -2,8 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
+	"net/http"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,12 +18,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	cachetesting "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/internal/leasescope"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
+	"github.com/gaborage/go-bricks/server"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
@@ -800,4 +810,204 @@ func TestForEachTenantBoundsOpenHandlesDuringASweep(t *testing.T) {
 		assert.Equal(t, len(tenants), open, "every leased handle stays open until the job scope drains")
 		jobScope.ReleaseAll()
 	})
+}
+
+const (
+	knownTenantID     = "acme"
+	unknownTenantID   = "ghost"
+	malformedTenantID = "Bad_ID"
+)
+
+type unknownTenantRequest struct{}
+
+// accessorModule exposes each per-tenant accessor on a raw route, which returns the
+// accessor's error as is, and on a typed route, which returns it through the door.
+type accessorModule struct{ deps *ModuleDeps }
+
+func (m *accessorModule) Name() string                { return "accessors" }
+func (m *accessorModule) Init(deps *ModuleDeps) error { m.deps = deps; return nil }
+func (m *accessorModule) Shutdown() error             { return nil }
+
+func (m *accessorModule) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
+	accessors := []struct {
+		kind string
+		use  func(context.Context) error
+	}{
+		{"db", func(ctx context.Context) error { _, err := m.deps.DB(ctx); return err }},
+		{"cache", func(ctx context.Context) error { _, err := m.deps.Cache(ctx); return err }},
+		{"messaging", func(ctx context.Context) error { _, err := m.deps.Messaging(ctx); return err }},
+	}
+	for _, a := range accessors {
+		r.Add(http.MethodGet, "/raw/"+a.kind, func(c server.HandlerContext) error {
+			if err := a.use(c.RequestContext()); err != nil {
+				return err
+			}
+			return c.JSON(http.StatusOK, map[string]string{"ok": a.kind})
+		})
+		server.GET(hr, r, "/typed/"+a.kind, func(_ unknownTenantRequest, c server.HandlerContext) (server.Result[string], server.IAPIError) {
+			if err := a.use(c.RequestContext()); err != nil {
+				return server.Result[string]{}, server.NewUnknownTenantError(err)
+			}
+			return server.Result[string]{Data: a.kind}, nil
+		})
+	}
+}
+
+// contractStore is a dynamic store keeping the contract: an unknown key wraps the sentinel.
+type contractStore struct{ *config.TenantStore }
+
+func (contractStore) DBConfig(_ context.Context, key string) (*config.DatabaseConfig, error) {
+	if key == knownTenantID {
+		return &config.DatabaseConfig{Type: config.PostgreSQL, Host: localHost, Database: key}, nil
+	}
+	return nil, fmt.Errorf("%w: no secret for this tenant", multitenant.ErrUnknownTenant)
+}
+
+func (contractStore) IsDynamic() bool { return true }
+
+// startTenantApp runs a real App on loopback: header resolver, app.env production, app.debug
+// off. A nil store means the built-in store serving knownTenantID only.
+func startTenantApp(t *testing.T, store TenantStore, opts *Options) string {
+	t.Helper()
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Version: "1.0.0", Env: config.EnvProduction},
+		Log:         config.LogConfig{Level: "error"},
+		Multitenant: config.MultitenantConfig{Enabled: true, Resolver: config.ResolverConfig{Type: config.ResolverTypeHeader}},
+	}
+	cfg.Server.Host, cfg.Server.Port = "127.0.0.1", testutil.ReserveFreePort(t)
+	cfg.Server.Timeout = config.TimeoutConfig{Read: probeRunDeadline, Write: 2 * probeRunDeadline, Middleware: probeRunDeadline, Shutdown: probeRunDeadline}
+	if store != nil {
+		cfg.Source.Type = config.SourceTypeDynamic
+	} else {
+		cfg.Multitenant.Tenants = map[string]config.TenantEntry{knownTenantID: {
+			Database:  config.DatabaseConfig{Type: config.PostgreSQL, Host: localHost, Port: 5432, Database: knownTenantID, Username: knownTenantID},
+			Messaging: config.TenantMessagingConfig{URL: "amqp://" + localHost},
+			Cache:     config.CacheConfig{Enabled: true, Type: "redis", Redis: config.RedisConfig{Host: localHost, Port: 6379}},
+		}}
+	}
+	sig := newQuitSignalHandler()
+	opts.SignalHandler, opts.ResourceSource = sig, store
+	opts.DatabaseConnector = func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+		return dbtesting.NewTestDB(config.PostgreSQL), nil
+	}
+	opts.MessagingClientFactory = func(string, logger.Logger) messaging.AMQPClient {
+		client := testmocks.NewMockAMQPClient()
+		client.On("Close").Return(nil)
+		return client
+	}
+	a, _, err := NewWithConfig(cfg, opts)
+	require.NoError(t, err)
+	require.NoError(t, a.RegisterModule(&accessorModule{}))
+	done := runInBackground(a)
+	t.Cleanup(func() {
+		sig.requestShutdown(t)
+		assert.NoError(t, awaitRun(t, done))
+	})
+	base := fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port)
+	require.Eventually(t, func() bool {
+		code, _, err := fetch(probeRunClient(), base+"/health")
+		return err == nil && code == http.StatusOK
+	}, probeRunDeadline, 10*time.Millisecond, "the listener never came up")
+	return base
+}
+
+// tenantGet sends GET url as tenant and decodes the envelope.
+func tenantGet(t *testing.T, url, tenant string) (int, server.APIResponse) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set(server.HeaderXTenantID, tenant)
+	resp, err := probeRunClient().Do(req)
+	require.NoError(t, err)
+	defer func() { assert.NoError(t, resp.Body.Close()) }()
+	var env server.APIResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+	return resp.StatusCode, env
+}
+
+func TestUnknownTenantAccessorsAnswer400(t *testing.T) {
+	tests := []struct {
+		name      string
+		store     TenantStore
+		path      string
+		skipKnown bool // true where the known tenant would dial a real Redis
+	}{
+		{name: "raw_db_accessor", path: "/raw/db"},
+		{name: "raw_cache_accessor_builtin_connector", path: "/raw/cache", skipKnown: true},
+		{name: "raw_messaging_accessor_per_tenant", path: "/raw/messaging"},
+		{name: "typed_db_accessor", path: "/typed/db"},
+		{name: "typed_stub_store_error", store: contractStore{config.NewTenantStore(&config.Config{})}, path: "/typed/db"},
+	}
+	shared := startTenantApp(t, nil, &Options{})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base := shared
+			if tc.store != nil {
+				base = startTenantApp(t, tc.store, &Options{})
+			}
+
+			status, env := tenantGet(t, base+tc.path, unknownTenantID)
+
+			assert.Equal(t, http.StatusBadRequest, status)
+			assert.Equal(t, &server.APIErrorResponse{Code: "BAD_REQUEST", Message: "Invalid tenant"}, env.Error)
+			if !tc.skipKnown {
+				status, env = tenantGet(t, base+tc.path, knownTenantID)
+				assert.Equal(t, http.StatusOK, status, "%+v", env.Error)
+			}
+		})
+	}
+}
+
+func TestUnknownTenantTypedAndRawAnswersMatchMalformed(t *testing.T) {
+	base := startTenantApp(t, nil, &Options{})
+	seatStatus, seat := tenantGet(t, base+"/raw/db", malformedTenantID)
+	require.Equal(t, http.StatusBadRequest, seatStatus)
+	require.NotNil(t, seat.Error)
+	require.Contains(t, seat.Meta, "timestamp")
+	seatMetaKeys := slices.Sorted(maps.Keys(seat.Meta))
+
+	for _, path := range []string{"/typed/db", "/raw/db"} {
+		status, env := tenantGet(t, base+path, unknownTenantID)
+
+		assert.Equal(t, seatStatus, status, path)
+		assert.Equal(t, seat.Error, env.Error, path)
+		metaKeys := slices.Sorted(maps.Keys(env.Meta))
+		assert.Equal(t, seatMetaKeys, metaKeys, path)
+		assert.Subset(t, []string{"timestamp", "traceId"}, metaKeys, "%s: framework meta keys only", path)
+	}
+}
+
+func TestKnownAndMalformedTenantAnswersUnchanged(t *testing.T) {
+	var unknownDials atomic.Int32
+	dialing := Options{CacheConnector: func(_ context.Context, key string) (cache.Cache, error) {
+		if key == unknownTenantID {
+			unknownDials.Add(1)
+		}
+		return cachetesting.NewMockCache(), nil
+	}}
+	tests := []struct {
+		name, path, tenant string
+		opts               *Options
+		want               int
+	}{
+		{name: "known_tenant_answers_200", path: "/raw/db", tenant: knownTenantID, want: http.StatusOK},
+		{name: "malformed_tenant_answers_400", path: "/raw/db", tenant: malformedTenantID, want: http.StatusBadRequest},
+		{name: "custom_cache_connector_still_dials", path: "/raw/cache", tenant: unknownTenantID, opts: &dialing, want: http.StatusOK},
+	}
+	shared := startTenantApp(t, nil, &Options{})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base := shared
+			if tc.opts != nil {
+				base = startTenantApp(t, nil, tc.opts)
+			}
+			status, env := tenantGet(t, base+tc.path, tc.tenant)
+
+			assert.Equal(t, tc.want, status)
+			if tc.want == http.StatusBadRequest {
+				assert.Equal(t, &server.APIErrorResponse{Code: "BAD_REQUEST", Message: "Invalid tenant"}, env.Error)
+			}
+		})
+	}
+	assert.Equal(t, int32(1), unknownDials.Load(), "a custom CacheConnector still serves the unknown tenant")
 }

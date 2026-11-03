@@ -71,6 +71,11 @@ There is no framework module, no `ModuleDeps` slot, and no global registration: 
 builds its own `Verifier` in `Init`, attaches the middleware to the route groups that need
 it, and closes the verifier in `Shutdown`.
 
+A tenant-owned route family (`server.TenantOwnedGroup`,
+[ADR-164](adr_164_tenant_owned_route_family.md)) is the exception: put
+`auth.Middleware` in the family's `Authenticate` steps, not on a group, and let
+`auth.TenantClaim("tid")` read the family's tenant from the verified credential.
+
 ```go
 package orders
 

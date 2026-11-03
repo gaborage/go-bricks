@@ -525,6 +525,19 @@ func (l *capturingLogger) warned(substr string) bool {
 	return false
 }
 
+// warnsContaining returns, in order, every WARN line whose message contains substr.
+func (l *capturingLogger) warnsContaining(substr string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, w := range l.warns {
+		if strings.Contains(w, substr) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 func (l *capturingLogger) Warn() logger.LogEvent         { return &capturingEvent{sink: l} }
 func (l *capturingLogger) Info() logger.LogEvent         { return &capturingEvent{} }
 func (l *capturingLogger) Error() logger.LogEvent        { return &capturingEvent{} }

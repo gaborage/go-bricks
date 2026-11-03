@@ -1,11 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -68,7 +73,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			capturer := &capturingLogger{}
 			e := newTenantTestEcho()
-			e.Use(tenantMiddlewareEcho(tc.resolver, nil, capturer))
+			e.Use(tenantMiddlewareEcho(tc.resolver, nil, nil, capturer))
 			e.GET("/tenant-check", func(c *echo.Context) error {
 				return c.String(http.StatusOK, "ok")
 			})
@@ -99,7 +104,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 	resolver := &fixedTenantResolver{tenantID: "", err: nil}
 	e := newTenantTestEcho()
-	e.Use(tenantMiddlewareEcho(resolver, nil, nil))
+	e.Use(tenantMiddlewareEcho(resolver, nil, nil, nil))
 	e.GET("/tenant-check", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -118,7 +123,7 @@ func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 // log escaped on both logger paths.
 func TestTenantRejectionLogEscapesRequestValues(t *testing.T) {
 	assertRejectionLogEscapesRequestValues(t, func(l logger.Logger, c *echo.Context) {
-		logTenantRejection(l, c, nil)
+		logTenantRejection(l, c, tenantRejectionReason(nil), c.Request().URL.Path)
 	})
 }
 
@@ -168,4 +173,218 @@ func TestTenantMiddlewareNilSkipperResolvesEveryRoute(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "with a tenant header the same request resolves")
+}
+
+// newTenantServer is a Server resolving the tenant from X-Tenant-ID, or from path segment 1.
+func newTenantServer(resolverType string, testLog *testLogger) *Server {
+	cfg := newTestConfig("", "", "")
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = resolverType
+	cfg.Multitenant.Resolver.Path.Segment = 1
+	return New(cfg, testLog)
+}
+
+// serveTenant sends GET path for tenant and decodes the envelope.
+func serveTenant(t *testing.T, srv *Server, path, tenant string) (int, APIResponse) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, observedRequest(http.MethodGet, path, tenant, nil))
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), rec.Body.String())
+	return rec.Code, resp
+}
+
+type unknownTenantReq struct{}
+
+func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
+	storeErr := unknownTenantStoreErr(t)
+	tests := []struct {
+		name     string
+		resolver string
+		typed    bool
+		cause    error
+	}{
+		{name: "raw_header_resolver", resolver: config.ResolverTypeHeader, cause: storeErr},
+		{name: "raw_path_resolver", resolver: config.ResolverTypePath, cause: storeErr},
+		{name: "typed_header_resolver", resolver: config.ResolverTypeHeader, typed: true, cause: storeErr},
+		{name: "typed_path_resolver", resolver: config.ResolverTypePath, typed: true, cause: storeErr},
+		{name: "typed_misused_door_logs_error", resolver: config.ResolverTypeHeader, typed: true, cause: errors.New("secrets manager: request timed out")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testLog := &testLogger{}
+			srv := newTenantServer(tc.resolver, testLog)
+			route, path := "/orders", "/orders"
+			if tc.resolver == config.ResolverTypePath {
+				route, path = "/:tenant/orders", "/"+unknownTenantID+"/orders"
+			}
+			if tc.typed {
+				hr := NewHandlerRegistry(srv.cfg, WithLogger(testLog))
+				GET(hr, srv.ModuleGroup(), route, func(unknownTenantReq, HandlerContext) (Result[string], IAPIError) {
+					return Result[string]{}, NewUnknownTenantError(tc.cause)
+				})
+			} else {
+				srv.ModuleGroup().Add(http.MethodGet, route, func(HandlerContext) error { return tc.cause })
+			}
+
+			status, _ := serveTenant(t, srv, path, unknownTenantID)
+
+			warns, unhandled := splitTenantRefusalLogs(testLog.logEntries())
+			if !errors.Is(tc.cause, multitenant.ErrUnknownTenant) {
+				assert.Equal(t, http.StatusInternalServerError, status)
+				assert.Empty(t, warns)
+				assert.Len(t, unhandled, 1, "a misused door is a server fault, logged once")
+				return
+			}
+			assert.Equal(t, http.StatusBadRequest, status)
+			assert.Empty(t, unhandled, "an unknown tenant is not an unhandled error")
+			require.Len(t, warns, 1, "exactly one WARN per refusal")
+			assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
+			assert.Contains(t, warns[0].msg, "status=400")
+			assert.Contains(t, warns[0].msg, fmt.Sprintf("path=%q", route), "the route template, never the URL")
+			for _, field := range append([]string{warns[0].msg}, slices.Collect(maps.Values(warns[0].values))...) {
+				assert.NotContains(t, field, unknownTenantID, "the tenant ID never reaches the line")
+				assert.NotContains(t, field, "configuration not found", "the error text never reaches the line")
+			}
+		})
+	}
+}
+
+// splitTenantRefusalLogs splits entries into tenant-refusal WARNs and unhandled-error lines.
+func splitTenantRefusalLogs(entries []testLogEntry) (warns, unhandled []testLogEntry) {
+	for _, e := range entries {
+		if e.level == "warn" && strings.HasPrefix(e.msg, "[server.tenant]") {
+			warns = append(warns, e)
+		}
+		if e.msg == "unhandled error" {
+			unhandled = append(unhandled, e)
+		}
+	}
+	return warns, unhandled
+}
+
+// TestUnknownTenantRefusalNilLoggerFallsBackToStdlib covers public WrapHandler, which threads
+// a nil logger: a misused door still leaves its unhandled-error line, type only.
+func TestUnknownTenantRefusalNilLoggerFallsBackToStdlib(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/orders", http.NoBody)
+	c := echo.New().NewContext(req, httptest.NewRecorder())
+
+	logUnknownTenantRefusal(NewUnknownTenantError(errors.New("dial tcp 10.0.0.7: refused")), c, nil, false)
+
+	assert.Contains(t, buf.String(), "ERROR unhandled error")
+	assert.Contains(t, buf.String(), "error_type=*errors.errorString")
+	assert.NotContains(t, buf.String(), "10.0.0.7", "outside debug the error text stays out")
+}
+
+// TestTenantSeatRefusesOffGrammarID pins the seat built by New: a header-resolved ID
+// outside the tenant-ID grammar is refused before any module route runs.
+func TestTenantSeatRefusesOffGrammarID(t *testing.T) {
+	cfg := newTestConfig("", "", "")
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = config.ResolverTypeHeader
+	srv := New(cfg, &testLogger{})
+	srv.echo.GET("/api/orders", okEchoHandler)
+
+	tests := []struct {
+		name       string
+		tenant     string
+		wantStatus int
+	}{
+		{name: "uppercase", tenant: "Acme", wantStatus: http.StatusBadRequest},
+		{name: "underscore", tenant: "acme_1", wantStatus: http.StatusBadRequest},
+		{name: "dot", tenant: "acme.prod", wantStatus: http.StatusBadRequest},
+		{name: "colon", tenant: "named:primary", wantStatus: http.StatusBadRequest},
+		{name: "slash", tenant: "acme/prod", wantStatus: http.StatusBadRequest},
+		{name: "over_64_bytes", tenant: strings.Repeat("a", 65), wantStatus: http.StatusBadRequest},
+		{name: "max_64_bytes", tenant: strings.Repeat("a", 64), wantStatus: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+
+			srv.echo.ServeHTTP(rec, observedRequest(http.MethodGet, "/api/orders", tt.tenant, nil))
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			if tt.wantStatus == http.StatusOK {
+				return
+			}
+			var resp APIResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.NotNil(t, resp.Error)
+			assert.Equal(t, "BAD_REQUEST", resp.Error.Code)
+			assert.Equal(t, "Invalid tenant", resp.Error.Message)
+		})
+	}
+}
+
+// TestTenantSeatSkipsOwnedPrefix pins, through New with the header resolver, that the tenant
+// seat skips exactly the requests whose matched route template a tenant-owned family owns,
+// leaving seatSkippedKey for the family to find, and resolves every other route as before.
+func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
+	const (
+		familyID = "partner-tenant"
+		seatID   = "acme"
+	)
+	tests := []struct {
+		name       string
+		path       string
+		seatHeader string
+		wantStatus int
+		wantFamily bool   // the family's Tenant step ran and found the seat's evidence
+		wantBody   string // the tenant the handler saw, when one answered
+	}{
+		{name: "static_route", path: "/partner/v2/orders", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		{name: "param_route", path: "/partner/v2/orders/42", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		{name: "wildcard_route", path: "/partner/v2/files/a/b.txt", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		// The seat keys on the matched template: a spelling no route registers lands in the
+		// family's catch-all, and the family, not the seat, answers 404.
+		{name: "percent_encoded_spelling", path: "/partner/v2/%6Frders", wantStatus: http.StatusNotFound, wantFamily: true},
+		{name: "bare_prefix_route", path: "/partner/v2", wantStatus: http.StatusOK, wantFamily: true, wantBody: familyID},
+		{name: "unknown_sub_path", path: "/partner/v2/nowhere", wantStatus: http.StatusNotFound, wantFamily: true},
+		{name: "segment_sibling_not_skipped", path: "/partner/v20", wantStatus: http.StatusBadRequest},
+		{name: "non_family_route_resolves", path: "/orders", seatHeader: seatID, wantStatus: http.StatusOK, wantBody: seatID},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTenantFamilyServer(t, "")
+			testLog, ok := srv.logger.(*testLogger)
+			require.True(t, ok)
+
+			var familyRan, evidence bool
+			policy := TenantPolicy{Tenant: func(c HandlerContext) (string, error) {
+				familyRan = true
+				evidence, _ = c.Get(seatSkippedKey).(bool)
+				return familyID, nil
+			}}
+			family := TenantOwnedGroup(srv.ModuleGroup(), "/partner/v2", policy)
+			for _, path := range []string{"", "/orders", "/orders/:id", "/files/*"} {
+				family.Add(http.MethodGet, path, echoTenant)
+			}
+			srv.ModuleGroup().Add(http.MethodGet, "/orders", echoTenant)
+			srv.ModuleGroup().Add(http.MethodGet, "/partner/v20", echoTenant)
+
+			rec := requireObservedStatus(t, srv, observedRequest(http.MethodGet, tc.path, tc.seatHeader, nil), tc.wantStatus)
+			assert.Equal(t, tc.wantFamily, familyRan, "the family's own steps run exactly on its routes")
+			assert.Equal(t, tc.wantFamily, evidence, "the seat leaves its evidence exactly where it skipped")
+			if tc.wantBody != "" {
+				assert.Equal(t, tc.wantBody, rec.Body.String())
+			}
+			wantWarns := 0
+			if tc.wantStatus == http.StatusBadRequest {
+				wantWarns = 1
+			}
+			warns, _ := splitTenantRefusalLogs(testLog.logEntries())
+			assert.Len(t, warns, wantWarns, "the seat answers, and logs, only a route no family owns")
+		})
+	}
+}
+
+// echoTenant answers 200 with the tenant on the request context, "" for none.
+func echoTenant(c HandlerContext) error {
+	tenantID, _ := multitenant.GetTenant(c.RequestContext())
+	return c.String(http.StatusOK, tenantID)
 }

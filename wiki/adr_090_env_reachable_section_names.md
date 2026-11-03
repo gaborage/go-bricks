@@ -58,6 +58,15 @@ un-addressable.
    this check and would still be refused by the resolver at request time. Whether a hyphenated
    name is *settable* depends on the runtime — Docker and Kubernetes permit `-` in variable names,
    POSIX `export` does not — which the docs state and the framework does not police.
+
+   > **Amended (2026-10-31, #2227, by [ADR-162](adr_162_tenant_id_grammar_is_fixed.md)):** the
+   > premise that `config` cannot import the resolver's grammar is retired. The grammar now lives in
+   > `multitenant`, which does not import `config`. A static `multitenant.tenants` key also passes
+   > `multitenant.ValidateTenantID` after this section-name check, so the 64-byte bound is now shared
+   > and a longer key fails startup instead of being refused at request time. This check's messages
+   > still win for `.`, `_` and uppercase. `internal/keyname` stays the first gate for tenant keys
+   > and the only one for `databases` and `keystore.keys`. §5 is unchanged.
+
 5. **Dynamic tenant sources are not validated here.** Their IDs arrive at request time and
    the resolver's own `^[a-z0-9-]{1,64}$` is their gate; the static-source gate in
    `checkMultitenant` is what keeps them out of this check.

@@ -63,7 +63,7 @@ func TestMaskedPathForeignEngine(t *testing.T) {
 }
 
 // echoParameters is the independent oracle: the Parameters a plain echo router reports for
-// template, the wildcard spelled "*" (echo v5.4.2 router.go:545).
+// template, the wildcard spelled "*" (echo v5.4.4 router.go:546).
 func echoParameters(t *testing.T, template string) []string {
 	t.Helper()
 	ri, err := echo.NewRouter(echo.RouterConfig{}).Add(echo.Route{Method: http.MethodGet, Path: template, Handler: okEchoHandler})

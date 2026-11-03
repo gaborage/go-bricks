@@ -25,6 +25,9 @@ type ModuleRegistry struct {
 	// framework span; a closing span ends the last module), which attribute ModuleName on
 	// the route table handed to Options.PostRegisterRoutes.
 	routeSpans []routeSpan
+	// globalMiddlewareSources are the GlobalMiddleware implementers of the last
+	// CollectGlobalMiddleware, in registration order.
+	globalMiddlewareSources []globalMiddlewareSource
 }
 
 // NewModuleRegistry creates a new module registry with the given dependencies.
@@ -162,6 +165,12 @@ func (r *ModuleRegistry) checkDatabaseRequirement(module Module) error {
 // meter from deps are also threaded into the registry so JOSE failures get audit-grade
 // structured logs and OTEL telemetry. Routes without jose tags are unaffected.
 func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
+	r.registerRoutes(registrar, nil)
+}
+
+// registerRoutes is RegisterRoutes; each span also records how many tenant-owned families
+// `families` had built when it began (0 when `families` is nil).
+func (r *ModuleRegistry) registerRoutes(registrar server.RouteRegistrar, families tenantFamilyLister) {
 	opts := []server.HandlerRegistryOption{}
 	if r.deps.KeyStore != nil {
 		opts = append(opts, server.WithJOSEResolver(jose.NewKeyStoreResolver(r.deps.KeyStore)))
@@ -194,11 +203,11 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 			Str("module", module.Name()).
 			Msg("Registering module routes")
 
-		spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count()})
+		spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count(), families: familyCount(families)})
 		rr.RegisterRoutes(handlerRegistry, registrar)
 	}
 	// A closing span with no module ends the last module's range where this loop ended.
-	spans = append(spans, routeSpan{start: server.DefaultRouteRegistry.Count()})
+	spans = append(spans, routeSpan{start: server.DefaultRouteRegistry.Count(), families: familyCount(families)})
 	r.routeSpans = spans[1:]
 
 	if logRoutes {
@@ -234,6 +243,16 @@ func routeListenerLabel(listener string) string {
 type routeSpan struct {
 	module string
 	start  int
+	// families is the server's tenant-owned family count when the span began.
+	families int
+}
+
+// familyCount is how many tenant-owned route families families has built so far; 0 when nil.
+func familyCount(families tenantFamilyLister) int {
+	if families == nil {
+		return 0
+	}
+	return len(families.TenantFamilyPrefixes())
 }
 
 // routeLogEntry is the flattened, logger-free result of resolving spans against
@@ -294,18 +313,41 @@ func (r *ModuleRegistry) routesSince(start int) []server.RouteDescriptor {
 
 // CollectGlobalMiddleware gathers middleware from modules that implement
 // GlobalMiddlewareRegisterer, in registration order. Modules without global middleware are
-// silently skipped.
+// silently skipped. Each implementer's installable (non-nil) count is recorded for the
+// tenant-family check.
 func (r *ModuleRegistry) CollectGlobalMiddleware() []server.MiddlewareFunc {
 	var mws []server.MiddlewareFunc
+	var sources []globalMiddlewareSource
 	for _, module := range r.modules {
 		if gm, ok := module.(GlobalMiddlewareRegisterer); ok {
 			r.logger.Info().
 				Str("module", module.Name()).
 				Msg("Collecting module global middleware")
-			mws = append(mws, gm.GlobalMiddleware()...)
+			got := gm.GlobalMiddleware()
+			sources = append(sources, globalMiddlewareSource{module: module.Name(), installed: installableCount(got)})
+			mws = append(mws, got...)
 		}
 	}
+	r.globalMiddlewareSources = sources
 	return mws
+}
+
+// globalMiddlewareSource is one GlobalMiddleware implementer and how many of its entries the
+// server installs.
+type globalMiddlewareSource struct {
+	module    string
+	installed int
+}
+
+// installableCount counts the entries the server installs; it skips nil ones.
+func installableCount(mws []server.MiddlewareFunc) int {
+	n := 0
+	for _, m := range mws {
+		if m != nil {
+			n++
+		}
+	}
+	return n
 }
 
 // DeclareMessaging calls DeclareMessaging on modules that implement MessagingDeclarer.

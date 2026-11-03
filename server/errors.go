@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 
 	"github.com/labstack/echo/v5"
+
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // stackFrameDepth caps the number of stack frames captured per error.
@@ -253,6 +255,39 @@ func NewBadRequestError(message string) *BadRequestError {
 	return &BadRequestError{
 		BaseAPIError: NewBaseAPIError(errCodeBadRequest, message, http.StatusBadRequest),
 	}
+}
+
+// UnknownTenantError is the refusal for a well-formed tenant the deployment does not serve.
+type UnknownTenantError struct {
+	*BaseAPIError
+	cause error
+}
+
+// Error implements the error interface.
+func (e *UnknownTenantError) Error() string {
+	return e.BaseAPIError.Error()
+}
+
+// Unwrap returns the cause, so errors.Is and errors.As see through the refusal.
+func (e *UnknownTenantError) Unwrap() error {
+	return e.cause
+}
+
+// NewUnknownTenantError refuses a request for a tenant the deployment does not serve.
+// Fail-closed: only a cause that errors.Is multitenant.ErrUnknownTenant answers 400
+// "Invalid tenant"; any other cause (nil, an outage) answers 500, so any accessor
+// error in a typed handler is safe to pass:
+//
+//	db, err := deps.DB(ctx)
+//	if err != nil {
+//		return server.Result[R]{}, server.NewUnknownTenantError(err)
+//	}
+func NewUnknownTenantError(cause error) *UnknownTenantError {
+	code, msg, status := errCodeInternalError, msgInternalErrorProd, http.StatusInternalServerError
+	if errors.Is(cause, multitenant.ErrUnknownTenant) {
+		code, msg, status = errCodeBadRequest, msgInvalidTenant, http.StatusBadRequest
+	}
+	return &UnknownTenantError{BaseAPIError: NewBaseAPIError(code, msg, status), cause: cause}
 }
 
 // ServiceUnavailableError represents service unavailable errors.

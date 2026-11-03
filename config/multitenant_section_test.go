@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -770,6 +771,60 @@ func TestCheckMultitenantTenantEntryAcceptsReachableIDs(t *testing.T) {
 	for _, id := range []string{"acme-corp", "acme", "t1"} {
 		t.Run(id, func(t *testing.T) {
 			require.NoError(t, checkMultitenantTenantEntry(id, &TenantEntry{}))
+		})
+	}
+}
+
+func TestValidateRefusesOverlongStaticTenantKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		wantErr bool
+	}{
+		{name: "over_64_bytes", key: strings.Repeat("a", 65), wantErr: true},
+		{name: "max_64_bytes", key: strings.Repeat("a", 64)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := staticMultitenantFixture()
+			cfg.Multitenant.Tenants[tt.key] = TenantEntry{Database: createValidDatabaseConfig()}
+
+			err := Validate(cfg)
+
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, "multitenant.tenants."+tt.key, cfgErr.Field)
+			require.ErrorContains(t, err, "rename")
+			assert.ErrorContains(t, err, "65 bytes")
+		})
+	}
+}
+
+// TestStaticTenantKeyRefusalMessagesUnchanged pins the check order: the earlier, more
+// specific refusals keep their messages, and only the length bound is the grammar's.
+func TestStaticTenantKeyRefusalMessagesUnchanged(t *testing.T) {
+	tests := []struct {
+		name      string
+		tenantID  string
+		wantField string
+		wantMsg   string
+	}{
+		{name: "uppercase", tenantID: "Acme", wantField: "multitenant.tenants.Acme", wantMsg: "is not reachable by an environment variable"},
+		{name: "underscore", tenantID: "acme_1", wantField: "multitenant.tenants.acme_1", wantMsg: "is not reachable by an environment variable"},
+		{name: "dot", tenantID: "acme.prod", wantField: fieldMultitenantTenants, wantMsg: "cannot contain '.'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkMultitenantTenantEntry(tt.tenantID, &TenantEntry{})
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Message, tt.wantMsg)
 		})
 	}
 }

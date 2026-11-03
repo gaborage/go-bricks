@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -12,6 +14,12 @@ const (
 	notConfiguredErrMsg  = "not configured"
 	notEnabledErrMsg     = "not enabled"
 )
+
+// unknownTenant marks a key absent from the store so errors.Is matches
+// multitenant.ErrUnknownTenant while errors.As still reaches the *ConfigError.
+func unknownTenant(cfgErr *ConfigError) error {
+	return fmt.Errorf("%w: %w", multitenant.ErrUnknownTenant, cfgErr)
+}
 
 // NamedDatabasePrefix is the key prefix used to identify named database lookups.
 // When DBConfig receives a key starting with this prefix, it looks up the named
@@ -104,7 +112,7 @@ func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, 
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return nil, NewMultiTenantError(key, fieldDatabase, configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s.database section or verify dynamic tenant source", key))
+		return nil, unknownTenant(NewMultiTenantError(key, fieldDatabase, configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s.database section or verify dynamic tenant source", key)))
 	}
 
 	return &tenant.Database, nil
@@ -128,7 +136,7 @@ func (s *TenantStore) BrokerURL(_ context.Context, key string) (string, error) {
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return "", NewMultiTenantError(key, "tenant", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key))
+		return "", unknownTenant(NewMultiTenantError(key, "tenant", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key)))
 	}
 
 	if tenant.Messaging.URL == "" {
@@ -155,7 +163,7 @@ func (s *TenantStore) CacheConfig(_ context.Context, key string) (*CacheConfig, 
 	tenant, exists := s.tenants[key]
 	s.mu.RUnlock()
 	if !exists {
-		return nil, NewMultiTenantError(key, "tenant", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key))
+		return nil, unknownTenant(NewMultiTenantError(key, "tenant", configNotFoundErrMsg, fmt.Sprintf("check multitenant.tenants.%s section or verify dynamic tenant source", key)))
 	}
 
 	if !tenant.Cache.Enabled {

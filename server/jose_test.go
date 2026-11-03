@@ -223,6 +223,37 @@ func TestJOSEPostTrustErrorIsEncrypted(t *testing.T) {
 	assert.Contains(t, envelope, "meta")
 }
 
+func TestUnknownTenantErrorOnJOSERoute(t *testing.T) {
+	f := newJOSEFixture(t)
+	testLog := &testLogger{}
+	srv := newTenantServer(config.ResolverTypeHeader, testLog)
+	hr := NewHandlerRegistry(srv.cfg, WithLogger(testLog), WithJOSEResolver(f.resolver))
+	storeErr := unknownTenantStoreErr(t)
+	POST(hr, srv.ModuleGroup(), "/tokens", func(taggedReq, HandlerContext) (taggedResp, IAPIError) {
+		return taggedResp{}, NewUnknownTenantError(storeErr)
+	})
+	compactReq := jositest.SealForTest(t, []byte(`{"pan":"test-pan-001"}`), f.peerOutbound(), f.resolver)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", strings.NewReader(compactReq))
+	req.Header.Set(echo.HeaderContentType, jose.ContentType)
+	req.Header.Set(HeaderXTenantID, unknownTenantID)
+	rec := httptest.NewRecorder()
+
+	srv.echo.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, jose.ContentType, rec.Header().Get(echo.HeaderContentType), "a post-trust refusal is sealed")
+	plainResp, _ := jositest.OpenForTest(t, rec.Body.String(), f.peerInbound(), f.resolver)
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(plainResp, &envelope))
+	errObj := joseErrorObject(t, envelope)
+	assert.Equal(t, errCodeBadRequest, errObj["code"])
+	assert.Equal(t, msgInvalidTenant, errObj["message"])
+	warns, unhandled := splitTenantRefusalLogs(testLog.logEntries())
+	require.Len(t, warns, 1, "the JOSE sink still logs the one refusal WARN")
+	assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
+	assert.Empty(t, unhandled, "an unknown tenant is not an unhandled error")
+}
+
 func TestJOSEResultWithMetaSealsEnvelope(t *testing.T) {
 	// When the handler returns ResultWithMeta on a JOSE-protected route, the sealed body
 	// is the standard APIResponse envelope ({data, meta}) — symmetric with how the JOSE

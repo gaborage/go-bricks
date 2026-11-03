@@ -59,7 +59,9 @@ type MessagingDeclarer interface {
 
 // GlobalMiddlewareRegisterer is an optional interface that modules can implement to
 // contribute middleware to the root request chain. It runs once per request after tenant
-// resolution, before handlers, and cannot be skipped per-route.
+// resolution, before handlers, and cannot be skipped per-route. Startup refuses a binary
+// that installs one beside a tenant-owned route family (ADR-164,
+// server.ErrTenantFamilyWithGlobalMiddleware).
 type GlobalMiddlewareRegisterer interface {
 	GlobalMiddleware() []server.MiddlewareFunc
 }

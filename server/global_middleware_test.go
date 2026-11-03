@@ -267,3 +267,131 @@ func TestRegisterGlobalMiddlewareGatesURLRewrittenByEarlierMiddleware(t *testing
 	assertServeCode(t, srv.echo, http.MethodGet, probeSkipHealth, http.StatusOK,
 		"the genuine probe still bypasses the gate")
 }
+
+// TestServerStartRefusesTenantFamilyWithGlobalMiddleware pins Start's backstop (ADR-164): a
+// tenant-owned route family beside installed global middleware refuses Start before either
+// bind, whichever was built first.
+func TestServerStartRefusesTenantFamilyWithGlobalMiddleware(t *testing.T) {
+	const tail = "global middleware runs before a family resolves its tenant, so it would see no tenant on the family's routes — " +
+		"attach each gate per group instead: in the family's Authenticate (before the tenant) or Use (after it), and on every other group that needs it"
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	family := func(srv *Server, prefix string) {
+		TenantOwnedGroup(srv.ModuleGroup(), prefix, fixedTenantPolicy(familySeatTenant))
+	}
+	oneFamily := "tenant-owned route family with global middleware: 1 family(ies) (/api/v1/orgs); 1 global middleware installed; " + tail
+	tests := []struct {
+		name  string
+		build func(srv *Server)
+		want  string
+	}{
+		{
+			name:  "global_middleware_then_family",
+			build: func(srv *Server) { srv.RegisterGlobalMiddleware(mw); family(srv, "/api/v1/orgs") },
+			want:  oneFamily,
+		},
+		{
+			name:  "family_then_global_middleware",
+			build: func(srv *Server) { family(srv, "/api/v1/orgs"); srv.RegisterGlobalMiddleware(mw) },
+			want:  oneFamily,
+		},
+		{
+			name: "two_families",
+			build: func(srv *Server) {
+				family(srv, "/api/v1/orgs")
+				family(srv, "/partner/v2")
+				srv.RegisterGlobalMiddleware([]MiddlewareFunc{mw, mw, mw}...)
+			},
+			want: "tenant-owned route family with global middleware: 2 family(ies) (/api/v1/orgs, /partner/v2); 3 global middleware installed; " + tail,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			tt.build(srv)
+
+			err := requireStartRefusedBeforeBind(t, srv, "Start bound and served despite a tenant-owned family beside global middleware")
+
+			require.ErrorIs(t, err, ErrTenantFamilyWithGlobalMiddleware)
+			assert.Equal(t, tt.want, err.Error())
+		})
+	}
+}
+
+// TestServerStartAllowsTenantFamilyWithoutGlobalMiddleware is P32's negative control: a family
+// alone, global middleware alone, or only nil global middleware beside a family lets Start serve.
+func TestServerStartAllowsTenantFamilyWithoutGlobalMiddleware(t *testing.T) {
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	tests := []struct {
+		name  string
+		build func(srv *Server)
+	}{
+		{name: "family_without_global_middleware", build: func(srv *Server) { buildTrespassFamily(srv) }},
+		{name: "global_middleware_without_family", build: func(srv *Server) { srv.RegisterGlobalMiddleware(mw) }},
+		{
+			name: "family_with_only_nil_global_middleware",
+			build: func(srv *Server) {
+				buildTrespassFamily(srv)
+				srv.RegisterGlobalMiddleware(nil)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			tt.build(srv)
+
+			errCh := startProbeServer(t, srv)
+
+			assert.NotNil(t, srv.BoundAddr())
+			shutdownAndDrain(t, srv, errCh)
+		})
+	}
+}
+
+// TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily pins that after Start, when
+// nothing checks again, global middleware beside a tenant-owned family panics and is never
+// installed, while a call with no family installs and a nil-only call stays a no-op.
+func TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily(t *testing.T) {
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	tests := []struct {
+		name      string
+		family    bool
+		mw        MiddlewareFunc
+		wantCount int
+		wantPanic string
+	}{
+		{
+			name: "beside_family_panics", family: true, mw: mw,
+			wantPanic: "server: global middleware registered after Start: tenant-owned route family with global middleware (" +
+				trespassFamily + "); " + tenantFamilyGlobalMiddlewareHint,
+		},
+		{name: "without_family_installs", mw: mw, wantCount: 1},
+		{name: "nil_beside_family_is_noop", family: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTrespassTestServer(t)
+			if tt.family {
+				buildTrespassFamily(srv)
+			}
+			errCh := startProbeServer(t, srv)
+			t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+			register := func() { srv.RegisterGlobalMiddleware(tt.mw) }
+
+			if tt.wantPanic != "" {
+				func() {
+					defer func() {
+						err, ok := recover().(error)
+						require.True(t, ok, "expected registration to panic with an error")
+						require.ErrorIs(t, err, ErrTenantFamilyWithGlobalMiddleware)
+						assert.EqualError(t, err, tt.wantPanic)
+					}()
+					register()
+				}()
+			} else {
+				require.NotPanics(t, register)
+			}
+			assert.Equal(t, tt.wantCount, srv.GlobalMiddlewareCount())
+		})
+	}
+}

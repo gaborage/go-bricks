@@ -109,7 +109,7 @@ func TestOutermostRecoverStopsAPreRecoverPanicReachingNetHTTP(t *testing.T) {
 	frameworkLog := &testLogger{}
 	e := echo.New()
 	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
-	e.Use(tenantMiddlewareEcho(panicTenantResolver{}, nil, frameworkLog))
+	e.Use(tenantMiddlewareEcho(panicTenantResolver{}, nil, nil, frameworkLog))
 	e.GET("/tenant", func(c *echo.Context) error { return c.String(http.StatusOK, "unreachable") })
 
 	srv := httptest.NewServer(e)

@@ -20,6 +20,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/racedetect"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -345,13 +346,19 @@ func (l *guardLogger) entryCount() int {
 }
 
 // warnCount reports how many WARN entries whose message contains msgContains the double
-// recorded, under the lock; an empty msgContains counts every WARN.
+// recorded; an empty msgContains counts every WARN.
 func (l *guardLogger) warnCount(msgContains string) int {
+	return l.countEntries("warn", msgContains)
+}
+
+// countEntries reports how many entries at level ("" for any) whose message contains
+// msgContains the double recorded, under the lock.
+func (l *guardLogger) countEntries(level, msgContains string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	n := 0
 	for _, e := range l.logs {
-		if e.level == "warn" && strings.Contains(e.msg, msgContains) {
+		if (level == "" || e.level == level) && strings.Contains(e.msg, msgContains) {
 			n++
 		}
 	}
@@ -458,9 +465,12 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 const (
 	observedHeaderTenant = "acme"
 	observedPathTenant   = "/t/globex/orders"
-	// observedOpenLimit keeps the pre-guard and the limiter on but out of reach of any
-	// row's request count, so every row except ip_preguard_denied passes both.
+	// observedOpenLimit keeps the limiter on but out of reach of any row's request count.
 	observedOpenLimit = 1_000_000
+	// observedOpenPreGuard keeps the pre-guard on and out of reach the same way, so every row
+	// except ip_preguard_denied passes both. It differs from the limiter's, so a response's
+	// X-RateLimit-* headers name the limiter that wrote them.
+	observedOpenPreGuard = 2 * observedOpenLimit
 	// observedRuns is AllocsPerRun's measured run count; it adds one warm-up call of its own.
 	observedRuns = 100
 
@@ -469,16 +479,34 @@ const (
 	warnFCCLeaf        = "[server.forwardedclientcert] leaf certificate not decoded"
 	warnIPPreGuard     = "[server.ip_preguard] request rejected"
 	warnAccessLog4xx   = "with status 4xx" // the request logger's WARN for a 4xx
+
+	observedFamilyPrefix = "/partner"        // the tenant-owned family a family server mounts
+	observedDenyHeader   = "X-Observed-Deny" // makes observedFamilyPolicy deny
 )
+
+var errObservedDeny = fmt.Errorf("observed family: %w", multitenant.ErrTenantResolutionFailed)
+
+// observedFamilyPolicy resolves observedHeaderTenant, or refuses a request carrying
+// observedDenyHeader with DenyBodyless's 403.
+func observedFamilyPolicy() TenantPolicy {
+	return TenantPolicy{Tenant: func(c HandlerContext) (string, error) {
+		if c.RequestHeader(observedDenyHeader) != "" {
+			return "", errObservedDeny
+		}
+		return observedHeaderTenant, nil
+	}}
+}
 
 // newObservedServer builds a server through New the way an observed deployment configures
 // it: OTel tracing on, the IP pre-guard and the limiter on, composite tenant resolution
 // (header, then path segment 2 under /t) and forwarded-client-cert identity. denyIP drops
 // the pre-guard threshold to 1/s (burst 2) so a client is denied once the burst is spent;
 // the caller freezes the clock (see TestObservedRequestAllocsStable) so no token ever refills.
-func newObservedServer(t *testing.T, log *guardLogger, denyIP bool) *Server {
+// family adds a tenant-owned family at observedFamilyPrefix (observedFamilyPolicy), with a
+// typed /orders and a raw /identity answering the forwarded-client-cert subject.
+func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Server {
 	t.Helper()
-	preGuard := observedOpenLimit
+	preGuard := observedOpenPreGuard
 	if denyIP {
 		preGuard = 1
 	}
@@ -510,6 +538,14 @@ func newObservedServer(t *testing.T, log *guardLogger, denyIP bool) *Server {
 	// A group with middleware gets Echo's RouteNotFound catch-all for its prefix.
 	admin := srv.ModuleGroup().Group("/admin", func(_ HandlerContext, next func() error) error { return next() })
 	GET(hr, admin, "/status", ok)
+	if family {
+		partner := TenantOwnedGroup(srv.ModuleGroup(), observedFamilyPrefix, observedFamilyPolicy())
+		GET(hr, partner, "/orders", ok)
+		partner.Add(http.MethodGet, "/identity", func(c HandlerContext) error {
+			cert, _ := ForwardedClientCertFromContext(c.RequestContext())
+			return c.String(http.StatusOK, cert.Subject)
+		})
+	}
 	return srv
 }
 
@@ -533,6 +569,7 @@ type observedRow struct {
 	name       string
 	req        *http.Request
 	denyIP     bool
+	family     bool // build the server with the tenant-owned family (newObservedServer)
 	wantStatus int
 	warn       string // substring of the only WARN sink allowed to fire, once per request
 	baseline   int
@@ -541,7 +578,7 @@ type observedRow struct {
 // measureObservedRow warms, measures and checks one row.
 func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc observedRow) {
 	log := &guardLogger{}
-	srv := newObservedServer(t, log, tc.denyIP)
+	srv := newObservedServer(t, log, tc.denyIP, tc.family)
 	// Warm one-time lazy state (and, for the denied row, spend the burst) before
 	// measuring; the last warm-up proves the row exercises the shape it names.
 	var rec *httptest.ResponseRecorder
@@ -644,6 +681,30 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 				headerClientCertSubject: {"CN=client"},
 				headerClientCertLeaf:    {"not-a-pem"},
 			}),
+		},
+		// A route outside the family on a server with one: the seat's ownership check is free.
+		{
+			name: "non_family_route_beside_family", baseline: 113, family: true, wantStatus: http.StatusOK,
+			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, nil),
+		},
+		// The seat skips the family's route, so no X-Tenant-ID: the family's steps publish.
+		{
+			name: "family_route_matched", baseline: 118, family: true, wantStatus: http.StatusOK,
+			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", nil),
+		},
+		// Deny answers the client fault with a bodyless 403, which the access logger WARNs.
+		{
+			name: "family_route_denied", baseline: 115, family: true, wantStatus: http.StatusForbidden,
+			warn: warnAccessLog4xx,
+			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", map[string][]string{
+				observedDenyHeader: {"1"},
+			}),
+		},
+		// The family's catch-all: the steps publish, then the framework 404.
+		{
+			name: "family_unknown_sub_path_not_found", baseline: 128, family: true, wantStatus: http.StatusNotFound,
+			warn: warnAccessLog4xx,
+			req:  observedRequest(http.MethodGet, observedFamilyPrefix+"/nowhere", "", nil),
 		},
 		// Rate 1/s, burst 2 under a frozen clock: the warm-ups spend the burst and no token
 		// ever refills, so every measured request is denied and WARNs.

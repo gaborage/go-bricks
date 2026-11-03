@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // TestStreamShipperIsAlwaysReady pins that the stream lane has no lane-wide pre-flight:
@@ -152,6 +153,7 @@ func TestStreamShipperAbortsOnAClosedPublisherWithoutWriting(t *testing.T) {
 
 func TestStreamShipperClassifiesItsPublishFailures(t *testing.T) {
 	confirmErr := errors.New(`publish to stream "customers" was not confirmed by the broker`)
+	offGrammarErr := multitenant.ValidateTenantID("Acme")
 	tests := []struct {
 		name       string
 		publishErr error
@@ -164,6 +166,10 @@ func TestStreamShipperClassifiesItsPublishFailures(t *testing.T) {
 		{
 			name: "stamp_conflict_is_poison", publishErr: messaging.ErrTenantStampConflict,
 			wantKind: shipPoison, wantReason: messaging.ErrTenantStampConflict.Error(),
+		},
+		{
+			name: "off_grammar_stamp_is_poison", publishErr: offGrammarErr,
+			wantKind: shipPoison, wantReason: offGrammarErr.Error(),
 		},
 		{name: "publisher_not_started_stalls_the_stream", publishErr: streams.ErrPublisherNotStarted, wantKind: shipScopeDown},
 		{name: "deadline_stalls_the_stream", publishErr: context.DeadlineExceeded, wantKind: shipScopeDown},

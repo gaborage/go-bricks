@@ -23,6 +23,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Server represents an HTTP server instance with Echo framework.
@@ -71,6 +72,9 @@ type Server struct {
 
 	// opts carries the programmatic extensions NewWithOptions received.
 	opts Options
+
+	// globalMiddleware counts the global middleware RegisterGlobalMiddleware installed.
+	globalMiddleware int
 }
 
 // probeListener is the probe listener's server and the socket it serves, stored together
@@ -263,6 +267,8 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 		probeErrs:       make(chan error, 1),
 		probeStopBudget: probeStopTimeout,
 	}
+	s.admission.engine = e
+	s.admission.log = log
 	s.closeProbeErrs = sync.OnceFunc(func() { close(s.probeErrs) })
 	if cfg.Server.Probes.Port > 0 {
 		s.probeAddr = hostPort(cfg.Server.EffectiveProbeHost(), cfg.Server.Probes.Port)
@@ -283,7 +289,7 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 	if observabilityEnabled {
 		s.setupErr = otelServerNameError(cfg.App.Name)
 	}
-	SetupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath)
+	s.admission.seated = setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath, s.admission.owns)
 
 	if s.probeAddr != "" {
 		s.probeEcho = newProbeEngine(e, cfg, log, healthRoute, readyRoute)
@@ -344,6 +350,7 @@ func newProbeEngine(app *echo.Echo, cfg *config.Config, log logger.Logger, healt
 // probe engine serves the probes at their unprefixed paths. Then the route table lists
 // the probe listener's routes, not the reservation.
 func (s *Server) registerProbeRoutes(healthPath, readyPath string) {
+	s.admission.probePaths = []string{healthPath, readyPath}
 	probes := []struct {
 		path, route, name     string
 		handler, probeHandler echo.HandlerFunc
@@ -396,7 +403,8 @@ func (s *Server) RootGroup() RouteRegistrar {
 }
 
 // RouteConflicts returns every registration this server's registrars refused (RouteConflict.Reason
-// says why), in registration order. Empty when there are none.
+// says why), in registration order. Empty when there are none. A tenant-owned trespass after
+// Start panics at registration instead and is never recorded.
 func (s *Server) RouteConflicts() []RouteConflict {
 	return s.admission.snapshot()
 }
@@ -477,7 +485,9 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 // use, outside its validity period) refuses Start before either bind.
 //
 // A refused route registration recorded on this server (RouteConflicts) refuses Start
-// before either bind with a *DuplicateRouteError, which matches ErrDuplicateRoute.
+// before either bind with a *DuplicateRouteError, which matches ErrDuplicateRoute. Global
+// middleware installed beside a tenant-owned route family refuses Start before either bind
+// with an error matching ErrTenantFamilyWithGlobalMiddleware (ADR-164).
 //
 // With observability enabled, an app.name the HTTP instrumentation cannot use as its
 // host[:port] server name refuses Start before either bind (ADR-132).
@@ -485,6 +495,7 @@ func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrServerAlreadyStarted
 	}
+	conflicts := s.admission.seal()
 	if s.stopping.Load() {
 		s.closeProbeErrs()
 		return http.ErrServerClosed
@@ -493,7 +504,11 @@ func (s *Server) Start() error {
 		s.closeProbeErrs()
 		return s.setupErr
 	}
-	if err := duplicateRouteError(s.RouteConflicts()); err != nil {
+	if err := duplicateRouteError(conflicts); err != nil {
+		s.closeProbeErrs()
+		return err
+	}
+	if err := s.tenantFamilyGlobalMiddlewareError(); err != nil {
 		s.closeProbeErrs()
 		return err
 	}
@@ -858,10 +873,20 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		return NewServiceUnavailableError("Request processing timed out")
 	}
 
-	// Already a structured API error — use as-is
+	// Already a structured API error — use as-is. A type assertion, not its own errors.As,
+	// finds the unknown-tenant refusal: an escaping target allocates on every error (ADR-026).
 	var apiErr IAPIError
 	if goerrors.As(err, &apiErr) {
+		if unknownTenant, ok := apiErr.(*UnknownTenantError); ok {
+			logUnknownTenantRefusal(unknownTenant, c, log, cfg.App.Debug)
+		}
 		return apiErr
+	}
+
+	if goerrors.Is(err, multitenant.ErrUnknownTenant) {
+		unknownTenant := NewUnknownTenantError(err)
+		logUnknownTenantRefusal(unknownTenant, c, log, cfg.App.Debug)
+		return unknownTenant
 	}
 
 	// Map echo.HTTPError, echo.HTTPStatusCoder, and untyped errors.
@@ -898,8 +923,7 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		// FilterConfig.ErrorRedactor — the seam that CAN see message content — reaches
 		// it (#1182), and Err applies the field-name filter as well, so marking `error`
 		// sensitive still masks this line. The non-debug error_type goes through Str.
-		appendErrorDetail(log.Error().Str("request_id", safeGetRequestID(c)), err, cfg.App.Debug).
-			Msg("unhandled error")
+		logUnhandledError(log, c, err, cfg.App.Debug)
 	}
 
 	code := statusToErrorCode(status)

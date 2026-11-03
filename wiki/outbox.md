@@ -214,7 +214,7 @@ the failure's class:
 | Class | Causes | Behavior |
 | --- | --- | --- |
 | **Connectivity** | broker down / not ready, **broker NACK**, confirmation timeout, per-record `publishtimeout` elapsed, missing exchange (surfaces as a synthesized NACK) | `retry_count` advances; **never** dead-lettered. The event stays `pending` and delivers once the broker recovers or the config is fixed. |
-| **Poison** | six message-intrinsic classes, each of which reads the same way every cycle: undecodable headers; an unknown `lane`; a destination past the AMQP shortstr limit (`messaging.ErrInvalidPublishDestination`); a tenant-stamp conflict (`messaging.ErrTenantStampConflict`, reachable on the AMQP **and** the stream lane, one class either way); a stream that is not an outbox target (the streams lane is unwired, or the row's stream left `outbox.superstreams`); a stream row with no `partition_key` | `retry_count` advances; once it reaches `maxretries` the event is **dead-lettered** to `status = 'failed'` and stops being retried. |
+| **Poison** | seven message-intrinsic classes, each of which reads the same way every cycle: undecodable headers; an unknown `lane`; a destination past the AMQP shortstr limit (`messaging.ErrInvalidPublishDestination`); a tenant-stamp conflict (`messaging.ErrTenantStampConflict`, reachable on the AMQP **and** the stream lane, one class either way); a stored tenant stamp off the tenant-ID grammar (`multitenant.ErrInvalidTenantID`, as a row enqueued before [ADR-162](adr_162_tenant_id_grammar_is_fixed.md) can carry, reachable on both lanes, one class either way); a stream that is not an outbox target (the streams lane is unwired, or the row's stream left `outbox.superstreams`); a stream row with no `partition_key` | `retry_count` advances; once it reaches `maxretries` the event is **dead-lettered** to `status = 'failed'` and stops being retried. |
 
 Consequences worth knowing:
 
@@ -222,7 +222,7 @@ Consequences worth knowing:
   confirm is a *transient broker condition* (disk alarm, mirror resync, node failover), not a
   statement that the message is bad — so the event is retried (at-least-once), never auto-parked.
   A permanently mis-named exchange likewise surfaces as a NACK and keeps retrying, so it delivers
-  the moment an operator creates the exchange. Auto-parking is reserved for the six deterministic,
+  the moment an operator creates the exchange. Auto-parking is reserved for the seven deterministic,
   broker-independent classes in the table above — the row itself is unpublishable, so no broker
   state can change the outcome. `deadLetterPoison` in `outbox/relay.go` carries the canonical list.
 - **An over-long destination parks rather than retrying forever.** A row whose exchange, routing key
@@ -313,8 +313,9 @@ _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
 These refusals happen at `Publish`, where the developer sees them rather than as poison rows
 cycles later: an empty `EventType` or `AggregateID`, a caller header claiming the reserved
 `x-gobricks-` prefix, naming a stream beside an exchange or routing key, naming a stream
-absent from `outbox.superstreams`, publishing a stream target with no tenant in context, and
-an AMQP destination, header KEY or event type past the 255-byte shortstr limit. A nil
+absent from `outbox.superstreams`, publishing a stream target with no tenant in context, a
+context tenant that fails the tenant-ID grammar (`multitenant.ErrInvalidTenantID`, on both
+lanes), and an AMQP destination, header KEY or event type past the 255-byte shortstr limit. A nil
 transaction or event is refused first, and a payload or header that will not marshal after
 that. The list is the ones worth designing around rather than a closed set — read
 `validateEvent` and `resolveAMQPDestination` for the current whole.
@@ -445,7 +446,12 @@ stored header: `Publish` persists it in the row, the relay strips it from the he
 `SetTenant`s the publish context with it, and the pooled publisher — the stamp's only writer
 ([ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md)) — re-stamps the frame from that
 context. A consumer still reads `x-tenant-id` as before, and a hand-written stamp in
-`OutboxEvent.Headers` is refused at `Publish` with `messaging.ErrTenantStampConflict`.
+`OutboxEvent.Headers` is refused at `Publish` with `messaging.ErrTenantStampConflict`. A context
+tenant that fails the tenant-ID grammar is refused at `Publish` with
+`multitenant.ErrInvalidTenantID` and writes no row; a row already stored under such a stamp is
+refused each cycle (on the AMQP lane before the client resolves, on the stream lane when the relay
+re-stamps it), so it parks as poison at `maxretries`
+([ADR-162](adr_162_tenant_id_grammar_is_fixed.md)).
 
 ## Relay Window Line and Metrics
 

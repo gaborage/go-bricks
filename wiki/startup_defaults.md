@@ -135,6 +135,16 @@ The error is a `*server.DuplicateRouteError` whatever the reasons: `errors.As` r
 
 There is no disable knob — a colliding route is always a startup-blocking bug, never a warning. Fix by removing or renaming the colliding route.
 
+## Tenant-Owned Route Families
+
+`server.TenantOwnedGroup` ([ADR-164](adr_164_tenant_owned_route_family.md)) mounts a route family that resolves its own tenant instead of passing the root tenant seat. Startup holds it to three refusals:
+
+- **At the call site:** `TenantOwnedGroup` panics on a misuse its own registrar, prefix, policy and configuration already show; [ADR-164's boot refusals](adr_164_tenant_owned_route_family.md#boot-refusals) list each one.
+- **Trespass:** any route, or any group carrying middleware (its own or inherited), at or below a family's prefix that did not come through the family is a `RouteConflictReasonTenantOwned` conflict, the owning module's plain registrar included. It travels in the same `*server.DuplicateRouteError` as [Duplicate Route Detection](#duplicate-route-detection). App startup refuses it before the route table hook, and `server.Start` refuses before binding.
+- **Global middleware:** any installed global middleware beside a family fails startup with `server.ErrTenantFamilyWithGlobalMiddleware` ([global_middleware.md](global_middleware.md#fail-closed-startup)).
+
+After `Start`, `TenantOwnedGroup` panics; a route or middleware-bearing group registered from outside a family at or below its prefix panics at registration with an error matching `server.ErrDuplicateRoute`, instead of being recorded where nothing reads it any more; and `RegisterGlobalMiddleware` beside a family panics instead of installing middleware that would run on the family's routes with no tenant.
+
 ## Route Table Hook
 
 `app.Options.PostRegisterRoutes func([]server.RouteDescriptor) error` lets a service veto its own route table before traffic arrives — for example, reject a route outside the versioned prefix, or a raw route (nil `RequestType`) where only typed handlers are allowed. It runs once per `App.Run`, after every module's `RegisterRoutes`, the route log and the duplicate-route check above, and before either listener opens. A non-nil error aborts startup the same way a route conflict does, wrapped as `app.Options.PostRegisterRoutes rejected the route table: <err>`. A nil hook changes nothing.
@@ -186,16 +196,27 @@ The check is a `HEAD` of the reserved `<base><ready path>` on the application li
 
 | Setting | Default | Applies to probes |
 | --- | --- | --- |
-| `app.rate.limit` | 100 rps | Yes — global limiter; a value `<= 0` disables it entirely |
+| `app.rate.limit` | 100 rps per client IP | Yes — global limiter; a value `<= 0` disables it entirely |
 | `app.rate.ippreguard.enabled` | `true` | Registers the per-IP pre-guard |
 | `app.rate.ippreguard.threshold` | 2000 rps/IP | Yes — per-IP abuse ceiling |
 
 No path is exempt from either limiter. With `server.probes.port` set, `/health` and `/ready` leave both by moving to the probe listener, which has none; on the application listener the reserved probe paths stay inside both, the `HEAD` the application-listener check sends included, and a `429` there still counts as a live listener ([ADR-120](adr_120_internal_probe_listener_and_minimal_ready_body.md)).
 
-That per-IP ceiling is only a ceiling because the client IP is derived through the trusted-proxy chain (`echo.ExtractIPFromXFFHeader` in `server.New`, plus `server.trustedproxies` for a proxy on a public address) — before [ADR-057](adr_057_trusted_proxy_ip_extraction.md) the key was the caller-written left-most `X-Forwarded-For` entry, which any client could rotate to get a fresh bucket per request.
+Those per-IP budgets are only budgets because the client IP is derived through the trusted-proxy chain (`echo.ExtractIPFromXFFHeader` in `server.New`, plus `server.trustedproxies` for a proxy on a public address) — before [ADR-057](adr_057_trusted_proxy_ip_extraction.md) the key was the caller-written left-most `X-Forwarded-For` entry, which any client could rotate to get a fresh bucket per request.
 
-Probe traffic is always keyed by **client IP**, never by tenant: the probe skipper bypasses tenant resolution for the requests the probe routes serve — the matched health/ready route, on `GET`/`HEAD`. The two limiters differ in what else lands in that same IP bucket: `app.rate.ippreguard.threshold` (`ipPreGuardEcho`) runs *before* tenant resolution and keys every request — probe or tenant-resolved — by client IP, so it is one shared per-IP budget across all traffic from that address, while `app.rate.limit` (`rateLimitEcho`) runs *after* tenant resolution and keys by the resolved **tenant ID** first, falling back to client IP only when no tenant was resolved — true for probes, but not for a tenant's own ordinary traffic, which draws on that tenant's separate budget instead.
+Both limiters key **every** request by **client IP**, probe or tenant-resolved, whatever its tenant ([ADR-160](adr_160_rate_limit_keys_on_client_ip.md)). `app.rate.ippreguard.threshold` (`ipPreGuardEcho`) runs *before* tenant resolution and `app.rate.limit` (`rateLimitEcho`) *after* it, but neither reads the tenant, so each is one shared per-IP budget across all traffic from that address.
 
-**Operational consequence.** A saturating client that shares a source IP with the prober — an L3/L4 NAT, or any hop that forwards without rewriting the client address — can push the probes themselves to `429` on the pre-guard regardless of that client's own tenant, and on the global limiter too whenever the client's traffic is itself untenanted. The two outcomes differ: a rejected `/ready` drops the instance from the load balancer's rotation, while a rejected `/health` fails one liveness probe; per the wiring documented under [Wiring Kubernetes probes](cache.md#wiring-kubernetes-probes), repeated `/health` failures — `failureThreshold` consecutive ones, not a single `429` — can restart the container, and a failing readiness probe never restarts anything. Mitigate by raising `app.rate.limit` / `app.rate.ippreguard.threshold` for that deployment, or by giving probe traffic a path to the instance that does not share a source IP with application traffic — structurally, [`server.probes.port`](#internal-probe-listener), which takes the probes out of both limiters.
+**Operational consequence.** A saturating client that shares a source IP with the prober — an L3/L4 NAT, or any hop that forwards without rewriting the client address — can push the probes themselves to `429` on either limiter, whatever that client's tenant. Before ADR-160 a tenant's own traffic drew on a separate tenant budget and spared the global limiter's probe bucket; it no longer does, so `server.probes.port` matters more. The two outcomes differ: a rejected `/ready` drops the instance from the load balancer's rotation, while a rejected `/health` fails one liveness probe; per the wiring documented under [Wiring Kubernetes probes](cache.md#wiring-kubernetes-probes), repeated `/health` failures — `failureThreshold` consecutive ones, not a single `429` — can restart the container, and a failing readiness probe never restarts anything. Mitigate by raising `app.rate.limit` / `app.rate.ippreguard.threshold` for that deployment, or by giving probe traffic a path to the instance that does not share a source IP with application traffic — structurally, [`server.probes.port`](#internal-probe-listener), which takes the probes out of both limiters.
+
+**Shared addresses and trusted proxies.** Every client behind one NAT, partner gateway or load balancer shares one bucket of each limiter, so every tenant behind such an address shares one `app.rate.limit` budget. A correct `server.trustedproxies` is load-bearing for both: a missing entry for a proxy on a public address keys the whole fleet on the proxy's address, and an over-broad entry lets a caller pick its own key through `X-Forwarded-For` ([ADR-057](adr_057_trusted_proxy_ip_extraction.md)).
+
+**Per-tenant budgets.** The framework installs no tenant-keyed limiter. `server.TenantRateLimit(rps)` keys on the context tenant with the global limiter's rate and burst derivation; attach it in the same `RouteRegistrar.Group` call as `auth.Middleware`, listed after authentication and after your tenant-authorization check:
+
+```go
+// authorizeTenant is application-supplied: it refuses a principal the resolved tenant does not admit.
+r.Group("/orders", auth.Middleware(verifier), authorizeTenant, server.TenantRateLimit(20))
+```
+
+`auth.Middleware` verifies the credential, not the tenant, so without the tenant check a credentialed caller can drain any tenant it names. A request with no tenant passes through without charging any bucket. Its `X-RateLimit-*` headers overwrite the global limiter's, so a response's headers describe the innermost limiter that ran.
 
 These are *koanf* defaults. A `*config.Config` assembled in Go rather than loaded through configuration leaves both at zero, and the global limiter is a pass-through at `<= 0` — such a deployment has no ceiling at all (see [ADR-049](adr_049_debug_endpoints_fail_closed.md)).

@@ -12,6 +12,13 @@ type routeGroup struct {
 	prefix    string
 	cfg       *config.Config // populates HandlerContext.Config in the go-bricks↔echo adapters
 	admission *routeAdmission
+	// family is non-nil on a tenant-owned family's registrar and on every Group below it.
+	family *tenantFamily
+	// familyNode holds this family registrar's own middleware; nil outside a family.
+	familyNode *familyNode
+	// carriesMiddleware is set once the echo group has middleware, its own or its parent's, and
+	// admission has recorded the group (markMiddleware).
+	carriesMiddleware bool
 }
 
 func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) *routeGroup {
@@ -36,11 +43,7 @@ func newAdmittingRouteGroup(group *echo.Group, prefix string, cfg *config.Config
 // routeAdmission.admit.
 func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descriptor *RouteDescriptor) {
 	relative := rg.relativePath(path)
-	rg.admission.admit(admittedRoute{
-		Method:     method,
-		Path:       rg.fullPathFromRelative(relative),
-		Descriptor: descriptor,
-	}, func() { rg.group.Add(method, relative, h) })
+	rg.admitRoute(method, relative, rg.fullPathFromRelative(relative), descriptor, h, nil)
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -58,11 +61,37 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 	fullPath := rg.fullPathFromRelative(relative)
 	pkg := getCallerPackage(2) // getCallerPackage → Add → module (best-effort, as typed routes)
 	reg := RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg}
-	rg.admission.admit(admittedRoute{
-		Method:     method,
-		Path:       fullPath,
-		Descriptor: modellessDescriptor(method, fullPath, reg),
-	}, func() { rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...) })
+	rg.admitRoute(method, relative, fullPath, modellessDescriptor(method, fullPath, reg), adaptHandler(handler, rg.cfg), middleware)
+}
+
+// admitRoute stamps TenantOwned (after RegisterHandler's RouteOptions, so no option forges or
+// clears it; before admit, which registers a copy) and admits the route.
+func (rg *routeGroup) admitRoute(method, relative, full string, d *RouteDescriptor, h echo.HandlerFunc, mw []MiddlewareFunc) {
+	d.TenantOwned = rg.family != nil
+	rg.admission.admit(admittedRoute{Method: method, Path: full, Descriptor: d}, func() { rg.addAdmitted(method, relative, full, h, mw) })
+}
+
+// addAdmitted adds an admitted route to rg's echo group at relative, the spelling on it of full.
+// Inside a tenant-owned family, a template holding a wildcard also gets the family's catch-all at
+// its echo node (tenantFamily.addWildcardCatchAll).
+func (rg *routeGroup) addAdmitted(method, relative, full string, h echo.HandlerFunc, mw []MiddlewareFunc) {
+	rg.group.Add(method, relative, h, rg.routeMiddleware(mw)...)
+	if rg.family != nil {
+		rg.family.addWildcardCatchAll(rg.group, relative, full)
+	}
+}
+
+// routeMiddleware returns a route's echo middleware: mw adapted, and inside a tenant-owned
+// family behind the family's steps (outermost), then each family registrar's own middleware
+// from the family root down to rg, all read now, at registration, and before the family's
+// leaf guard (innermost).
+func (rg *routeGroup) routeMiddleware(mw []MiddlewareFunc) []echo.MiddlewareFunc {
+	if rg.family == nil {
+		return rg.adaptAll(mw)
+	}
+	chain := rg.familyNode.appendChain([]echo.MiddlewareFunc{rg.family.steps})
+	chain = append(chain, rg.adaptAll(mw)...)
+	return append(chain, rg.family.guard)
 }
 
 // probeListenerDescriptor describes a probe served on the probe listener, at its unprefixed
@@ -88,18 +117,43 @@ func modellessDescriptor(method, path string, reg RouteRegistrant) *RouteDescrip
 
 func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
 	normalized := pathutil.NormalizePrefix(prefix)
-	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
-
-	return &routeGroup{
-		group:     newGroup,
-		prefix:    rg.combinePrefix(normalized),
-		cfg:       rg.cfg,
-		admission: rg.admission,
+	child := &routeGroup{prefix: rg.combinePrefix(normalized), cfg: rg.cfg, admission: rg.admission, family: rg.family}
+	if rg.family != nil {
+		// Echo's Group with middleware auto-registers a catch-all pair carrying only that
+		// middleware, replacing the family's; the child node keeps it for its routes instead.
+		child.group = rg.group.Group(normalized)
+		child.familyNode = &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)}
+		return child
 	}
+	// Marked first, so a trespass after Start panics before echo registers the group's catch-alls.
+	if rg.carriesMiddleware || len(middleware) > 0 {
+		child.markMiddleware(getCallerPackage(2))
+	}
+	child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
+	return child
 }
 
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
+	if rg.family != nil {
+		// Echo's Group.Use auto-registers a catch-all pair (see Group): the middleware reaches
+		// only routes registered after this call, through this registrar or a Group below it.
+		rg.familyNode.mw = append(rg.familyNode.mw, rg.adaptAll(middleware)...)
+		return
+	}
+	if len(middleware) > 0 {
+		rg.markMiddleware(getCallerPackage(2))
+	}
 	rg.group.Use(rg.adaptAll(middleware)...)
+}
+
+// markMiddleware records rg's group with admission the first time it carries middleware; pkg
+// called Group or Use.
+func (rg *routeGroup) markMiddleware(pkg string) {
+	if rg.carriesMiddleware {
+		return
+	}
+	rg.admission.admitGroup(rg.prefix, pkg)
+	rg.carriesMiddleware = true
 }
 
 // adaptAll converts a slice of flat MiddlewareFunc to echo middleware using the group's config.

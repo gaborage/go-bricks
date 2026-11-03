@@ -637,6 +637,15 @@ a publish error, `messaging.ErrTenantStampConflict` (re-exported as
 to the one the framework would have written is refused too: guessing right is still claiming a
 field the caller does not own.
 
+**The stamp is checked on write as on read.** A publish whose context tenant (or, with none, the
+client's pool key) fails the tenant-ID grammar `^[a-z0-9-]{1,64}$` returns an error wrapping
+`multitenant.ErrInvalidTenantID`, carrying the byte length and never the value, and nothing is
+sent: the classic and streams lanes, the typed and sealed doors, and outbox `Publish` all refuse
+it before the wire or the ledger. The grammar is fixed
+([ADR-162](adr_162_tenant_id_grammar_is_fixed.md)), so a consumer on another service never
+receives a stamp it would refuse. A control-plane publish with no tenant carries no stamp and is
+not judged.
+
 **The consumer reads it back automatically.** Before the handler runs, the delivery pipeline both
 lanes share reads the stamp, validates it against `multitenant.DefaultTenantIDPattern()`
 (`^[a-z0-9-]{1,64}$`), and puts the tenant in the handler's context — so `deps.DB(ctx)`,

@@ -62,6 +62,17 @@ routing, independent of route-registration order — dissolving the group-scopin
 Appended after the built-in chain, global middleware lands at the innermost slot: after
 tenant resolution, inside `Recover`, before the handler.
 
+**Amendment (2026-11-02, #2166).** "After tenant resolution" holds only on a route whose tenant the
+root chain resolves. A tenant-owned route family (ADR-164) resolves its tenant inside its own
+pipeline, and the root tenant seat skips its routes, so global middleware, which sits on the root
+chain, would run there with no tenant in context. Startup therefore refuses a binary in which at
+least one non-nil global middleware is installed and a tenant-owned family is built, in either
+order. After `Start`, `TenantOwnedGroup` panics, and so does `RegisterGlobalMiddleware` beside a
+family. So in a binary that passes the startup check, global middleware runs after tenant
+resolution and the Consequences below hold as written. Running global middleware inside a family's
+pipeline, after its tenant is published, would lift the refusal additively, but it would make the
+global-middleware seat a second reader of route ownership.
+
 The app invokes the server method through an optional (inline) type assertion rather than
 adding a method to the exported `ServerRunner` interface — keeping `ServerRunner`
 byte-identical and the change apidiff-additive (`feat:`).
@@ -71,7 +82,8 @@ unsafe, so the app refuses to start rather than serve unguarded traffic.
 
 ## Consequences
 
-- Auth / API-key / audit gates install once, un-skippable, with the tenant already in context.
+- Auth / API-key / audit gates install once, un-skippable, with the tenant already in context
+  (see the amendment above).
 - Runs after rate-limit / timeout / gzip / bodyLimit (innermost slot): an unauthenticated
   request still consumes rate-limit budget. This is an auth-gate hook, not a general
   "run early" hook.

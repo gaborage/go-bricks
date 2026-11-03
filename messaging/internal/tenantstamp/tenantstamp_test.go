@@ -1,6 +1,7 @@
 package tenantstamp
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"testing"
@@ -45,6 +46,43 @@ func TestResolve(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantID, id)
+		})
+	}
+}
+
+func TestResolveRefusesOffGrammarTenant(t *testing.T) {
+	tests := []struct {
+		name      string
+		ctxTenant string
+		replayKey string
+		wantID    string
+		wantErr   error
+	}{
+		{name: "context_uppercase", ctxTenant: "Acme", wantErr: multitenant.ErrInvalidTenantID},
+		{name: "context_underscore", ctxTenant: "acme_1", wantErr: multitenant.ErrInvalidTenantID},
+		{name: "context_over_64_bytes", ctxTenant: strings.Repeat("a", 65), wantErr: multitenant.ErrInvalidTenantID},
+		{name: "replay_key_uppercase", replayKey: "Acme", wantErr: multitenant.ErrInvalidTenantID},
+		{name: "context_valid", ctxTenant: testTenant, wantID: testTenant},
+		{name: "context_max_64_bytes", ctxTenant: strings.Repeat("a", 64), wantID: strings.Repeat("a", 64)},
+		{name: "replay_key_valid", replayKey: testTenant, wantID: testTenant},
+		{name: "control_plane_empty", wantID: ""},
+		{name: "conflict_beats_grammar", ctxTenant: "Acme", replayKey: "beta", wantErr: ErrConflict},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := multitenant.SetTenant(context.Background(), tt.ctxTenant)
+
+			id, err := Resolve(ctx, tt.replayKey)
+
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantID, id)
+				return
+			}
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Empty(t, id)
+			assert.NotContains(t, err.Error(), cmp.Or(tt.ctxTenant, tt.replayKey), "the error carries the byte length, never the value")
 		})
 	}
 }
