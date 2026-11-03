@@ -220,11 +220,11 @@ type PathResolver struct {
 // ResolveTenant implements TenantResolver.
 func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (string, error) {
 	_ = ctx
-	if r == nil || req == nil || r.Segment <= 0 || req.URL == nil {
+	if r == nil || req == nil || r.Segment <= 0 || req.URL == nil { //nolint:forbidigo // tenant resolution reads the raw path to extract the segment; the path never reaches a sink (#2212)
 		return "", ErrTenantResolutionFailed
 	}
 
-	path := req.URL.Path
+	path := req.URL.Path //nolint:forbidigo // tenant resolution reads the raw path to extract the segment; the path never reaches a sink (#2212)
 	normalizedPrefix := pathutil.NormalizePrefix(r.Prefix)
 	if normalizedPrefix != "" {
 		if _, ok := pathutil.StripPathPrefix(path, normalizedPrefix); !ok {

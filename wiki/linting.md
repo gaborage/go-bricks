@@ -60,8 +60,13 @@ Every entry under `linters.exclusions.rules` is a GoBricks path and means nothin
 repo — `logger/adapter.go` (zerologlint), `cmd/seal-payload/` (an importas carve-out), and
 a few rules scoped to `_test.go`. Delete them all and add your own as findings justify.
 Drop the GoBricks-internal `forbidigo` patterns too: the two ADR-083 ones
-(`trace.Span.RecordError`, `semconv.Exception*`) and `echo.New(WithConfig)` (#2212, whose
-`msg` points at the unexported `server.newEngine`). They enforce GoBricks architecture
+(`trace.Span.RecordError`, `semconv.Exception*`), `echo.New(WithConfig)`, and all three
+inbound path-door patterns (#2212): `http.Request.(URL|RequestURI|PathValue|SetPathValue)`,
+the echo v5 path/query/form reads, and `server.HandlerContext.(Param|Query|PathParams)`. Drop
+the three together, with the exclusion rules keyed to their `msg`s: the second reuses the
+first's `msg` through the YAML anchor `*pathDoorMsg`, so keeping it alone fails
+`golangci-lint config verify` with `unknown anchor`. The `echo.New` and path-door `msg`s point
+at the unexported `server.newEngine` and `server.maskedPath`. They enforce GoBricks architecture
 decisions and mean nothing outside this repo. Keep the
 `otel.(Logger|GetLoggerProvider|SetLoggerProvider)` pattern, with `analyze-types: true`, if
 your app logs through GoBricks. GoBricks registers no global LoggerProvider, so records emitted

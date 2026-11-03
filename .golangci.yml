@@ -87,6 +87,22 @@ linters:
         - pattern: ^echo\.New(WithConfig)?$
           pkg: ^github\.com/labstack/echo/v5$
           msg: build echo engines through server.newEngine (#2212) — a foreign engine has no maskingRouter, so every path it serves renders as the bare REDACTED.
+        # The inbound path door (#2212 L3): three patterns over request-URL, path, query and form
+        # reads, pinned by receiver type (net/http's Request, echo v5's Context and package
+        # funcs, and the framework's own HandlerContext path/query doors), so a variable name
+        # cannot dodge them. Repo-wide: the exclusions below lift them only for tests, the
+        # outbound-request packages, and (for the HandlerContext pattern alone) server/, which
+        # defines those doors; every other framework read carries a reasoned nolint.
+        - pattern: ^http\.Request\.(URL|RequestURI|PathValue|SetPathValue)$
+          pkg: ^net/http$
+          msg: &pathDoorMsg 'inbound path: render it through server.maskedPath (#2212) — request-URL, path, query and form values are caller-written bytes (a PAN in a segment), so a sink prints only the masked route template.'
+        - pattern: ^echo\.(Context\.(Param(Or)?|PathValues|QueryParams?|QueryParamOr|QueryString|FormValue(Or)?|FormValues|Bind|SetPath)|PathParam(Or)?|QueryParams?(Or)?|FormValues?(Or)?|Bind(PathValues|QueryParams)|(PathValues|QueryParams)Binder)$
+          pkg: ^github\.com/labstack/echo/v5$
+          msg: *pathDoorMsg
+        # Its own msg, so the server/ exclusion below can lift this pattern alone.
+        - pattern: ^server\.HandlerContext\.(Param|Query|PathParams)$
+          pkg: ^github\.com/gaborage/go-bricks/server$
+          msg: 'inbound path: a HandlerContext path/query door is for consumer handlers — framework code renders an inbound path through server.maskedPath (#2212), never the caller-written value.'
     gocognit:
       min-complexity: 15
     goconst:
@@ -229,6 +245,27 @@ linters:
           - forbidigo
         path: server/router_test\.go
         text: 'use of `echo\.New'
+      # The inbound path door binds all framework code except where a request URL is not an
+      # inbound path: httpclient/ (the request the client sends and its redirects),
+      # migration/source/ (a source URL it fetches), auth/jwks.go (the JWKS fetch request),
+      # auth/testing/ (the stub issuer's own handler), and tests, which build and assert the
+      # requests they send. server/ is lifted for the HandlerContext pattern only, since it
+      # defines those doors; its URL and echo reads stay forbidden. multitenant/resolver.go
+      # reads inbound paths and carries a reasoned nolint instead. forbidigo's issue text
+      # quotes the source spelling (`req.URL`), not the type-expanded name, so these key off
+      # the door msgs, which no other pattern carries.
+      - linters:
+          - forbidigo
+        path: (^|/)(httpclient/|migration/source/|auth/jwks\.go$|auth/testing/)
+        text: &pathDoorText 'through server\.maskedPath \(#2212\)'
+      - linters:
+          - forbidigo
+        path: _test\.go
+        text: *pathDoorText
+      - linters:
+          - forbidigo
+        path: (^|/)server/
+        text: 'a HandlerContext path/query door is for consumer handlers'
       - linters:
           - lll
         source: '^//go:generate '
