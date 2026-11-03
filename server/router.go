@@ -25,9 +25,10 @@ func newMaskingRouter() *maskingRouter {
 	return &maskingRouter{DefaultRouter: echo.NewRouter(echo.RouterConfig{AllowOverwritingRoute: true})}
 }
 
-// newEngine builds an echo engine whose router is a maskingRouter.
+// newEngine builds an echo engine whose router is a maskingRouter. It is the framework's only
+// echo engine constructor.
 func newEngine() *echo.Echo {
-	return echo.NewWithConfig(echo.Config{Router: newMaskingRouter()})
+	return echo.NewWithConfig(echo.Config{Router: newMaskingRouter()}) //nolint:forbidigo // the one allowed engine constructor
 }
 
 // Add registers route with the embedded router and learns its masked rendering from echo's own

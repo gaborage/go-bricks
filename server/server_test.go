@@ -243,6 +243,17 @@ func TestServerNewInitializesEchoAndRoutes(t *testing.T) {
 	assertHealthEndpoints(t, srv, healthRoute, testReadyRoute)
 }
 
+// TestServerEnginesUseMaskingRouter pins that both engines newServer builds, the application
+// engine and the probe listener's, carry the maskingRouter, so an echo.New() there (whose
+// foreign router renders every path as the bare maskToken) fails here.
+func TestServerEnginesUseMaskingRouter(t *testing.T) {
+	srv := newProbeTestServer(newProbeTestConfig(""), &testLogger{})
+
+	require.NotNil(t, srv.probeEcho)
+	assert.IsType(t, &maskingRouter{}, srv.echo.Router(), "application engine")
+	assert.IsType(t, &maskingRouter{}, srv.probeEcho.Router(), "probe engine")
+}
+
 func TestServerNewRegistersProbeDescriptors(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)

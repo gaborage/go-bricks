@@ -2380,6 +2380,14 @@ func TestHandlerContextRouteTemplate(t *testing.T) {
 	})
 }
 
+// TestNewHandlerContextForTestUsesMaskingRouter pins that the synthetic context's engine
+// carries the maskingRouter every framework engine is built on.
+func TestNewHandlerContextForTestUsesMaskingRouter(t *testing.T) {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	c := NewHandlerContextForTest(httptest.NewRecorder(), req, nil)
+	assert.IsType(t, &maskingRouter{}, c.ectx.Echo().Router())
+}
+
 // TestNewHandlerContextForTestWithRouteTemplate verifies the WithRouteTemplate
 // test option seeds RouteTemplate() on an otherwise-unrouted synthetic context (the gap
 // from issue #639), that it reads back through the real public getter, and that it composes
