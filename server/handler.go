@@ -210,9 +210,14 @@ type PathParam struct {
 
 // RouteTemplate returns the registered route path that matched this request,
 // including any group/base-path prefix (e.g. "/api/cards/:cardId/status").
-// It is the template the application registered, NOT the concrete URL
-// (use Request().URL.Path for that). Empty before routing completes and on
-// unmatched (404) requests; on a top-level 405 the engine sets the best-matching
+// It is the template the application registered, NOT the concrete URL: read a
+// matched value through Param or PathParams. On a matched route it is the value
+// the access line and the framework's correlated WARN and ERROR lines carry as
+// http.route, so a log query keyed on it joins them. No framework sink prints the
+// request path (ADR-167); a handler that logs Request().URL.Path itself prints
+// what the caller sent, a card number in a segment included. Empty before
+// routing completes and on unmatched (404) requests; on a top-level 405 the
+// engine sets the best-matching
 // route's template (engine-defined, not a contract). Note the asymmetry under a
 // middleware-bearing group: a wrong-method or unmatched sub-path there resolves
 // to the group's implicit catch-all (a 404), so it returns "" rather than a

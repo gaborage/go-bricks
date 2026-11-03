@@ -301,6 +301,19 @@ validated before either is used ([ADR-070](adr_070_inbound_trace_identifier_vali
 a non-conforming one is discarded and replaced, so a value you sent may not be
 the value you see.
 
+The framework's own lines about one HTTP request that are correlated (the
+`[server.tenant]` rejection WARN) carry the same correlation: `http.route`,
+`request_id`, `correlation_id`, and `trace_id`/`span_id` when the request's
+span context is valid, so each joins its request's access line and span. On
+these lines `http.route` is the registered route template (`/cards/:id`), the
+same value the access line and the JOSE failure line carry, so one filter on it
+finds all of them; their `path` field is the masked rendering
+(`/cards/REDACTED`, [ADR-167](adr_167_inbound_paths_render_from_route_template.md)).
+`request_id` and `correlation_id` hold the same value, read without minting one.
+With a nil logger (the public `TenantMiddleware` construction) the stdlib
+fallback appends the same fields as `key=value` text. A WARN whose level is
+disabled returns before it is formatted or reads the client address.
+
 The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
 run's framework id: a UUID minted once per run and shared by the normal-return and
 panic-recovery lines (a framework id already on the run's context wins, though no

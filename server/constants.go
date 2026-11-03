@@ -41,6 +41,7 @@ const (
 	fieldError     = "error"
 	fieldMessage   = "message"
 	fieldRequestID = "request_id"
+	fieldHTTPRoute = "http.route"
 	fieldTimestamp = "timestamp"
 	fieldTraceID   = "traceId"
 

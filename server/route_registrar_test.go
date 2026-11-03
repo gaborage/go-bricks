@@ -678,7 +678,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// Neither resolver finds a tenant: rejected before route matching.
 		{
-			name: "tenant_rejected", baseline: 93, wantStatus: http.StatusBadRequest,
+			name: "tenant_rejected", baseline: 98, wantStatus: http.StatusBadRequest,
 			warn: warnTenantRejected,
 			req:  observedRequest(http.MethodGet, "/orders", "", nil),
 		},

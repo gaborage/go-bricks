@@ -237,7 +237,7 @@ func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEven
 		Int("http.response.status_code", params.status).
 		Int64("http.server.request.duration", params.latency.Nanoseconds()). // OTel uses nanoseconds
 		Str("url.path", params.metadata.URLPath).
-		Str("http.route", params.metadata.Route).
+		Str(fieldHTTPRoute, params.metadata.Route).
 		Str("client.address", params.metadata.ClientAddr).
 		Str("user_agent.original", params.metadata.UserAgent).
 		Str("result_code", params.resultCode).
