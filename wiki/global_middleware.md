@@ -30,7 +30,7 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 | --- | --- |
 | Runs once per request | Registered on the root echo chain (`e.Use`), compiled once, applied to every request. |
 | Cannot be skipped per-route | Registration is framework-controlled; no route-level opt-out exists. |
-| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup), which registration after `Start` cannot bypass. |
+| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup), which registration after `Start` cannot bypass, except on the framework routes a path-reading resolver skips ([ADR-169](adr_169_framework_routes_skip_path_tenant.md)). |
 | Skips health/ready | The framework wraps each with the health/ready probe skipper: the exemption is keyed on the route the router matched, so it covers exactly the probe routes the server registered, on `GET`/`HEAD`. |
 | Deterministic ordering | Across modules, middleware composes in module-registration order. |
 
@@ -110,7 +110,12 @@ panic guard → requestID → tenant resolution → logger → Recover → timeo
 ```
 
 On a tenant-owned route family's route, the `tenant resolution` box is skipped
-([Fail-closed startup](#fail-closed-startup)).
+([Fail-closed startup](#fail-closed-startup)). Under a tenant resolver that may read the path, it
+is also skipped on the framework's own routes under `<base>/_sys` (the scheduler) and an enabled
+`debug.pathprefix` ([ADR-169](adr_169_framework_routes_skip_path_tenant.md)): global middleware
+still runs there, with no tenant in context, so a global gate that requires one must let those
+routes through. Under a composite chain that is true of a header tenant as well. Startup refuses
+a consumer route under those roots ([ADR-168](adr_168_framework_route_roots_reserved.md)).
 
 Consequences:
 

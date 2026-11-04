@@ -279,11 +279,10 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 	if cfg.Multitenant.Enabled {
 		resolver := buildTenantResolver(cfg)
 		if resolver != nil {
-			// Under a resolver that may read the path, admission reserves the framework route
-			// roots for framework routes (ADR-168).
+			// The seat skips the probes and, under a resolver that may read the path, the
+			// framework route roots (ADR-169); the forwarded-client-cert seat skips probes only.
 			seat.frameworkRoots, seat.rootsErr = frameworkRoots(cfg, resolver)
-			// Use skipper-aware middleware to bypass tenant resolution for health probes
-			e.Use(tenantMiddlewareEcho(resolver, skipProbe, owned, log))
+			e.Use(tenantMiddlewareEcho(resolver, skipFrameworkRoots(skipProbe, seat.frameworkRoots), owned, log))
 			seat.seated = true
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
@@ -314,7 +313,7 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 }
 
 // tenantSeat is what setupMiddlewares installed for tenant resolution: whether the seat is
-// installed, the framework route roots its resolver implies (frameworkRoots), which route
+// installed, the framework route roots its skip covers (frameworkRoots), which route
 // admission reserves, and why those roots are unusable, which Start returns.
 type tenantSeat struct {
 	seated         bool

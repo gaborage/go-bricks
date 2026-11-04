@@ -2903,6 +2903,22 @@ still run there.
 
 ---
 
+### [ADR-169: Framework Routes Skip Tenant Resolution Under a Path-Reading Resolver](adr_169_framework_routes_skip_path_tenant.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, the framework's `/_sys` and debug routes carry no tenant, so global middleware sees none there, a composite chain's header tenant included
+
+A path resolver read a tenant out of the framework's own routes: `<base>/_sys/job` failed the tenant
+grammar (400), and a segment such as `job` could be taken for a tenant. Under a resolver that may
+read the path (`multitenant.MayReadPath`), the tenant seat now skips every matched template under
+the framework route roots ADR-168 reserves, the scheduler root `<base>/_sys` and, with
+`debug.enabled`, `debug.pathprefix`, as it skips the probes; admission and the seat read one list,
+so the skip never reaches consumer code. See [migrations.md](migrations.md) `[C73.35]`.
+
+**Key Benefits:** the framework's own routes answer under path tenancy, and the skip is total over
+roots no consumer can register under.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3712,7 +3728,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-168) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-169) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
