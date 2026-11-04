@@ -30,7 +30,7 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 | --- | --- |
 | Runs once per request | Registered on the root echo chain (`e.Use`), compiled once, applied to every request. |
 | Cannot be skipped per-route | Registration is framework-controlled; no route-level opt-out exists. |
-| After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup), which registration after `Start` cannot bypass, except on the framework routes a path-reading resolver skips ([ADR-169](adr_169_framework_routes_skip_path_tenant.md)). |
+| After tenant resolution | Lands after the built-in chain, so a tenant the seat wrote is already in `context.Context`, in every binary that passes the [tenant-owned family check](#fail-closed-startup), which registration after `Start` cannot bypass. Two cases carry none: the framework routes a path-reading resolver skips ([ADR-169](adr_169_framework_routes_skip_path_tenant.md)), and a path-read tenant the store does not hold, which is never written and which the handler adapter refuses after this slot ([ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md), [below](#a-request-without-a-tenant)). |
 | Skips health/ready | The framework wraps each with the health/ready probe skipper: the exemption is keyed on the route the router matched, so it covers exactly the probe routes the server registered, on `GET`/`HEAD`. |
 | Deterministic ordering | Across modules, middleware composes in module-registration order. |
 
@@ -116,6 +116,20 @@ is also skipped on the framework's own routes under `<base>/_sys` (the scheduler
 still runs there, with no tenant in context, so a global gate that requires one must let those
 routes through. Under a composite chain that is true of a header or subdomain tenant as well. Startup refuses
 a consumer route under those roots ([ADR-168](adr_168_framework_route_roots_reserved.md)).
+
+### A request without a tenant
+
+Under a tenant resolver that may read the path, the seat writes a path-read tenant only when the
+App's tenant resource source holds it (`HasTenant`, [ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md)).
+A path tenant the store does not hold is never written: global middleware runs with **no tenant
+in context**, then route-group middleware (auth) and JOSE inbound verification, and only then
+does the route's handler adapter answer 400 `BAD_REQUEST` "Invalid tenant", with one
+`[server.tenant]` WARN reading `reason="unknown tenant"`. This reverses, for such requests,
+ADR-036's "tenant already in context". A global gate that requires a tenant should therefore pass
+a tenant-less request through (`next()`) and leave the refusal to the framework, instead of
+answering it in its own shape: a gate that answered, say, 403 for no tenant would make the answer
+for an unknown tenant differ from the 400 every other caller gets. Header- and subdomain-won
+tenants are written as before.
 
 Consequences:
 

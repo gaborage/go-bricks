@@ -313,9 +313,18 @@ func (c HandlerContext) SetPathParams(params []PathParam) {
 // from other packages.
 func (c HandlerContext) echoContext() *echo.Context { return c.ectx }
 
-// adaptHandler converts a go-bricks Handler into an echo.HandlerFunc for registration.
-func adaptHandler(h Handler, cfg *config.Config) echo.HandlerFunc {
-	return func(c *echo.Context) error { return h(newHandlerContext(c, cfg)) }
+// adaptHandler converts a go-bricks Handler into an echo.HandlerFunc for registration. A
+// request whose path tenant the seat refused gets the unknown-tenant 400 instead of h
+// (refuseUnknownPathTenant), written here, so the access line records the 400, with its WARN
+// logged through log.
+func adaptHandler(h Handler, cfg *config.Config, log logger.Logger) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if refused := refuseUnknownPathTenant(c); refused != nil {
+			logUnknownTenantRefusal(refused, c, log, cfg.App.Debug)
+			return formatErrorResponse(c, refused, cfg)
+		}
+		return h(newHandlerContext(c, cfg))
+	}
 }
 
 // adaptMiddleware converts a flat MiddlewareFunc into an echo.MiddlewareFunc. The
@@ -677,6 +686,9 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		}
 		if apiErr := hw.runJOSEInbound(c); apiErr != nil {
 			return formatJOSEPlaintextError(c, apiErr)
+		}
+		if refused := refuseUnknownPathTenant(c); refused != nil {
+			return hw.dispatchResponse(c, nil, refused)
 		}
 
 		request, apiErr := hw.processor.process(c)

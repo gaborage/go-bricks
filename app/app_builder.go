@@ -202,7 +202,7 @@ func (b *Builder) CreateApp() *Builder {
 	}
 
 	probesStart := server.DefaultRouteRegistry.Count()
-	signalHandler, srv := b.bootstrap.coreComponents()
+	signalHandler, srv := b.bootstrap.coreComponents(b.bundle.tenantChecker)
 
 	b.app = &App{
 		cfg:              b.cfg,

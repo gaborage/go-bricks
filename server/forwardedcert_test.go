@@ -498,7 +498,7 @@ type forwardedCertGuardProbe struct {
 // leaves /open unguarded. Both routes record into probe.
 func newForwardedCertGuardEcho(cfg *config.Config, guardLog logger.Logger, probe *forwardedCertGuardProbe) *echo.Echo {
 	e := newTenantTestEcho()
-	setupMiddlewares(e, &capturingLogger{}, cfg, true, testHealthPath, testReadyPath, nil)
+	setupMiddlewares(e, &capturingLogger{}, cfg, true, testHealthPath, testReadyPath, seatInputs{})
 	record := func(c HandlerContext) error {
 		probe.ran = true
 		probe.identity, probe.ok = ForwardedClientCertFromContext(c.RequestContext())
@@ -649,7 +649,7 @@ func TestRequireForwardedClientCertLeavesUnguardedGroupsOpen(t *testing.T) {
 func TestRequireForwardedClientCertExemptsNoProbe(t *testing.T) {
 	cfg := newForwardedCertCfg(true, true)
 	e := newTenantTestEcho()
-	setupMiddlewares(e, &capturingLogger{}, cfg, true, testHealthPath, testReadyPath, nil)
+	setupMiddlewares(e, &capturingLogger{}, cfg, true, testHealthPath, testReadyPath, seatInputs{})
 	ran := false
 	newRouteGroup(e.Group(""), "", cfg).Group("", RequireForwardedClientCert(nil)).Add(http.MethodGet, testHealthPath, func(c HandlerContext) error {
 		ran = true

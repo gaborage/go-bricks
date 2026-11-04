@@ -538,7 +538,9 @@ refuses global middleware beside a tenant-owned route family, whose routes the r
 skips; after `Start`, `TenantOwnedGroup` panics, as does `RegisterGlobalMiddleware` beside a
 family. So the after-tenant-resolution guarantee holds in every binary that passes the startup
 check, except on the framework's `/_sys` and debug routes, which the seat skips under a
-path-reading resolver (amended by ADR-169), so global middleware sees no tenant there.
+path-reading resolver (amended by ADR-169), so global middleware sees no tenant there. check. Reversed in part by ADR-170 (2026-11-03): under a path-reading resolver, a path tenant the
+store does not hold is never written, so global middleware runs with no tenant in context and the
+handler adapter answers 400 afterwards.
 
 **Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved (on every consumer route); single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
 
@@ -2920,6 +2922,25 @@ roots no consumer can register under.
 
 ---
 
+### [ADR-170: A Path-Read Tenant Is Written Only When the Store Holds It](adr_170_path_tenant_written_only_when_store_holds_it.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, a path tenant the store does not hold answers 400 "Invalid tenant" from the handler adapter and is never written to the request
+
+A path resolver's tenant is caller-written, and the seat checked only its grammar, which a 16-digit
+card number passes, before writing it where every downstream printer carried it. The framework seat
+now resolves through `multitenant.Resolve` and writes a path-read id only when
+`server.Options.TenantChecker.HasTenant` answers true; the App sets that checker from its resource
+source. Any other path id is never written: the request runs on with an id-free marker, and the
+typed and raw handler adapters answer 400 after route-group middleware and JOSE inbound
+verification, before binding, with the seat's `reason="unknown tenant"` WARN. Header- and
+subdomain-won tenants and the public `server.TenantMiddleware` are unchanged. Reverses ADR-036's
+"tenant already in context" for such requests. See [migrations.md](migrations.md) `[C73.36]`.
+
+**Key Benefits:** a caller-written path segment reaches no framework sink unless the store vouches
+for it, and no response before the adapter differs by tenant existence.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3729,7 +3750,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-169) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-170) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -73,7 +73,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			capturer := &capturingLogger{}
 			e := newTenantTestEcho()
-			e.Use(tenantMiddlewareEcho(tc.resolver, nil, nil, capturer))
+			e.Use(tenantMiddlewareEcho(tc.resolver, nil, seatInputs{}, capturer))
 			e.GET("/tenant-check", func(c *echo.Context) error {
 				return c.String(http.StatusOK, "ok")
 			})
@@ -104,7 +104,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 	resolver := &fixedTenantResolver{tenantID: "", err: nil}
 	e := newTenantTestEcho()
-	e.Use(tenantMiddlewareEcho(resolver, nil, nil, nil))
+	e.Use(tenantMiddlewareEcho(resolver, nil, seatInputs{}, nil))
 	e.GET("/tenant-check", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -387,7 +387,7 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 // logger paths.
 func TestTenantRejectionCorrelatesItsLine(t *testing.T) {
 	seat := func(l logger.Logger) echo.MiddlewareFunc {
-		return tenantMiddlewareEcho(&fixedTenantResolver{}, nil, nil, l)
+		return tenantMiddlewareEcho(&fixedTenantResolver{}, nil, seatInputs{}, l)
 	}
 	t.Run("framework_logger", func(t *testing.T) {
 		l := &testLogger{}

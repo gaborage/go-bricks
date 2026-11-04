@@ -2457,7 +2457,7 @@ func TestAdaptHandlerRoundTrip(t *testing.T) {
 
 	eh := adaptHandler(func(c HandlerContext) error {
 		return c.String(http.StatusTeapot, "brewed")
-	}, cfg)
+	}, cfg, nil)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()

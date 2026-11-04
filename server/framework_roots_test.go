@@ -359,7 +359,7 @@ func TestTenantSeatSkipsFrameworkRootsUnderPathResolver(t *testing.T) {
 			cfg := frameworkRootsConfig(tt.resolverType)
 			e := newEngine()
 			e.HTTPErrorHandler = httpErrorHandler(cfg, logger.New("disabled", true))
-			setupIdentityMiddlewares(e, logger.New("disabled", true), cfg, newProbeSkipper("/health", "/ready"), nil)
+			setupIdentityMiddlewares(e, logger.New("disabled", true), cfg, newProbeSkipper("/health", "/ready"), seatInputs{})
 			e.GET(tt.path, func(c *echo.Context) error {
 				_, hasTenant := multitenant.GetTenant(c.Request().Context())
 				assert.False(t, hasTenant, "a skipped route carries no tenant")

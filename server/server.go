@@ -295,7 +295,8 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 	if observabilityEnabled {
 		s.setupErr = otelServerNameError(cfg.App.Name)
 	}
-	seat := setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath, s.admission.owns)
+	seat := setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath,
+		seatInputs{owned: s.admission.owns, checkPath: true, checker: s.opts.TenantChecker})
 	// Admission reserves the framework route roots the seat computed for its resolver (ADR-168),
 	// and Start refuses a debug prefix that would cover the module routes.
 	s.admission.seated, s.admission.frameworkRoots = seat.seated, seat.frameworkRoots
@@ -429,7 +430,7 @@ func (s *Server) RegisterReadyHandler(handler Handler) {
 	if handler == nil {
 		s.readyHandler = s.readyCheck
 	} else {
-		s.readyHandler = adaptHandler(handler, s.cfg)
+		s.readyHandler = adaptHandler(handler, s.cfg, s.logger)
 	}
 }
 
