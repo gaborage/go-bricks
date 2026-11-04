@@ -663,7 +663,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// Recover turns the panic into a 500, which the request logger reports at ERROR.
 		{
-			name: "handler_panic_recovered", baseline: 145, wantStatus: http.StatusInternalServerError,
+			name: "handler_panic_recovered", baseline: 150, wantStatus: http.StatusInternalServerError,
 			req: observedRequest(http.MethodGet, "/boom", observedHeaderTenant, nil),
 		},
 		// The header resolver runs first, so it wins even where the path carries a tenant.
