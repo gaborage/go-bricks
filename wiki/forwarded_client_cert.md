@@ -55,7 +55,11 @@ still passes. When the engine-level middleware did not attach the identity (`ena
 false`), the guard attaches it, so `ForwardedClientCertFromContext` works behind the guard in
 every posture. Probes are not exempted: a route stays open by being registered outside the
 guarded group, as with [`auth.Middleware`](auth.md). WARNs go to the logger passed in; `nil`
-falls back to the standard library `log` package. The guard decides presence, never
+falls back to the standard library `log` package. Every `[server.forwardedclientcert]` WARN
+prints `client=` as the client address the access line's `client.address` carries (behind a
+trusted proxy, the `X-Forwarded-For` client) and `peer=` as the TCP peer (the load balancer),
+and carries the request's correlation fields
+([observability.md](observability.md#correlation-fields-and-exemplars)). The guard decides presence, never
 provenance; mounting it is a [trust model](#trust-model) posture assertion.
 
 ## What gets parsed

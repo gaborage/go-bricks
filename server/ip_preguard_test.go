@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -381,4 +382,51 @@ func tripIPPreGuard(t *testing.T, l logger.Logger, path, ip string, lines func()
 	field, _, _ := strings.Cut(after, " ")
 	assert.LessOrEqual(t, len(field), logSafeValueMaxBytes+2, "client field must be capped (plus its quotes)")
 	return got[0]
+}
+
+// TestIPPreGuardRejectionCorrelatesItsLine pins the pre-guard's 429 WARN to the request on both
+// logger paths.
+func TestIPPreGuardRejectionCorrelatesItsLine(t *testing.T) {
+	// trip serves until the first 429 and returns how many times the client address was read;
+	// the limiter itself reads it once per request.
+	trip := func(t *testing.T, l logger.Logger) int32 {
+		t.Helper()
+		e := newEngine()
+		var reads atomic.Int32
+		e.IPExtractor = func(r *http.Request) string {
+			reads.Add(1)
+			return echo.ExtractIPDirect()(r)
+		}
+		e.Use(ipPreGuardEcho(1, l))
+		e.GET(correlationRoute, func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
+		for i := range 5 {
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, correlatedRequest(t, true))
+			if rec.Code == http.StatusTooManyRequests {
+				return reads.Load() - int32(i+1)
+			}
+		}
+		t.Fatal("the pre-guard never rejected")
+		return 0
+	}
+	t.Run("framework_logger", func(t *testing.T) {
+		l := &testLogger{}
+		trip(t, l)
+		entries := l.logEntries()
+		require.Len(t, entries, 1)
+		assert.Equal(t, "[server.ip_preguard] request rejected by IP pre-guard", entries[0].msg)
+		assertLineCorrelated(t, entries[0])
+	})
+	t.Run("nil_logger_stdlib_fallback", func(t *testing.T) {
+		buf := captureStdlibLog(t)
+		trip(t, nil)
+		line := strings.TrimSuffix(buf.String(), "\n")
+		assert.True(t, strings.HasSuffix(line, "status=429"+correlationSuffix), "got %q", line)
+	})
+	t.Run("disabled_warn_level_formats_nothing", func(t *testing.T) {
+		dl := &disabledLogger{ev: &disabledEvent{}}
+		assert.Zero(t, trip(t, dl), "a disabled WARN level must not read the client address")
+		assert.False(t, dl.ev.msgCalled)
+		assert.Equal(t, int32(1), trip(t, &testLogger{}), "an enabled WARN reads the client address once")
+	})
 }

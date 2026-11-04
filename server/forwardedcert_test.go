@@ -662,3 +662,67 @@ func TestRequireForwardedClientCertExemptsNoProbe(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.False(t, ran, "a probe path behind the guard must never reach the handler")
 }
+
+// TestForwardedClientCertWarnsCorrelateTheirLines pins each of the three forwarded-client-cert
+// WARNs to the request on both logger paths, including the two that fire on a 200. The request
+// arrives behind a load balancer (a private TCP peer and X-Forwarded-For), so client= must be
+// the forwarded client the access line's client.address carries and peer= the balancer.
+func TestForwardedClientCertWarnsCorrelateTheirLines(t *testing.T) {
+	const wantAddrs = `client="203.0.113.7" peer="10.0.0.5:4242"`
+	tests := []struct {
+		name     string
+		required bool
+		headers  map[string][]string
+		msg      string
+	}{
+		{name: "missing_identity_under_require", required: true, msg: "request rejected: missing identity"},
+		{
+			name: "duplicated_header_on_a_200", msg: "duplicated header detected",
+			headers: map[string][]string{headerClientCertSubject: {"CN=one", "CN=two"}},
+		},
+		{
+			name: "leaf_not_decoded_on_a_200", msg: "leaf certificate not decoded",
+			headers: map[string][]string{headerClientCertSubject: {testForwardedCertSubject}, headerClientCertLeaf: {"not-a-pem"}},
+		},
+	}
+	for _, tc := range tests {
+		request := func(t *testing.T) *http.Request {
+			req := correlatedRequest(t, true)
+			req.RemoteAddr = "10.0.0.5:4242"
+			req.Header.Set(echo.HeaderXForwardedFor, "203.0.113.7")
+			for name, values := range tc.headers {
+				for _, v := range values {
+					req.Header.Add(name, v)
+				}
+			}
+			return req
+		}
+		mw := func(l logger.Logger) echo.MiddlewareFunc {
+			return forwardedClientCertMiddlewareEcho(config.ForwardedClientCertConfig{Enabled: true, Require: tc.required}, nil, l)
+		}
+		t.Run(tc.name+"_framework_logger", func(t *testing.T) {
+			l := &testLogger{}
+			serveCorrelated(t, mw(l), request(t))
+			entries := l.logEntries()
+			require.Len(t, entries, 1)
+			assert.Contains(t, entries[0].msg, tc.msg)
+			assert.Contains(t, entries[0].msg, wantAddrs)
+			assertLineCorrelated(t, entries[0])
+		})
+		t.Run(tc.name+"_nil_logger_stdlib_fallback", func(t *testing.T) {
+			buf := captureStdlibLog(t)
+			serveCorrelated(t, mw(nil), request(t))
+			line := strings.TrimSuffix(buf.String(), "\n")
+			assert.Contains(t, line, tc.msg)
+			assert.Contains(t, line, wantAddrs)
+			assert.True(t, strings.HasSuffix(line, correlationSuffix), "got %q", line)
+		})
+		t.Run(tc.name+"_disabled_warn_level_formats_nothing", func(t *testing.T) {
+			dl := &disabledLogger{ev: &disabledEvent{}}
+			assert.Zero(t, serveCorrelated(t, mw(dl), request(t)), "a disabled WARN level must not read the client address")
+			assert.False(t, dl.ev.msgCalled)
+			assert.Equal(t, int32(1), serveCorrelated(t, mw(&testLogger{}), request(t)),
+				"an enabled WARN reads the client address once")
+		})
+	}
+}

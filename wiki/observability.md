@@ -301,8 +301,9 @@ validated before either is used ([ADR-070](adr_070_inbound_trace_identifier_vali
 a non-conforming one is discarded and replaced, so a value you sent may not be
 the value you see.
 
-The framework's own lines about one HTTP request that are correlated (the
-`[server.tenant]` rejection WARN; both `Panic recovered` ERRORs, the error
+The framework's own WARN and ERROR lines about one HTTP request (the
+`[server.tenant]` rejection WARN; the `[server.ip_preguard]` WARN; the three
+`[server.forwardedclientcert]` WARNs; both `Panic recovered` ERRORs, the error
 handler's for a handler panic and the outermost panic guard's; and the error
 handler's `unhandled error`) carry the same correlation: `http.route`,
 `request_id`, `correlation_id`, and `trace_id`/`span_id` when the request's
@@ -322,9 +323,13 @@ so on a panic-guard line written before the request-id middleware set the
 response's `X-Request-ID` both hold the inbound `X-Request-ID` when it is valid
 and are empty otherwise. With a nil logger the stdlib fallback appends the same
 fields as `key=value` text: the tenant WARN takes it under the public
-`TenantMiddleware` construction, and `unhandled error` under a
-`server.NewHandlerRegistry` built without `server.WithLogger`. A WARN whose
-level is disabled returns before it is formatted or reads the client address.
+`TenantMiddleware` construction, `unhandled error` under a
+`server.NewHandlerRegistry` built without `server.WithLogger`, and the IP
+pre-guard and forwarded-client-cert WARNs under `IPPreGuard` and
+`RequireForwardedClientCert(nil)`. A WARN whose level is disabled returns before
+it is formatted or reads the client address. The forwarded-client-cert WARNs
+print `client=` as the access line's `client.address` (behind a trusted proxy,
+the `X-Forwarded-For` client) and `peer=` as the TCP peer.
 
 The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
 run's framework id: a UUID minted once per run and shared by the normal-return and
