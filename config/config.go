@@ -18,6 +18,7 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/gaborage/go-bricks/internal/configdecode"
+	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -689,7 +690,7 @@ func koanfOnlyDefaults() map[string]any {
 
 		// Debug endpoints defaults (disabled by default for security)
 		"debug.enabled":              false,
-		"debug.pathprefix":           "/_sys",
+		"debug.pathprefix":           pathutil.SystemPrefix,
 		"debug.allowedips":           []string{"127.0.0.1", "::1"},
 		"debug.trustedproxies":       []string{},
 		"debug.bearertoken":          "",

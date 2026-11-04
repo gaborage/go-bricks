@@ -1513,13 +1513,17 @@ func RegisterHandler[T any, R any](
 		HandlerID:    formatHandlerID(method, fullPath),
 		RequestType:  reqType,
 		ResponseType: reflect.TypeOf(respType),
-		Package:      getCallerPackage(3), // getCallerPackage → RegisterHandler → GET/POST/etc → module
 		HandlerName:  extractHandlerName(handler),
 	}
 
 	for _, opt := range opts {
 		opt(&descriptor)
 	}
+	// Stamped after the options, from the handler function itself, so every door (the GET/POST
+	// helpers, a direct RegisterHandler call, a registrar embedding RouteRegistrar) gives one
+	// answer: admission decides who may register under a framework route root by this package
+	// (ADR-168), and no RouteOption or caller frame forges or clears it.
+	descriptor.Package = handlerPackage(handler)
 
 	// Scan request/response types for jose: tags and resolve every kid against the
 	// registry's resolver. Panics at startup on any failure (Fail Fast principle).
@@ -1725,45 +1729,49 @@ func WithLogger(log logger.Logger) HandlerRegistryOption {
 }
 
 // getCallerPackage extracts the package path of the calling function. skip is the number of
-// stack frames above getCallerPackage to inspect: the typed registration path passes 3
-// (getCallerPackage → RegisterHandler → GET/POST/etc → module), the raw RouteRegistrar.Add
-// path passes 2 (getCallerPackage → Add → module).
+// stack frames above getCallerPackage to inspect: Group and Use pass 2 (getCallerPackage →
+// Group/Use → module). A route is attributed from its handler instead (handlerPackage).
 func getCallerPackage(skip int) string {
 	pc, _, _, ok := runtime.Caller(skip)
 	if !ok {
 		return ""
 	}
-
 	fn := runtime.FuncForPC(pc)
 	if fn == nil {
 		return ""
 	}
+	return funcPackage(fn.Name())
+}
 
-	name := fn.Name()
+// handlerPackage returns the package path of the function a route registers: the package that
+// declares it, a method value's receiver package, or a closure's enclosing function's package.
+// Unlike a caller frame it is the same whichever door registered the route (ADR-168). A nil
+// or non-function handler has none.
+func handlerPackage(handler any) string {
+	v := reflect.ValueOf(handler)
+	if v.Kind() != reflect.Func || v.IsNil() {
+		return ""
+	}
+	fn := runtime.FuncForPC(v.Pointer())
+	if fn == nil {
+		return ""
+	}
+	return funcPackage(fn.Name())
+}
 
-	// Extract package path from function name
-	// Function names are typically in the format: package/path.functionName
+// funcPackage extracts the package path from a runtime function name
+// (example.com/svc/orders.(*Handler).get-fm, example.com/svc/orders.Register.func1,
+// example.com/svc/orders.get[...]): everything before the first dot after the last slash. The
+// runtime escapes a dot in a path's last element (%2e), so that dot ends the path. A type
+// argument list is cut first, since it may name other packages.
+func funcPackage(name string) string {
+	if bracket := strings.IndexByte(name, '['); bracket >= 0 {
+		name = name[:bracket]
+	}
 	lastSlash := strings.LastIndex(name, "/")
-	if lastSlash >= 0 {
-		// Find the next dot after the last slash to separate package from function
-		remaining := name[lastSlash+1:]
-		if dot := strings.Index(remaining, "."); dot >= 0 {
-			return name[:lastSlash+1+dot]
-		}
+	if dot := strings.IndexByte(name[lastSlash+1:], '.'); dot >= 0 {
+		return name[:lastSlash+1+dot]
 	}
-
-	// Fallback: try to extract package from the beginning
-	if dot := strings.LastIndex(name, "."); dot >= 0 {
-		packagePart := name[:dot]
-		// Remove receiver type if present (e.g., package.(*Type).method -> package)
-		if parenIndex := strings.LastIndex(packagePart, "("); parenIndex >= 0 {
-			if dotIndex := strings.LastIndex(packagePart[:parenIndex], "."); dotIndex >= 0 {
-				return packagePart[:dotIndex]
-			}
-		}
-		return packagePart
-	}
-
 	return ""
 }
 
