@@ -114,7 +114,7 @@ On a tenant-owned route family's route, the `tenant resolution` box is skipped
 is also skipped on the framework's own routes under `<base>/_sys` (the scheduler) and an enabled
 `debug.pathprefix` ([ADR-169](adr_169_framework_routes_skip_path_tenant.md)): global middleware
 still runs there, with no tenant in context, so a global gate that requires one must let those
-routes through. Under a composite chain that is true of a header tenant as well. Startup refuses
+routes through. Under a composite chain that is true of a header or subdomain tenant as well. Startup refuses
 a consumer route under those roots ([ADR-168](adr_168_framework_route_roots_reserved.md)).
 
 Consequences:

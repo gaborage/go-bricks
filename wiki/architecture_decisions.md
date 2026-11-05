@@ -537,9 +537,10 @@ auth only), and emits the standard envelope on raw-response routes. Amended by A
 refuses global middleware beside a tenant-owned route family, whose routes the root tenant seat
 skips; after `Start`, `TenantOwnedGroup` panics, as does `RegisterGlobalMiddleware` beside a
 family. So the after-tenant-resolution guarantee holds in every binary that passes the startup
-check.
+check, except on the framework's `/_sys` and debug routes, which the seat skips under a
+path-reading resolver (amended by ADR-169), so global middleware sees no tenant there.
 
-**Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved; single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
+**Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved (on every consumer route); single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
 
 ---
 
@@ -2905,14 +2906,14 @@ still run there.
 
 ### [ADR-169: Framework Routes Skip Tenant Resolution Under a Path-Reading Resolver](adr_169_framework_routes_skip_path_tenant.md)
 
-**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, the framework's `/_sys` and debug routes carry no tenant, so global middleware sees none there, a composite chain's header tenant included
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, the framework's `/_sys` and debug routes carry no tenant, so global middleware sees none there, a composite chain's header or subdomain tenant included
 
 A path resolver read a tenant out of the framework's own routes: `<base>/_sys/job` failed the tenant
 grammar (400), and a segment such as `job` could be taken for a tenant. Under a resolver that may
 read the path (`multitenant.MayReadPath`), the tenant seat now skips every matched template under
 the framework route roots ADR-168 reserves, the scheduler root `<base>/_sys` and, with
 `debug.enabled`, `debug.pathprefix`, as it skips the probes; admission and the seat read one list,
-so the skip never reaches consumer code. See [migrations.md](migrations.md) `[C73.35]`.
+so the skip never reaches a consumer handler. See [migrations.md](migrations.md) `[C73.35]`.
 
 **Key Benefits:** the framework's own routes answer under path tenancy, and the skip is total over
 roots no consumer can register under.

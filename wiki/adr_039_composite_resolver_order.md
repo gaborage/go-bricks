@@ -24,8 +24,9 @@
 > the chain holds a `path` member (or the resolver is a bare `path` one), the root seat also
 > skips every route under the framework roots, `<base>/_sys` and an enabled
 > `debug.pathprefix`, which startup reserves for framework routes
-> ([ADR-168](adr_168_framework_route_roots_reserved.md)). A header member's tenant is not read
-> there either. A header-and-subdomain chain skips and reserves nothing.
+> ([ADR-168](adr_168_framework_route_roots_reserved.md)). The seat skips the whole chain
+> there, so its header and subdomain members are not read either. A header-and-subdomain chain
+> skips and reserves nothing.
 
 ## Context
 

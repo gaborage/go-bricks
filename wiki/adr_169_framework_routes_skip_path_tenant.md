@@ -35,7 +35,9 @@ The skip keys on `c.Path()`, the template the router matched, never on the reque
 allocates nothing.
 
 With ADR-168's refusal in place, a template under a root names a framework handler or a
-not-found catch-all, so the skip cannot reach consumer code.
+not-found catch-all, so the skip cannot reach a consumer handler. Consumer middleware still runs
+there (see Consequences). The seat skips the whole resolver on those templates, so under a
+composite chain its header and subdomain members are not read there either.
 
 Under a header or subdomain resolver, or with multitenant off, there is no root and nothing
 changes.
@@ -53,13 +55,15 @@ changes.
 ## Consequences
 
 - **Breaking + silent-behavior**: framework routes under the roots carry no tenant. Module global
-  middleware (ADR-036) still runs there, with no tenant in context: under a composite chain, a
-  header tenant that resolved on `<base>/_sys/job` in v0.72.0 no longer does, so a global gate
-  that requires a tenant now refuses those routes and must let them through. The scheduler and
+  middleware (ADR-036) still runs there, with no tenant in context, and so does a module's `Use`
+  on the shared module registrar on the scheduler's routes, whose group is built after it: under
+  a composite chain, a header or subdomain tenant that resolved on `<base>/_sys/job` in v0.72.0
+  no longer does, so a gate that requires a tenant now refuses those routes and must let them
+  through. The scheduler and
   debug handlers need none. The built-in rate limiter keys those requests on the client address;
   a `server.TenantRateLimit` installed as global middleware passes them without charging a bucket.
-- Those routes' access lines carry no `tenant` field, where a composite chain's header tenant or a
-  segment such as `job` filled it in v0.72.0, and a path that failed the grammar there no longer
+- Those routes' access lines carry no `tenant` field, where a composite chain's header or subdomain
+  tenant or a segment such as `job` filled it in v0.72.0, and a path that failed the grammar there no longer
   logs a `[server.tenant]` WARN.
 - Scheduler and debug routes keep their own access control (the CIDR allowlist and the debug IP
   allowlist or bearer token); the skip removes tenant resolution only.
