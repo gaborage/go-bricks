@@ -13493,8 +13493,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   behavior and now spell the new type (C73.27). ADR-165.
 - gist: `server.SetupMiddlewares` installed the framework chain on any `*echo.Echo`, so a
   consumer could build an engine without the masking router every framework engine carries. It
-  is unexported, so such a call fails to compile; `server.New` and the App install the chain
-  unchanged (C73.28). ADR-166.
+  is unexported, so such a call fails to compile; `server.New`, `server.NewWithOptions` and the
+  App install the chain unchanged (C73.28). ADR-166.
 
 ### [C73.1] a type-less migration tenant runs with the runner's vendor, and an undeliverable migrator identity is refused · breaking · when: match
 
@@ -14978,10 +14978,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   package (`undefined: server.SetupMiddlewares`).
 - gate: match = a detect hit. no-match = no hit: nothing changes.
 - scope: the exported `server.SetupMiddlewares(e, log, cfg, observabilityEnabled, healthPath,
-  readyPath)`. **Unchanged**: `server.New` and the App, which install the same chain in the same
-  order on the engine they build; every public middleware constructor (`server.CORS`,
-  `server.RateLimit`, `server.TenantMiddleware`, …); `RouteRegistrar.Use`, route groups and
-  `app.GlobalMiddlewareRegisterer`; every configuration key.
+  readyPath)`. **Unchanged**: `server.New`, `server.NewWithOptions` and the App, which install the
+  same chain in the same order on the engine they build; every public middleware constructor
+  (`server.CORS`, `server.RateLimit`, `server.TenantMiddleware`, …); `RouteRegistrar.Use`, route
+  groups and `app.GlobalMiddlewareRegisterer`; every configuration key.
 - before (v0.72.0): a caller built an engine with `echo.New()` and passed it to
   `server.SetupMiddlewares`, which registered the framework chain on it.
 - after: the name does not exist, and a call fails to compile. Only `newServer`, which
