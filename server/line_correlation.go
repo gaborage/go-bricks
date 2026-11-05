@@ -27,8 +27,9 @@ type lineCorrelation struct {
 }
 
 // correlateLine reads c's correlation. It mints nothing and writes nothing to the response:
-// a line written before the request-id middleware ran carries an empty request id rather than
-// one no other line of the request shares.
+// a line written before the request-id middleware set the response's X-Request-ID (an outermost
+// panic guard line for a panic in that middleware) carries the inbound X-Request-ID if valid and
+// an empty request id otherwise, rather than one no other line of the request shares.
 func correlateLine(c *echo.Context) lineCorrelation {
 	lc := lineCorrelation{route: c.Path(), requestID: safeGetRequestID(c)}
 	if sc := trace.SpanContextFromContext(c.Request().Context()); sc.IsValid() {

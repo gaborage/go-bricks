@@ -68,6 +68,12 @@
 >   into one shared string. The other four are `guardLogger`'s field-slice growth (0 → 5
 >   fields). Against the real zerolog adapter a correlated line costs +2 allocations with a
 >   span and +1 without, paid only when the line fires.
+> - **Correlated error-handler ERRORs (#2329), `handler_panic_recovered` 145 → 150 —
+>   justified feature cost.** A handler panic's 500 writes two lines, the error handler's
+>   `Panic recovered` (+2) and `unhandled error` (+3), and both gain `http.route`,
+>   `correlation_id`, `trace_id` and `span_id`. One allocation per line is the shared
+>   hex string of the trace and span ids; the rest is `guardLogger`'s field-slice growth.
+>   The outermost panic guard's line is correlated too, but no row reaches it.
 
 ## Context
 

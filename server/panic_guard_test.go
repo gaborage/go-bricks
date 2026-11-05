@@ -200,3 +200,23 @@ func TestOutermostRecoverSurvivesAPanickingLogger(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"error"`)
 	assert.NotContains(t, rec.Body.String(), recoverProbeSecret)
 }
+
+// TestOutermostRecoverCorrelatesItsLine pins the guard's ERROR line to the request: the masked
+// route, the request id twice and the OTel ids, and the route value nowhere among them.
+func TestOutermostRecoverCorrelatesItsLine(t *testing.T) {
+	frameworkLog := &testLogger{}
+	boom := func(echo.HandlerFunc) echo.HandlerFunc {
+		return func(*echo.Context) error { panic(recoverProbeSecret) }
+	}
+	e := newEngine()
+	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()), boom)
+	e.GET(correlationRoute, func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, correlatedRequest(t, true))
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	entries := frameworkLog.logEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "Panic recovered", entries[0].msg)
+	assertLineCorrelated(t, entries[0])
+}

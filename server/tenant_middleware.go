@@ -112,12 +112,13 @@ func logUnknownTenantRefusal(apiErr *UnknownTenantError, c *echo.Context, l logg
 	logUnhandledError(l, c, apiErr.cause, debug)
 }
 
-// logUnhandledError writes the 5xx "unhandled error" line, the error type only outside
-// debug; with a nil logger it falls back to stdlib log.
+// logUnhandledError writes the 5xx "unhandled error" line, correlated (correlateLine), the
+// error type only outside debug; with a nil logger it falls back to stdlib log.
 func logUnhandledError(l logger.Logger, c *echo.Context, err error, debug bool) {
+	lc := correlateLine(c)
 	if l == nil {
-		log.Printf("ERROR unhandled error request_id=%s error_type=%T", logSafeValue(safeGetRequestID(c)), err)
+		log.Printf("ERROR unhandled error error_type=%T%s", err, lc.text())
 		return
 	}
-	appendErrorDetail(l.Error().Str("request_id", safeGetRequestID(c)), err, debug).Msg("unhandled error")
+	appendErrorDetail(lc.stamp(l.Error()), err, debug).Msg("unhandled error")
 }

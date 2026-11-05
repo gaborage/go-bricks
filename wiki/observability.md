@@ -302,21 +302,29 @@ a non-conforming one is discarded and replaced, so a value you sent may not be
 the value you see.
 
 The framework's own lines about one HTTP request that are correlated (the
-`[server.tenant]` rejection WARN) carry the same correlation: `http.route`,
+`[server.tenant]` rejection WARN; both `Panic recovered` ERRORs, the error
+handler's for a handler panic and the outermost panic guard's; and the error
+handler's `unhandled error`) carry the same correlation: `http.route`,
 `request_id`, `correlation_id`, and `trace_id`/`span_id` when the request's
 span context is valid, so each joins its request's span and the response's
-`X-Request-ID`. The tenant seat runs before the access logger, so its own
-rejection writes no access line to join; a handler's
-`server.NewUnknownTenantError` refusal comes from inside the access logger, so
-it also joins that request's access line. On these lines `http.route` is the
+`X-Request-ID`. The tenant seat and the outermost panic guard run outside the
+access logger, so their lines have no access line to join; the error handler's
+lines report a panic or error that passed through the access logger, and a
+handler's `server.NewUnknownTenantError` refusal comes from inside it, so they
+also join that request's access line. On these lines `http.route` is the
 registered route template (`/cards/:id`), the same value the access line and
-the JOSE failure line carry, so one filter on it finds all of them; their
-`path` field is the masked rendering
+the JOSE failure line carry, so one filter on it finds all of them; the lines
+that carry a `path` field (the tenant WARN and the guard's line) carry the
+masked rendering
 (`/cards/REDACTED`, [ADR-167](adr_167_inbound_paths_render_from_route_template.md)).
-`request_id` and `correlation_id` hold the same value, read without minting one.
-With a nil logger (the public `TenantMiddleware` construction) the stdlib
-fallback appends the same fields as `key=value` text. A WARN whose level is
-disabled returns before it is formatted or reads the client address.
+`request_id` and `correlation_id` hold the same value, read without minting one,
+so on a panic-guard line written before the request-id middleware set the
+response's `X-Request-ID` both hold the inbound `X-Request-ID` when it is valid
+and are empty otherwise. With a nil logger the stdlib fallback appends the same
+fields as `key=value` text: the tenant WARN takes it under the public
+`TenantMiddleware` construction, and `unhandled error` under a
+`server.NewHandlerRegistry` built without `server.WithLogger`. A WARN whose
+level is disabled returns before it is formatted or reads the client address.
 
 The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
 run's framework id: a UUID minted once per run and shared by the normal-return and
