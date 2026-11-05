@@ -1382,8 +1382,9 @@ Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) 
 ```go
 // RouteTemplate() = registered route incl. base path ("/users/:id"), NOT the concrete URL
 // ("/users/42"); it is the access line's http.route. Read a value via Param/PathParams; never
-// log Request().URL.Path, which is caller-written. Always non-empty inside consumer
-// middleware/handlers (they only run on matched routes); empty only on unrouted contexts.
+// log Request().URL.Path, which is caller-written. Non-empty on a matched route; empty before
+// routing and on a 404 or 405 under a middleware-bearing group, whose catch-all matches no route
+// (see the RouteTemplate godoc).
 // PathParams() = matched params in route-template order (defensive copy, safe to retain;
 // empty when no route matched). NEVER use raw param values as metric labels — unbounded
 // cardinality, and path-embedded IDs (card/user IDs) would leak to the metrics vendor.
@@ -1395,12 +1396,13 @@ func RouteMetrics(c server.HandlerContext, next func() error) error {
 }
 
 // A handler's own line joins its access line on request_id + http.route. HandlerContext has no
-// request-id accessor: read the X-Request-ID the framework validated and set on the response,
-// never the inbound request header (caller-written, unvalidated).
+// request-id accessor: read the id from the request context with trace.IDFromContext
+// (go-bricks/trace), never from the inbound request header (caller-written, unvalidated).
 func logRefund(log logger.Logger, c server.HandlerContext) {
+	requestID, _ := trace.IDFromContext(c.RequestContext())
 	log.Info().
 		Str("http.route", c.RouteTemplate()).
-		Str("request_id", c.ResponseWriter().Header().Get(trace.HeaderXRequestID)). // go-bricks/trace
+		Str("request_id", requestID).
 		Msg("refund accepted")
 }
 

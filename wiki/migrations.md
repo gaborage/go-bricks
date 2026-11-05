@@ -15080,7 +15080,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `server/tenant_middleware.go`, `server/tenant_policy.go`, `server/ip_preguard.go`,
   `server/forwardedcert.go`, `server/panic_guard.go`
 
-### [C73.30] the tenant-rejection WARN carries `http.route`, the request id and the OTel ids · silent-behavior · when: match
+### [C73.30] the tenant-rejection WARN carries `http.route`, the request id and the OTel ids · silent-behavior · when: always
 
 - detect: whatever reads the `[server.tenant] request rejected` WARN by its exact field set or by
   where its text ends: a log-parsing job, a schema-checked ingest that refuses unknown fields, a
@@ -15094,8 +15094,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   ```
 
   Rules outside the repository (a log platform's parser or saved query) count too.
-- gate: match = a hit that pins the line's field set or anchors its text end. no-match = every
-  reader keys on the message prefix: nothing to do.
+- gate: always. The line changes for every service that logs through the framework, and its
+  readers (a saved log query, an alert, a parser) sit outside the repository, where no grep finds
+  them: audit them whether or not the detect hits.
 - scope: the `[server.tenant]` rejection WARN on both logger paths (the framework logger and the
   stdlib fallback the public `TenantMiddleware` takes with a nil logger), on every engine the
   framework builds. **Unchanged**: the message text through `reason="…"`, and `path`
@@ -15114,12 +15115,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the response's `X-Request-ID`. A handler's `server.NewUnknownTenantError` refusal comes from
   inside the access logger, so it also joins that request's access line.
 - verify: against a non-production log sink with tracing on, in a multi-tenant service:
-  - call a route whose handler returns `server.NewUnknownTenantError(err)` and confirm the
-    `reason="unknown tenant"` WARN carries its access line's `request_id` in both `request_id`
-    and `correlation_id`, its `http.route`, and the span's `trace_id`;
-  - send a request with no tenant and confirm the `reason="empty tenant"` WARN carries the 400
-    response's `X-Request-ID` in both `request_id` and `correlation_id`, its `http.route`, and
-    the span's `trace_id`, and that no access line was written for it.
+  - call a route whose handler returns `server.NewUnknownTenantError(err)`, with an `err` that
+    matches `multitenant.ErrUnknownTenant` (any other cause answers 500 and writes no `reason=`
+    line), and confirm the `reason="unknown tenant"` WARN carries its access line's `request_id`
+    in both `request_id` and `correlation_id`, its `http.route`, and the span's `trace_id`;
+  - send a request with no tenant to a registered route and confirm the `reason="resolver error"`
+    WARN carries the 400 response's `X-Request-ID` in both `request_id` and `correlation_id`, its
+    `http.route`, and the span's `trace_id`, and that no access line was written for it. Every
+    built-in resolver reports a missing tenant as `resolver error`; an unmatched route leaves
+    `http.route` empty.
 - ref: gaborage/go-bricks#2212 · `server/line_correlation.go` (`correlateLine`, `openWarn`,
   `warnCorrelated`) · `server/tenant_middleware.go` (`logTenantRejection`)
 
