@@ -106,40 +106,51 @@ func newHandlerContext(c *echo.Context, cfg *config.Config) HandlerContext {
 	return HandlerContext{Config: cfg, ectx: c}
 }
 
-// TestContextOption customizes a HandlerContext built by NewHandlerContextForTest. It
-// seeds pre-routing state the engine would otherwise populate during matching, so unit
-// tests can exercise code that reads that state without standing up a router. Test-support
-// only: options are applied at test construction, never on a live request context.
-type TestContextOption func(*HandlerContext)
+// TestContextSeeder seeds a HandlerContext built by NewHandlerContextForTest with
+// pre-routing state the engine would otherwise populate during matching, so unit tests can
+// exercise code that reads that state without standing up a router. Test-support only:
+// seeders are applied at test construction, never on a live request context.
+//
+// The type is sealed (ADR-165): its only method is unexported, so the constructors in this
+// package (WithRouteTemplate) are the only source of a working value, and the framework can
+// change how a seeder seeds the context without breaking a consumer.
+type TestContextSeeder interface {
+	seedTestContext(c *HandlerContext)
+}
+
+// routeTemplateSeeder is the TestContextSeeder WithRouteTemplate returns.
+type routeTemplateSeeder struct{ template string }
+
+func (s routeTemplateSeeder) seedTestContext(c *HandlerContext) {
+	c.ectx.SetPath(s.template)
+	c.ectx.Request().Pattern = s.template
+}
 
 // WithRouteTemplate stamps the matched route template so RouteTemplate() reports it on an
 // otherwise-unrouted test context (which never routes and would report ""). It stamps both
 // places the router writes on a live request — the context and r.Pattern, which echo sets for
 // standard-library middlewares and which CreateProbeSkipper reads — so a test context cannot
 // present a template through one and an empty one through the other. On a live request the
-// router owns both values; the option is reachable only through the test constructor, so it
+// router owns both values; the seeder is reachable only through the test constructor, so it
 // cannot mutate a routed context's identity. See issue #639.
-func WithRouteTemplate(template string) TestContextOption {
-	return func(c *HandlerContext) {
-		c.ectx.SetPath(template)
-		c.ectx.Request().Pattern = template
-	}
+func WithRouteTemplate(template string) TestContextSeeder {
+	return routeTemplateSeeder{template: template}
 }
 
 // NewHandlerContextForTest builds a HandlerContext backed by a real Echo context for use
 // in external-package tests (e.g. app/, scheduler/) that exercise Handler / MiddlewareFunc
 // code but cannot name the unexported escape hatch. It keeps the echo dependency confined
-// to package server. Test-support only — not for production wiring. TestContextOption
+// to package server. Test-support only — not for production wiring. TestContextSeeder
 // values (e.g. WithRouteTemplate) seed routing state the synthetic context would otherwise
 // leave empty.
-func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *config.Config, opts ...TestContextOption) HandlerContext {
+func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *config.Config, opts ...TestContextSeeder) HandlerContext {
 	e := newEngine()
 	// Register the framework validator so contexts built here drive the typed pipeline
 	// (which calls c.Validate) exactly as a live request would.
 	e.Validator = NewValidator()
 	c := newHandlerContext(e.NewContext(r, w), cfg)
 	for _, opt := range opts {
-		opt(&c)
+		opt.seedTestContext(&c)
 	}
 	return c
 }

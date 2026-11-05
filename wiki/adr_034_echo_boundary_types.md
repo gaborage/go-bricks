@@ -7,6 +7,9 @@
 > `server.NewHandlerContextForTest` is now `(w, r, cfg, opts ...TestContextOption) HandlerContext`.
 > The separate `NewHandlerContextForTestWithOptions` constructor is removed. The Decision text
 > below keeps the original three-argument signature.
+>
+> **Amended (2026-11-03, [ADR-165](adr_165_test_context_seeder_opaque.md)):** the option type is
+> now the sealed `TestContextSeeder`; `TestContextOption` is removed.
 
 ## Context
 

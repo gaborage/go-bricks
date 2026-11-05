@@ -386,8 +386,10 @@ A store port is judged by the SQL it emits, not by the unit tests that pin subst
 ## Server / HandlerContext Testing
 
 Unit-test a `Handler` or `MiddlewareFunc` without standing up a router by building a
-`HandlerContext` directly with `server.NewHandlerContextForTest`, passing `TestContextOption`
-values (e.g. `server.WithRouteTemplate`) only when routing state is needed. The synthetic context is
+`HandlerContext` directly with `server.NewHandlerContextForTest`, passing `TestContextSeeder`
+values (e.g. `server.WithRouteTemplate`) only when routing state is needed. `TestContextSeeder` is
+sealed ([ADR-165](adr_165_test_context_seeder_opaque.md)): only package `server` builds one, so
+pass configuration through the `cfg` argument rather than writing your own seeder. The synthetic context is
 never routed, so routing-derived state is empty by default — seed only what the code under
 test reads:
 
