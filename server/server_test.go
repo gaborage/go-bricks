@@ -254,6 +254,20 @@ func TestServerEnginesUseMaskingRouter(t *testing.T) {
 	assert.IsType(t, &maskingRouter{}, srv.probeEcho.Router(), "probe engine")
 }
 
+// A module route under the base path renders masked on the application engine, and an
+// unmatched request renders value-free.
+func TestServerModuleRoutesRenderMaskedPaths(t *testing.T) {
+	srv := newTestServer("/svc", "", "")
+	masked := recordMaskedPaths(srv.echo)
+	srv.ModuleGroup().Add(http.MethodGet, "/cards/:pan", func(c HandlerContext) error {
+		return c.String(http.StatusOK, "")
+	})
+
+	assert.Equal(t, http.StatusOK, serveEngine(srv.echo, http.MethodGet, "/svc/cards/"+parityPAN).Code)
+	assert.Equal(t, http.StatusNotFound, serveEngine(srv.echo, http.MethodGet, "/nope/"+parityPAN).Code)
+	assert.Equal(t, []string{"/svc/cards/REDACTED", maskToken}, *masked)
+}
+
 func TestServerNewRegistersProbeDescriptors(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
@@ -1202,7 +1216,7 @@ func TestModuleGroupBehavior(t *testing.T) {
 
 func TestCustomErrorHandlerRawMode(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
-	e := echo.New()
+	e := newEngine()
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1231,7 +1245,7 @@ func TestCustomErrorHandlerRawMode(t *testing.T) {
 
 func TestCustomErrorHandlerRawModeTimeout(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
-	e := echo.New()
+	e := newEngine()
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1254,7 +1268,7 @@ func TestCustomErrorHandlerRawModeTimeout(t *testing.T) {
 
 func TestCustomErrorHandlerRawModeEchoHTTPError(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
-	e := echo.New()
+	e := newEngine()
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
@@ -1776,7 +1790,7 @@ func TestClassifyErrorWithholdsDetailOutsideDevelopment(t *testing.T) {
 			cfg.App.Env = tt.env
 			cfg.App.Debug = tt.debug
 
-			e := echo.New()
+			e := newEngine()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			c := e.NewContext(req, httptest.NewRecorder())
 

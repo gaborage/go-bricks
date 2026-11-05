@@ -136,7 +136,7 @@ func (l *disabledLogger) WithFields(_ map[string]any) logger.Logger { return l }
 // TestLogActionSummarySkipsWhenLevelDisabled verifies the short-circuit guard: when
 // the action-log level is disabled, logActionSummary returns before emitting.
 func TestLogActionSummarySkipsWhenLevelDisabled(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -149,7 +149,7 @@ func TestLogActionSummarySkipsWhenLevelDisabled(t *testing.T) {
 
 // Test that the request logger logs the same correlation_id as the response meta.traceId
 func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	recLog := &recLogger{}
 	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
@@ -183,7 +183,7 @@ func TestRequestLoggerUsesSameCorrelationIDAsResponse(t *testing.T) {
 }
 
 func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	recLog := &recLogger{}
 	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
@@ -210,7 +210,7 @@ func TestRequestLoggerLogsTraceparentWhenInboundPresent(t *testing.T) {
 }
 
 func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	recLog := &recLogger{}
 	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
@@ -263,7 +263,7 @@ func TestRequestLoggerSkipsHealthAndReady(t *testing.T) {
 // 4xx/5xx responses produce an action log summary even when no explicit WARN+ logs
 // were emitted during request execution.
 func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	recLog := &recLogger{}
 	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
@@ -320,7 +320,7 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 // if a WARN+ log is explicitly emitted during request execution, the final
 // action summary is suppressed (since trace logs already captured the issue).
 func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	recLog := &recLogger{}
 	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
@@ -352,7 +352,7 @@ func TestRequestLoggerSuppressesActionLogWhenExplicitWarningLogged(t *testing.T)
 // This is a regression test for the bug where 404 errors were logged as 200 because
 // Echo's error handler (which sets the response status) runs AFTER middleware completes.
 func TestRequestLoggerHandlesEchoNotFoundError(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	recLog := &recLogger{}
 	e.Use(loggerWithConfigEcho(recLog, LoggerConfig{
 		HealthPath:           testHealthPath,
@@ -473,7 +473,7 @@ func TestHandlerContextEscalateSeverity(t *testing.T) {
 // TestEscalateSeverityConcurrency verifies that the public EscalateSeverity function
 // is thread-safe when called from multiple goroutines.
 func TestEscalateSeverityConcurrency(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(loggerWithConfigEcho(logger.New("info", false), LoggerConfig{
 		SlowRequestThreshold: 100 * time.Millisecond,
 	}))
@@ -825,7 +825,7 @@ func TestCreateActionMessage(t *testing.T) {
 
 // TestExtractRequestMetadataWithResponse verifies metadata extraction when response is available.
 func TestExtractRequestMetadataWithResponse(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/users/123?q=test", http.NoBody)
 	req.Header.Set("User-Agent", "test-agent/1.0")
 	rec := httptest.NewRecorder()
@@ -849,7 +849,7 @@ func TestExtractRequestMetadataWithResponse(t *testing.T) {
 
 // TestExtractRequestMetadataFallbackToRequestHeader verifies fallback to request header.
 func TestExtractRequestMetadataFallbackToRequestHeader(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testHealthPath, http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, "fallback-789")
 	rec := httptest.NewRecorder()
@@ -869,7 +869,7 @@ func TestExtractRequestMetadataFallbackToRequestHeader(t *testing.T) {
 
 // TestExtractRequestMetadataNoRequestID verifies behavior with missing request ID.
 func TestExtractRequestMetadataNoRequestID(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 
@@ -886,7 +886,7 @@ func TestExtractRequestMetadataNoRequestID(t *testing.T) {
 
 // TestExtractRequestMetadataAllFields verifies all 8 fields are populated correctly.
 func TestExtractRequestMetadataAllFields(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/api/resource", http.NoBody)
 	req.Header.Set("User-Agent", testUserAgent)
 	rec := httptest.NewRecorder()
@@ -1238,7 +1238,7 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			urlPath := tt.urlPath
 			if urlPath == "" {
 				urlPath = tt.path
@@ -1263,7 +1263,7 @@ func TestRequestLoggerExtractStatus(t *testing.T) {
 	rl := newRequestLogger(&recLogger{}, LoggerConfig{})
 
 	t.Run("error status takes precedence", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
@@ -1279,7 +1279,7 @@ func TestRequestLoggerExtractStatus(t *testing.T) {
 	})
 
 	t.Run("response status when no error", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
@@ -1291,7 +1291,7 @@ func TestRequestLoggerExtractStatus(t *testing.T) {
 	})
 
 	t.Run("zero when no status written", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 		rec := httptest.NewRecorder()
 		c := e.NewContext(req, rec)
@@ -1310,7 +1310,7 @@ func TestRequestLoggerHandleFullFlow(t *testing.T) {
 		SlowRequestThreshold: 100 * time.Millisecond,
 	})
 
-	e := echo.New()
+	e := newEngine()
 	e.Use(rl.Handle)
 
 	e.GET(testAPITestPath, func(c *echo.Context) error {
@@ -1338,7 +1338,7 @@ func TestRequestLoggerHandleSkipsHealthProbes(t *testing.T) {
 		ReadyPath:  "/ready",
 	})
 
-	e := echo.New()
+	e := newEngine()
 	e.Use(rl.Handle)
 
 	e.GET(testHealthPath, func(c *echo.Context) error {
@@ -1374,7 +1374,7 @@ func TestRequestLoggerHandleSkipsHealthProbes(t *testing.T) {
 // This tests the fix for the scenario where middleware ordering causes response headers to be unset
 // even though the response object is non-nil.
 func TestExtractRequestMetadataEmptyResponseHeaders(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
 	req.Header.Set(gobrickstrace.HeaderTraceParent, testRequestTraceSpan01)
@@ -1395,7 +1395,7 @@ func TestExtractRequestMetadataEmptyResponseHeaders(t *testing.T) {
 // TestExtractRequestMetadataPartialResponseHeaders verifies independent fallback for each header.
 // This ensures that if only one header is empty in the response, only that header falls back.
 func TestExtractRequestMetadataPartialResponseHeaders(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/partial", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
 	req.Header.Set(gobrickstrace.HeaderTraceParent, testRequestTraceSpan01)
@@ -1415,7 +1415,7 @@ func TestExtractRequestMetadataPartialResponseHeaders(t *testing.T) {
 // TestExtractRequestMetadataResponseHeadersPriority verifies response headers take precedence when set.
 // This ensures the existing behavior is maintained - response headers are preferred.
 func TestExtractRequestMetadataResponseHeadersPriority(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/priority", http.NoBody)
 	req.Header.Set(echo.HeaderXRequestID, testReqFromRequest)
 	req.Header.Set(gobrickstrace.HeaderTraceParent, testRequestTraceSpan01)
@@ -1436,7 +1436,7 @@ func TestExtractRequestMetadataResponseHeadersPriority(t *testing.T) {
 // TestExtractRequestMetadataMissingBothRequestAndResponseHeaders verifies behavior when headers absent everywhere.
 // This ensures the function doesn't panic and returns empty strings gracefully.
 func TestExtractRequestMetadataMissingBothRequestAndResponseHeaders(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/no-headers", http.NoBody)
 	// Don't set any headers in request
 	rec := httptest.NewRecorder()
@@ -1458,7 +1458,7 @@ func TestExtractRequestMetadataMissingBothRequestAndResponseHeaders(t *testing.T
 // caller-reachable. An unvouched value is dropped, never logged.
 func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 	t.Run("from_the_request_header_fallback", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 		req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 		c := e.NewContext(req, httptest.NewRecorder())
@@ -1467,7 +1467,7 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 	})
 
 	t.Run("from_the_response_header", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 		c := e.NewContext(req, httptest.NewRecorder())
 		c.Response().Header().Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
@@ -1476,7 +1476,7 @@ func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
 	})
 
 	t.Run("a_valid_response_header_still_wins_over_an_invalid_request_one", func(t *testing.T) {
-		e := echo.New()
+		e := newEngine()
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
 		req.Header.Set(gobrickstrace.HeaderTraceParent, poisonedTraceParent)
 		c := e.NewContext(req, httptest.NewRecorder())
@@ -1496,7 +1496,7 @@ func TestActionLogForgedPathStaysOnOneLine(t *testing.T) {
 	for name, pretty := range cases {
 		t.Run(name, func(t *testing.T) {
 			out := captureStdout(t, func() {
-				e := echo.New()
+				e := newEngine()
 				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				req.URL.Path = "/test\n[FORGED] level=info msg=owned"
 				req.Header.Set("User-Agent", "ua\nforged-agent")
@@ -1521,7 +1521,7 @@ func TestActionLogForgedRawPathStaysOnOneLine(t *testing.T) {
 	for name, pretty := range cases {
 		t.Run(name, func(t *testing.T) {
 			out := captureStdout(t, func() {
-				e := echo.New()
+				e := newEngine()
 				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 				// Lowercase hex differs from net/url's canonical %0A, which is exactly why
 				// RawPath survives here where the canonical spelling clears it.
@@ -1546,7 +1546,7 @@ func TestAccessLogRecordsRawPath(t *testing.T) {
 	recLog := &recLogger{}
 	rl := newRequestLogger(recLog, LoggerConfig{SlowRequestThreshold: time.Second})
 
-	e := echo.New()
+	e := newEngine()
 	e.Use(rl.Handle)
 	e.GET(probeSkipHealth, okEchoHandler)
 	e.GET(probeSkipModuleRoute, okEchoHandler)
