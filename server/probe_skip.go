@@ -148,7 +148,7 @@ func CreateProbeSkipper(healthPath, readyPath string) SkipperFunc {
 // served it from a module route. The SECURITY block on CreateProbeSkipper has the full
 // argument.
 func routerPath(r *http.Request) string {
-	return cmp.Or(r.URL.RawPath, r.URL.Path)
+	return cmp.Or(r.URL.RawPath, r.URL.Path) //nolint:forbidigo // the probe skip keys on the path the router matched (GHSA-h4jw-4c64-48mh); L6p moves the access-log and span callers to maskedPath (#2212)
 }
 
 // skipperFromRequest adapts a consumer-supplied SkipperFunc to the echo-native form the

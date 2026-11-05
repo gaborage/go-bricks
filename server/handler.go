@@ -122,7 +122,7 @@ type TestContextSeeder interface {
 type routeTemplateSeeder struct{ template string }
 
 func (s routeTemplateSeeder) seedTestContext(c *HandlerContext) {
-	c.ectx.SetPath(s.template)
+	c.ectx.SetPath(s.template) //nolint:forbidigo // test seeder: writes the route template a test names, not a caller-written path (#2212)
 	c.ectx.Request().Pattern = s.template
 }
 
@@ -167,10 +167,10 @@ func (c HandlerContext) RequestContext() context.Context { return c.ectx.Request
 func (c HandlerContext) ResponseWriter() http.ResponseWriter { return c.ectx.Response() }
 
 // Param returns the path parameter for name (empty string if absent).
-func (c HandlerContext) Param(name string) string { return c.ectx.Param(name) }
+func (c HandlerContext) Param(name string) string { return c.ectx.Param(name) } //nolint:forbidigo // consumer door: hands the handler its own request value, which no framework sink prints
 
 // Query returns the first query-string value for name (empty string if absent).
-func (c HandlerContext) Query(name string) string { return c.ectx.QueryParam(name) }
+func (c HandlerContext) Query(name string) string { return c.ectx.QueryParam(name) } //nolint:forbidigo // consumer door: hands the handler its own request value, which no framework sink prints
 
 // RequestHeader returns the first request header value for name (empty string if absent).
 func (c HandlerContext) RequestHeader(name string) string { return c.ectx.Request().Header.Get(name) }
@@ -276,7 +276,7 @@ func (c HandlerContext) PathParams() []PathParam {
 	}
 	// echo's PathValues() returns a slice header ALIASING the pooled context's
 	// backing array (reused across requests) — element-wise copy is mandatory.
-	values := c.ectx.PathValues()
+	values := c.ectx.PathValues() //nolint:forbidigo // consumer door: hands the handler its own request value, which no framework sink prints
 	params := make([]PathParam, len(values))
 	for i, v := range values {
 		params[i] = PathParam{Name: v.Name, Value: v.Value}
@@ -848,11 +848,11 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSc
 		return nil
 	}
 
-	if err := echo.BindPathValues(c, target); err != nil {
+	if err := echo.BindPathValues(c, target); err != nil { //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 		return newJSONBindError(err, fieldPathIsSchema)
 	}
 	if req.Method == http.MethodGet || req.Method == http.MethodDelete || req.Method == http.MethodHead || req.Method == echo.QUERY {
-		if err := echo.BindQueryParams(c, target); err != nil {
+		if err := echo.BindQueryParams(c, target); err != nil { //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 			return newJSONBindError(err, fieldPathIsSchema)
 		}
 	}
@@ -867,7 +867,7 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSc
 
 // bindParamValue binds one path parameter into fieldValue for a bindRequestPlanned entry.
 func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, fieldValue reflect.Value) error {
-	value := c.Param(paramName)
+	value := c.Param(paramName) //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if value != "" {
 		if err := setFieldValue(fieldValue, value); err != nil {
 			return newFieldBindError(bindSourceParam, paramName, err)
@@ -883,7 +883,7 @@ func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSli
 		return rb.bindQueryStringSlice(c, queryName, fieldValue)
 	}
 
-	value := c.QueryParam(queryName)
+	value := c.QueryParam(queryName) //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if value != "" {
 		if err := setFieldValue(fieldValue, value); err != nil {
 			return newFieldBindError(bindSourceQuery, queryName, err)
@@ -894,7 +894,7 @@ func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSli
 
 // bindQueryStringSlice binds repeated query parameters to a []string field
 func (rb *RequestBinder) bindQueryStringSlice(c *echo.Context, queryName string, fieldValue reflect.Value) error {
-	values := c.QueryParams()[queryName]
+	values := c.QueryParams()[queryName] //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if len(values) > 0 {
 		slice := reflect.MakeSlice(fieldValue.Type(), len(values), len(values))
 		for i, v := range values {

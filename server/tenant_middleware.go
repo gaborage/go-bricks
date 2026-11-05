@@ -58,7 +58,7 @@ func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkip
 
 			tenantID, err := resolver.ResolveTenant(c.Request().Context(), c.Request())
 			if err != nil || tenantID == "" {
-				logTenantRejection(l, c, tenantRejectionReason(err), c.Request().URL.Path)
+				logTenantRejection(l, c, tenantRejectionReason(err), c.Request().URL.Path) //nolint:forbidigo // L6p renders this sink through maskedPath (#2212)
 				return NewBadRequestError(msgInvalidTenant)
 			}
 

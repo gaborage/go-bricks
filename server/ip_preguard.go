@@ -96,7 +96,7 @@ func ipPreGuardEcho(threshold int, l logger.Logger) echo.MiddlewareFunc {
 func logIPPreGuardRejection(l logger.Logger, c *echo.Context) {
 	req := c.Request()
 	method := logSafeValue(req.Method)
-	path := logSafeValue(req.URL.Path)
+	path := logSafeValue(req.URL.Path) //nolint:forbidigo // L6p renders this sink through maskedPath (#2212)
 	client := logSafeValue(c.RealIP())
 	if l == nil {
 		log.Printf("WARN [server.ip_preguard] request rejected by IP pre-guard method=%s path=%s client=%s status=%d",
