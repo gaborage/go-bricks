@@ -73,6 +73,13 @@ resolution and the Consequences below hold as written. Running global middleware
 pipeline, after its tenant is published, would lift the refusal additively, but it would make the
 global-middleware seat a second reader of route ownership.
 
+**Amendment (2026-11-03, [ADR-169](adr_169_framework_routes_skip_path_tenant.md)).** Under a
+tenant resolver that may read the path, the root tenant seat also skips the framework's own routes
+under `<base>/_sys` and an enabled `debug.pathprefix`, so global middleware runs there with no
+tenant in context, a composite chain's header tenant included. Startup refuses a consumer route
+under those roots ([ADR-168](adr_168_framework_route_roots_reserved.md)), so on every consumer
+route the statement above still holds.
+
 The app invokes the server method through an optional (inline) type assertion rather than
 adding a method to the exported `ServerRunner` interface — keeping `ServerRunner`
 byte-identical and the change apidiff-additive (`feat:`).
