@@ -408,6 +408,13 @@ func TestRequestLoggerKeepsActionLogWhenSeverityEscalates(t *testing.T) {
 			},
 			wantLevel: "info", wantCode: "INFO",
 		},
+		{
+			name: "escalate_severity_panic_is_the_highest_severity",
+			escalate: func(c *echo.Context, _ logger.Logger) {
+				newHandlerContext(c, nil).EscalateSeverity(zerolog.PanicLevel)
+			},
+			wantLevel: "error", wantCode: "ERROR",
+		},
 	}
 
 	for _, tt := range tests {
