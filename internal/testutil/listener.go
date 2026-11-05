@@ -53,7 +53,7 @@ func StartListener(t *testing.T, srv Listener) string {
 	case <-time.After(5 * time.Second):
 		t.Fatal("server was not ready within 5s")
 	}
-	return "http://" + srv.BoundAddr().String()
+	return "http://" + srv.BoundAddr().String() // NOSONAR S5332: loopback test listener, no TLS to terminate
 }
 
 // AssertGETStatuses sends GET base+path for every path in want and reports each response
