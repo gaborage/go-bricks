@@ -309,18 +309,22 @@ handler's `unhandled error`) carry the same correlation: `http.route`,
 span context is valid, so each joins its request's span and the response's
 `X-Request-ID`. The tenant seat and the outermost panic guard run outside the
 access logger, so their lines have no access line to join; the error handler's
-lines and a handler's `server.NewUnknownTenantError` refusal come from inside
-it, so they also join that request's access line. On these lines `http.route`
-is the registered route template (`/cards/:id`), the same value the access line
-and the JOSE failure line carry, so one filter on it finds all of them; their
-`path` field is the masked rendering
+lines report a panic or error that passed through the access logger, and a
+handler's `server.NewUnknownTenantError` refusal comes from inside it, so they
+also join that request's access line. On these lines `http.route` is the
+registered route template (`/cards/:id`), the same value the access line and
+the JOSE failure line carry, so one filter on it finds all of them; the lines
+that carry a `path` field (the tenant WARN and the guard's line) carry the
+masked rendering
 (`/cards/REDACTED`, [ADR-167](adr_167_inbound_paths_render_from_route_template.md)).
 `request_id` and `correlation_id` hold the same value, read without minting one,
-so both are empty on a panic-guard line written before the request-id
-middleware ran. With a nil logger (the public `TenantMiddleware` construction
-has one) the tenant WARN and `unhandled error` take the stdlib fallback, which
-appends the same fields as `key=value` text. A WARN whose level is
-disabled returns before it is formatted or reads the client address.
+so on a panic-guard line written before the request-id middleware set the
+response's `X-Request-ID` both hold the inbound `X-Request-ID` when it is valid
+and are empty otherwise. With a nil logger the stdlib fallback appends the same
+fields as `key=value` text: the tenant WARN takes it under the public
+`TenantMiddleware` construction, and `unhandled error` under a
+`server.NewHandlerRegistry` built without `server.WithLogger`. A WARN whose
+level is disabled returns before it is formatted or reads the client address.
 
 The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
 run's framework id: a UUID minted once per run and shared by the normal-return and

@@ -22,8 +22,9 @@ import (
 //
 // The message matches the HTTPErrorHandler's own panic line, so an alert keyed
 // on it catches the panics from BOTH sides of Recover. The line is correlated
-// (correlateLine); its request_id and correlation_id are empty when the
-// request-id middleware — which runs inside this guard — had not run yet.
+// (correlateLine); when the request-id middleware — which runs inside this guard —
+// had not set the response's X-Request-ID yet, its request_id and correlation_id
+// hold the inbound X-Request-ID if valid, and are empty otherwise.
 func reportPanic(log logger.Logger, c *echo.Context, r any) {
 	defer func() { _ = recover() }()
 
