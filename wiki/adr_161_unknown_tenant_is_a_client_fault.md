@@ -91,7 +91,10 @@ tenant the deployment does not serve passes the seat, and the handler runs (#222
    answers 500.
 8. **The seat does no existence check.** It checks form; existence belongs to the store, and the
    first tenant resource the request asks for answers it. An opt-in existence check at the seat
-   can come later and return the same sentinel, so the wire answer would not move.
+   can come later and return the same sentinel, so the wire answer would not move. (Amended by
+   ADR-170: under a path-reading resolver this no longer holds for a path-read tenant, which the
+   seat writes only when the store's `HasTenant` holds it; header- and subdomain-won tenants keep
+   this decision.)
 
 ## Consequences
 

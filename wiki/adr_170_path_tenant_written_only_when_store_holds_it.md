@@ -33,9 +33,14 @@ only at the first per-tenant accessor (ADR-161), after it had already been print
    builds, from its tenant resource source when the source implements `HasTenant` (the built-in
    `*config.TenantStore` does), replacing any value a consumer put in `app.Options.ServerOptions`:
    the resource source is the one authority on which tenants exist. A server passed as
-   `app.Options.Server` is used as given and keeps its own checker. A server with no checker
-   vouches for no path-read id, so every one answers 400 (fail closed). A later #2212 link (A1e)
-   turns that state into a startup refusal.
+   `app.Options.Server` is used as given and keeps its own checker. A server whose resolver may
+   read the path (`multitenant.MayReadPath`) and that has no checker refuses `Start` before
+   binding, where it would answer 400 to every path tenant: a hand-built `server.New`, or an App
+   whose resource source has no `HasTenant`. One served anyway (its `Echo()` behind another
+   listener) still vouches for no path-read id, so it stays fail-closed. With a checker wired,
+   `Start` writes one INFO line (`log.type=action`): `[server.tenant] a tenant read from the
+   request path is written only when the tenant store holds it (ADR-170) store=<%T>`, plus
+   `tenants=<n>` for a `*config.TenantStore`; other servers write none.
 4. **The public `server.TenantMiddleware` is unchanged.** It asks no checker and writes every
    resolved id; a later link (A1d) requires the check there.
 5. **Reversal of ADR-036.** ADR-036 promised global middleware "the tenant already in context".
@@ -63,8 +68,8 @@ tenant, and no response before the adapter differs by tenant existence.
 
 - **Breaking**: under a path-reading resolver, a request whose path tenant the store does not hold
   answers 400 "Invalid tenant" from the adapter, with no tenant in context anywhere, where it ran
-  its handler with the tenant written. A server built without the App, or an App whose resource
-  source has no `HasTenant`, refuses every path tenant.
+  its handler with the tenant written. A path-reading server with no checker, built without the
+  App or by an App whose resource source has no `HasTenant`, fails `Start`.
 - **Limits.** A consumer `HasTenant` that breaks its contract (panics, blocks or answers from a
   stale set) is a named residual; a panic is caught by the outermost guard (`Panic recovered`, no
   access line). Consumer `SetTenant` values, consumer `Request().URL` reads and edge or WAF logs
@@ -74,12 +79,14 @@ tenant, and no response before the adapter differs by tenant existence.
     with `auth.jwt.telemetry.enduserid` on; otherwise correlate on `client.address` and
     `user_agent.original`.
   - *Authenticated unknown-tenant 400s* read as catalog drift or credentialed enumeration.
-  - *Store health:* every path tenant answering 400 on one pod means that pod's set is empty or
-    stale; `Panic recovered` with no access line means its `HasTenant` panicked.
+  - *Store health:* the `[server.tenant]` startup line names the store and, for the built-in
+    one, its tenant count; every path tenant answering 400 on one pod means that pod's set is
+    empty or stale; `Panic recovered` with no access line means its `HasTenant` panicked.
   - *Collapsed clients:* a prober sharing a load balancer's address shares that address's limiter
     bucket (ADR-160).
   - *`HasTenant` contract for a custom source:* load the set before `app.New`, keep the last good
-    set on a failed refresh, never shrink to empty, never panic, and log each refresh's size.
+    set on a failed refresh, never shrink to empty because a refresh failed, never panic, and log
+    each refresh's size.
 - **Cost (ADR-026).** A known path tenant pays one in-memory lookup and no allocation; every
   existing observed-request row is unchanged. Two 400 rows are pinned: `path_won_unknown_tenant`
   at 133 and `xff_path_won_unknown_tenant` at 142 allocs/op, whose WARN reuses the limiter's
@@ -91,5 +98,6 @@ tenant, and no response before the adapter differs by tenant existence.
   `refuseUnknownPathTenant`, `unknownPathTenantKey`
 - `server/handler.go`: `adaptHandler`, `handlerWrapper.wrap`
 - `server/options.go`: `Options.TenantChecker`
+- `server/server.go`: `newServer` (`errNoTenantChecker`), `logPathTenantCheck`
 - `app/app.go`: `resolveServer`; `app/bootstrap.go`: `dependencies`
 - See [migrations.md](migrations.md) `[C73.36]`.

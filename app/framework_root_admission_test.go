@@ -9,6 +9,7 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -62,7 +63,7 @@ func TestModuleRoutesUnderFrameworkRootsRefused(t *testing.T) {
 	cfg.Multitenant.Resolver.Type = config.ResolverTypePath
 	cfg.Multitenant.Resolver.Path.Segment = 2
 	log := logger.New("disabled", true)
-	srv := server.New(cfg, log)
+	srv := server.NewWithOptions(cfg, log, server.Options{TenantChecker: testutil.TenantSet{}}) // needed to start (ADR-170)
 
 	registry := app.NewModuleRegistry(&app.ModuleDeps{Logger: log, Config: cfg})
 	require.NoError(t, registry.Register(frameworkRootModule{}))

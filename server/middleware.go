@@ -281,6 +281,7 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 			// The seat skips the probes and, under a resolver that may read the path, the
 			// framework route roots (ADR-169); the forwarded-client-cert seat skips probes only.
 			seat.frameworkRoots, seat.rootsErr = frameworkRoots(cfg, resolver)
+			seat.checksPath = inputs.checkPath && multitenant.MayReadPath(resolver)
 			e.Use(tenantMiddlewareEcho(resolver, skipFrameworkRoots(skipProbe, seat.frameworkRoots), inputs, log))
 			seat.seated = true
 		} else {
@@ -323,11 +324,14 @@ type seatInputs struct {
 
 // tenantSeat is what setupMiddlewares installed for tenant resolution: whether the seat is
 // installed, the framework route roots its skip covers (frameworkRoots), which route
-// admission reserves, and why those roots are unusable, which Start returns.
+// admission reserves, why those roots are unusable, which Start returns, and whether the seat
+// asks inputs.checker about a path-read tenant (ADR-170): the Server's seat under a resolver
+// that may read the path (multitenant.MayReadPath).
 type tenantSeat struct {
 	seated         bool
 	frameworkRoots []string
 	rootsErr       error
+	checksPath     bool
 }
 
 func newHeaderResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {

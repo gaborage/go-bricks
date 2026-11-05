@@ -22,8 +22,11 @@ type Options struct {
 	// TenantChecker vouches for a tenant id read from the request path (ADR-170). Under
 	// multitenant.enabled the tenant seat writes a path-read id to the request only when
 	// HasTenant answers true; any other path-read id is never written, and the route's handler
-	// adapter answers 400 "Invalid tenant". A nil checker vouches for no id, so every path-read
-	// tenant is refused. Header- and subdomain-read tenants are never asked. The App sets it on
+	// adapter answers 400 "Invalid tenant". Under a resolver that may read the path
+	// (multitenant.MayReadPath) a nil checker refuses Start before binding; a server served
+	// anyway vouches for no id, so every path-read tenant is refused. With a checker, Start
+	// writes one [server.tenant] INFO line naming it. Header- and subdomain-read tenants are never
+	// asked. The App sets it on
 	// the server it builds from its tenant resource source, replacing any value given here; a
 	// server passed as app.Options.Server keeps its own.
 	TenantChecker multitenant.TenantChecker

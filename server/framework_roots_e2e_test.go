@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -26,7 +27,8 @@ func frameworkRootServer(resolverType string) *server.Server {
 	cfg.Multitenant.Resolver.Path.Segment = 2
 	cfg.Debug.Enabled = true
 	cfg.Debug.PathPrefix = "/_debug"
-	return server.New(cfg, logger.New("disabled", true))
+	// A path-reading server needs a check to start (ADR-170); this one holds no tenant.
+	return server.NewWithOptions(cfg, logger.New("disabled", true), server.Options{TenantChecker: testutil.TenantSet{}})
 }
 
 // TestStartRefusesConsumerRoutesUnderFrameworkRoots pins ADR-168's refusal through server.New:

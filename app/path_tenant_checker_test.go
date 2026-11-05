@@ -54,3 +54,40 @@ func TestResolveServerAsksTheResourceSourceAboutPathTenants(t *testing.T) {
 		"/consumer-set/orders": http.StatusBadRequest,
 	})
 }
+
+// TestResolveServerRefusesPathTenancyWithoutAChecker pins ADR-170's wiring refusal through the
+// App's door: a resource source with no HasTenant hands resolveServer a nil checker, and the
+// server it builds refuses Start before binding, while the built-in store's check boots it.
+func TestResolveServerRefusesPathTenancyWithoutAChecker(t *testing.T) {
+	server.DefaultRouteRegistry.Clear()
+	t.Cleanup(server.DefaultRouteRegistry.Clear)
+	cfg := &config.Config{App: config.AppConfig{Name: "path-tenant", Env: "test", Version: "1.0.0"}}
+	cfg.Server.Host = localhostIPV4
+	cfg.Server.Timeout.Read = 5 * time.Second
+	cfg.Server.Timeout.Write = 5 * time.Second
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Resolver.Type = config.ResolverTypePath
+	cfg.Multitenant.Resolver.Path.Segment = 1
+	log := logger.New("disabled", true)
+
+	refused := resolveServer(cfg, log, nil, nil)
+	errCh := make(chan error, 1)
+	go func() { errCh <- refused.Start() }()
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "server.Options.TenantChecker is nil")
+	case <-time.After(5 * time.Second):
+		require.NoError(t, refused.Shutdown(context.Background()))
+		t.Fatal("Start served a path-reading server that has no TenantChecker")
+	}
+
+	store := config.NewTenantStore(cfg)
+	store.AddTenant("acme", &config.TenantEntry{})
+	srv, ok := resolveServer(cfg, log, nil, store).(*server.Server)
+	require.True(t, ok)
+	srv.ModuleGroup().Add(http.MethodGet, "/:tenant/orders", func(c server.HandlerContext) error {
+		return c.String(http.StatusOK, "")
+	})
+	testutil.AssertGETStatuses(t, testutil.StartListener(t, srv), map[string]int{"/acme/orders": http.StatusOK})
+}

@@ -2751,7 +2751,7 @@ as `path`, never the tenant ID. Typed handlers reach the same answer through
 `server.NewUnknownTenantError(err)`, which is fail-closed: any cause that is not the sentinel answers
 500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
 JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
-the tenant does not exist. The seat still does no existence check. Amended by ADR-167: the WARN's
+the tenant does not exist. The seat still does no existence check (until ADR-170, for a path-read tenant). Amended by ADR-167: the WARN's
 `path` is the masked template rendering (`/REDACTED/orders`), not the template. Amended by ADR-170:
 under a path-reading resolver the seat writes a path-read tenant only when the store holds it, and
 the handler adapters answer this 400 for any other, the raw adapter through the same writer. See
@@ -2934,8 +2934,9 @@ now resolves through `multitenant.Resolve` and writes a path-read id only when
 `server.Options.TenantChecker.HasTenant` answers true; the App sets that checker from its resource
 source. Any other path id is never written: the request runs on with an id-free marker, and the
 typed and raw handler adapters answer 400 after route-group middleware and JOSE inbound
-verification, before binding, with the seat's `reason="unknown tenant"` WARN. Header- and
-subdomain-won tenants and the public `server.TenantMiddleware` are unchanged. Reverses ADR-036's
+verification, before binding, with the seat's `reason="unknown tenant"` WARN. A path-reading
+server with no checker fails `Start`; one with a checker writes a `[server.tenant]` startup line
+naming the store. Header- and subdomain-won tenants and the public `server.TenantMiddleware` are unchanged. Reverses ADR-036's
 "tenant already in context" for such requests. See [migrations.md](migrations.md) `[C73.36]`.
 
 **Key Benefits:** a caller-written path segment reaches no framework sink unless the store vouches
