@@ -265,6 +265,7 @@ func TestResolveAllocsStable(t *testing.T) {
 	}{
 		{name: "header_win", resolver: header, leaves: []TenantResolver{header}},
 		{name: "composite_path_win", resolver: &CompositeResolver{Resolvers: []TenantResolver{header, path}}, leaves: []TenantResolver{header, path}, noHeader: true},
+		{name: "validating_header_win", resolver: &ValidatingResolver{Resolver: header}, leaves: []TenantResolver{header}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

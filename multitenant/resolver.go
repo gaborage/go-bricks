@@ -273,8 +273,8 @@ func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (st
 //
 // The contract every implementation must keep:
 //
-//   - tenantID may be an unadmitted request value: the framework calls HasTenant to decide
-//     whether to admit it. An implementation must never log it, echo it, put it in an error,
+//   - tenantID may be an unadmitted request value: a caller of HasTenant may pass it before
+//     admitting it. An implementation must never log it, echo it, put it in an error,
 //     send it outbound, pass it to a deps.* call, or use it as a cache, store or metric key.
 //     It may only compare it against the set it holds.
 //   - HasTenant answers false for "" and for any key that is not a tenant id, including a
@@ -284,6 +284,8 @@ func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (st
 //     tenant only because a load is still in flight.
 //   - On a failed refresh the implementation keeps the last good set; it never shrinks to
 //     empty because a refresh failed.
+//   - A source that refreshes logs the size of each refresh's result, a count and never the
+//     ids, so operators can tell when a pod's set is stale.
 //   - HasTenant never panics.
 //   - The answer is existence, not authorization: true says the deployment holds the tenant,
 //     not that the caller may act for it.
