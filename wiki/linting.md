@@ -172,9 +172,10 @@ direction. GoBricks carried two `text: "var-naming: avoid package names"` stanza
 dead from revive v1.15.0 onward, when that check moved to a separate rule and the wording
 changed. Those two stanzas were suppressing nothing, and nothing said so — deleting them
 changed no findings. Prefer scoping by `path` and `linters` over matching message text.
-GoBricks' one exception is its `server/router_test.go` `forbidigo` stanza, which keys off the
-forbidden identifier because scoping by linter alone would also exempt the ADR-083 and otel
-patterns in that file.
+GoBricks' exceptions are `forbidigo` stanzas, where scoping by linter would lift every pattern:
+`server/router_test.go` keys off the identifier (``use of `echo\.New``), and the path-door
+stanzas key off the msg forbidigo's issue text quotes — each pattern shares or owns one, so an
+exclusion lifts exactly its patterns, and `.golangci.yml` writes that msg, so no release rewords it.
 
 Keep the `presets` list (`comments`, `common-false-positives`, `legacy`,
 `std-error-handling`) — those are generic.

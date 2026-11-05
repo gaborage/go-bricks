@@ -91,12 +91,13 @@ linters:
         # reads, pinned by receiver type (net/http's Request, echo v5's Context and package
         # funcs, and the framework's own HandlerContext path/query doors), so a variable name
         # cannot dodge them. Repo-wide: the exclusions below lift them only for tests, the
-        # outbound-request packages, and (for the HandlerContext pattern alone) server/, which
-        # defines those doors; every other framework read carries a reasoned nolint.
+        # outbound-request packages, and (for the HandlerContext pattern alone) server/, whose
+        # framework code calls its own HandlerContext doors; every other framework read carries
+        # a reasoned nolint.
         - pattern: ^http\.Request\.(URL|RequestURI|PathValue|SetPathValue)$
           pkg: ^net/http$
           msg: &pathDoorMsg 'inbound path: render it through server.maskedPath (#2212) — request-URL, path, query and form values are caller-written bytes (a PAN in a segment), so a sink prints only the masked route template.'
-        - pattern: ^echo\.(Context\.(Param(Or)?|PathValues|QueryParams?|QueryParamOr|QueryString|FormValue(Or)?|FormValues|Bind|SetPath)|PathParam(Or)?|QueryParams?(Or)?|FormValues?(Or)?|Bind(PathValues|QueryParams)|(PathValues|QueryParams)Binder)$
+        - pattern: ^echo\.(Context\.(Param(Or)?|PathValues|QueryParams?|QueryParamOr|QueryString|FormValue(Or)?|FormValues|Bind|SetPath)|PathParam(Or)?|QueryParams?(Or)?|FormValues?(Or)?|Bind(PathValues|QueryParams|Body)|(PathValues|QueryParams|FormField)Binder)$
           pkg: ^github\.com/labstack/echo/v5$
           msg: *pathDoorMsg
         # Its own msg, so the server/ exclusion below can lift this pattern alone.
@@ -249,9 +250,10 @@ linters:
       # inbound path: httpclient/ (the request the client sends and its redirects),
       # migration/source/ (a source URL it fetches), auth/jwks.go (the JWKS fetch request),
       # auth/testing/ (the stub issuer's own handler), and tests, which build and assert the
-      # requests they send. server/ is lifted for the HandlerContext pattern only, since it
-      # defines those doors; its URL and echo reads stay forbidden. multitenant/resolver.go
-      # reads inbound paths and carries a reasoned nolint instead. forbidigo's issue text
+      # requests they send. server/ is lifted for the HandlerContext pattern only, since its
+      # framework code calls its own doors; its URL and echo reads stay forbidden.
+      # multitenant/resolver.go reads inbound paths and carries a reasoned nolint instead.
+      # forbidigo's issue text
       # quotes the source spelling (`req.URL`), not the type-expanded name, so these key off
       # the door msgs, which no other pattern carries.
       - linters:
