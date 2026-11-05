@@ -43,7 +43,7 @@ rule is their gate.
 
 ## Unknown tenants
 
-**A path-read tenant is written only when the store holds it** ([ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md)). When a `path` resolver produced the id (a bare `path` resolver, or the `path` member of a composite chain), the seat asks the App's tenant resource source (`multitenant.TenantChecker`, which `*config.TenantStore` implements) before writing it. An id the store does not hold is never written: the request runs on with no tenant through global middleware, route-group middleware and JOSE inbound verification, and the typed or raw handler adapter then answers 400 `BAD_REQUEST` "Invalid tenant" before binding, with one WARN reading `reason="unknown tenant"` and the masked path. An unauthenticated caller on an auth group gets the group's 401 for every id, and an unmatched request keeps its 404/405. The App always hands the server its resource source's check (`server.Options.TenantChecker`), replacing any value in `app.Options.ServerOptions`; a server with no checker, or a custom `app.Options.ResourceSource` without `HasTenant`, refuses every path tenant.
+**A path-read tenant is written only when the store holds it** ([ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md)). When a `path` resolver produced the id (a bare `path` resolver, or the `path` member of a composite chain), the seat asks the App's tenant resource source (`multitenant.TenantChecker`, which `*config.TenantStore` implements) before writing it. An id the store does not hold is never written: the request runs on with no tenant through global middleware, route-group middleware and JOSE inbound verification, and the typed or raw handler adapter then answers 400 `BAD_REQUEST` "Invalid tenant" before binding, with one WARN reading `reason="unknown tenant"` and the masked path. An unauthenticated caller on an auth group gets the group's 401 for every id, and an unmatched request keeps its 404/405. The App hands the server it builds its resource source's check (`server.Options.TenantChecker`), replacing any value in `app.Options.ServerOptions`; a server passed as `app.Options.Server` keeps its own; a server with no checker, or a custom `app.Options.ResourceSource` without `HasTenant`, refuses every path tenant.
 
 Operating it:
 
@@ -78,7 +78,7 @@ case err != nil:
 
 **A custom `app.Options.CacheConnector` still dials an unknown tenant:** it owns its dial, and the framework reads the store's error for that key as "no cache section". Refuse unknown tenants in the connector, or before the handler as below.
 
-**Refusing before the handler.** The handler runs until its first accessor, and a route that never calls one serves the unknown tenant. To refuse earlier, or in your own shape, attach a group middleware: it runs right after the seat, so the tenant is in context. It reads the tenant catalog and writes its own bytes:
+**Refusing before the handler (header- and subdomain-won tenants).** A path-read tenant the store does not hold never reaches this middleware with a tenant (above). For a header or subdomain tenant, the handler runs until its first accessor, and a route that never calls one serves the unknown tenant. To refuse earlier, or in your own shape, attach a group middleware: it runs after the seat, so a tenant the seat wrote is in context. It reads the tenant catalog and writes its own bytes:
 
 ```go
 func knownTenant(deps *app.ModuleDeps) server.MiddlewareFunc {
@@ -86,7 +86,7 @@ func knownTenant(deps *app.ModuleDeps) server.MiddlewareFunc {
 		ctx := c.RequestContext()
 		tenantID, ok := multitenant.GetTenant(ctx) // set by the seat, which runs first
 		if !ok {
-			return errors.New("knownTenant: no tenant in context") // 500: mounted without multitenant
+			return next() // none written: a path tenant the store does not hold, refused 400 by the handler adapter
 		}
 		catalog, err := deps.DBByName(ctx, "catalog")
 		if err != nil {

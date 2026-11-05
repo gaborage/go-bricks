@@ -15437,8 +15437,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep -nE 'ResourceSource:|server\.New(WithOptions)?\(|multitenant\.GetTenant\(' -- '*.go'
   ```
 
-  In production, count path-tenancy 400s with `reason="unknown tenant"` per `client.address` for
-  a day before the upgrade: those callers keep their 400, now before the handler.
+  In production, for a day before the upgrade, count path-tenancy access lines per
+  `client.address` whose `tenant` field names an id the store does not hold (v0.72.0 logs no
+  `reason="unknown tenant"` WARN): those callers get 400 after it, before the handler.
 - gate: match = a path-reading resolver and one such hit. no-match = a header or subdomain
   resolver, multitenant off, or a built-in store listing every tenant the service serves, with no
   middleware that requires a tenant: nothing to do.
@@ -15455,8 +15456,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   that id in context and on the access line's `tenant` field, and was refused, if at all, at the
   first per-tenant accessor (`[C73.21]`).
 - after: the seat writes a path-read id only when `server.Options.TenantChecker.HasTenant`
-  answers true. The App always sets that checker from its resource source (`*config.TenantStore`
-  implements it) and replaces one given in `app.Options.ServerOptions`. Any other path id is never
+  answers true. The App sets that checker from its resource source (`*config.TenantStore`
+  implements it) and replaces one given in `app.Options.ServerOptions`; a server passed as
+  `app.Options.Server` keeps its own. Any other path id is never
   written: global middleware, route-group middleware (auth) and JOSE inbound verification run with
   no tenant, then the typed or raw handler adapter answers 400 `BAD_REQUEST` "Invalid tenant"
   before binding, with one `[server.tenant] request rejected: invalid tenant … reason="unknown

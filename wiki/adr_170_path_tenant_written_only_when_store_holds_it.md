@@ -29,10 +29,11 @@ only at the first per-tenant accessor (ADR-161), after it had already been print
    `reason="unknown tenant"` and the masked path (ADR-167); the access line, the span and
    `http.server.request.duration` record 400. An unauthenticated caller on an auth group gets that
    group's 401 for every id, and an unmatched request keeps its 404/405: only an adapter refuses.
-3. **`server.Options.TenantChecker` carries the check, and the App always sets it** from its
-   tenant resource source when the source implements `HasTenant` (the built-in
+3. **`server.Options.TenantChecker` carries the check, and the App sets it** on the server it
+   builds, from its tenant resource source when the source implements `HasTenant` (the built-in
    `*config.TenantStore` does), replacing any value a consumer put in `app.Options.ServerOptions`:
-   the resource source is the one authority on which tenants exist. A server with no checker
+   the resource source is the one authority on which tenants exist. A server passed as
+   `app.Options.Server` is used as given and keeps its own checker. A server with no checker
    vouches for no path-read id, so every one answers 400 (fail closed). A later #2212 link (A1e)
    turns that state into a startup refusal.
 4. **The public `server.TenantMiddleware` is unchanged.** It asks no checker and writes every

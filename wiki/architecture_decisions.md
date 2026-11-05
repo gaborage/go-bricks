@@ -2752,7 +2752,9 @@ as `path`, never the tenant ID. Typed handlers reach the same answer through
 500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
 JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
 the tenant does not exist. The seat still does no existence check. Amended by ADR-167: the WARN's
-`path` is the masked template rendering (`/REDACTED/orders`), not the template. See
+`path` is the masked template rendering (`/REDACTED/orders`), not the template. Amended by ADR-170:
+under a path-reading resolver the seat writes a path-read tenant only when the store holds it, and
+the handler adapters answer this 400 for any other, the raw adapter through the same writer. See
 [migrations.md](migrations.md) `[C73.21]`.
 
 **Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
