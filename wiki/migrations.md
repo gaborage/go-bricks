@@ -14991,21 +14991,23 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `server.NewWithOptions(cfg, log, opts)`, or let the App build the server, and register routes
   through its `RouteRegistrar`. Move middleware the hand-built engine carried to
   `RouteRegistrar.Use`, a route group, or `app.GlobalMiddlewareRegisterer`. Engine-wide middleware
-  moved to `RouteRegistrar.Use` or a group narrows its scope: it runs only on requests that matched
-  a route under it, never on 404/405 traffic, and only for routes registered after the `Use` call
-  (ADR-036), where `e.Use` on a hand-built engine covered earlier routes too, so a gate moved at
-  the same point misses them with no error; call `Use` before the routes it must cover. Keep
-  middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`, which skips the
-  health and ready routes (a gate that must cover them is enforced separately) and which startup
-  refuses beside a tenant-owned route family with `server.ErrTenantFamilyWithGlobalMiddleware`
-  (ADR-164). A bare `server.New` caller's door for engine-wide middleware is
-  `Server.RegisterGlobalMiddleware`. The removed arguments become
+  moved to `RouteRegistrar.Use` or a group narrows its scope: it runs only under the group's
+  prefix, where a 404 reaches it too (echo's `Group.Use` registers a catch-all) with an empty
+  `RouteTemplate()`, and never on traffic outside the prefix; and it covers only routes registered
+  after the `Use` call (ADR-036), where `e.Use` on a hand-built engine covered earlier routes too,
+  so a gate moved at the same point misses them with no error; call `Use` before the routes it
+  must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
+  which skips the health and ready routes (a gate that must cover them is enforced separately) and
+  which startup refuses beside a tenant-owned route family with
+  `server.ErrTenantFamilyWithGlobalMiddleware` (ADR-164). A bare `server.New` caller's door for
+  engine-wide middleware is `Server.RegisterGlobalMiddleware`, the same door with the same
+  skipper, so it skips the health and ready routes too. The removed arguments become
   configuration: `observabilityEnabled` comes from the key `observability.enabled`, so a caller
   that passed `true` with the key unset loses the OTel HTTP middleware until it sets the key;
   `healthPath` and `readyPath` come from `server.path.health` and `server.path.ready` (defaults
   `/health` and `/ready`, joined under `server.path.base`), so a caller that passed other probe
   paths sets those keys to keep them. **Supersedes**, for a service that jumps from E41 to E73 in one step,
-  `[C41.4]`'s apply: there is no call left to add the parameter to.
+  `[C41.4]`'s after: there is no call left to add the parameter to.
 - verify: `go vet ./...` passes and the detect returns no hit.
 - ref: [ADR-166](adr_166_setup_middlewares_unexported.md) · `server/middleware.go`
   (`setupMiddlewares`) · `server/server.go` (`New`) · `server/router.go` (`newEngine`) ·

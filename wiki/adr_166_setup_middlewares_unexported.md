@@ -47,7 +47,9 @@ outside this decision.
   service built through `server.New`, `server.NewWithOptions` or the App is unaffected and its
   chain is unchanged.
 - Consumer middleware keeps its doors: `RouteRegistrar.Use`, a route group, and
-  `app.GlobalMiddlewareRegisterer` (ADR-036). None of them moves.
+  `app.GlobalMiddlewareRegisterer` (ADR-036). None of them moves. A bare `server.New` caller's
+  door for engine-wide middleware is `Server.RegisterGlobalMiddleware`, which skips the health and
+  ready routes.
 - This link changes no request path, no middleware order and no rendering; the path seats move to
   the masking router in later #2212 links.
 
