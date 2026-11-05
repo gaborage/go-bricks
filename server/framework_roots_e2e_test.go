@@ -30,8 +30,9 @@ func frameworkRootServer(resolverType string) *server.Server {
 }
 
 // TestStartRefusesConsumerRoutesUnderFrameworkRoots pins ADR-168's refusal through server.New:
-// under a path resolver a consumer route or middleware-bearing group under <base>/_sys or the
-// debug prefix is a RouteConflictReasonFrameworkRoot conflict, and Start returns it.
+// under a path resolver a consumer route, middleware-bearing group or tenant-owned family under
+// <base>/_sys or the debug prefix is a RouteConflictReasonFrameworkRoot conflict, and Start
+// returns it.
 func TestStartRefusesConsumerRoutesUnderFrameworkRoots(t *testing.T) {
 	server.DefaultRouteRegistry.Clear()
 	t.Cleanup(server.DefaultRouteRegistry.Clear)
@@ -48,6 +49,9 @@ func TestStartRefusesConsumerRoutesUnderFrameworkRoots(t *testing.T) {
 	server.GET(hr, srv.ModuleGroup(), "/_sys/typed", typed, forged)
 	srv.ModuleGroup().Group("/_sys/extra", mw)
 	srv.RootGroup().Add(http.MethodPost, "/_debug/flush", noop)
+	server.TenantOwnedGroup(srv.ModuleGroup(), "/_sys/family", server.TenantPolicy{
+		Tenant: func(server.HandlerContext) (string, error) { return "acme", nil },
+	})
 	srv.ModuleGroup().Add(http.MethodGet, "/_system", noop) // beside the root, admitted
 	srv.RootGroup().Add(http.MethodGet, "/_sys/job", noop)  // the unprefixed spelling, admitted
 
@@ -57,6 +61,7 @@ func TestStartRefusesConsumerRoutesUnderFrameworkRoots(t *testing.T) {
 		{http.MethodGet, "/api/_sys/typed", "/api/_sys"},
 		{"", "/api/_sys/extra", "/api/_sys"},
 		{http.MethodPost, "/_debug/flush", "/_debug"},
+		{"", "/api/_sys/family", "/api/_sys"}, // a tenant-owned family, with no routes
 	}
 	require.Len(t, conflicts, len(want))
 	for i, w := range want {
@@ -86,4 +91,20 @@ func TestHeaderResolverReservesNoFrameworkRoot(t *testing.T) {
 	srv.ModuleGroup().Add(http.MethodGet, "/_sys/mine", noop)
 	srv.RootGroup().Add(http.MethodPost, "/_debug/flush", noop)
 	assert.Empty(t, srv.RouteConflicts())
+}
+
+// TestRouteOptionReadsHandlerPackage pins that RegisterHandler sets RouteDescriptor.Package
+// before the options run, so an option reads the handler's package, and stamps it again after.
+func TestRouteOptionReadsHandlerPackage(t *testing.T) {
+	server.DefaultRouteRegistry.Clear()
+	t.Cleanup(server.DefaultRouteRegistry.Clear)
+	srv := frameworkRootServer(config.ResolverTypeHeader)
+	hr := server.NewHandlerRegistry(&config.Config{})
+	var seen string
+	read := func(d *server.RouteDescriptor) { seen = d.Package }
+	typed := func(frameworkRootReq, server.HandlerContext) (frameworkRootResp, server.IAPIError) {
+		return frameworkRootResp{}, nil
+	}
+	server.GET(hr, srv.ModuleGroup(), "/orders", typed, read)
+	assert.Equal(t, thisTestPackage, seen)
 }

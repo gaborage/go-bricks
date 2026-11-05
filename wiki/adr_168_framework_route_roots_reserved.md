@@ -26,12 +26,14 @@ are reserved.** The roots are `<base>/_sys` (`internal/pathutil.SystemPrefix`, t
 the scheduler, the config default and the server share) always, plus `debug.pathprefix` when
 `debug.enabled` is true.
 
-- **Refusal through route admission.** A route, or a group carrying middleware, at or below a root
-  is a conflict with the exported reason `RouteConflictReasonFrameworkRoot` unless its package is
-  `scheduler` or `app` (the debug group), or it is one of the server's own probes. Start fails
+- **Refusal through route admission.** A route, a group carrying middleware, or a
+  `TenantOwnedGroup` family's prefix (its steps are middleware, so it is refused with no routes),
+  at or below a root is a conflict with the exported reason `RouteConflictReasonFrameworkRoot`
+  unless its package is `scheduler` or `app` (the debug group), or it is one of the server's own
+  probes: a `GET` or `HEAD` the server registers at the health or ready path. Start fails
   with the `*DuplicateRouteError` (`errors.Is(err, server.ErrDuplicateRoute)`), whose line names
   the route and the root, and a registration after Start panics, as a tenant-owned trespass does
-  (ADR-164). A middleware-bearing group is refused because its middleware would run on the
+  (ADR-164). A refused family's steps are not mounted. A middleware-bearing group is refused because its middleware would run on the
   framework routes below it. Middleware above a root is not judged: a module's `Use` on the
   shared `ModuleGroup` registrar reaches every route registered through it afterwards, the
   scheduler's included, and global middleware runs on every route.
@@ -40,9 +42,10 @@ the scheduler, the config default and the server share) always, plus `debug.path
   value's receiver package, or a closure's enclosing function's. The `GET`/`POST` helpers, a
   direct `RegisterHandler` call and a raw `Add` give that answer. The typed fallback for a
   registrar that is not the framework's adapts the handler in a `server` closure, so admission
-  sees `server` there, and `server` is not an admitted package. `RegisterHandler` stamps
-  `RouteDescriptor.Package` after every `RouteOption`, unconditionally and under every resolver,
-  so no option forges or clears it. A group keeps its caller frame: it has no handler.
+  sees `server` there, and `server` is not an admitted package. `RegisterHandler` sets
+  `RouteDescriptor.Package` before the `RouteOption`s run, so an option reads it, and stamps it
+  again after every one, unconditionally and under every resolver, so no option forges or clears
+  it. A group, and a family, keeps its caller frame: it has no handler.
 - **A debug prefix that covers the module routes is refused.** Under the same resolver, with
   `debug.enabled`, a `debug.pathprefix` of `""` or `/`, or one at or above `server.path.base`,
   would reserve every module route. `server.New` records an error naming `debug.pathprefix` and
@@ -62,8 +65,8 @@ Under a header or subdomain resolver, or with multitenant off, no root is reserv
 
 ## Consequences
 
-- **Breaking**: under a path-reading resolver, a consumer route or middleware-bearing group at or
-  below `<base>/_sys` or an enabled `debug.pathprefix` fails startup, whichever door
+- **Breaking**: under a path-reading resolver, a consumer route, middleware-bearing group or
+  tenant-owned family at or below `<base>/_sys` or an enabled `debug.pathprefix` fails startup, whichever door
   registered it; and an enabled `debug.pathprefix` of `""`, `/` or at or above
   `server.path.base` fails startup.
 - Under every resolver, `RouteDescriptor.Package` (the route table, the `PostRegisterRoutes`
@@ -78,6 +81,8 @@ Under a header or subdomain resolver, or with multitenant off, no root is reserv
 
 - `internal/pathutil/pathutil.go`: `SystemPrefix`
 - `server/framework_roots.go`: `frameworkRoots`, `frameworkRootPackages`
-- `server/route_conflicts.go`: `refuseFrameworkRootLocked`, `RouteConflictReasonFrameworkRoot`
+- `server/route_conflicts.go`: `refuseFrameworkRootLocked`, `refuseFamilyUnderFrameworkRoot`,
+  `isProbe`, `RouteConflictReasonFrameworkRoot`
+- `server/tenant_family.go`: `TenantOwnedGroup`
 - `server/handler.go`: `RegisterHandler`, `handlerPackage`
 - See [migrations.md](migrations.md) `[C73.34]`.

@@ -1506,6 +1506,13 @@ func RegisterHandler[T any, R any](
 		panic("server: handler registration failed for " + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
 	}
 
+	// The route's package is its handler function's, so the GET/POST helpers and a direct
+	// RegisterHandler call give one answer: admission decides who may register under a framework
+	// route root by it (ADR-168). Set before the options, so an option reads it, and stamped again
+	// after them, so no RouteOption forges or clears it. A registrar embedding RouteRegistrar takes
+	// the fallback below, whose Add admits the server closure, so admission sees server there.
+	pkg := handlerPackage(handler)
+
 	// Create descriptor with type information
 	descriptor := RouteDescriptor{
 		Method:       method,
@@ -1513,18 +1520,14 @@ func RegisterHandler[T any, R any](
 		HandlerID:    formatHandlerID(method, fullPath),
 		RequestType:  reqType,
 		ResponseType: reflect.TypeOf(respType),
+		Package:      pkg,
 		HandlerName:  extractHandlerName(handler),
 	}
 
 	for _, opt := range opts {
 		opt(&descriptor)
 	}
-	// Stamped after the options, from the handler function itself, so the GET/POST helpers and a
-	// direct RegisterHandler call give one answer: admission decides who may register under a
-	// framework route root by this package (ADR-168), and no RouteOption or caller frame forges or
-	// clears it. A registrar embedding RouteRegistrar takes the fallback below, whose Add admits
-	// the server closure, so admission sees server there.
-	descriptor.Package = handlerPackage(handler)
+	descriptor.Package = pkg
 
 	// Scan request/response types for jose: tags and resolve every kid against the
 	// registry's resolver. Panics at startup on any failure (Fail Fast principle).

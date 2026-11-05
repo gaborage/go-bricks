@@ -145,6 +145,15 @@ There is no disable knob — a colliding route is always a startup-blocking bug,
 
 After `Start`, `TenantOwnedGroup` panics; a route or middleware-bearing group registered from outside a family at or below its prefix panics at registration with an error matching `server.ErrDuplicateRoute`, instead of being recorded where nothing reads it any more; and `RegisterGlobalMiddleware` beside a family panics instead of installing middleware that would run on the family's routes with no tenant.
 
+## Framework Route Roots
+
+Under a tenant resolver that may read the path (`multitenant.resolver.type: path`, or `composite` with `path` in `order`), `<server.path.base>/_sys` and, with `debug.enabled`, `debug.pathprefix` are reserved for framework routes ([ADR-168](adr_168_framework_route_roots_reserved.md)). Startup holds them to two refusals:
+
+- **Consumer route under a root:** any route, any group carrying middleware, or any `TenantOwnedGroup` family (with or without routes), at or below a root whose handler package (for a group or family, its caller's) is not `scheduler` or `app` is a `RouteConflictReasonFrameworkRoot` conflict (`GET /api/_sys/mine — under a framework route root at /api/_sys, refused: <handler> (<pkg>)`), in the same `*server.DuplicateRouteError` as [Duplicate Route Detection](#duplicate-route-detection). The probes (`GET` and `HEAD` at the health and ready paths) are exempt, and a refused family's steps are not mounted. Move the route outside both roots (`/_sys/reports` to `/internal/reports`); only the scheduler's job API and the App's debug group may register there.
+- **Debug prefix covering the module routes:** an enabled `debug.pathprefix` at the engine root (`""` or `/`) or at or above `server.path.base` fails startup before binding with `server: debug.pathprefix "/api" is at or above server.path.base "/api/v1": …`. Set it outside `server.path.base` (`/_debug` over `/api`).
+
+After `Start`, a consumer route, middleware-bearing group or family at or below a root panics at registration with an error matching `server.ErrDuplicateRoute`.
+
 ## Route Table Hook
 
 `app.Options.PostRegisterRoutes func([]server.RouteDescriptor) error` lets a service veto its own route table before traffic arrives — for example, reject a route outside the versioned prefix, or a raw route (nil `RequestType`) where only typed handlers are allowed. It runs once per `App.Run`, after every module's `RegisterRoutes`, the route log and the duplicate-route check above, and before either listener opens. A non-nil error aborts startup the same way a route conflict does, wrapped as `app.Options.PostRegisterRoutes rejected the route table: <err>`. A nil hook changes nothing.

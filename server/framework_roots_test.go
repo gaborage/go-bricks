@@ -169,6 +169,7 @@ func TestRouteAdmissionRefusesNonFrameworkRegistrationUnderFrameworkRoot(t *test
 	t.Cleanup(DefaultRouteRegistry.Clear)
 	tests := []struct {
 		name    string
+		method  string // http.MethodGet when empty
 		path    string
 		pkg     string
 		refused bool
@@ -176,6 +177,8 @@ func TestRouteAdmissionRefusesNonFrameworkRegistrationUnderFrameworkRoot(t *test
 		{name: "scheduler_route", path: "/api/_sys/job", pkg: schedulerPkg},
 		{name: "debug_route", path: "/_debug/gc", pkg: appPkg},
 		{name: "probe_route", path: "/api/_sys/health", pkg: serverPackagePath},
+		{name: "probe_head_route", method: http.MethodHead, path: "/api/_sys/health", pkg: serverPackagePath},
+		{name: "server_package_non_probe_method_at_probe_path", method: http.MethodPost, path: "/api/_sys/health", pkg: serverPackagePath, refused: true},
 		{name: "server_package_route_is_not_a_probe", path: "/api/_sys/adapted", pkg: serverPackagePath, refused: true},
 		{name: "consumer_route_under_scheduler_root", path: "/api/_sys/mine", pkg: consumerPkg, refused: true},
 		{name: "consumer_route_at_root_itself", path: "/_debug", pkg: consumerPkg, refused: true},
@@ -188,8 +191,12 @@ func TestRouteAdmissionRefusesNonFrameworkRegistrationUnderFrameworkRoot(t *test
 			a.frameworkRoots = []string{"/api/_sys", "/_debug"}
 			a.probePaths = []string{"/api/_sys/health", "/ready"}
 			reg := RouteRegistrant{HandlerName: "h", Package: tt.pkg}
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
 			added := false
-			a.admit(admittedRoute{Method: http.MethodGet, Path: tt.path, Descriptor: modellessDescriptor(http.MethodGet, tt.path, reg)}, func() { added = true })
+			a.admit(admittedRoute{Method: method, Path: tt.path, Descriptor: modellessDescriptor(method, tt.path, reg)}, func() { added = true })
 			assert.Equal(t, !tt.refused, added)
 			if !tt.refused {
 				assert.Empty(t, a.snapshot())
@@ -235,4 +242,59 @@ func TestRouteAdmissionFrameworkRootAfterStartPanics(t *testing.T) {
 			a.admit(admittedRoute{Method: http.MethodGet, Path: "/_sys/late", Descriptor: modellessDescriptor(http.MethodGet, "/_sys/late", reg)}, func() {})
 		})
 	assert.Panics(t, func() { a.admitGroup("/_sys/late", consumerPkg) })
+}
+
+// TestTenantOwnedGroupUnderFrameworkRootRefused pins that a tenant-owned family's prefix at or
+// below a framework route root is a RouteConflictReasonFrameworkRoot conflict (which Start
+// returns, TestStartRefusesConsumerRoutesUnderFrameworkRoots) even with no routes, that its steps are never mounted there, and that a prefix beside the root, or the same
+// prefix under a resolver that reads no path, is an ordinary family.
+func TestTenantOwnedGroupUnderFrameworkRootRefused(t *testing.T) {
+	tests := []struct {
+		name, resolverType, prefix string
+		refused                    bool
+	}{
+		{name: "family_below_scheduler_root", resolverType: config.ResolverTypePath, prefix: "/_sys/x", refused: true},
+		{name: "family_at_scheduler_root", resolverType: config.ResolverTypePath, prefix: "/_sys", refused: true},
+		{name: "family_beside_scheduler_root", resolverType: config.ResolverTypePath, prefix: "/_system"},
+		{name: "header_resolver_reserves_nothing", resolverType: config.ResolverTypeHeader, prefix: "/_sys/x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			DefaultRouteRegistry.Clear()
+			t.Cleanup(DefaultRouteRegistry.Clear)
+			cfg := frameworkRootsConfig(tt.resolverType)
+			cfg.Server.Path.Base = "/api"
+			srv := New(cfg, logger.New("disabled", true))
+			ran := false
+			TenantOwnedGroup(srv.ModuleGroup(), tt.prefix, TenantPolicy{Tenant: func(HandlerContext) (string, error) {
+				ran = true
+				return "acme", nil
+			}})
+			_ = serveFamily(srv, http.MethodGet, "/api"+tt.prefix+"/unknown")
+			if !tt.refused {
+				assert.Empty(t, srv.RouteConflicts())
+				assert.Equal(t, []string{"/api" + tt.prefix}, srv.admission.familyPrefixes())
+				assert.True(t, ran, "the family's steps run under its prefix")
+				return
+			}
+			assert.Equal(t, []RouteConflict{{
+				Path: "/api" + tt.prefix, FirstPath: "/api/_sys", Duplicate: RouteRegistrant{Package: serverPackagePath},
+				Reason: RouteConflictReasonFrameworkRoot,
+			}}, srv.RouteConflicts())
+			assert.Empty(t, srv.admission.familyPrefixes(), "a refused family is not claimed")
+			assert.False(t, ran, "a refused family's steps are not mounted under the root")
+		})
+	}
+}
+
+// TestTenantOwnedGroupUnderFrameworkRootAfterStartPanics pins the after-Start refusal.
+func TestTenantOwnedGroupUnderFrameworkRootAfterStartPanics(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	t.Cleanup(DefaultRouteRegistry.Clear)
+	srv := New(frameworkRootsConfig(config.ResolverTypePath), logger.New("disabled", true))
+	srv.admission.seal()
+	assert.PanicsWithError(t,
+		"server: registration after Start: route registration refused (1 conflict(s))\n"+
+			"group /_sys/x — under a framework route root at /_sys, refused: middleware ("+serverPackagePath+")",
+		func() { TenantOwnedGroup(srv.ModuleGroup(), "/_sys/x", fixedTenantPolicy("acme")) })
 }

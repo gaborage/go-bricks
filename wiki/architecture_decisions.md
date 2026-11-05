@@ -2883,14 +2883,15 @@ or `HandlerContext.Param`, consumer error text, the request method token, and pa
 
 ### [ADR-168: Framework Route Roots Are Reserved Under a Path-Reading Resolver](adr_168_framework_route_roots_reserved.md)
 
-**Date:** 2026-11-04 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, a consumer route or middleware-bearing group under `<base>/_sys` or the enabled debug prefix fails startup, as does an enabled `debug.pathprefix` at the engine root or at or above `server.path.base`; under every resolver `RouteDescriptor.Package` names the handler's package
+**Date:** 2026-11-04 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, a consumer route, middleware-bearing group or tenant-owned family at or below `<base>/_sys` or the enabled debug prefix fails startup, as does an enabled `debug.pathprefix` at the engine root or at or above `server.path.base`; under every resolver `RouteDescriptor.Package` names the handler's package
 
 Under a resolver that may read the path (`multitenant.MayReadPath`), route admission reserves the
 framework route roots, the scheduler's `<base>/_sys` (`internal/pathutil.SystemPrefix`) and, with
-`debug.enabled`, `debug.pathprefix`: a route or middleware-bearing group there from any package
-but `scheduler` or `app`, other than the server's probes, is a `RouteConflictReasonFrameworkRoot`
+`debug.enabled`, `debug.pathprefix`: a route, middleware-bearing group or `TenantOwnedGroup`
+family at or below one, from any package but `scheduler` or `app`, other than the server's `GET`
+and `HEAD` probes, is a `RouteConflictReasonFrameworkRoot`
 conflict in the `*DuplicateRouteError`, or a panic after Start. A route's package is its handler
-function's, stamped after every `RouteOption` (an embedding registrar's typed fallback admits as
+function's, set before the `RouteOption`s and stamped again after them (an embedding registrar's typed fallback admits as
 `server`, which is not admitted); a caller frame named
 `app` or `server` for a direct `RegisterHandler` call or an embedding registrar. `server.New`
 refuses a debug prefix that would cover the module routes, naming `debug.pathprefix` and

@@ -33,8 +33,8 @@ const (
 	// RouteConflictReasonTenantOwned is a route, or a group carrying middleware, at or below a
 	// tenant-owned route family's prefix that did not come through the family.
 	RouteConflictReasonTenantOwned RouteConflictReason = "inside a tenant-owned route family"
-	// RouteConflictReasonFrameworkRoot is a route, or a group carrying middleware, at or below a
-	// framework route root (the scheduler's <base>/_sys, or debug.pathprefix with debug.enabled)
+	// RouteConflictReasonFrameworkRoot is a route, a group carrying middleware, or a tenant-owned
+	// family's prefix, at or below a framework route root (the scheduler's <base>/_sys, or debug.pathprefix with debug.enabled)
 	// registered from outside the framework, under a tenant resolver that may read the path. The
 	// roots are reserved for framework routes (ADR-168).
 	RouteConflictReasonFrameworkRoot RouteConflictReason = "under a framework route root"
@@ -74,7 +74,7 @@ type RouteConflict struct {
 	First RouteRegistrant
 	// Duplicate is the refused registrant under every reason. For a group under
 	// RouteConflictReasonTenantOwned or RouteConflictReasonFrameworkRoot only Package is set: the
-	// package that called Group or Use.
+	// package that called Group, Use or, under RouteConflictReasonFrameworkRoot, TenantOwnedGroup.
 	Duplicate RouteRegistrant
 	// Reason says why the registration was refused.
 	Reason RouteConflictReason
@@ -297,10 +297,21 @@ func (a *routeAdmission) refuseFrameworkRootLocked(c *RouteConflict) bool {
 	return true
 }
 
+// refuseFamilyUnderFrameworkRoot records a tenant-owned family's full prefix, built from pkg, as
+// a framework-root conflict when it is at or below a framework route root, reporting whether it
+// did: the family is a group carrying middleware (its steps) there. After Start it panics.
+func (a *routeAdmission) refuseFamilyUnderFrameworkRoot(full, pkg string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c := tenantOwnedConflict("", full, RouteRegistrant{Package: pkg})
+	return a.refuseFrameworkRootLocked(&c)
+}
+
 // isProbe reports whether c is one of the server's own probe routes (registerProbeRoutes),
-// which a health or ready path configured under a framework root places there.
+// which a health or ready path configured under a framework root places there: a probe method
+// (probeMethods) at a probe path, registered by the server.
 func (a *routeAdmission) isProbe(c *RouteConflict) bool {
-	return c.Method != "" && c.Duplicate.Package == serverPackagePath && slices.Contains(a.probePaths, c.Path)
+	return slices.Contains(probeMethods, c.Method) && c.Duplicate.Package == serverPackagePath && slices.Contains(a.probePaths, c.Path)
 }
 
 // refuseTrespassLocked records c as a conflict under the family prefix covering c.Path,
