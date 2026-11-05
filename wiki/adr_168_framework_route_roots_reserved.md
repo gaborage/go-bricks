@@ -32,12 +32,15 @@ the scheduler, the config default and the server share) always, plus `debug.path
   with the `*DuplicateRouteError` (`errors.Is(err, server.ErrDuplicateRoute)`), whose line names
   the route and the root, and a registration after Start panics, as a tenant-owned trespass does
   (ADR-164). A middleware-bearing group is refused because its middleware would run on the
-  framework routes below it.
+  framework routes below it. Middleware above a root is not judged: a module's `Use` on the
+  shared `ModuleGroup` registrar reaches every route registered through it afterwards, the
+  scheduler's included, and global middleware runs on every route.
 - **A route's package is its handler function's.** `RegisterHandler` and `RouteRegistrar.Add`
   read the package that declares the handler (`runtime.FuncForPC` on the function value): a method
-  value's receiver package, or a closure's enclosing function's. It is the same answer through
-  every door. The typed fallback for a registrar that is not the framework's adapts the handler
-  in a `server` closure, so `server` is not an admitted package. `RegisterHandler` stamps
+  value's receiver package, or a closure's enclosing function's. The `GET`/`POST` helpers, a
+  direct `RegisterHandler` call and a raw `Add` give that answer. The typed fallback for a
+  registrar that is not the framework's adapts the handler in a `server` closure, so admission
+  sees `server` there, and `server` is not an admitted package. `RegisterHandler` stamps
   `RouteDescriptor.Package` after every `RouteOption`, unconditionally and under every resolver,
   so no option forges or clears it. A group keeps its caller frame: it has no handler.
 - **A debug prefix that covers the module routes is refused.** Under the same resolver, with
@@ -60,13 +63,15 @@ Under a header or subdomain resolver, or with multitenant off, no root is reserv
 ## Consequences
 
 - **Breaking**: under a path-reading resolver, a consumer route or middleware-bearing group at or
-  below `<base>/_sys`, or below an enabled `debug.pathprefix`, fails startup, whichever door
+  below `<base>/_sys` or an enabled `debug.pathprefix` fails startup, whichever door
   registered it; and an enabled `debug.pathprefix` of `""`, `/` or at or above
   `server.path.base` fails startup.
 - Under every resolver, `RouteDescriptor.Package` (the route table, the `PostRegisterRoutes`
   hook, conflict lines) names the handler's declaring package, where it named the registering
   caller's, and a `RouteOption` that wrote it no longer takes effect.
-- A typed route registered through a consumer registrar names `server` (the fallback's adapter).
+- A typed route registered through a consumer registrar is described twice in the route table:
+  the fallback's descriptor names the handler's package, and the one `Add` records names `server`
+  (the fallback's adapter), as its admission record and conflict line do.
 - No request-path cost: admission runs at registration.
 
 ## References

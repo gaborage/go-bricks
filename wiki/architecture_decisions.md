@@ -2890,12 +2890,15 @@ framework route roots, the scheduler's `<base>/_sys` (`internal/pathutil.SystemP
 `debug.enabled`, `debug.pathprefix`: a route or middleware-bearing group there from any package
 but `scheduler` or `app`, other than the server's probes, is a `RouteConflictReasonFrameworkRoot`
 conflict in the `*DuplicateRouteError`, or a panic after Start. A route's package is its handler
-function's, the same through every door, stamped after every `RouteOption`; a caller frame named
+function's, stamped after every `RouteOption` (an embedding registrar's typed fallback admits as
+`server`, which is not admitted); a caller frame named
 `app` or `server` for a direct `RegisterHandler` call or an embedding registrar. `server.New`
 refuses a debug prefix that would cover the module routes, naming `debug.pathprefix` and
 `server.path.base`. See [migrations.md](migrations.md) `[C73.34]`.
 
-**Key Benefits:** only framework code runs under the roots, which ADR-169's tenant skip relies on.
+**Key Benefits:** only framework handlers, and middleware on groups at or below a root, sit under
+the roots, which ADR-169's tenant skip relies on; middleware above a root and global middleware
+still run there.
 
 ---
 

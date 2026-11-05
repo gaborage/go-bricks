@@ -49,10 +49,10 @@ func (m frameworkRootModule) RegisterRoutes(hr *server.HandlerRegistry, r server
 }
 
 // TestModuleRoutesUnderFrameworkRootsRefused pins ADR-168's attribution through ModuleRegistry:
-// a route is judged by its handler function's package, so a module route under <base>/_sys is
-// refused whichever door registered it. A caller frame would name app for the direct
-// RegisterHandler call (frame 3 is ModuleRegistry) and server for the embedding registrar's
-// typed fallback, and admit both.
+// a route is judged by its handler function's package (the embedding registrar's typed fallback
+// by its server adapter's), so a module route under <base>/_sys is refused whichever door
+// registered it. A caller frame would name app for the direct RegisterHandler call (frame 3 is
+// ModuleRegistry), an admitted package.
 func TestModuleRoutesUnderFrameworkRootsRefused(t *testing.T) {
 	server.DefaultRouteRegistry.Clear()
 	t.Cleanup(server.DefaultRouteRegistry.Clear)

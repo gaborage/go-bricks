@@ -1519,10 +1519,11 @@ func RegisterHandler[T any, R any](
 	for _, opt := range opts {
 		opt(&descriptor)
 	}
-	// Stamped after the options, from the handler function itself, so every door (the GET/POST
-	// helpers, a direct RegisterHandler call, a registrar embedding RouteRegistrar) gives one
-	// answer: admission decides who may register under a framework route root by this package
-	// (ADR-168), and no RouteOption or caller frame forges or clears it.
+	// Stamped after the options, from the handler function itself, so the GET/POST helpers and a
+	// direct RegisterHandler call give one answer: admission decides who may register under a
+	// framework route root by this package (ADR-168), and no RouteOption or caller frame forges or
+	// clears it. A registrar embedding RouteRegistrar takes the fallback below, whose Add admits
+	// the server closure, so admission sees server there.
 	descriptor.Package = handlerPackage(handler)
 
 	// Scan request/response types for jose: tags and resolve every kid against the
@@ -1745,7 +1746,7 @@ func getCallerPackage(skip int) string {
 
 // handlerPackage returns the package path of the function a route registers: the package that
 // declares it, a method value's receiver package, or a closure's enclosing function's package.
-// Unlike a caller frame it is the same whichever door registered the route (ADR-168). A nil
+// Unlike a caller frame it does not depend on who called the registration (ADR-168). A nil
 // or non-function handler has none.
 func handlerPackage(handler any) string {
 	v := reflect.ValueOf(handler)

@@ -10,8 +10,8 @@ import (
 
 // frameworkRootPackages are the packages whose routes may sit under a framework route root:
 // the scheduler's system API and the App's debug group. A route's package is its handler
-// function's (handlerPackage), stamped after every RouteOption, so neither an option nor the
-// registration door moves a route into or out of this set. The server's own package is absent
+// function's (handlerPackage), stamped after every RouteOption, so no option moves a route into
+// or out of this set, and no door moves a consumer route into it. The server's own package is absent
 // on purpose: the typed-handler fallback for a registrar that is not the framework's adapts the
 // handler in a server closure, so admitting server would admit that route. The probes, which
 // the server registers itself, are exempt by path instead (refuseFrameworkRootLocked).
