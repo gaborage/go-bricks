@@ -156,6 +156,10 @@ func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *confi
 }
 
 // Request returns the underlying *http.Request.
+//
+// SECURITY: its URL (URL.Path, RawPath, RawQuery), RequestURI, query and form values are bytes
+// the caller wrote, a card number in a path segment included; never log them. Log
+// RouteTemplate() instead, the template the access line carries as http.route (ADR-167).
 func (c HandlerContext) Request() *http.Request { return c.ectx.Request() }
 
 // RequestContext returns the request's context.Context. Convenience for the dominant

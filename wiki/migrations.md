@@ -13502,9 +13502,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`/cards/REDACTED`), the bare `REDACTED` when no template matched; `http.route` is unchanged
   (C73.29). ADR-167.
 - gist: the `[server.tenant]` rejection WARN carried no request identifier, so a 400 for a bad
-  tenant could not be joined to its access line or span. It now carries `http.route` (the
-  registered template, as on the access line), `request_id`, `correlation_id` and, under a valid
-  span context, `trace_id`/`span_id` (C73.30).
+  tenant could not be joined to its request. It now carries `http.route` (the registered
+  template, as on the access line), `request_id`, `correlation_id` and, under a valid span
+  context, `trace_id`/`span_id`: the seat's own rejection, which runs before the access logger
+  and writes no access line, joins its span and the response's `X-Request-ID`; a handler's
+  `server.NewUnknownTenantError` refusal also joins its access line (C73.30).
 
 ### [C73.1] a type-less migration tenant runs with the runner's vendor, and an undeliverable migrator identity is refused · breaking · when: match
 
@@ -15107,10 +15109,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   span. A disabled WARN level writes nothing, as before, and now returns before the line is
   formatted or the client address read.
 - apply: re-anchor each match on the message prefix and named fields, and join the line to its
-  access line and span on `request_id`/`correlation_id`, or on `trace_id` where tracing is on.
-- verify: against a non-production log sink with tracing on, send a request with no tenant to a
-  multi-tenant service and confirm the WARN carries the access line's `request_id` in both
-  `request_id` and `correlation_id`, its `http.route`, and the span's `trace_id`.
+  request on `request_id`/`correlation_id`, or on `trace_id` where tracing is on. The seat's own
+  rejection runs before the access logger and leaves no access line: join it to its span and to
+  the response's `X-Request-ID`. A handler's `server.NewUnknownTenantError` refusal comes from
+  inside the access logger, so it also joins that request's access line.
+- verify: against a non-production log sink with tracing on, in a multi-tenant service:
+  - call a route whose handler returns `server.NewUnknownTenantError(err)` and confirm the
+    `reason="unknown tenant"` WARN carries its access line's `request_id` in both `request_id`
+    and `correlation_id`, its `http.route`, and the span's `trace_id`;
+  - send a request with no tenant and confirm the `reason="empty tenant"` WARN carries the 400
+    response's `X-Request-ID` in both `request_id` and `correlation_id`, its `http.route`, and
+    the span's `trace_id`, and that no access line was written for it.
 - ref: gaborage/go-bricks#2212 · `server/line_correlation.go` (`correlateLine`, `openWarn`,
   `warnCorrelated`) · `server/tenant_middleware.go` (`logTenantRejection`)
 

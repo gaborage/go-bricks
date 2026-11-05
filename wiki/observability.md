@@ -304,10 +304,14 @@ the value you see.
 The framework's own lines about one HTTP request that are correlated (the
 `[server.tenant]` rejection WARN) carry the same correlation: `http.route`,
 `request_id`, `correlation_id`, and `trace_id`/`span_id` when the request's
-span context is valid, so each joins its request's access line and span. On
-these lines `http.route` is the registered route template (`/cards/:id`), the
-same value the access line and the JOSE failure line carry, so one filter on it
-finds all of them; their `path` field is the masked rendering
+span context is valid, so each joins its request's span and the response's
+`X-Request-ID`. The tenant seat runs before the access logger, so its own
+rejection writes no access line to join; a handler's
+`server.NewUnknownTenantError` refusal comes from inside the access logger, so
+it also joins that request's access line. On these lines `http.route` is the
+registered route template (`/cards/:id`), the same value the access line and
+the JOSE failure line carry, so one filter on it finds all of them; their
+`path` field is the masked rendering
 (`/cards/REDACTED`, [ADR-167](adr_167_inbound_paths_render_from_route_template.md)).
 `request_id` and `correlation_id` hold the same value, read without minting one.
 With a nil logger (the public `TenantMiddleware` construction) the stdlib

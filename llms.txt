@@ -1394,6 +1394,16 @@ func RouteMetrics(c server.HandlerContext, next func() error) error {
 	return err
 }
 
+// A handler's own line joins its access line on request_id + http.route. HandlerContext has no
+// request-id accessor: read the X-Request-ID the framework validated and set on the response,
+// never the inbound request header (caller-written, unvalidated).
+func logRefund(log logger.Logger, c server.HandlerContext) {
+	log.Info().
+		Str("http.route", c.RouteTemplate()).
+		Str("request_id", c.ResponseWriter().Header().Get(trace.HeaderXRequestID)). // go-bricks/trace
+		Msg("refund accepted")
+}
+
 // SetPathParams replaces the set; Param(name) AND `param:"..."` binding observe it.
 // Values pass through verbatim — a promoted query param is still user input, validate as usual.
 // Replace an existing entry instead of appending a duplicate: params can match empty

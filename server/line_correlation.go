@@ -12,10 +12,11 @@ import (
 )
 
 // lineCorrelation is what a framework WARN or ERROR line about one request carries, so the line
-// joins that request's access line and span (#2212): http.route, the registered route template
-// exactly as the access line and the JOSE line write it (c.Path(), template-only, so it carries
-// no request bytes; ADR-167), the request id, which is also the line's correlation_id, and the
-// OTel trace and span ids when the request's span context is valid.
+// joins that request's span and X-Request-ID (#2212), and its access line when one is written (a
+// line from the tenant seat, which runs before the access logger, has none): http.route, the
+// registered route template exactly as the access line and the JOSE line write it (c.Path(),
+// template-only, so it carries no request bytes; ADR-167), the request id, which is also the
+// line's correlation_id, and the OTel trace and span ids when the request's span context is valid.
 // correlateLine is the one constructor and every such line goes through stamp or text, so a
 // field added here reaches every sink at once.
 type lineCorrelation struct {
