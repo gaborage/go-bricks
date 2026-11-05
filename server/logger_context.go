@@ -51,6 +51,8 @@ func getRequestLogContext(c *echo.Context) *requestLogContext {
 // pooled echo.Context, so no request can read another's address. Outside the access logger
 // (no requestLogContext) it is a plain c.RealIP(). A new client-address read downstream of
 // the access logger should call this, not c.RealIP(), or it pays a second extraction.
+// When the limiter is on, client.address is fixed at limiter time: a later rewrite of the
+// peer address or X-Forwarded-For no longer moves it.
 func clientAddress(c *echo.Context) string {
 	reqCtx := getRequestLogContext(c)
 	if reqCtx == nil {
