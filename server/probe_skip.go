@@ -110,45 +110,17 @@ func CreateProbeSkipper(healthPath, readyPath string) SkipperFunc {
 			return matchesProbePath(r.Pattern, healthPath, readyPath)
 		}
 
-		return matchesProbePath(routerPath(r), healthPath, readyPath)
+		// The path echo's router keyed on: RawPath when set, Path otherwise, exactly the
+		// router's own selection (DefaultRouter.Route under the default RouterConfig). net/url
+		// leaves RawPath empty whenever the canonical escaping equals the spelling the client
+		// sent, so this differs from the decoded path only for a request that arrived
+		// percent-encoded. url.URL.EscapedPath() is NOT equivalent and must not be substituted:
+		// it re-encodes Path when RawPath is unset, and ignores a RawPath that fails its own
+		// validity check although the router would still have matched on it. Decoding,
+		// normalizing or lowercasing the hex digits here reopens GHSA-h4jw-4c64-48mh. Inline,
+		// not a helper, so no sink can reuse it: sinks print maskedPath (#2212).
+		return matchesProbePath(cmp.Or(r.URL.RawPath, r.URL.Path), healthPath, readyPath) //nolint:forbidigo // a comparison key for the probe skip, never printed (GHSA-h4jw-4c64-48mh)
 	}
-}
-
-// routerPath returns the path echo's router keyed on: RawPath when it is set, Path otherwise.
-// cmp.Or is exactly the router's own selection (DefaultRouter.Route under the default
-// RouterConfig), which is what makes it the right key for anything that has to agree with the
-// matched route. It is not "the escaped path": net/url leaves RawPath empty whenever the
-// canonical escaping equals the spelling the client sent, so the answer differs from the
-// decoded path only for a request that actually arrived percent-encoded.
-//
-// Which is the whole point for GET <base>/%68ealth against a server serving both <base>/health
-// and <base>/:id — the router keys on the encoded spelling and matches the param route, while
-// URL.Path decodes to <base>/health, a route this request never reached. Reported beside the
-// matched route, the decoded form states two things an operator cannot reconcile.
-//
-// url.URL.EscapedPath() is NOT equivalent and must not be substituted: it re-encodes Path
-// when RawPath is unset, and it silently IGNORES a RawPath that fails its own validity check
-// even though the router would still have matched on it. Either divergence reports a path the
-// router never routed.
-//
-// One coupling to know about: this mirrors echo's DEFAULT router selection. A consumer that
-// installs its own router with RouterConfig.UseEscapedPathForMatching — reachable through
-// echo.NewWithConfig, and note the flag is inverted relative to its name, so setting it makes
-// the router match the DECODED path — would make this function disagree with what that router
-// matched. The framework cannot detect it: the field is unexported and absent from the Router
-// interface, so there is nothing to read and nothing to reject. Such a deployment gets a
-// url.path that disagrees with its http.route, the defect this helper exists to fix, in the
-// opposite direction; the probe exemption stays fail-safe there, per the SECURITY note below.
-//
-// SECURITY: CreateProbeSkipper above keys its no-template fallback on this function, so the
-// selection is load-bearing beyond log readability — decoding, normalizing, lowercasing the
-// hex digits or switching to EscapedPath() here reopens GHSA-h4jw-4c64-48mh, where a
-// percent-encoded spelling of a probe path was exempted from tenant resolution, the
-// forwarded-client-cert identity, OTel and every module global middleware while the router
-// served it from a module route. The SECURITY block on CreateProbeSkipper has the full
-// argument.
-func routerPath(r *http.Request) string {
-	return cmp.Or(r.URL.RawPath, r.URL.Path) //nolint:forbidigo // the probe skip keys on the path the router matched (GHSA-h4jw-4c64-48mh); L6p moves the access-log and span callers to maskedPath (#2212)
 }
 
 // skipperFromRequest adapts a consumer-supplied SkipperFunc to the echo-native form the

@@ -58,7 +58,7 @@ func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkip
 
 			tenantID, err := resolver.ResolveTenant(c.Request().Context(), c.Request())
 			if err != nil || tenantID == "" {
-				logTenantRejection(l, c, tenantRejectionReason(err), c.Request().URL.Path) //nolint:forbidigo // L6p renders this sink through maskedPath (#2212)
+				logTenantRejection(l, c, tenantRejectionReason(err))
 				return NewBadRequestError(msgInvalidTenant)
 			}
 
@@ -86,12 +86,13 @@ func tenantRejectionReason(resolveErr error) string {
 }
 
 // logTenantRejection emits one WARN per request refused for its tenant (400), carrying the
-// reason class and the caller-chosen path, never a tenant ID or an error message. With a nil
-// logger (public TenantMiddleware construction) it falls back to stdlib log, like corsWarnf.
-func logTenantRejection(l logger.Logger, c *echo.Context, reason, path string) {
+// reason class and the masked matched template (maskedPath), never request path bytes, a
+// tenant ID or an error message. With a nil logger (public TenantMiddleware construction) it
+// falls back to stdlib log, like corsWarnf.
+func logTenantRejection(l logger.Logger, c *echo.Context, reason string) {
 	req := c.Request()
 	msg := fmt.Sprintf("[server.tenant] request rejected: invalid tenant method=%s path=%s client=%s status=%d reason=%q",
-		logSafeValue(req.Method), logSafeValue(path), logSafeValue(c.RealIP()), http.StatusBadRequest, reason)
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), http.StatusBadRequest, reason)
 	if l == nil {
 		log.Printf("WARN %s", msg)
 		return
@@ -100,12 +101,12 @@ func logTenantRejection(l logger.Logger, c *echo.Context, reason, path string) {
 }
 
 // logUnknownTenantRefusal writes the one line an UnknownTenantError leaves. A 400
-// logs the tenant-rejection WARN with the route template, since a path resolver
+// logs the tenant-rejection WARN with the masked path, since a path resolver
 // puts the tenant ID in the URL. A 500 (a cause that is not the sentinel) logs
 // classifyError's unhandled-error line, the error type only outside debug.
 func logUnknownTenantRefusal(apiErr *UnknownTenantError, c *echo.Context, l logger.Logger, debug bool) {
 	if apiErr.HTTPStatus() == http.StatusBadRequest {
-		logTenantRejection(l, c, "unknown tenant", matchedRouteTemplate(c))
+		logTenantRejection(l, c, "unknown tenant")
 		return
 	}
 	logUnhandledError(l, c, apiErr.cause, debug)

@@ -32,7 +32,7 @@ func reportPanic(log logger.Logger, c *echo.Context, r any) {
 		Str("panic_type", fmt.Sprintf("%T", r)).
 		Str("request_id", safeGetRequestID(c)).
 		Str("method", req.Method).
-		Str("path", req.URL.Path). //nolint:forbidigo // L6p renders this sink through maskedPath (#2212)
+		Str("path", maskedPath(c)).
 		Msg("Panic recovered")
 }
 

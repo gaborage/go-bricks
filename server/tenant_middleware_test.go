@@ -119,11 +119,11 @@ func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 }
 
 // TestTenantRejectionLogEscapesRequestValues varies the attacker-written
-// dimension of logTenantRejection: method, path and client IP must reach the
-// log escaped on both logger paths.
+// dimension of logTenantRejection: the client IP must reach the log escaped on
+// both logger paths, and the request path not at all.
 func TestTenantRejectionLogEscapesRequestValues(t *testing.T) {
 	assertRejectionLogEscapesRequestValues(t, func(l logger.Logger, c *echo.Context) {
-		logTenantRejection(l, c, tenantRejectionReason(nil), c.Request().URL.Path)
+		logTenantRejection(l, c, tenantRejectionReason(nil))
 	})
 }
 
@@ -214,9 +214,9 @@ func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testLog := &testLogger{}
 			srv := newTenantServer(tc.resolver, testLog)
-			route, path := "/orders", "/orders"
+			route, path, masked := "/orders", "/orders", "/orders"
 			if tc.resolver == config.ResolverTypePath {
-				route, path = "/:tenant/orders", "/"+unknownTenantID+"/orders"
+				route, path, masked = "/:tenant/orders", "/"+unknownTenantID+"/orders", "/"+maskToken+"/orders"
 			}
 			if tc.typed {
 				hr := NewHandlerRegistry(srv.cfg, WithLogger(testLog))
@@ -241,7 +241,7 @@ func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
 			require.Len(t, warns, 1, "exactly one WARN per refusal")
 			assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
 			assert.Contains(t, warns[0].msg, "status=400")
-			assert.Contains(t, warns[0].msg, fmt.Sprintf("path=%q", route), "the route template, never the URL")
+			assert.Contains(t, warns[0].msg, fmt.Sprintf("path=%q", masked), "the masked route template, never the URL")
 			for _, field := range append([]string{warns[0].msg}, slices.Collect(maps.Values(warns[0].values))...) {
 				assert.NotContains(t, field, unknownTenantID, "the tenant ID never reaches the line")
 				assert.NotContains(t, field, "configuration not found", "the error text never reaches the line")

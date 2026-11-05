@@ -249,7 +249,6 @@ func TestIPPreGuardLogsRejection(t *testing.T) {
 	capturer := &capturingLogger{}
 	line := tripIPPreGuard(t, capturer, "/test", "10.0.0.200", func() []string { return capturer.warns })
 	assert.Contains(t, line, `method="GET"`)
-	assert.Contains(t, line, `path="/test"`)
 	assert.Contains(t, line, `client="10.0.0.200"`)
 	assert.Contains(t, line, "status=429")
 }
@@ -290,8 +289,10 @@ func TestIPPreGuardNilLoggerDoesNotPanic(t *testing.T) {
 // dimension of the rejection log: a path carrying a space-separated forged
 // field, a newline, a forged log prefix and a control byte, plus a spoofed X-Forwarded-For with a newline.
 // Both the framework-logger path and the stdlib fallback must emit exactly ONE
-// line with the injected bytes rendered as escape sequences, and an oversized
-// path must be capped (CodeQL go/log-injection).
+// line with the client's injected bytes rendered as escape sequences, and an
+// oversized client must be capped (CodeQL go/log-injection). No byte of the
+// forged path reaches the line, since it renders from the matched template
+// (#2212).
 func TestIPPreGuardRejectionLogEscapesRequestValues(t *testing.T) {
 	tests := []struct {
 		name string
@@ -304,15 +305,14 @@ func TestIPPreGuardRejectionLogEscapesRequestValues(t *testing.T) {
 			path: "/test status=200\n[server.ip_preguard] forged=true\x00",
 			ip:   "10.0.0.202\nclient=1.1.1.1",
 			want: []string{
-				`path="/test status=200\n[server.ip_preguard] forged=true\x00"`,
 				`client="10.0.0.202\nclient=1.1.1.1"`,
 			},
 		},
 		{
-			name: "oversized_path_is_capped",
-			path: "/" + strings.Repeat("a", 2*logSafeValueMaxBytes),
-			ip:   "10.0.0.203",
-			want: []string{"..."},
+			name: "oversized_client_is_capped",
+			path: "/test",
+			ip:   strings.Repeat("a", 2*logSafeValueMaxBytes),
+			want: []string{"...\""},
 		},
 	}
 
@@ -374,8 +374,11 @@ func tripIPPreGuard(t *testing.T, l logger.Logger, path, ip string, lines func()
 	require.Len(t, got, 1, "injected newline must not forge a second log line: %q", got)
 	assert.NotContains(t, got[0], "\n")
 	assert.NotContains(t, got[0], "\x00")
-	_, after, _ := strings.Cut(got[0], "path=")
+	// The path renders from the matched template "/*" (#2212), never from request bytes.
+	assert.Contains(t, got[0], `path="/`+maskToken+`"`)
+	assert.NotContains(t, got[0], "forged=true", "no request path byte may reach the line")
+	_, after, _ := strings.Cut(got[0], "client=")
 	field, _, _ := strings.Cut(after, " ")
-	assert.LessOrEqual(t, len(field), logSafeValueMaxBytes+2, "path field must be capped (plus its quotes)")
+	assert.LessOrEqual(t, len(field), logSafeValueMaxBytes+2, "client field must be capped (plus its quotes)")
 	return got[0]
 }

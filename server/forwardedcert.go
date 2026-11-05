@@ -276,9 +276,8 @@ func RequireForwardedClientCert(l logger.Logger) MiddlewareFunc {
 // fixed reason string.
 func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 	req := c.Request()
-	//nolint:forbidigo // L6p renders this sink through maskedPath (#2212)
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] request rejected: missing identity method=%s path=%s client=%s status=%d reason=%q",
-		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(req.RemoteAddr), http.StatusUnauthorized, "forwarded_client_cert_missing"))
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(req.RemoteAddr), http.StatusUnauthorized, "forwarded_client_cert_missing"))
 }
 
 // logForwardedClientCertDuplicateWarning emits one WARN whenever a request
@@ -291,9 +290,8 @@ func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 // never a header value.
 func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, dupErr error) {
 	req := c.Request()
-	//nolint:forbidigo // L6p renders this sink through maskedPath (#2212)
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] duplicated header detected method=%s path=%s client=%s reason=%q detail=%q",
-		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(req.RemoteAddr), "forwarded_client_cert_duplicate", dupErr.Error()))
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(req.RemoteAddr), "forwarded_client_cert_duplicate", dupErr.Error()))
 }
 
 // logForwardedClientCertLeafWarning emits a WARN whenever the -Leaf header
@@ -304,9 +302,8 @@ func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, du
 // header content.
 func logForwardedClientCertLeafWarning(l logger.Logger, c *echo.Context, parseErr error, encodedLeaf string) {
 	req := c.Request()
-	//nolint:forbidigo // L6p renders this sink through maskedPath (#2212)
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] leaf certificate not decoded method=%s path=%s client=%s reason=%q leaf_bytes=%d",
-		logSafeValue(req.Method), logSafeValue(req.URL.Path), logSafeValue(req.RemoteAddr), parseErr.Error(), len(encodedLeaf)))
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(req.RemoteAddr), parseErr.Error(), len(encodedLeaf)))
 }
 
 // warnWithFallback routes msg through l.Warn, falling back to the stdlib log

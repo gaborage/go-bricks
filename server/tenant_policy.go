@@ -233,11 +233,12 @@ func (f *tenantFaultError) Error() string { return "server: tenant-owned family 
 func (f *tenantFaultError) Unwrap() error { return f.cause }
 
 // logTenantRefusal emits one ERROR line per family refusal, carrying the reason class and
-// the matched route template, never a tenant ID, a header value or an error message. With
-// a nil logger it falls back to stdlib log, like logTenantRejection.
+// the masked matched template (maskedPath), never request path bytes, a tenant ID, a header
+// value or an error message. With a nil logger it falls back to stdlib log, like
+// logTenantRejection.
 func logTenantRefusal(c HandlerContext, l logger.Logger, reason string) {
 	msg := fmt.Sprintf("[server.tenant] family request refused: method=%s path=%s reason=%q",
-		logSafeValue(c.Request().Method), logSafeValue(c.RouteTemplate()), reason)
+		logSafeValue(c.Request().Method), logSafeValue(maskedPath(c.ectx)), reason)
 	if l == nil {
 		log.Printf("ERROR %s", msg)
 		return
