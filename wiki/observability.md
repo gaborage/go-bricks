@@ -320,18 +320,21 @@ that carry a `path` field (the tenant WARN and the guard's line) carry the
 masked rendering
 (`/cards/REDACTED`, [ADR-167](adr_167_inbound_paths_render_from_route_template.md)).
 `request_id` and `correlation_id` hold the same value, read without minting one,
-so on a panic-guard line written before the request-id middleware set the
-response's `X-Request-ID` both hold the inbound `X-Request-ID` when it is valid
-and are empty otherwise. With a nil logger the stdlib fallback appends the same
-fields as `key=value` text: the tenant WARN takes it under the public
-`TenantMiddleware` construction, `unhandled error` under a
-`server.NewHandlerRegistry` built without `server.WithLogger`, and the IP
-pre-guard and forwarded-client-cert WARNs under `IPPreGuard` and
-`RequireForwardedClientCert(nil)`. A WARN whose level is disabled returns before
-it is formatted or reads the client address. The forwarded-client-cert WARNs
-print `client=` as the access line's `client.address` (behind a trusted proxy,
-the `X-Forwarded-For` client) and `peer=` as the TCP peer. None of these lines is bound to the request context, so
-none raises the request's access line (see Request Logging above).
+so a panic-guard line written before the request-id middleware ran carries the
+caller's `X-Request-ID` when it is valid and is empty otherwise. With a nil
+logger the stdlib fallback appends the same fields as `key=value` text: the
+tenant WARN takes it under the public `TenantMiddleware` construction,
+`unhandled error` under a `server.NewHandlerRegistry` built without
+`server.WithLogger`, and the IP pre-guard and forwarded-client-cert WARNs under
+`IPPreGuard` and `RequireForwardedClientCert(nil)`. A WARN whose level is
+disabled returns before it is formatted or reads the client address. The
+forwarded-client-cert WARNs print `client=` as the access line's
+`client.address` (behind a trusted proxy, the `X-Forwarded-For` client) and
+`peer=` as the TCP peer. None of these lines is bound to the request context, so
+none raises the request's access line. A line logged through the request context
+does: a database query-tracking line (a slow-query WARN, a query ERROR) and a
+handler's or middleware's own `log.WithContext(ctx)` WARN or ERROR, enabled or
+not, as does `HandlerContext.EscalateSeverity` (see Request Logging above).
 
 ### Runbook: from a framework line to its request
 
@@ -343,23 +346,74 @@ lines by identifier, not by path:
    or `[server.forwardedclientcert]` WARN, a `Panic recovered` or `unhandled error`
    ERROR, a `jose: operation failed` line, or the meta-key WARN). `http.route`
    names the route; `path` shows its shape with every value `REDACTED`.
-2. **Find the access line** (`log.type=action`) with the same `request_id`
+2. **Or start from the response** a caller reports. Every enveloped response,
+   success or error, carries the request id as `meta.traceId` (the request id,
+   not the OTel `trace_id`), the response carries it as `X-Request-ID`, and the
+   IP pre-guard's and the rate limiter's 429 bodies carry it as
+   `error.request_id`. Search `request_id` or `correlation_id` for it.
+3. **Find the access line** (`log.type=action`) with the same `request_id`
    (`correlation_id` holds the same value). Every non-probe request that reaches
-   the access logger writes one, at the level its status and escalation give it;
-   no framework line replaces it or raises its level. Two cases have none: a
-   request the IP pre-guard refused (429), which runs outer to the access logger,
-   and a request whose access line `log.level` disables (an INFO line under
-   `log.level: warn`, such as a 200 that only drew a forwarded-client-cert WARN).
-   A `Panic recovered` line written by the outermost guard has no access line
-   either (its `request_id` is the inbound `X-Request-ID` when valid, empty
-   otherwise).
-3. **Follow `trace_id` to the span** when tracing is on: every correlated line
+   the access logger writes one, at the level its status and escalation give it,
+   and no line replaces it. The framework lines in step 1 leave its level
+   status-derived; a line logged through the request context (a query-tracking
+   slow-query WARN or query ERROR, a handler's own WARN or ERROR, enabled or not)
+   and `EscalateSeverity` raise it, so a 200 can read `level=warn` or
+   `level=error`. These requests have none:
+   - a CORS preflight, which the CORS middleware answers before the access
+     logger runs (its span is its only record);
+   - a request the IP pre-guard refused (429);
+   - a request the tenant seat refused (400 `Invalid tenant`, with its
+     `[server.tenant]` WARN) or the engine-level forwarded-client-cert seat
+     refused (401, with its `request rejected: missing identity` WARN); both run
+     outer to the access logger, while a route group's
+     `RequireForwardedClientCert` runs inside it, so its 401 has one;
+   - a request whose panic the outermost guard caught (see below);
+   - a request whose access line `log.level` disables (an INFO line under
+     `log.level: warn`, such as a 200 that only drew a forwarded-client-cert
+     WARN).
+
+   The outermost guard's `Panic recovered` line carries `panic_type`, `method`
+   and `path` and no `stack`; the error handler's line for a handler panic
+   carries `stack`, and its request has an access line. The guard catches a
+   panic in a middleware outside the access logger's recovery (request id, OTel,
+   request enrich, CORS, IP pre-guard, the tenant and forwarded-client-cert
+   seats, or the access logger itself), so its request has no access line. Its
+   `request_id` is the request's own whenever the request-id middleware had run,
+   which is every such panic except one inside that middleware; then it is the
+   caller's `X-Request-ID` when valid, and empty otherwise. Tell a guard line by
+   its fields, not by its `request_id`.
+4. **Check the status against the caller's.** The access line's
+   `http.response.status_code` is read when the chain returns to the access
+   logger, before the error handler writes the response for a returned error:
+   the status of a returned echo HTTP error, otherwise the response status
+   written so far, which is 200 when nothing was written. A raw handler or a
+   middleware that returns an `IAPIError` or a plain error can therefore log 200
+   while the caller got the error's status (#2213); a typed handler's error is
+   written by the handler adapter first, so its status matches. Where they
+   disagree, trust the caller's status and the framework line.
+5. **Follow `trace_id` to the span** when tracing is on: every correlated line
    carries the span's `trace_id`/`span_id` when the request's span context is
-   valid.
-4. **Identify the caller** from the access line's `client.address` and
+   valid. With `observability.enabled: false` no span is created, and with
+   `observability.trace.enabled: false` no line carries them (see below): join on
+   `request_id` alone.
+6. **Identify the caller** from the access line's `client.address` and
    `user_agent.original`, or the WARN's `client=`; on a forwarded-client-cert WARN
    `peer=` is the load balancer, not the caller.
-5. **Need the concrete path?** Read it at the edge (load balancer or WAF access
+7. **Join a business record through your own line.** Framework lines carry no
+   business key (an order or account reference). Log it on your own line through
+   `log.WithContext(ctx)`, which adds `trace_id`/`span_id` when the span is valid
+   but not `request_id`, and add the request id (`trace.IDFromContext(ctx)` from
+   the go-bricks `trace` package) as `correlation_id`, so the join survives with
+   tracing off. The business key must never be a card number or another value
+   the log filter masks.
+8. **Expect unmatched requests to collapse.** A request no route matched carries
+   its group's catch-all as `http.route` under a middleware-bearing group
+   (`<prefix>/*`, `path` `<prefix>/REDACTED`), and otherwise no template:
+   `http.route` is empty on the access line and omitted on a correlated line, and
+   `path` is the bare `REDACTED`. Every such request shares that one key, so tell
+   them apart by `request_id`, and read what each targeted at the edge (next
+   step).
+9. **Need the concrete path?** Read it at the edge (load balancer or WAF access
    logs) by timestamp and client address, under the same data controls as any
    card-data store; the framework keeps no copy.
 

@@ -15228,24 +15228,29 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `logForwardedClientCertDuplicateWarning`, `logForwardedClientCertLeafWarning`) ·
   `server/ip_preguard.go` (`logIPPreGuardRejection`) · `server/line_correlation.go` (`openWarn`)
 
-### [C73.33] a request's access line is no longer dropped when a WARN+ line or `EscalateSeverity` escalates it · silent-behavior · when: match
+### [C73.33] a request's access line is no longer dropped when a WARN+ line or `EscalateSeverity` escalates it · silent-behavior · when: always
 
 - detect: whatever counts or keys on the access line (`log.type=action`): request-volume
-  dashboards, error-rate alerts by `level` or `result_code`, log-ingest budgets, and a rule that
-  read the trace-stream WARN/ERROR line of a request as its only line.
+  dashboards, error-rate alerts by `level`, `result_code` or `http.response.status_code`,
+  log-ingest and export budgets, and a rule that read the trace-stream WARN/ERROR line of a
+  request as its only line.
 
   In this repository:
 
   ```bash
   # a test or tool counting access lines, or expecting none beside a WARN+ line
-  git grep -nE 'log\.type|EscalateSeverity|WithSeverityHook|"action"' -- ':!wiki/'
+  git grep -nE 'log\.type|result_code|http\.response\.status_code|EscalateSeverity|WithSeverityHook|"action"' -- ':!wiki/'
+  # each request that calls EscalateSeverity now keeps its access line
+  git grep -nE '[.]EscalateSeverity[(]' -- '*.go'
   ```
 
   Rules outside the repository (a log platform's saved query, an index's ingest budget) count
   too.
-- gate: match = a hit that counts access lines, reads their `level`/`result_code`, or relies on
-  a request with a WARN+ line having no access line. no-match = nothing reads the action stream:
-  nothing to do.
+- gate: always. A database query-tracking WARN (a slow query) or ERROR escalates the access line
+  with no consumer code, and the readers it reaches (a vendor-UI alert, a saved log query, an
+  ingest budget) sit outside the repository, where no grep finds them. The population is every
+  service that serves HTTP through the framework: audit those readers whether or not the detect
+  hits, and treat each `EscalateSeverity` hit as in scope.
 - scope: the request logger on every engine the framework builds, for every non-probe request
   that reaches it. The lines that escalate it: any WARN or ERROR line logged through the request
   context, enabled or disabled by `log.level` — a consumer handler's or middleware's own, and a
@@ -15265,14 +15270,21 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   context: they carry its correlation (`[C73.30]`'s fields) and leave the access line
   status-derived, so the JOSE 415 writes `level=warn result_code=WARN` and a 200 with a meta-key
   collision `level=info result_code=INFO`. A level below WARN, `zerolog.NoLevel` and
-  `zerolog.Disabled` escalate nothing.
-- apply: size the action index for one line per non-probe request, read error rates from the
-  access line's `result_code` (an escalated 2xx now counts where it was absent), and delete a
-  rule that took a request's WARN+ trace line as standing in for its access line.
+  `zerolog.Disabled` escalate nothing. A handler that calls `HandlerContext.EscalateSeverity`
+  keeps its access line, at the escalated level. The access line is an action log, so the OTel
+  log export sends it at 100% whatever `observability.logs.samplingrate` says (only INFO and
+  DEBUG trace lines are sampled): each line the drop used to suppress now reaches the exporter
+  and the vendor's ingest.
+- apply: size the action index and the export budget for one line per non-probe request, exported
+  at 100%, read error rates from the access line's `result_code` (an escalated 2xx now counts
+  where it was absent), and delete a rule that took a request's WARN+ trace line as standing in
+  for its access line.
 - verify: against a non-production log sink, request a route whose handler logs
   `log.WithContext(ctx).Warn()` and answers 200, and confirm one `log.type=action` line with
-  `level=warn` and `result_code=WARN` beside the handler's WARN; then POST plaintext to a JOSE
-  route and confirm its access line reads `status=415 level=warn`.
+  `level=warn` and `result_code=WARN` beside the handler's WARN; request a route whose handler
+  calls `ctx.EscalateSeverity(zerolog.WarnLevel)` and answers 200, and confirm one access line
+  with `level=warn` and `result_code=WARN`; then POST plaintext to a JOSE route and confirm its
+  access line reads `http.response.status_code=415 level=warn`.
 - ref: gaborage/go-bricks#2212 · `server/logger.go` (`logActionSummary`, `determineSeverity`) ·
   `server/logger_context.go` (`escalateSeverity`, `EscalateSeverity`) · `server/jose.go`
   (`recordFailure`) · `server/handler.go` (`logMetaKeyCollision`)
