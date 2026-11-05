@@ -216,8 +216,8 @@ type PathParam struct {
 // including any group/base-path prefix (e.g. "/api/cards/:cardId/status").
 // It is the template the application registered, NOT the concrete URL: read a
 // matched value through Param or PathParams. On a matched route it is the value
-// the access line and the framework's correlated WARN and ERROR lines carry as
-// http.route, so a log query keyed on it joins them. No framework sink prints the
+// the access line and the tenant-rejection WARN carry as http.route, so a log
+// query keyed on it joins them. No framework sink prints the
 // request path (ADR-167); a handler that logs Request().URL.Path itself prints
 // what the caller sent, a card number in a segment included. Empty before
 // routing completes and on unmatched (404) requests; on a top-level 405 the
