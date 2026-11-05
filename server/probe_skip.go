@@ -72,7 +72,7 @@ func isProbeMethod(method string) bool {
 
 // matchesProbePath compares a matched route (a template, or a raw path) against the probe
 // paths. An empty candidate never matches: no route matched, and an unmatched request is
-// never a probe. That also keeps a caller who passes an empty probe path — SetupMiddlewares
+// never a probe. That also keeps a caller who passes an empty probe path — setupMiddlewares
 // and CreateProbeSkipper both accept one, though New cannot produce one (normalizeRoutePath)
 // — from exempting every unmatched request.
 func matchesProbePath(path, healthPath, readyPath string) bool {

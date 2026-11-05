@@ -88,7 +88,7 @@ func TestSetupMiddlewares(t *testing.T) {
 			log := logger.New("disabled", false)
 
 			// Setup middlewares
-			SetupMiddlewares(e, log, tt.config, true, testHealthPath, testReadyPath)
+			setupMiddlewares(e, log, tt.config, true, testHealthPath, testReadyPath, nil)
 
 			// Create test handler
 			e.GET("/test", func(c *echo.Context) error {
@@ -144,7 +144,7 @@ func TestSetupMiddlewaresResponseTimeHeader(t *testing.T) {
 	t.Run("disabled_by_default_omits_header", func(t *testing.T) {
 		e := newEngine()
 		log := logger.New("disabled", false)
-		SetupMiddlewares(e, log, newCfg(false), true, testHealthPath, testReadyPath)
+		setupMiddlewares(e, log, newCfg(false), true, testHealthPath, testReadyPath, nil)
 		e.GET("/test", func(c *echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 		})
@@ -161,7 +161,7 @@ func TestSetupMiddlewaresResponseTimeHeader(t *testing.T) {
 	t.Run("enabled_sets_header", func(t *testing.T) {
 		e := newEngine()
 		log := logger.New("disabled", false)
-		SetupMiddlewares(e, log, newCfg(true), true, testHealthPath, testReadyPath)
+		setupMiddlewares(e, log, newCfg(true), true, testHealthPath, testReadyPath, nil)
 		e.GET("/test", func(c *echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 		})
@@ -311,7 +311,7 @@ func TestBuildCompositeResolverOrder(t *testing.T) {
 // TestBuildCompositeResolverUnavailableOrderFallsBack covers the fail-open a
 // nil sub-resolver would otherwise open: an unvalidated config naming only an
 // unconfigured resolver (subdomain without a domain) must still fall back to
-// the default order rather than yield a nil resolver — SetupMiddlewares skips
+// the default order rather than yield a nil resolver — setupMiddlewares skips
 // the tenant middleware entirely when buildTenantResolver returns nil.
 func TestBuildCompositeResolverUnavailableOrderFallsBack(t *testing.T) {
 	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
@@ -370,7 +370,7 @@ func TestMiddlewareOrder(t *testing.T) {
 		}
 	})
 
-	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
@@ -428,7 +428,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 
 	e.POST("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -472,7 +472,7 @@ func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 				BodyLimit: limit,
 			},
 		}
-		SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+		setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 		e.POST("/test", func(c *echo.Context) error {
 			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 		})
@@ -527,7 +527,7 @@ func TestGzipMiddleware(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 
 	// Create handler that returns large response
 	largeResponse := strings.Repeat("This is a test response that should be compressed. ", 100)
@@ -577,7 +577,7 @@ func TestGzipMiddlewareMinLength(t *testing.T) {
 			Gzip:    config.GzipConfig{MinLength: 2048},
 		},
 	}
-	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 
 	e.GET("/small", func(c *echo.Context) error { return c.String(http.StatusOK, "tiny") })
 	e.GET("/large", func(c *echo.Context) error {
@@ -617,7 +617,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 
 	// Handler that panics
 	e.GET("/panic", func(_ *echo.Context) error {
@@ -649,7 +649,7 @@ func TestSecurityHeaders(t *testing.T) {
 		},
 	}
 
-	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -684,7 +684,7 @@ func TestSecurityHeaders(t *testing.T) {
 // WARN that setupIdentityMiddlewares emits when require implies registration.
 const forwardedCertRequireWarnNeedle = "forwardedclientcert.require=true with enabled=false"
 
-// newForwardedCertCfg builds a minimal SetupMiddlewares config carrying the
+// newForwardedCertCfg builds a minimal setupMiddlewares config carrying the
 // given forwarded-client-cert posture.
 func newForwardedCertCfg(enabled, requireIdentity bool) *config.Config {
 	return &config.Config{
@@ -722,7 +722,7 @@ func forwardedCertProbe(e *echo.Echo, path string, withCertHeaders bool) (code i
 func TestForwardedClientCertRequireWithoutEnabledFailsClosed(t *testing.T) {
 	t.Run("unauthenticated_request_is_rejected", func(t *testing.T) {
 		e := newTenantTestEcho()
-		SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath)
+		setupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath, nil)
 
 		code, sawIdentity := forwardedCertProbe(e, "/check", false)
 
@@ -736,7 +736,7 @@ func TestForwardedClientCertRequireWithoutEnabledFailsClosed(t *testing.T) {
 	// never take the target group down.
 	t.Run("health_probe_still_bypasses", func(t *testing.T) {
 		e := newTenantTestEcho()
-		SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath)
+		setupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath, nil)
 
 		code, _ := forwardedCertProbe(e, testHealthPath, false)
 
@@ -745,7 +745,7 @@ func TestForwardedClientCertRequireWithoutEnabledFailsClosed(t *testing.T) {
 
 	t.Run("ready_probe_still_bypasses", func(t *testing.T) {
 		e := newTenantTestEcho()
-		SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath)
+		setupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath, nil)
 
 		code, _ := forwardedCertProbe(e, testReadyPath, false)
 
@@ -759,7 +759,7 @@ func TestForwardedClientCertRequireWithoutEnabledFailsClosed(t *testing.T) {
 func TestForwardedClientCertDisabledStaysDisabled(t *testing.T) {
 	capturer := &capturingLogger{}
 	e := newTenantTestEcho()
-	SetupMiddlewares(e, capturer, newForwardedCertCfg(false, false), true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, capturer, newForwardedCertCfg(false, false), true, testHealthPath, testReadyPath, nil)
 	assert.NotContains(t, strings.Join(capturer.warns, "\n"), forwardedCertRequireWarnNeedle,
 		"the all-zero posture must not warn")
 
@@ -774,7 +774,7 @@ func TestForwardedClientCertDisabledStaysDisabled(t *testing.T) {
 // the parse-and-expose middleware.
 func TestForwardedClientCertEnabledWithoutRequireStillRegisters(t *testing.T) {
 	e := newTenantTestEcho()
-	SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(true, false), true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(true, false), true, testHealthPath, testReadyPath, nil)
 
 	code, sawIdentity := forwardedCertProbe(e, "/check", true)
 
@@ -797,8 +797,8 @@ func TestForwardedClientCertRequireImpliedWarn(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			capturer := &capturingLogger{}
-			SetupMiddlewares(newTenantTestEcho(), capturer, newForwardedCertCfg(tc.enabled, true),
-				true, testHealthPath, testReadyPath)
+			setupMiddlewares(newTenantTestEcho(), capturer, newForwardedCertCfg(tc.enabled, true),
+				true, testHealthPath, testReadyPath, nil)
 
 			joined := strings.Join(capturer.warns, "\n")
 			if tc.wantWarn {
@@ -860,7 +860,7 @@ func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
 			cfg.App.Env = "production"
 
 			e := newEngine()
-			SetupMiddlewares(e, logger.New("disabled", true), cfg, true, "/health", "/ready")
+			setupMiddlewares(e, logger.New("disabled", true), cfg, true, "/health", "/ready", nil)
 			e.GET("/boom", func(*echo.Context) error { panic(tt.panicVal) })
 
 			rec := httptest.NewRecorder()
@@ -925,7 +925,7 @@ func TestSanitizePanicValueStillYieldsAPanicStackError(t *testing.T) {
 	e := newEngine()
 	cfg := &config.Config{}
 	cfg.App.Name = "panic-shape"
-	SetupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready")
+	setupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready", nil)
 
 	var seen error
 	e.HTTPErrorHandler = func(_ *echo.Context, err error) { seen = err }
@@ -961,7 +961,7 @@ func TestSanitizePanicValueKeepsTheOriginalFrameInTheStack(t *testing.T) {
 	e := newEngine()
 	cfg := &config.Config{}
 	cfg.App.Name = "panic-stack"
-	SetupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready")
+	setupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready", nil)
 
 	var seen error
 	e.HTTPErrorHandler = func(_ *echo.Context, err error) { seen = err }

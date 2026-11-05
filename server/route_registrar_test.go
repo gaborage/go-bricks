@@ -429,7 +429,7 @@ func (e *guardLogEvent) Enabled() bool { return true }
 // Tripwire guard (CONTEXT.md § Testing): re-pin the baseline on a toolchain shift, never
 // widen the margin, which must stay below the ~+12 flat-adapter signal. Locks the
 // allocation count of the FULL default middleware chain (registered echo-native via e.Use
-// inside SetupMiddlewares); it fails if a future change routes the default chain through
+// inside setupMiddlewares); it fails if a future change routes the default chain through
 // adaptMiddleware (the flat adapter), which would add one baton allocation per middleware
 // layer — this config registers 12 unconditional layers, so 57 + ~12 = ~69 clears the
 // ceiling of 64 — the ADR-026 invariant. Measured baseline: 57 allocs/op on go1.27.x, down
@@ -445,7 +445,7 @@ const (
 )
 
 // TestDefaultMiddlewareChainAllocsStable drives a request through the full default chain of a
-// server built via New (SetupMiddlewares) and asserts allocs/op stays at or below the locked
+// server built via New (setupMiddlewares) and asserts allocs/op stays at or below the locked
 // baseline, enforcing that the default path remains echo-native and baton-free.
 func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 	if racedetect.Enabled {

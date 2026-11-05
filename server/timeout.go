@@ -20,14 +20,14 @@ import (
 // on the public surface.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in timeoutEcho, which SetupMiddlewares wires directly on
+// echo-native logic lives in timeoutEcho, which setupMiddlewares wires directly on
 // the default request path (ADR-026, no per-request baton).
 func Timeout(duration time.Duration) MiddlewareFunc {
 	return fromEchoMiddleware(timeoutEcho(duration))
 }
 
 // timeoutEcho is the echo-native request-timeout middleware constructor. Public
-// callers use Timeout (echo-free); SetupMiddlewares uses this form to keep the
+// callers use Timeout (echo-free); setupMiddlewares uses this form to keep the
 // default chain baton-free.
 func timeoutEcho(duration time.Duration) echo.MiddlewareFunc {
 	if duration <= 0 {

@@ -488,6 +488,8 @@ typed handler hot path stays echo-direct via an unexported `addEcho` seam (ADR-0
 preserved); only middleware routes pay a bounded +1 baton alloc. Amended by ADR-133:
 `NewHandlerContextForTest` takes `...TestContextOption`, and `NewHandlerContextForTestWithOptions`
 is removed; amended by ADR-165: the option type is now the sealed `TestContextSeeder`.
+Amended by ADR-166: the scope note that kept `SetupMiddlewares` exported is closed, and `WrapHandler`'s
+`echo.HandlerFunc` return is the one remaining `echo.*` type on the consumer surface.
 
 **Key Benefits:** No `echo.*` symbol on the consumer path, downstream services decoupled from Echo's version, security improvement (no spoofable `RealIP()` accessor), uniform flat middleware shape
 
@@ -2837,6 +2839,26 @@ the break this change already makes.
 
 ---
 
+### [ADR-166: `server.SetupMiddlewares` Is Unexported](adr_166_setup_middlewares_unexported.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** `server.SetupMiddlewares` is removed, so a call fails to compile
+
+`server.SetupMiddlewares` installed the framework chain on any `*echo.Echo`, so a consumer could
+build an engine without the masking router every framework engine carries, where each inbound path
+would render as the bare `REDACTED` (#2212). It is removed with no replacement export: only
+`newServer`, which `server.New`, `server.NewWithOptions` and so the App reach, installs the chain,
+through the unexported `setupMiddlewares` on an engine `newEngine` built. The chain, its order and
+every consumer middleware door are unchanged. Amends ADR-034, closing its scope note; the one
+remaining `echo.*` type on the consumer surface is `WrapHandler`'s `echo.HandlerFunc` return.
+See [migrations.md](migrations.md) `[C73.28]`.
+
+**Key Benefits:** the last exported signature taking `*echo.Echo` leaves the consumer surface;
+calls to `SetupMiddlewares` fail to compile instead of rendering unusable paths at run time. An
+engine a consumer builds directly with `echo.New()` still runs, without the masking router or the
+framework chain, so it is outside the framework's guarantees.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3646,7 +3668,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-165) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-166) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -10,6 +10,12 @@
 >
 > **Amended (2026-11-03, [ADR-165](adr_165_test_context_seeder_opaque.md)):** the option type is
 > now the sealed `TestContextSeeder`; `TestContextOption` is removed.
+>
+> **Amended (2026-11-03, [ADR-166](adr_166_setup_middlewares_unexported.md)):** the Phase-1 scope
+> note under *Locked decisions* is closed. `SetupMiddlewares`, which it kept exported with an
+> `*echo.Echo` parameter, is now the unexported `setupMiddlewares`, reached only through
+> `newServer` (from `server.New` and `server.NewWithOptions`). The one `echo.*` type left on the
+> consumer surface is `WrapHandler`'s `echo.HandlerFunc` return.
 
 ## Context
 
@@ -126,7 +132,7 @@ tests (`app/`, `scheduler/`) build a context without naming the escape hatch.
 middleware constructors) is resolved by **converting the constructors to flat
 public signatures** (Option A) while keeping `SetupMiddlewares` on echo-native
 internals. Functionality is preserved and the ADR-026 default path stays
-baton-free.
+baton-free. *(Closed by ADR-166: `SetupMiddlewares` is unexported.)*
 
 ## Consequences
 

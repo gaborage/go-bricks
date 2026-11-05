@@ -13,7 +13,8 @@
 
 ## Context
 
-`SetupMiddlewares` installs the built-in rate limiter on the root chain from `app.rate.limit`.
+The server's middleware setup (`SetupMiddlewares`, unexported by ADR-166) installs the built-in
+rate limiter on the root chain from `app.rate.limit`.
 It keyed on the context tenant (`multitenant.GetTenant`) when one resolved, and on `RealIP()`
 otherwise. It runs after tenant resolution and before every global and route-group middleware,
 so the tenant key was whatever the caller wrote in the header, path or `Host` the resolver reads.

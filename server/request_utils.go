@@ -48,14 +48,14 @@ func validateTraceState(ts string) string {
 // so the rest of the stack sees a sanitized value.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in requestIDMiddlewareEcho, which SetupMiddlewares wires
+// echo-native logic lives in requestIDMiddlewareEcho, which setupMiddlewares wires
 // directly on the default request path (ADR-026, no per-request baton).
 func RequestIDMiddleware() MiddlewareFunc {
 	return fromEchoMiddleware(requestIDMiddlewareEcho())
 }
 
 // requestIDMiddlewareEcho is the echo-native request-ID middleware constructor.
-// Public callers use RequestIDMiddleware (echo-free); SetupMiddlewares uses this
+// Public callers use RequestIDMiddleware (echo-free); setupMiddlewares uses this
 // form to keep the default chain baton-free.
 func requestIDMiddlewareEcho() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

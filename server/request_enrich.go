@@ -12,7 +12,7 @@ import (
 // (PerformanceStats) — into a single middleware that performs ONE
 // Request.WithContext clone instead of two. The standalone TraceContext() and
 // PerformanceStats() middlewares remain exported for callers that register them
-// individually; SetupMiddlewares wires this combined form on the hot path.
+// individually; setupMiddlewares wires this combined form on the hot path.
 //
 // Behavior is the union of both originals: the resolved trace ID and any inbound
 // W3C trace headers are attached for outbound propagation, and the shared AMQP/DB
@@ -25,17 +25,17 @@ import (
 // under the active request. The scope is folded into the existing Request.WithContext clone
 // so it adds no extra per-request allocation, and its release slice stays nil until the first
 // borrow (a request touching no managed resource pays nothing). Registered early in
-// SetupMiddlewares so ReleaseAll runs after the handler and every inner middleware.
+// setupMiddlewares so ReleaseAll runs after the handler and every inner middleware.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in requestEnrichEcho, which SetupMiddlewares wires directly
+// echo-native logic lives in requestEnrichEcho, which setupMiddlewares wires directly
 // on the default request path (ADR-026, no per-request baton).
 func RequestEnrich() MiddlewareFunc {
 	return fromEchoMiddleware(requestEnrichEcho())
 }
 
 // requestEnrichEcho is the echo-native request-enrichment middleware constructor.
-// Public callers use RequestEnrich (echo-free); SetupMiddlewares uses this form to
+// Public callers use RequestEnrich (echo-free); setupMiddlewares uses this form to
 // keep the default chain baton-free.
 func requestEnrichEcho() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

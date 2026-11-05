@@ -30,7 +30,7 @@ import (
 //     protection). A WARN is logged at startup.
 //
 // The env can be passed explicitly via the variadic envOverride argument
-// (preferred — SetupMiddlewares passes cfg.App.Env, which honors the
+// (preferred — setupMiddlewares passes cfg.App.Env, which honors the
 // Koanf default of EnvDevelopment when APP_ENV is unset). When omitted,
 // CORS falls back to os.Getenv("APP_ENV") — preserving call sites that
 // existed before the parameter was added.
@@ -41,7 +41,7 @@ import (
 // misleading, so this keeps the CORS contract aligned with what is on the wire.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in corsEcho, which SetupMiddlewares wires directly on
+// echo-native logic lives in corsEcho, which setupMiddlewares wires directly on
 // the default request path (ADR-026, no per-request baton).
 func CORS(exposeResponseTime bool, envOverride ...string) MiddlewareFunc {
 	return fromEchoMiddleware(corsEcho(exposeResponseTime, envOverride...))
@@ -55,7 +55,7 @@ func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFun
 }
 
 // corsEchoWithLogger is the echo-native CORS middleware constructor.
-// SetupMiddlewares uses this form (keeping the default chain baton-free,
+// setupMiddlewares uses this form (keeping the default chain baton-free,
 // ADR-026), passing its framework logger so startup warnings flow through
 // structured logging (SensitiveDataFilter, dual-mode routing). l may be nil,
 // in which case warnings fall back to the stdlib log package via corsWarnf.
@@ -235,7 +235,7 @@ func emitDevWildcardIgnoredWarn(l logger.Logger, appEnv string) {
 // emitFailClosedWarn surfaces the fail-closed CORS state on a non-dev env
 // with no CORS_ORIGINS (its only call site is the default branch — the
 // invalid-explicit-allowlist path has its own warn naming the allowlist as
-// the cause). The framework path (SetupMiddlewares) threads its logger
+// the cause). The framework path (setupMiddlewares) threads its logger
 // through corsEchoWithLogger so this lands in structured logging; stdlib log
 // is only the corsWarnf fallback when CORS()/corsEcho is constructed without
 // a logger. strconv.Quote sanitizes the env var (escapes control chars,

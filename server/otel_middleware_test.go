@@ -37,7 +37,7 @@ const (
 )
 
 // TestOTelMiddlewareAbsentWhenObservabilityDisabled verifies the #2 gate: with
-// observabilityEnabled=false, SetupMiddlewares does NOT register the OTel HTTP
+// observabilityEnabled=false, setupMiddlewares does NOT register the OTel HTTP
 // middleware, so no span is produced even though a real tracer is registered.
 func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 	originalTP := otel.GetTracerProvider()
@@ -56,7 +56,7 @@ func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 	log := logger.New("disabled", false)
 	cfg := &config.Config{App: config.AppConfig{Name: testServiceName}}
 	// observabilityEnabled = false → the echo-otel middleware must not be registered.
-	SetupMiddlewares(e, log, cfg, false, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, false, testHealthPath, testReadyPath, nil)
 	var captured context.Context
 	e.GET("/test", func(c *echo.Context) error {
 		captured = c.Request().Context()
@@ -97,7 +97,7 @@ func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryEx
 	// Setup middlewares (including OTel)
 	healthPath := testHealthPath
 	readyPath := testReadyPath
-	SetupMiddlewares(e, log, cfg, true, healthPath, readyPath)
+	setupMiddlewares(e, log, cfg, true, healthPath, readyPath, nil)
 
 	return e, exporter
 }
@@ -545,7 +545,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 	// Setup middlewares with custom base path
 	healthPath := "/api/v1/health"
 	readyPath := "/api/v1/ready"
-	SetupMiddlewares(e, log, cfg, true, healthPath, readyPath)
+	setupMiddlewares(e, log, cfg, true, healthPath, readyPath, nil)
 
 	// Register route under base path
 	group := e.Group("/api/v1")
@@ -567,7 +567,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 // wired to an in-memory metric reader so recorded HTTP server metrics can be
 // asserted. echo-otel captures otel.GetMeterProvider() at middleware
 // construction time, so the test meter provider is installed before
-// SetupMiddlewares runs. Global state is saved and restored to avoid pollution.
+// setupMiddlewares runs. Global state is saved and restored to avoid pollution.
 func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProvider) {
 	t.Helper()
 
@@ -588,7 +588,7 @@ func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProv
 	}
 	log := logger.New("disabled", false)
 
-	SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
 
 	return e, mp
 }

@@ -20,18 +20,14 @@ import (
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
-// SetupMiddlewares configures and registers all HTTP middlewares for the Echo server.
-// It sets up CORS, logging, recovery, security headers, rate limiting, and other essential middleware.
-// observabilityEnabled gates the OTel HTTP instrumentation middleware (passed explicitly,
-// like healthPath/readyPath, so the decision is made by the caller from observability.enabled).
-// healthPath and readyPath are used by the tenant middleware skipper to bypass probe endpoints.
-func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string) {
-	setupMiddlewares(e, log, cfg, observabilityEnabled, healthPath, readyPath, nil)
-}
-
-// setupMiddlewares is SetupMiddlewares with owned, the Server's tenant-owned family record,
-// which only the tenant seat reads (see tenantMiddlewareEcho). It reports whether it installed
-// the tenant seat.
+// setupMiddlewares configures and registers all framework HTTP middlewares on e, an engine
+// newEngine built: CORS, logging, recovery, security headers, rate limiting and the rest.
+// Outside tests only newServer, which server.New and server.NewWithOptions both reach,
+// calls it (ADR-166). observabilityEnabled gates the OTel HTTP instrumentation
+// middleware; healthPath and readyPath let the probe skipper bypass the probe endpoints.
+// owned is the Server's tenant-owned family record, which only the tenant seat reads
+// (see tenantMiddlewareEcho); nil means none. It reports whether it installed the
+// tenant seat.
 func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, owned func(template string) bool) (seated bool) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,
@@ -210,7 +206,7 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 // attribute only for a non-empty path, so finding no url.path here means there is nothing to
 // override.
 //
-// A named function, not a closure in SetupMiddlewares: the loop pushes that function past the
+// A named function, not a closure in setupMiddlewares: the loop pushes that function past the
 // gocognit ceiling (make lint).
 func overrideSpanURLPath(c *echo.Context, _ *echootel.Values, attrs []attribute.KeyValue) []attribute.KeyValue {
 	for i := range attrs {
@@ -360,7 +356,7 @@ func newSubResolver(cfg *config.ResolverConfig, name string, trustedProxies []*n
 // entirely (e.g. built directly in tests, or by an embedding app). For such a
 // config, an empty/unusable Order falls back to config.DefaultResolverOrder():
 // it must not end up with zero sub-resolvers, because buildTenantResolver then
-// returns nil and SetupMiddlewares skips tenant resolution entirely.
+// returns nil and setupMiddlewares skips tenant resolution entirely.
 func compositeSubResolvers(cfg *config.ResolverConfig, trustedProxies []*net.IPNet) []multitenant.TenantResolver {
 	build := func(order []string) []multitenant.TenantResolver {
 		subs := make([]multitenant.TenantResolver, 0, len(order))

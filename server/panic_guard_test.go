@@ -95,7 +95,7 @@ func (panicTenantResolver) ResolveTenant(context.Context, *http.Request) (string
 }
 
 // TestOutermostRecoverStopsAPreRecoverPanicReachingNetHTTP drives a real server
-// over the wire with the chain SetupMiddlewares composes for the tenant door:
+// over the wire with the chain setupMiddlewares composes for the tenant door:
 // the guard outermost, the tenant middleware inside it and outside Recover.
 // Before the guard, net/http printed `http: panic serving <addr>: <value>` with
 // a stack to the standard logger and closed the connection, so the client got

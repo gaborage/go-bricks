@@ -22,7 +22,7 @@ const (
 // If threshold is 0 or negative, IP pre-guard is disabled.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in ipPreGuardEcho, which SetupMiddlewares wires directly
+// echo-native logic lives in ipPreGuardEcho, which setupMiddlewares wires directly
 // on the default request path (ADR-026, no per-request baton). Constructed here
 // with a nil logger — see ipPreGuardEcho for the framework-logger form.
 func IPPreGuard(threshold int) MiddlewareFunc {
@@ -30,7 +30,7 @@ func IPPreGuard(threshold int) MiddlewareFunc {
 }
 
 // ipPreGuardEcho is the echo-native IP pre-guard middleware constructor. Public
-// callers use IPPreGuard (echo-free, nil logger); SetupMiddlewares passes its
+// callers use IPPreGuard (echo-free, nil logger); setupMiddlewares passes its
 // framework logger so rejected (429) requests leave a structured WARN trail —
 // this middleware is registered outer to the access logger (server/middleware.go),
 // so a short-circuited request never reaches it and would otherwise leave zero
