@@ -654,7 +654,7 @@ func (s *Server) startProbeListener(tlsCfg *tls.Config) (closeProbes func(), err
 
 	boundAddr := ln.Addr()
 	s.probeBoundAddr.Store(&boundAddr)
-	logPathRendering(s.logger, listenerProbe)
+	logPathRendering(s.logger, ListenerProbes)
 	s.logger.Info().
 		Str("address", boundAddr.String()).
 		Msg("Starting probe listener...")
@@ -662,11 +662,9 @@ func (s *Server) startProbeListener(tlsCfg *tls.Config) (closeProbes func(), err
 	return p.close, nil
 }
 
-// The listeners a server binds, as the [server.paths] startup line names them.
-const (
-	listenerApplication = "application"
-	listenerProbe       = "probe"
-)
+// listenerApplication names the application listener on the [server.paths] line; the probe
+// listener is ListenerProbes, the name every other startup line uses.
+const listenerApplication = "application"
 
 // pathRenderingRule names the inbound-path rule of ADR-167 on the [server.paths] line.
 const pathRenderingRule = "masked_route_template"
@@ -676,8 +674,11 @@ const pathRenderingRule = "masked_route_template"
 // message, the span's url.path and every framework WARN and ERROR path print the matched
 // route template with each parameter and the wildcard tail as the token, never request bytes.
 func logPathRendering(l logger.Logger, listener string) {
-	l.Info().Msgf("[server.paths] inbound paths render from the matched route template rule=%s listener=%s token=%s",
-		pathRenderingRule, listener, maskToken)
+	l.Info().
+		Str("log.type", "action"). // Mark as action log for dual-mode routing
+		Msgf("[server.paths] inbound paths render from the matched route template "+
+			"rule=%s listener=%s token=%s unmatched=%s",
+			pathRenderingRule, listener, maskToken, maskToken)
 }
 
 // serveProbes runs the probe listener until it stops, sends any serve error other than

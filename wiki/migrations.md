@@ -15056,10 +15056,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   encoded slash; text after a route's first `*` is cut (`/files/*` prints `/files/REDACTED`). A
   request that matched no template, such as a root 404, prints the bare `REDACTED`. Each engine
   logs one INFO line as its listener starts, naming the rule, the listener and the token:
-  `[server.paths] inbound paths render from the matched route template rule=masked_route_template listener=application token=REDACTED`
-  (and `listener=probe` with `server.probes.port` set).
-- apply: repoint each match to `http.route` (low cardinality, the same on the access line and the
-  span), or to the masked rendering. Where an operator needs the concrete path for an incident,
+  `[server.paths] inbound paths render from the matched route template rule=masked_route_template listener=application token=REDACTED unmatched=REDACTED`
+  (and `listener=probes` with `server.probes.port` set).
+- apply: repoint each match to `http.route` on the access line and the span (low cardinality, the
+  same on both), or to the masked rendering, the only form a framework WARN or ERROR carries at
+  this link. Where an operator needs the concrete path for an incident,
   read it at the edge (load balancer or WAF access logs), and keep those logs under the same data
   controls as any card-data store.
 - verify: register `GET /cards/:pan`, request it with a test card number against a non-production

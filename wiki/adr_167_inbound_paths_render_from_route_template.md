@@ -36,16 +36,18 @@ root 404) prints the bare `REDACTED`. The unknown-tenant WARN of ADR-161, which 
 template (`/:tenant/orders`), prints the masked rendering too (`/REDACTED/orders`), so every seat
 prints one rendering.
 
-**Each engine states the rule once at startup.** As its listener starts, before it binds, every
-engine the framework serves logs one INFO line naming the rule, the listener and the token:
+**Each engine states the rule once at startup.** Before its listener serves a request (the
+application listener before it binds, the probe listener once bound), every engine the framework
+serves logs one INFO action line naming the rule, the listener and the token:
 
 ```text
-[server.paths] inbound paths render from the matched route template rule=masked_route_template listener=application token=REDACTED
-[server.paths] inbound paths render from the matched route template rule=masked_route_template listener=probe token=REDACTED
+[server.paths] inbound paths render from the matched route template rule=masked_route_template listener=application token=REDACTED unmatched=REDACTED
+[server.paths] inbound paths render from the matched route template rule=masked_route_template listener=probes token=REDACTED unmatched=REDACTED
 ```
 
-The probe line appears only with `server.probes.port` set. An operator reading a log that holds
-`REDACTED` where a path was expected finds the reason in the same stream.
+The probe line appears only with `server.probes.port` set. `unmatched=REDACTED` states what a
+request that matched no template prints. An operator reading a log that holds `REDACTED` where a
+path was expected finds the reason in the same stream.
 
 `http.route` stays the registered template; the query string still reaches no sink.
 

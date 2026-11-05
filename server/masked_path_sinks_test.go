@@ -85,7 +85,7 @@ func TestFrameworkLinesRenderTheMaskedPath(t *testing.T) {
 
 // TestStartLogsOnePathRenderingLinePerEngine pins the ADR-167 startup line: each engine the
 // server starts states the inbound-path rule once, naming its listener and the mask token,
-// before that listener binds.
+// before that listener serves a request; the action type keeps it out of trace sampling.
 func TestStartLogsOnePathRenderingLinePerEngine(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -100,7 +100,7 @@ func TestStartLogsOnePathRenderingLinePerEngine(t *testing.T) {
 		{
 			name:      "with_probe_listener",
 			build:     func(log *testLogger) *Server { return newProbeTestServer(newProbeTestConfig(""), log) },
-			listeners: []string{listenerProbe, listenerApplication},
+			listeners: []string{ListenerProbes, listenerApplication},
 		},
 	}
 	for _, tt := range tests {
@@ -120,9 +120,10 @@ func TestStartLogsOnePathRenderingLinePerEngine(t *testing.T) {
 			require.Len(t, lines, len(tt.listeners), "one line per engine")
 			for i, listener := range tt.listeners {
 				assert.Equal(t, "info", lines[i].level)
+				assert.Equal(t, "action", lines[i].values["log.type"])
 				assert.Equal(t,
 					"[server.paths] inbound paths render from the matched route template rule=masked_route_template listener="+
-						listener+" token=REDACTED",
+						listener+" token=REDACTED unmatched=REDACTED",
 					lines[i].msg)
 			}
 		})
