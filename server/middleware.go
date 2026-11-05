@@ -22,11 +22,12 @@ import (
 
 // setupMiddlewares configures and registers all framework HTTP middlewares on e, an engine
 // newEngine built: CORS, logging, recovery, security headers, rate limiting and the rest.
-// Outside tests only server.New calls it (ADR-166). observabilityEnabled gates the OTel
-// HTTP instrumentation middleware; healthPath and readyPath let the probe skipper bypass
-// the probe endpoints. owned is the Server's tenant-owned family record, which only the
-// tenant seat reads (see tenantMiddlewareEcho); nil means none. It reports whether it
-// installed the tenant seat.
+// Outside tests only newServer, which server.New and server.NewWithOptions both reach,
+// calls it (ADR-166). observabilityEnabled gates the OTel HTTP instrumentation
+// middleware; healthPath and readyPath let the probe skipper bypass the probe endpoints.
+// owned is the Server's tenant-owned family record, which only the tenant seat reads
+// (see tenantMiddlewareEcho); nil means none. It reports whether it installed the
+// tenant seat.
 func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, owned func(template string) bool) (seated bool) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,

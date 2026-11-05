@@ -488,6 +488,8 @@ typed handler hot path stays echo-direct via an unexported `addEcho` seam (ADR-0
 preserved); only middleware routes pay a bounded +1 baton alloc. Amended by ADR-133:
 `NewHandlerContextForTest` takes `...TestContextOption`, and `NewHandlerContextForTestWithOptions`
 is removed; amended by ADR-165: the option type is now the sealed `TestContextSeeder`.
+Amended by ADR-166: the scope note that kept `SetupMiddlewares` exported is closed, and `WrapHandler`'s
+`echo.HandlerFunc` return is the one remaining `echo.*` type on the consumer surface.
 
 **Key Benefits:** No `echo.*` symbol on the consumer path, downstream services decoupled from Echo's version, security improvement (no spoofable `RealIP()` accessor), uniform flat middleware shape
 
@@ -2831,6 +2833,10 @@ interface takes (ADR-013), and only package `server` can implement it. `WithRout
 `NewHandlerContextForTest` keep their names and behavior and now spell the new type. See
 [migrations.md](migrations.md) `[C73.27]`.
 
+**Key Benefits:** the framework can change how an option seeds the synthetic context without
+breaking a consumer, `WithRouteTemplate` is the whole option surface, and the S8196 rename rides
+the break this change already makes.
+
 ---
 
 ### [ADR-166: `server.SetupMiddlewares` Is Unexported](adr_166_setup_middlewares_unexported.md)
@@ -2840,8 +2846,10 @@ interface takes (ADR-013), and only package `server` can implement it. `WithRout
 `server.SetupMiddlewares` installed the framework chain on any `*echo.Echo`, so a consumer could
 build an engine without the masking router every framework engine carries, where each inbound path
 would render as the bare `REDACTED` (#2212). It is removed with no replacement export: only
-`server.New`, and so the App, installs the chain, through the unexported `setupMiddlewares` on an
-engine `newEngine` built. The chain, its order and every consumer middleware door are unchanged.
+`newServer`, which `server.New`, `server.NewWithOptions` and so the App reach, installs the chain,
+through the unexported `setupMiddlewares` on an engine `newEngine` built. The chain, its order and
+every consumer middleware door are unchanged. Amends ADR-034, closing its scope note; the one
+remaining `echo.*` type on the consumer surface is `WrapHandler`'s `echo.HandlerFunc` return.
 See [migrations.md](migrations.md) `[C73.28]`.
 
 **Key Benefits:** the last exported signature taking `*echo.Echo` leaves the consumer surface;

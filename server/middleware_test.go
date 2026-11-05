@@ -463,7 +463,7 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 	log := logger.New("disabled", false)
 
-	newEngine := func(limit int64) *echo.Echo {
+	buildEngine := func(limit int64) *echo.Echo {
 		e := newEngine()
 		cfg := &config.Config{
 			App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
@@ -489,7 +489,7 @@ func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 	}
 
 	t.Run("configured_limit_is_enforced", func(t *testing.T) {
-		e := newEngine(1024) // 1 KB
+		e := buildEngine(1024) // 1 KB
 		assert.Equal(t, http.StatusOK, post(e, 512))
 		assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, 2048))
 	})
@@ -506,7 +506,7 @@ func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
 		underDefault := int(config.DefaultBodyLimitBytes) - 1024
 		overDefault := int(config.DefaultBodyLimitBytes) + 1024
 		for _, limit := range []int64{0, -1} {
-			e := newEngine(limit)
+			e := buildEngine(limit)
 			assert.Equal(t, http.StatusOK, post(e, underDefault),
 				"limit %d must fall back to the 10 MB default (accepts an under-default body)", limit)
 			assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, overDefault),
