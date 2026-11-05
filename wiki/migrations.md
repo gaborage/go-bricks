@@ -15232,8 +15232,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: whatever counts or keys on the access line (`log.type=action`): request-volume
   dashboards, error-rate alerts by `level`, `result_code` or `http.response.status_code`,
-  log-ingest and export budgets, and a rule that read the trace-stream WARN/ERROR line of a
-  request as its only line.
+  log-ingest and export budgets, a rule that read the trace-stream WARN/ERROR line of a
+  request as its only line, an alert counting `jose: operation failed` or
+  `envelope meta key collides` lines, and a service running at `log.level: error`.
 
   In this repository:
 
@@ -15242,15 +15243,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep -nE 'log\.type|result_code|http\.response\.status_code|EscalateSeverity|WithSeverityHook|"action"' -- ':!wiki/'
   # each request that calls EscalateSeverity now keeps its access line
   git grep -nE '[.]EscalateSeverity[(]' -- '*.go'
+  # a handler or middleware that logs WARN+ through the request context, or escalates
+  git grep -nE 'EscalateSeverity[(]|WithContext[(][^)]*[)][.](Warn|Error)[(]' -- '*.go'
   ```
 
   Rules outside the repository (a log platform's saved query, an index's ingest budget) count
   too.
-- gate: always. A database query-tracking WARN (a slow query) or ERROR escalates the access line
-  with no consumer code, and the readers it reaches (a vendor-UI alert, a saved log query, an
-  ingest budget) sit outside the repository, where no grep finds them. The population is every
-  service that serves HTTP through the framework: audit those readers whether or not the detect
-  hits, and treat each `EscalateSeverity` hit as in scope.
+- gate: always for every service whose requests can log at WARN or above or call
+  `EscalateSeverity` (a database query-tracking WARN needs no consumer code), and the readers it
+  reaches (a vendor-UI alert, a saved log query, an ingest budget) sit outside the repository,
+  where no grep finds them: audit them whether or not the detect hits. no-match = requests that
+  never log at WARN or above and never call `EscalateSeverity`: nothing to do.
 - scope: the request logger on every engine the framework builds, for every non-probe request
   that reaches it. The lines that escalate it: any WARN or ERROR line logged through the request
   context, enabled or disabled by `log.level` — a consumer handler's or middleware's own, and a
@@ -15279,8 +15282,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   at 100%, read error rates from the access line's `result_code` (an escalated 2xx now counts
   where it was absent), and delete a rule that took a request's WARN+ trace line as standing in
   for its access line.
-- verify: against a non-production log sink, request a route whose handler logs
-  `log.WithContext(ctx).Warn()` and answers 200, and confirm one `log.type=action` line with
+- verify: against a non-production log sink at `log.level: info` (`log.level: error` drops the
+  WARN), request a route whose handler logs `log.WithContext(ctx.RequestContext()).Warn()` and
+  answers 200, and confirm one `log.type=action` line with
   `level=warn` and `result_code=WARN` beside the handler's WARN; request a route whose handler
   calls `ctx.EscalateSeverity(zerolog.WarnLevel)` and answers 200, and confirm one access line
   with `level=warn` and `result_code=WARN`; then POST plaintext to a JOSE route and confirm its

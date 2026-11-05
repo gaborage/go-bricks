@@ -403,7 +403,7 @@ lines by identifier, not by path:
    business key (an order or account reference). Log it on your own line through
    `log.WithContext(ctx)`, which adds `trace_id`/`span_id` when the span is valid
    but not `request_id`, and add the request id (`trace.IDFromContext(ctx)` from
-   the go-bricks `trace` package) as `correlation_id`, so the join survives with
+   the go-bricks `trace` package) as `request_id`, so the join survives with
    tracing off. The business key must never be a card number or another value
    the log filter masks.
 8. **Expect unmatched requests to collapse.** A request no route matched carries
