@@ -301,7 +301,7 @@ validated before either is used ([ADR-070](adr_070_inbound_trace_identifier_vali
 a non-conforming one is discarded and replaced, so a value you sent may not be
 the value you see.
 
-The framework's own WARN and ERROR lines about one HTTP request (the
+The framework's own lines about one HTTP request that are correlated (the
 `[server.tenant]` rejection WARN; the `[server.ip_preguard]` WARN; the three
 `[server.forwardedclientcert]` WARNs; both `Panic recovered` ERRORs, the error
 handler's for a handler panic and the outermost panic guard's; and the error
