@@ -82,7 +82,8 @@ linters:
         - pattern: ^otel\.(Logger|GetLoggerProvider|SetLoggerProvider)$
           msg: GoBricks registers no global LoggerProvider (observability/CLAUDE.md) — otel.Logger/GetLoggerProvider are a no-op here and drop records, and otel.SetLoggerProvider would let foreign records bypass SensitiveDataFilter; log through logger.Logger.
         # pkg pins echo v5's import path, so a package merely named echo cannot match.
-        # server/router.go's newEngine is the one allowed call, marked by its nolint.
+        # server/router.go's newEngine is the one allowed call, marked by its nolint (and
+        # server/router_test.go's parity oracle, via the exclusion below).
         - pattern: ^echo\.New(WithConfig)?$
           pkg: ^github\.com/labstack/echo/v5$
           msg: build echo engines through server.newEngine (#2212) — a foreign engine has no maskingRouter, so every path it serves renders as the bare REDACTED.
@@ -220,13 +221,13 @@ linters:
           - ineffassign
           - rowserrcheck
         path: _test\.go
-      # Test engines stay on echo.New until #2212's L2t moves them: the exemption covers ALL
-      # _test.go until L2t narrows it to server/router_test\.go, whose parity oracle needs a
-      # plain echo engine regardless. It keys off the forbid rule's identifier, not its msg
-      # prose, so the ADR-083 and otel patterns still fire in tests.
+      # Test engines come from newEngine too (#2212), so they exercise the maskingRouter. Only
+      # router_test.go builds plain echo engines: its parity oracle and the foreign-engine
+      # fallback need one. It keys off the forbid rule's identifier, not its msg prose, so the
+      # ADR-083 and otel patterns still fire there.
       - linters:
           - forbidigo
-        path: _test\.go
+        path: server/router_test\.go
         text: 'use of `echo\.New'
       - linters:
           - lll

@@ -58,7 +58,7 @@ func TestRateLimit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// Create fresh Echo instance for each test to avoid interference
-			e := echo.New()
+			e := newEngine()
 			e.Use(rateLimitEcho(tt.requestsPerSec))
 
 			e.GET("/test", func(c *echo.Context) error {
@@ -96,7 +96,7 @@ func TestRateLimit(t *testing.T) {
 }
 
 func TestRateLimitDifferentIPs(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(rateLimitEcho(2)) // Very low limit to trigger easily
 
 	e.GET("/test", func(c *echo.Context) error {
@@ -136,7 +136,7 @@ func TestRateLimitDifferentIPs(t *testing.T) {
 }
 
 func TestRateLimitErrorResponse(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(rateLimitEcho(1)) // Very restrictive limit
 
 	e.GET("/test", func(c *echo.Context) error {
@@ -282,7 +282,7 @@ func TestRateLimitDisabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
+			e := newEngine()
 			e.Use(rateLimitEcho(0))
 
 			callCount := 0
@@ -320,7 +320,7 @@ func TestRateLimitReset(t *testing.T) {
 		t.Skip("Skipping rate limit reset test in short mode")
 	}
 
-	e := echo.New()
+	e := newEngine()
 	e.Use(rateLimitEcho(2)) // 2 requests per second
 
 	e.GET("/test", func(c *echo.Context) error {

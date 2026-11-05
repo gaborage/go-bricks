@@ -149,7 +149,7 @@ func TestTenantOwnedGroupPanicsAtCallSite(t *testing.T) {
 	policy := fixedTenantPolicy("family-tenant")
 	// bare is a group no Server built: it carries no admission.
 	bare := func(*Server) RouteRegistrar {
-		return newRouteGroup(echo.New().Group(""), "", newTenantFamilyConfig(""))
+		return newRouteGroup(newEngine().Group(""), "", newTenantFamilyConfig(""))
 	}
 	moduleGroup := (*Server).ModuleGroup
 	rootGroup := (*Server).RootGroup

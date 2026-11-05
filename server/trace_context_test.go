@@ -23,7 +23,7 @@ const testTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
 var poisonedTraceParent = "00-" + strings.Repeat("!", 32) + "-00f067aa0ba902b7-01"
 
 func TestTraceContext(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(traceContextEcho())
 
 	var capturedContext context.Context
@@ -116,7 +116,7 @@ func TestTraceContext(t *testing.T) {
 }
 
 func TestTraceContextWithErrorHandler(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(traceContextEcho())
 
 	var capturedContext context.Context
@@ -148,7 +148,7 @@ func TestTraceContextWithErrorHandler(t *testing.T) {
 }
 
 func TestTraceContextMiddlewareOrder(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 
 	var preTraceContext context.Context
 	var postTraceContext context.Context
@@ -206,7 +206,7 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 // Drop-and-mint, not reject: an unusable traceparent leaves the context in
 // exactly the state an untraced request produces, and the request is served.
 func TestTraceContextIngressValidation(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(traceContextEcho())
 
 	var capturedContext context.Context
@@ -309,7 +309,7 @@ func TestTraceContextIngressValidation(t *testing.T) {
 }
 
 func TestTraceContextConcurrentRequests(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(traceContextEcho())
 
 	type requestResult struct {
@@ -395,7 +395,7 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 // own valid parent must not adopt it — the outbound hop would re-emit one trace's
 // vendor state under another's parent (ADR-070, amended).
 func TestTraceContextShadowsAnInheritedTraceState(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(traceContextEcho())
 
 	var capturedContext context.Context
@@ -455,7 +455,7 @@ func (m mapHeaders) Set(key string, value any) { m[key] = value }
 // and shipped an EMPTY CorrelationId (the C60.10 symptom) — remote-triggerable
 // and free. The minted identity has to be publishable end to end.
 func TestTraceContextIngressYieldsAPublishableIdentity(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	e.Use(traceContextEcho())
 
 	var capturedContext context.Context

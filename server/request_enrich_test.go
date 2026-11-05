@@ -17,7 +17,7 @@ import (
 // TestRequestEnrichInjectsTraceAndCounters verifies the combined middleware seeds
 // both the trace context and the per-request counters in a single pass.
 func TestRequestEnrichInjectsTraceAndCounters(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
@@ -49,7 +49,7 @@ func TestRequestEnrichPropagatesW3CHeaders(t *testing.T) {
 		traceparent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 		tracestate  = "rojo=00f067aa0ba902b7"
 	)
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req.Header.Set(gobrickstrace.HeaderTraceParent, traceparent)
 	req.Header.Set(gobrickstrace.HeaderTraceState, tracestate)
@@ -79,7 +79,7 @@ func TestRequestEnrichShortCircuitsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before the request runs
 
-	e := echo.New()
+	e := newEngine()
 	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/test", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)

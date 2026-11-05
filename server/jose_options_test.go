@@ -95,7 +95,7 @@ func TestIsJOSEContentTypeVariants(t *testing.T) {
 // path. Even though scanRouteJOSE prevents this combination at registration, the
 // runtime check is defense-in-depth and must be exercised.
 func TestJOSEHandleResponseRefusesWithoutInboundVerification(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	rh := newResponseHandler(cfg, nil)
 

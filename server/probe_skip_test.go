@@ -29,7 +29,7 @@ const (
 func routedContext(t *testing.T, method, url, template string) *echo.Context {
 	t.Helper()
 	req := httptest.NewRequestWithContext(context.Background(), method, url, http.NoBody)
-	c := echo.New().NewContext(req, httptest.NewRecorder())
+	c := newEngine().NewContext(req, httptest.NewRecorder())
 	c.SetPath(template)
 	return c
 }
@@ -179,7 +179,7 @@ func TestWithRouteTemplateStampsRequestPattern(t *testing.T) {
 // echo's router puts the matched template on the request, for every shape, so a URL rewritten
 // downstream of routing cannot make a module route look like a probe.
 func TestCreateProbeSkipperReadsPatternStampedByTheRouter(t *testing.T) {
-	e := echo.New()
+	e := newEngine()
 	seen := map[string]bool{}
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {

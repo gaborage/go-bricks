@@ -43,8 +43,7 @@ func devDebugConfig() *config.Config {
 func postJSON[T any, R any](t *testing.T, cfg *config.Config, handler func(T, HandlerContext) (R, IAPIError), body string) (resp APIResponse, raw string, status int) {
 	t.Helper()
 
-	e := echo.New()
-	e.Validator = NewValidator()
+	e := newValidatedEngine(t)
 	h := WrapHandler(handler, NewRequestBinder(), cfg)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/things", strings.NewReader(body))
@@ -180,7 +179,7 @@ func TestRawResponseDetailsGateQuadrants(t *testing.T) {
 	for _, tc := range detailsGateQuadrants {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{App: config.AppConfig{Env: tc.env, Debug: tc.debug}}
-			e := echo.New()
+			e := newEngine()
 			rec := httptest.NewRecorder()
 			c := e.NewContext(httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody), rec)
 
