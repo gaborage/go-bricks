@@ -107,7 +107,7 @@ func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, 
 		Str("direction", direction).
 		Str("http.method", method)
 	if route != "" {
-		ev = ev.Str("http.route", route)
+		ev = ev.Str(fieldHTTPRoute, route)
 	}
 	if jaerr != nil {
 		ev = ev.Str("message", jaerr.message)

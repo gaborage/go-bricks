@@ -383,6 +383,36 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 	}
 }
 
+// TestTenantRejectionCorrelatesItsLine pins the seat's rejection WARN to the request on both
+// logger paths.
+func TestTenantRejectionCorrelatesItsLine(t *testing.T) {
+	seat := func(l logger.Logger) echo.MiddlewareFunc {
+		return tenantMiddlewareEcho(&fixedTenantResolver{}, nil, nil, l)
+	}
+	t.Run("framework_logger", func(t *testing.T) {
+		l := &testLogger{}
+		serveCorrelated(t, seat(l), correlatedRequest(t, true))
+		entries := l.logEntries()
+		require.Len(t, entries, 1)
+		assert.Contains(t, entries[0].msg, "[server.tenant] request rejected")
+		assertLineCorrelated(t, entries[0])
+	})
+	t.Run("nil_logger_stdlib_fallback", func(t *testing.T) {
+		buf := captureStdlibLog(t)
+		serveCorrelated(t, seat(nil), correlatedRequest(t, true))
+		line := strings.TrimSuffix(buf.String(), "\n")
+		assert.True(t, strings.HasSuffix(line, `reason="empty tenant"`+correlationSuffix), "got %q", line)
+	})
+	t.Run("disabled_warn_level_formats_nothing", func(t *testing.T) {
+		dl := &disabledLogger{ev: &disabledEvent{}}
+		reads := serveCorrelated(t, seat(dl), correlatedRequest(t, true))
+		assert.Zero(t, reads, "a disabled WARN level must not read the client address")
+		assert.False(t, dl.ev.msgCalled)
+		assert.Equal(t, int32(1), serveCorrelated(t, seat(&testLogger{}), correlatedRequest(t, true)),
+			"an enabled WARN reads the client address once")
+	})
+}
+
 // echoTenant answers 200 with the tenant on the request context, "" for none.
 func echoTenant(c HandlerContext) error {
 	tenantID, _ := multitenant.GetTenant(c.RequestContext())

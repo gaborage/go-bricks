@@ -156,6 +156,10 @@ func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *confi
 }
 
 // Request returns the underlying *http.Request.
+//
+// SECURITY: its URL (URL.Path, RawPath, RawQuery), RequestURI, query and form values are bytes
+// the caller wrote, a card number in a path segment included; never log them. Log
+// RouteTemplate() instead, the template the access line carries as http.route (ADR-167).
 func (c HandlerContext) Request() *http.Request { return c.ectx.Request() }
 
 // RequestContext returns the request's context.Context. Convenience for the dominant
@@ -210,9 +214,14 @@ type PathParam struct {
 
 // RouteTemplate returns the registered route path that matched this request,
 // including any group/base-path prefix (e.g. "/api/cards/:cardId/status").
-// It is the template the application registered, NOT the concrete URL
-// (use Request().URL.Path for that). Empty before routing completes and on
-// unmatched (404) requests; on a top-level 405 the engine sets the best-matching
+// It is the template the application registered, NOT the concrete URL: read a
+// matched value through Param or PathParams. On a matched route it is the value
+// the access line and the tenant-rejection WARN carry as http.route, so a log
+// query keyed on it joins them. No framework sink prints the
+// request path (ADR-167); a handler that logs Request().URL.Path itself prints
+// what the caller sent, a card number in a segment included. Empty before
+// routing completes and on unmatched (404) requests; on a top-level 405 the
+// engine sets the best-matching
 // route's template (engine-defined, not a contract). Note the asymmetry under a
 // middleware-bearing group: a wrong-method or unmatched sub-path there resolves
 // to the group's implicit catch-all (a 404), so it returns "" rather than a

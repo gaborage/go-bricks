@@ -56,6 +56,18 @@
 > toolchain step, which is the go1.26.x reading that step exists to contrast;
 > `go.mod` pins go 1.27.0 and the guard comment records the baseline as measured on
 > go1.27.x, a patch-level difference that does not move these counts.
+>
+> **Amended (2026-11-04, #2212):** rows of the observed-request guard
+> (`TestObservedRequestAllocsStable`, `server/route_registrar_test.go`) moved by the
+> #2212 links, each re-pinned in the commit that moves it. The decision below is
+> unchanged, and every other row reads base == head.
+>
+> - **Correlated tenant-rejection WARN (#2322), `tenant_rejected` 93 → 98 — justified
+>   feature cost.** The WARN gains `http.route`, `request_id`, `correlation_id`, `trace_id`
+>   and `span_id`. One allocation is production: the trace and span ids are hex-encoded
+>   into one shared string. The other four are `guardLogger`'s field-slice growth (0 → 5
+>   fields). Against the real zerolog adapter a correlated line costs +2 allocations with a
+>   span and +1 without, paid only when the line fires.
 
 ## Context
 

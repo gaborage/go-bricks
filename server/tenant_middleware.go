@@ -85,19 +85,19 @@ func tenantRejectionReason(resolveErr error) string {
 	return "empty tenant"
 }
 
-// logTenantRejection emits one WARN per request refused for its tenant (400), carrying the
-// reason class and the masked matched template (maskedPath), never request path bytes, a
-// tenant ID or an error message. With a nil logger (public TenantMiddleware construction) it
-// falls back to stdlib log, like corsWarnf.
+// logTenantRejection emits one correlated WARN per request refused for its tenant (400),
+// carrying the reason class and the masked matched template (maskedPath), never request path
+// bytes, a tenant ID or an error message. With a nil logger (public TenantMiddleware
+// construction) it falls back to stdlib log, like corsWarnf. A disabled WARN level returns
+// before the line is formatted or the client address read.
 func logTenantRejection(l logger.Logger, c *echo.Context, reason string) {
-	req := c.Request()
-	msg := fmt.Sprintf("[server.tenant] request rejected: invalid tenant method=%s path=%s client=%s status=%d reason=%q",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), http.StatusBadRequest, reason)
-	if l == nil {
-		log.Printf("WARN %s", msg)
+	ev, ok := openWarn(l)
+	if !ok {
 		return
 	}
-	l.Warn().Msg(msg)
+	req := c.Request()
+	warnCorrelated(ev, c, fmt.Sprintf("[server.tenant] request rejected: invalid tenant method=%s path=%s client=%s status=%d reason=%q",
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), http.StatusBadRequest, reason))
 }
 
 // logUnknownTenantRefusal writes the one line an UnknownTenantError leaves. A 400

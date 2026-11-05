@@ -213,7 +213,7 @@ func (c HandlerContext) PathParams() []PathParam          // ordered defensive c
 func (c HandlerContext) SetPathParams(params []PathParam) // replaces the set; input is copied, nil clears
 ```
 
-**`RouteTemplate()` — low-cardinality route identity.** Returns the registered route path that matched the request, including any group/base-path prefix (e.g. `/api/cards/:cardId/status`). It is the template the application registered, not the concrete URL — use `ctx.Request().URL.Path` for that. This makes it the right key for per-route registries and metrics: one entry per route regardless of parameter values.
+**`RouteTemplate()` — low-cardinality route identity.** Returns the registered route path that matched the request, including any group/base-path prefix (e.g. `/api/cards/:cardId/status`). It is the template the application registered, not the concrete URL; read a matched value with `ctx.Param(name)` or `ctx.PathParams()`. On a matched route it is the value the access line and the tenant-rejection WARN carry as `http.route`, so one log query joins them. No framework sink prints the request path ([ADR-167](adr_167_inbound_paths_render_from_route_template.md)); a handler that logs `ctx.Request().URL.Path` itself prints what the caller sent, a card number in a segment included. This makes it the right key for per-route registries and metrics: one entry per route regardless of parameter values.
 
 ```go
 // Per-route latency histograms keyed by route template — low cardinality:
