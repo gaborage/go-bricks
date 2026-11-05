@@ -202,8 +202,13 @@ func (s *TenantStore) Tenants() map[string]TenantEntry {
 	return result
 }
 
-// HasTenant checks if a tenant configuration exists
+// HasTenant checks if a tenant configuration exists. It answers false for "", for a
+// NamedDatabasePrefix key and on a nil store, even after AddTenant stored such a key
+// (the multitenant.TenantChecker contract).
 func (s *TenantStore) HasTenant(tenantID string) bool {
+	if s == nil || tenantID == "" || strings.HasPrefix(tenantID, NamedDatabasePrefix) {
+		return false
+	}
 	s.mu.RLock()
 	_, exists := s.tenants[tenantID]
 	s.mu.RUnlock()

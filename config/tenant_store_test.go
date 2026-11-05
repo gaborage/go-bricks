@@ -306,6 +306,13 @@ func TestTenantStoreHasTenant(t *testing.T) {
 	assert.False(t, store.HasTenant(""))
 	// A named-database key is a resource key, not a tenant id (multitenant.TenantChecker).
 	assert.False(t, store.HasTenant(NamedDatabasePrefix+"reporting"))
+	// AddTenant does not validate its key, so the contract holds in HasTenant itself.
+	store.AddTenant("", &TenantEntry{})
+	store.AddTenant(NamedDatabasePrefix+"reporting", &TenantEntry{})
+	assert.False(t, store.HasTenant(""))
+	assert.False(t, store.HasTenant(NamedDatabasePrefix+"reporting"))
+	var nilStore *TenantStore
+	assert.False(t, nilStore.HasTenant(tenantA))
 }
 
 func TestTenantStoreIsDynamic(t *testing.T) {
