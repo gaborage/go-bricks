@@ -74,6 +74,14 @@
 >   `correlation_id`, `trace_id` and `span_id`. One allocation per line is the shared
 >   hex string of the trace and span ids; the rest is `guardLogger`'s field-slice growth.
 >   The outermost panic guard's line is correlated too, but no row reaches it.
+> - **Correlated edge WARNs (#2212), `fcc_duplicate_header_warn` 131 → 139,
+>   `fcc_leaf_parse_warn` 134 → 142 and `ip_preguard_denied` 80 → 83 — justified feature
+>   cost.** Each WARN gains the correlation fields: +5 on each forwarded-client-cert line
+>   (one shared hex string, four of `guardLogger`'s field-slice growth, 0 → 5 fields) and +3
+>   on the pre-guard (the hex string and two of field-slice growth, 4 → 9 fields). The forwarded-client-cert lines also gain `peer=`, +3
+>   each: `logSafeValue`'s `%q` render (boxing and result, 2) and boxing that into the
+>   line's `Sprintf` (1). Reading `client=` from `c.RealIP()` instead of `RemoteAddr` costs
+>   nothing on the guard's request.
 
 ## Context
 

@@ -684,14 +684,14 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// Both forwarded-client-cert WARNs fire on a 200 (require is off).
 		{
-			name: "fcc_duplicate_header_warn", baseline: 131, wantStatus: http.StatusOK,
+			name: "fcc_duplicate_header_warn", baseline: 139, wantStatus: http.StatusOK,
 			warn: warnFCCDuplicate,
 			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, map[string][]string{
 				headerClientCertSubject: {"CN=one", "CN=two"},
 			}),
 		},
 		{
-			name: "fcc_leaf_parse_warn", baseline: 134, wantStatus: http.StatusOK,
+			name: "fcc_leaf_parse_warn", baseline: 142, wantStatus: http.StatusOK,
 			warn: warnFCCLeaf,
 			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, map[string][]string{
 				headerClientCertSubject: {"CN=client"},
@@ -725,7 +725,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		// Rate 1/s, burst 2 under a frozen clock: the warm-ups spend the burst and no token
 		// ever refills, so every measured request is denied and WARNs.
 		{
-			name: "ip_preguard_denied", baseline: 80, denyIP: true, wantStatus: http.StatusTooManyRequests,
+			name: "ip_preguard_denied", baseline: 83, denyIP: true, wantStatus: http.StatusTooManyRequests,
 			warn: warnIPPreGuard,
 			req:  observedRequest(http.MethodGet, "/orders", observedHeaderTenant, nil),
 		},
