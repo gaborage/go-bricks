@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -165,6 +167,44 @@ func TestServerFrameworkRootsFollowTheBuiltResolver(t *testing.T) {
 	}
 }
 
+func TestSkipFrameworkRoots(t *testing.T) {
+	e := newEngine()
+	probe := newProbeSkipper("/health", "/ready")
+	skip := skipFrameworkRoots(probe, []string{"/api/_sys", "/_debug"})
+	tests := []struct {
+		name     string
+		method   string
+		template string
+		want     bool
+	}{
+		{name: "scheduler_route", template: "/api/_sys/job/:jobId", want: true},
+		{name: "scheduler_root_itself", template: "/api/_sys", want: true},
+		{name: "group_catch_all", template: "/api/_sys/*", want: true},
+		{name: "debug_route", template: "/_debug/goroutines", want: true},
+		{name: "probe_still_skipped", template: "/health", want: true},
+		{name: "probe_method_still_judged", method: http.MethodPost, template: "/health"},
+		{name: "partial_word_is_not_under_root", template: "/api/_system/job"},
+		{name: "unprefixed_scheduler_spelling", template: "/_sys/job"},
+		{name: "consumer_route", template: "/api/:tenant/orders"},
+		{name: "unmatched_request", template: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			c := e.NewContext(httptest.NewRequestWithContext(context.Background(), method, "/x", http.NoBody), httptest.NewRecorder())
+			c.SetPath(tt.template)
+			assert.Equal(t, tt.want, skip(c))
+		})
+	}
+
+	c := e.NewContext(httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody), httptest.NewRecorder())
+	c.SetPath("/api/_sys/job")
+	assert.False(t, skipFrameworkRoots(probe, nil)(c), "no roots keeps the probe skip alone")
+}
+
 func TestRouteAdmissionRefusesNonFrameworkRegistrationUnderFrameworkRoot(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
@@ -298,4 +338,36 @@ func TestTenantOwnedGroupUnderFrameworkRootAfterStartPanics(t *testing.T) {
 		"server: registration after Start: route registration refused (1 conflict(s))\n"+
 			"group /_sys/x — under a framework route root at /_sys, refused: middleware ("+serverPackagePath+")",
 		func() { TenantOwnedGroup(srv.ModuleGroup(), "/_sys/x", fixedTenantPolicy("acme")) })
+}
+
+// TestTenantSeatSkipsFrameworkRootsUnderPathResolver drives the installed seat: under a path
+// resolver a template under the scheduler root reaches the handler without a tenant, while a
+// header resolver installs no root skip, so the same template still resolves (and fails here).
+func TestTenantSeatSkipsFrameworkRootsUnderPathResolver(t *testing.T) {
+	tests := []struct {
+		name         string
+		resolverType string
+		path         string
+		wantStatus   int
+	}{
+		{name: "path_resolver_skips_scheduler_root", resolverType: config.ResolverTypePath, path: "/_sys/job", wantStatus: http.StatusOK},
+		{name: "path_resolver_resolves_other_routes", resolverType: config.ResolverTypePath, path: "/_bad/job", wantStatus: http.StatusBadRequest},
+		{name: "header_resolver_resolves_scheduler_root", resolverType: config.ResolverTypeHeader, path: "/_sys/job", wantStatus: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := frameworkRootsConfig(tt.resolverType)
+			e := newEngine()
+			e.HTTPErrorHandler = httpErrorHandler(cfg, logger.New("disabled", true))
+			setupIdentityMiddlewares(e, logger.New("disabled", true), cfg, newProbeSkipper("/health", "/ready"), nil)
+			e.GET(tt.path, func(c *echo.Context) error {
+				_, hasTenant := multitenant.GetTenant(c.Request().Context())
+				assert.False(t, hasTenant, "a skipped route carries no tenant")
+				return c.NoContent(http.StatusOK)
+			})
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, http.NoBody))
+			assert.Equal(t, tt.wantStatus, rec.Code)
+		})
+	}
 }

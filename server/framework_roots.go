@@ -3,6 +3,8 @@ package server
 import (
 	"fmt"
 
+	"github.com/labstack/echo/v5"
+
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -44,4 +46,22 @@ func frameworkRoots(cfg *config.Config, resolver multitenant.TenantResolver) ([]
 			"a non-empty server.path.base (ADR-168)", cfg.Debug.PathPrefix, cfg.Server.Path.Base)
 	}
 	return append(roots, debug), nil
+}
+
+// skipFrameworkRoots extends the tenant seat's probe skip to every matched template under
+// roots. Admission refuses any other package's route or middleware-bearing group under a
+// root, so a template there names a framework handler, or a not-found catch-all that serves
+// none. An empty template (nothing matched) is under no root. With no roots it returns skip
+// unchanged; the per-request check allocates nothing.
+func skipFrameworkRoots(skip probeSkipper, roots []string) probeSkipper {
+	if len(roots) == 0 {
+		return skip
+	}
+	return func(c *echo.Context) bool {
+		if skip(c) {
+			return true
+		}
+		_, covered := coveringPrefix(c.Path(), roots)
+		return covered
+	}
 }

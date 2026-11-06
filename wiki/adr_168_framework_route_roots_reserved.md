@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11-04
-**Related:** [ADR-155](adr_155_reserved_engine_methods_refused.md) (route admission) · [ADR-164](adr_164_tenant_owned_route_family.md) (tenant-owned route family) · #2212
+**Related:** [ADR-155](adr_155_reserved_engine_methods_refused.md) (route admission) · [ADR-164](adr_164_tenant_owned_route_family.md) (tenant-owned route family) · [ADR-169](adr_169_framework_routes_skip_path_tenant.md) (framework routes skip the path tenant) · #2212
 
 ## Context
 
