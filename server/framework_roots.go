@@ -40,7 +40,8 @@ func frameworkRoots(cfg *config.Config, resolver multitenant.TenantResolver) ([]
 	if debug == "" || (base != "" && underPrefix(base, debug)) {
 		return roots, fmt.Errorf("server: debug.pathprefix %q is at or above server.path.base %q: under a tenant "+
 			"resolver that reads the path the debug prefix is a framework route root, so it would reserve every "+
-			"module route; set debug.pathprefix outside server.path.base (ADR-168)", cfg.Debug.PathPrefix, cfg.Server.Path.Base)
+			"module route; set debug.pathprefix to a non-root path below the engine root that neither equals nor covers "+
+			"a non-empty server.path.base (ADR-168)", cfg.Debug.PathPrefix, cfg.Server.Path.Base)
 	}
 	return append(roots, debug), nil
 }

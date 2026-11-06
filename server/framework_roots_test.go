@@ -115,7 +115,8 @@ func TestFrameworkRootsRefuseDebugPrefixCoveringModuleRoutes(t *testing.T) {
 			roots, err := frameworkRoots(cfg, path)
 			require.EqualError(t, err, `server: debug.pathprefix "`+tt.prefix+`" is at or above server.path.base "`+tt.base+
 				`": under a tenant resolver that reads the path the debug prefix is a framework route root, so it would `+
-				`reserve every module route; set debug.pathprefix outside server.path.base (ADR-168)`)
+				`reserve every module route; set debug.pathprefix to a non-root path below the engine root that neither `+
+				`equals nor covers a non-empty server.path.base (ADR-168)`)
 			assert.Equal(t, []string{joinBasePath(normalizeBasePath(tt.base), "/_sys")}, roots, "the scheduler root alone")
 
 			_, err = frameworkRoots(cfg, &multitenant.HeaderResolver{HeaderName: HeaderXTenantID})

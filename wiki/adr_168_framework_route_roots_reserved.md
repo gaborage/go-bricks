@@ -44,12 +44,14 @@ the scheduler, the config default and the server share) always, plus `debug.path
   registrar that is not the framework's adapts the handler in a `server` closure, so admission
   sees `server` there, and `server` is not an admitted package. `RegisterHandler` sets
   `RouteDescriptor.Package` before the `RouteOption`s run, so an option reads it, and stamps it
-  again after every one, unconditionally and under every resolver, so no option forges or clears
+  again after the options have run, unconditionally and under every resolver, so no option forges or clears
   it. A group, and a family, keeps its caller frame: it has no handler.
 - **A debug prefix that covers the module routes is refused.** Under the same resolver, with
   `debug.enabled`, a `debug.pathprefix` of `""` or `/`, or one at or above `server.path.base`,
   would reserve every module route. `server.New` records an error naming `debug.pathprefix` and
-  `server.path.base`, and Start returns it before binding.
+  `server.path.base`, and Start returns it before binding. The error states what is admitted: a
+  non-root path below the engine root that neither equals nor covers a non-empty
+  `server.path.base`; with the base at the engine root, only `""` and `/` fail.
 
 Under a header or subdomain resolver, or with multitenant off, no root is reserved.
 

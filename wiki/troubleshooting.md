@@ -427,7 +427,8 @@ on 1.27.
 # "server: debug.pathprefix ... is at or above server.path.base ..."
 # → Under a path-reading resolver, an enabled debug.pathprefix of "", "/" or one at or
 #   above server.path.base would reserve every module route (ADR-168)
-# → Set debug.pathprefix outside server.path.base (/_debug over /api)
+# → Set debug.pathprefix to a non-root path below the engine root that neither equals nor
+#   covers a non-empty server.path.base (/_debug over /api)
 
 # "tenant-owned route family with global middleware: ..."
 # → The binary installs global middleware AND builds a server.TenantOwnedGroup family
