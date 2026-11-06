@@ -22,7 +22,8 @@ var ErrDuplicateRoute = errors.New("duplicate route registration")
 // RouteConflictReason says why a route registration was refused.
 type RouteConflictReason string
 
-// Reasons carried by RouteConflict.Reason: ADR-155's two, and a third for tenant-owned route families.
+// Reasons carried by RouteConflict.Reason: ADR-155's two, a third for tenant-owned route families,
+// and a fourth for the framework route roots (ADR-168).
 const (
 	// RouteConflictReasonDuplicate is a second registration of a route node; the first keeps it.
 	RouteConflictReasonDuplicate RouteConflictReason = "duplicate"
@@ -32,6 +33,11 @@ const (
 	// RouteConflictReasonTenantOwned is a route, or a group carrying middleware, at or below a
 	// tenant-owned route family's prefix that did not come through the family.
 	RouteConflictReasonTenantOwned RouteConflictReason = "inside a tenant-owned route family"
+	// RouteConflictReasonFrameworkRoot is a route, a group carrying middleware, or a tenant-owned
+	// family's prefix, at or below a framework route root (the scheduler's <base>/_sys, or debug.pathprefix with debug.enabled)
+	// registered from outside the framework, under a tenant resolver that may read the path. The
+	// roots are reserved for framework routes (ADR-168).
+	RouteConflictReasonFrameworkRoot RouteConflictReason = "under a framework route root"
 )
 
 // serverPackagePath attributes framework-registered routes (health/ready probes)
@@ -48,24 +54,27 @@ type RouteRegistrant struct {
 
 // RouteConflict reports one refused registration. What each field means depends on Reason.
 type RouteConflict struct {
-	// Method is the refused route's HTTP method. Under RouteConflictReasonTenantOwned it is empty
-	// when the refused registration is a group carrying middleware.
+	// Method is the refused route's HTTP method. Under RouteConflictReasonTenantOwned and
+	// RouteConflictReasonFrameworkRoot it is empty when the refused registration is a group
+	// carrying middleware.
 	Method string
 	// Path is the refused registration's literal full path: the duplicate's under
 	// RouteConflictReasonDuplicate, the refused route's under RouteConflictReasonReservedMethod, and
-	// the route's or the group's full prefix under RouteConflictReasonTenantOwned.
+	// the route's or the group's full prefix under RouteConflictReasonTenantOwned and
+	// RouteConflictReasonFrameworkRoot.
 	Path string
 	// FirstPath under RouteConflictReasonDuplicate is the first registration's literal path; it
 	// differs from Path when the two templates name a path parameter or wildcard differently
 	// (/users/:id, /users/:uid), which echo's router treats as one route. Under
-	// RouteConflictReasonTenantOwned it is the family's prefix. Empty under
-	// RouteConflictReasonReservedMethod.
+	// RouteConflictReasonTenantOwned it is the family's prefix, and under
+	// RouteConflictReasonFrameworkRoot the root's. Empty under RouteConflictReasonReservedMethod.
 	FirstPath string
 	// First is the registration that keeps the route under RouteConflictReasonDuplicate. Empty under
 	// the other reasons.
 	First RouteRegistrant
 	// Duplicate is the refused registrant under every reason. For a group under
-	// RouteConflictReasonTenantOwned only Package is set: the package that called Group or Use.
+	// RouteConflictReasonTenantOwned or RouteConflictReasonFrameworkRoot only Package is set: the
+	// package that called Group, Use or, under RouteConflictReasonFrameworkRoot, TenantOwnedGroup.
 	Duplicate RouteRegistrant
 	// Reason says why the registration was refused.
 	Reason RouteConflictReason
@@ -130,7 +139,7 @@ func (r RouteRegistrant) label() string {
 
 // line renders one conflict as it appears in DuplicateRouteError's text.
 func (c *RouteConflict) line() string {
-	if c.Reason == RouteConflictReasonTenantOwned {
+	if c.Reason == RouteConflictReasonTenantOwned || c.Reason == RouteConflictReasonFrameworkRoot {
 		refused := " — " + string(c.Reason) + " at " + c.FirstPath + ", refused: "
 		if c.Method == "" {
 			return "group " + c.Path + refused + "middleware (" + c.Duplicate.Package + ")"
@@ -171,16 +180,17 @@ type admittedRoute struct {
 // record: the engine families are built on, the logger their refusals go to, the probe paths
 // they may not cover, and each family's full prefix (claimFamily).
 type routeAdmission struct {
-	mu         sync.Mutex
-	seen       map[string]seenRoute // key: routeNodeKey(method, fullPath)
-	conflicts  []RouteConflict
-	engine     *echo.Echo               // the application engine; written once by New, before any registrar exists
-	log        logger.Logger            // the Server's logger; written once by New, before any registrar exists
-	probePaths []string                 // full health and ready paths on the application listener; written once by New
-	seated     bool                     // whether New installed the tenant seat; written once by New
-	started    bool                     // set by seal, when Start reads the conflicts
-	families   []string                 // each tenant-owned family's full prefix, in build order
-	owned      atomic.Pointer[[]string] // families, republished copy-on-write for owns
+	mu             sync.Mutex
+	seen           map[string]seenRoute // key: routeNodeKey(method, fullPath)
+	conflicts      []RouteConflict
+	engine         *echo.Echo               // the application engine; written once by New, before any registrar exists
+	log            logger.Logger            // the Server's logger; written once by New, before any registrar exists
+	probePaths     []string                 // full health and ready paths on the application listener; written once by New
+	seated         bool                     // whether New installed the tenant seat; written once by New
+	frameworkRoots []string                 // prefixes reserved for framework routes (frameworkRoots); written once by New
+	started        bool                     // set by seal, when Start reads the conflicts
+	families       []string                 // each tenant-owned family's full prefix, in build order
+	owned          atomic.Pointer[[]string] // families, republished copy-on-write for owns
 
 	// registered is every admitted route (family routes and probes included) and every
 	// middleware-bearing group not built through a family, covered or not, in registration
@@ -233,6 +243,9 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 		return false
 	}
 	c := tenantOwnedConflict(r.Method, r.Path, reg)
+	if a.refuseFrameworkRootLocked(&c) {
+		return false
+	}
 	if !r.Descriptor.TenantOwned && a.refuseTrespassLocked(&c) {
 		return false
 	}
@@ -261,34 +274,75 @@ func (a *routeAdmission) admitGroup(path, pkg string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	c := tenantOwnedConflict("", path, RouteRegistrant{Package: pkg})
+	if a.refuseFrameworkRootLocked(&c) {
+		return
+	}
 	if !a.started {
 		a.registered = append(a.registered, c)
 	}
 	a.refuseTrespassLocked(&c)
 }
 
-// refuseTrespassLocked sets c.FirstPath to the family prefix covering c.Path and records c as a
-// conflict, reporting whether a family covers it. After Start nothing reads the record, so it
-// panics with c instead. a.mu is held.
+// refuseFrameworkRootLocked records c, re-reasoned as a framework-root conflict, when its path
+// is at or below a framework route root, its registrant's package is not the framework's
+// (frameworkRootPackages) and it is not a probe the server reserves, reporting whether it did
+// (refuseUnderLocked). a.mu is held.
+func (a *routeAdmission) refuseFrameworkRootLocked(c *RouteConflict) bool {
+	root, ok := coveringPrefix(c.Path, a.frameworkRoots)
+	if !ok || slices.Contains(frameworkRootPackages, c.Duplicate.Package) || a.isProbe(c) {
+		return false
+	}
+	c.Reason = RouteConflictReasonFrameworkRoot
+	a.refuseUnderLocked(c, root)
+	return true
+}
+
+// refuseFamilyUnderFrameworkRoot records a tenant-owned family's full prefix, built from pkg, as
+// a framework-root conflict when it is at or below a framework route root, reporting whether it
+// did: the family is a group carrying middleware (its steps) there. After Start it panics.
+func (a *routeAdmission) refuseFamilyUnderFrameworkRoot(full, pkg string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c := tenantOwnedConflict("", full, RouteRegistrant{Package: pkg})
+	return a.refuseFrameworkRootLocked(&c)
+}
+
+// isProbe reports whether c is one of the server's own probe routes (registerProbeRoutes),
+// which a health or ready path configured under a framework root places there: a probe method
+// (probeMethods) at a probe path, registered by the server.
+func (a *routeAdmission) isProbe(c *RouteConflict) bool {
+	return slices.Contains(probeMethods, c.Method) && c.Duplicate.Package == serverPackagePath && slices.Contains(a.probePaths, c.Path)
+}
+
+// refuseTrespassLocked records c as a conflict under the family prefix covering c.Path,
+// reporting whether a family covers it (refuseUnderLocked). a.mu is held.
 func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
-	family, ok := coveringFamily(c.Path, a.families)
+	family, ok := coveringPrefix(c.Path, a.families)
 	if !ok {
 		return false
 	}
-	c.FirstPath = family
+	a.refuseUnderLocked(c, family)
+	return true
+}
+
+// refuseUnderLocked sets c.FirstPath to prefix, the family or framework root that covers
+// c.Path, and records c as a conflict. After Start nothing reads the record, so it panics with
+// c instead. a.mu is held.
+func (a *routeAdmission) refuseUnderLocked(c *RouteConflict, prefix string) {
+	c.FirstPath = prefix
 	if a.started {
 		panic(fmt.Errorf("server: registration after Start: %w", duplicateRouteError([]RouteConflict{*c})))
 	}
 	a.conflicts = append(a.conflicts, *c)
-	return true
 }
 
-// coveringFamily returns the family prefix in families that path equals or sits under. The
-// trespass refusal and the tenant seat's skip both decide ownership here.
-func coveringFamily(path string, families []string) (string, bool) {
-	for _, f := range families {
-		if underPrefix(path, f) {
-			return f, true
+// coveringPrefix returns the prefix in prefixes that path equals or sits under on a segment
+// boundary. Tenant-owned families and framework route roots both decide ownership here: the
+// trespass and framework-root refusals, and the tenant seat's skips. It allocates nothing.
+func coveringPrefix(path string, prefixes []string) (string, bool) {
+	for _, p := range prefixes {
+		if underPrefix(path, p) {
+			return p, true
 		}
 	}
 	return "", false
@@ -395,7 +449,7 @@ func (a *routeAdmission) owns(template string) bool {
 	if families == nil {
 		return false
 	}
-	_, ok := coveringFamily(template, *families)
+	_, ok := coveringPrefix(template, *families)
 	return ok
 }
 

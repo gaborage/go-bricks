@@ -2881,6 +2881,28 @@ or `HandlerContext.Param`, consumer error text, the request method token, and pa
 
 ---
 
+### [ADR-168: Framework Route Roots Are Reserved Under a Path-Reading Resolver](adr_168_framework_route_roots_reserved.md)
+
+**Date:** 2026-11-04 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, a consumer route, middleware-bearing group or tenant-owned family at or below `<base>/_sys` or the enabled debug prefix fails startup, as does an enabled `debug.pathprefix` at the engine root or at or above `server.path.base`; under every resolver `RouteDescriptor.Package` names the handler's package
+
+Under a resolver that may read the path (`multitenant.MayReadPath`), route admission reserves the
+framework route roots, the scheduler's `<base>/_sys` (`internal/pathutil.SystemPrefix`) and, with
+`debug.enabled`, `debug.pathprefix`: a route, middleware-bearing group or `TenantOwnedGroup`
+family at or below one, from any package but `scheduler` or `app`, other than the server's `GET`
+and `HEAD` probes, is a `RouteConflictReasonFrameworkRoot`
+conflict in the `*DuplicateRouteError`, or a panic after Start. A route's package is its handler
+function's, set before the `RouteOption`s and stamped again after them (an embedding registrar's typed fallback admits as
+`server`, which is not admitted); a caller frame named
+`app` or `server` for a direct `RegisterHandler` call or an embedding registrar. `server.New`
+refuses a debug prefix that would cover the module routes, naming `debug.pathprefix` and
+`server.path.base`. See [migrations.md](migrations.md) `[C73.34]`.
+
+**Key Benefits:** only framework handlers, and middleware on groups at or below a root, sit under
+the roots, which ADR-169's tenant skip relies on; middleware above a root and global middleware
+still run there.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3690,7 +3712,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-167) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-168) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
