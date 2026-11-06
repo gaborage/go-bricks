@@ -39,8 +39,9 @@ type Server struct {
 	readyMu      sync.RWMutex
 	readyHandler echo.HandlerFunc
 	admission    *routeAdmission
-	setupErr     error                    // a construction-time configuration error Start returns before binding
-	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
+	setupErr     error                     // a construction-time configuration error Start returns before binding
+	pathChecker  multitenant.TenantChecker // the check the tenant seat asks about a path-read tenant; nil when it asks none (ADR-170)
+	boundAddr    atomic.Pointer[net.Addr]  // set via ListenerAddrFunc once Start's listener is bound; nil until then
 	ready        chan struct{}
 	started      atomic.Bool
 	// lifecycleMu serializes the readiness commit in onBeforeServe with Shutdown.
@@ -295,11 +296,21 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 	if observabilityEnabled {
 		s.setupErr = otelServerNameError(cfg.App.Name)
 	}
-	seat := setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath, s.admission.owns)
+	seat := setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath,
+		seatInputs{owned: s.admission.owns, checkPath: true, checker: s.opts.TenantChecker})
 	// Admission reserves the framework route roots the seat computed for its resolver (ADR-168),
 	// and Start refuses a debug prefix that would cover the module routes.
 	s.admission.seated, s.admission.frameworkRoots = seat.seated, seat.frameworkRoots
 	s.setupErr = goerrors.Join(s.setupErr, seat.rootsErr)
+	// Under a resolver that may read the path the seat refuses every path tenant without a
+	// check, so Start refuses instead of booting a server that answers 400 to all of them; one
+	// served anyway (Echo() behind another listener) stays fail-closed (seatInputs.holds).
+	if seat.checksPath {
+		if s.opts.TenantChecker == nil {
+			s.setupErr = goerrors.Join(s.setupErr, errNoTenantChecker)
+		}
+		s.pathChecker = s.opts.TenantChecker
+	}
 
 	if s.probeAddr != "" {
 		s.probeEcho = newProbeEngine(e, cfg, log, healthRoute, readyRoute)
@@ -429,7 +440,7 @@ func (s *Server) RegisterReadyHandler(handler Handler) {
 	if handler == nil {
 		s.readyHandler = s.readyCheck
 	} else {
-		s.readyHandler = adaptHandler(handler, s.cfg)
+		s.readyHandler = adaptHandler(handler, s.cfg, s.logger)
 	}
 }
 
@@ -538,6 +549,7 @@ func (s *Server) Start() error {
 	}
 
 	logPathRendering(s.logger, listenerApplication)
+	logPathTenantCheck(s.logger, s.pathChecker)
 	s.logger.Info().
 		Str("service", s.cfg.App.Name).
 		Str("version", s.cfg.App.Version).
@@ -691,6 +703,42 @@ func logPathRendering(l logger.Logger, listener string) {
 		Msgf("[server.paths] inbound paths render from the matched route template "+
 			"rule=%s listener=%s token=%s unmatched=%s",
 			pathRenderingRule, listener, maskToken, maskToken)
+}
+
+// errNoTenantChecker refuses Start for a server whose tenant seat may read the tenant from the
+// request path but has no server.Options.TenantChecker to ask about it (ADR-170).
+var errNoTenantChecker = goerrors.New("server: multitenant.resolver may read the tenant from the request path " +
+	"but server.Options.TenantChecker is nil, so every path tenant would answer 400: set it, or build the " +
+	"server through the App with a resource source that implements HasTenant (ADR-170)")
+
+// logPathTenantCheck states, once as the application listener starts, that the tenant seat
+// writes a path-read tenant only when checker holds it (ADR-170), naming the store's type and,
+// for the built-in *config.TenantStore, how many tenants it holds. A nil checker (a seat that
+// reads no path, or none at all) writes no line.
+func logPathTenantCheck(l logger.Logger, checker multitenant.TenantChecker) {
+	if checker == nil {
+		return
+	}
+	msg := fmt.Sprintf("[server.tenant] a tenant read from the request path is written only when "+
+		"the tenant store holds it (ADR-170) store=%T", checker)
+	if store, ok := checker.(*config.TenantStore); ok && store != nil {
+		msg += " tenants=" + strconv.Itoa(heldTenantCount(store))
+	}
+	l.Info().
+		Str("log.type", "action"). // Mark as action log for dual-mode routing
+		Msg(msg)
+}
+
+// heldTenantCount counts the ids store's HasTenant answers true for: every key but "" and a
+// config.NamedDatabasePrefix key.
+func heldTenantCount(store *config.TenantStore) int {
+	n := 0
+	for id := range store.Tenants() {
+		if store.HasTenant(id) {
+			n++
+		}
+	}
+	return n
 }
 
 // serveProbes runs the probe listener until it stops, sends any serve error other than

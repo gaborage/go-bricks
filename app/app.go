@@ -149,16 +149,22 @@ func resolveSignalHandler(opts *Options) SignalHandler {
 	return &OSSignalHandler{}
 }
 
-func resolveServer(cfg *config.Config, log logger.Logger, opts *Options) ServerRunner {
+// resolveServer returns the provided server, or builds one whose tenant seat asks checker, the
+// tenant resource source's existence check, about a path-read tenant (ADR-170). checker replaces
+// any ServerOptions.TenantChecker: the resource source is the one authority on which tenants
+// exist. A nil checker (a source with no HasTenant) vouches for no path-read tenant, so under a
+// resolver that may read the path the server's Start refuses.
+func resolveServer(cfg *config.Config, log logger.Logger, opts *Options, checker multitenant.TenantChecker) ServerRunner {
 	if opts != nil && opts.Server != nil {
 		log.Debug().Msg("Using provided server instance")
 		return opts.Server
 	}
+	var serverOpts server.Options
 	if opts != nil && opts.ServerOptions != nil {
-		return server.NewWithOptions(cfg, log, *opts.ServerOptions)
+		serverOpts = *opts.ServerOptions
 	}
-
-	return server.New(cfg, log)
+	serverOpts.TenantChecker = checker
+	return server.NewWithOptions(cfg, log, serverOpts)
 }
 
 // createBootstrapLogger creates a logger with smart defaults for bootstrap/initialization logging.

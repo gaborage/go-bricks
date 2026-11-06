@@ -19,6 +19,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/racedetect"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -479,6 +480,10 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 const (
 	observedHeaderTenant = "acme"
 	observedPathTenant   = "/t/globex/orders"
+	// observedKnownPathTenant is the one path tenant the observed server's checker holds;
+	// observedUnknownPathTenant names one it does not (ADR-170).
+	observedKnownPathTenant   = "globex"
+	observedUnknownPathTenant = "/t/initech/orders"
 	// observedOpenLimit keeps the limiter on but out of reach of any row's request count.
 	observedOpenLimit = 1_000_000
 	// observedOpenPreGuard keeps the pre-guard on and out of reach the same way, so every row
@@ -539,10 +544,11 @@ func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Ser
 		"server.forwardedclientcert.enabled": true,
 	})
 	require.NoError(t, err)
-	srv := New(cfg, log)
+	srv := NewWithOptions(cfg, log, Options{TenantChecker: testutil.TenantSet{observedKnownPathTenant: {}}})
 	require.NoError(t, srv.setupErr)
 
-	hr := NewHandlerRegistry(srv.cfg)
+	// The App's registry carries the framework logger, which the unknown-tenant refusal writes to.
+	hr := NewHandlerRegistry(srv.cfg, WithLogger(log))
 	ok := func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { return helloResp{Message: "ok"}, nil }
 	boom := func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { panic("observed alloc guard") }
 	GET(hr, srv.ModuleGroup(), "/orders", ok)
@@ -593,11 +599,12 @@ type observedRow struct {
 	family     bool // build the server with the tenant-owned family (newObservedServer)
 	wantStatus int
 	warn       string // substring of the only WARN sink allowed to fire, once per request
+	alsoWarn   string // substring of a second sink that also fires once per request; "" for none
 	baseline   int
 }
 
 // measureObservedRow warms, measures and checks one row.
-func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc observedRow) {
+func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc *observedRow) {
 	log := &guardLogger{}
 	srv := newObservedServer(t, log, tc.denyIP, tc.family)
 	// Warm one-time lazy state (and, for the denied row, spend the burst) before
@@ -609,19 +616,25 @@ func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc o
 	}
 	require.Equal(t, tc.wantStatus, rec.Code, "the row does not exercise the shape it names")
 	exporter.Reset()
-	allWarns, sinkWarns := log.warnCount(""), log.warnCount(tc.warn)
+	allWarns, sinkWarns, alsoWarns := log.warnCount(""), log.warnCount(tc.warn), log.warnCount(tc.alsoWarn)
 
 	got := testing.AllocsPerRun(observedRuns, func() {
 		srv.echo.ServeHTTP(httptest.NewRecorder(), tc.req)
 	})
 
 	require.NotEmpty(t, exporter.GetSpans(), "the measured requests produced no span, so tracing is not covered")
-	wantWarns := 0
+	wantWarns, wantAlso := 0, 0
 	if tc.warn != "" {
 		wantWarns = observedRuns + 1
 	}
-	require.Equal(t, wantWarns, log.warnCount("")-allWarns, "the measured requests emitted an unpinned number of WARNs")
+	if tc.alsoWarn != "" {
+		wantAlso = observedRuns + 1
+	}
+	require.Equal(t, wantWarns+wantAlso, log.warnCount("")-allWarns, "the measured requests emitted an unpinned number of WARNs")
 	require.Equal(t, wantWarns, log.warnCount(tc.warn)-sinkWarns, "the WARNs did not come from the sink this row pins")
+	if tc.alsoWarn != "" {
+		require.Equal(t, wantAlso, log.warnCount(tc.alsoWarn)-alsoWarns, "the second sink this row pins did not fire once per request")
+	}
 	t.Logf("observed request %s allocs/op = %.1f (pinned %d)", tc.name, got, tc.baseline)
 	assert.InDelta(t, float64(tc.baseline), got, 0, "observed request allocs/op moved off the pinned baseline (ADR-026)")
 }
@@ -690,6 +703,22 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 				HeaderXForwardedFor: {"203.0.113.7"},
 			})),
 		},
+		// A path tenant the checker does not hold: the seat writes no tenant, and the typed
+		// adapter answers the unknown-tenant 400 with the seat's WARN, and the access line
+		// still WARNs the 4xx (ADR-170).
+		{
+			name: "path_won_unknown_tenant", baseline: 133, wantStatus: http.StatusBadRequest,
+			warn: warnTenantRejected, alsoWarn: warnAccessLog4xx,
+			req: observedRequest(http.MethodGet, observedUnknownPathTenant, "", nil),
+		},
+		// The same behind a trusted proxy: the WARN's client reuses the limiter's address.
+		{
+			name: "xff_path_won_unknown_tenant", baseline: 142, wantStatus: http.StatusBadRequest,
+			warn: warnTenantRejected, alsoWarn: warnAccessLog4xx,
+			req: viaTrustedProxy(observedRequest(http.MethodGet, observedUnknownPathTenant, "", map[string][]string{
+				HeaderXForwardedFor: {"203.0.113.7"},
+			})),
+		},
 		// Neither resolver finds a tenant: rejected before route matching.
 		{
 			name: "tenant_rejected", baseline: 98, wantStatus: http.StatusBadRequest,
@@ -747,7 +776,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			run := func(t *testing.T) { measureObservedRow(t, exporter, tc) }
+			run := func(t *testing.T) { measureObservedRow(t, exporter, &tc) }
 			// A denyIP row runs inside a synctest bubble: the pre-guard's memory store reads
 			// time.Now, which a bubble advances only when every goroutine in it is durably
 			// blocked, and ServeHTTP never blocks, so the clock stands still for the whole row

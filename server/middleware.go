@@ -25,10 +25,9 @@ import (
 // Outside tests only newServer, which server.New and server.NewWithOptions both reach,
 // calls it (ADR-166). observabilityEnabled gates the OTel HTTP instrumentation
 // middleware; healthPath and readyPath let the probe skipper bypass the probe endpoints.
-// owned is the Server's tenant-owned family record, which only the tenant seat reads
-// (see tenantMiddlewareEcho); nil means none. It reports the tenant seat it installed
-// (tenantSeat).
-func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, owned func(template string) bool) (seat tenantSeat) {
+// inputs is what only the tenant seat reads (seatInputs). It reports the tenant seat it
+// installed (tenantSeat).
+func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, inputs seatInputs) (seat tenantSeat) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,
 	// only covers what is downstream of ITSELF, and the eight middlewares
@@ -82,7 +81,7 @@ func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold, log))
 	}
 
-	seat = setupIdentityMiddlewares(e, log, cfg, skipProbe, owned)
+	seat = setupIdentityMiddlewares(e, log, cfg, skipProbe, inputs)
 
 	// Logger middleware with zerolog
 	e.Use(requestLoggerEcho(log, healthPath, readyPath))
@@ -272,9 +271,9 @@ func secureHeadersEcho() echo.MiddlewareFunc {
 // setupIdentityMiddlewares registers the identity-establishing middlewares
 // (tenant resolution, ALB forwarded-client-cert). Both run before the access
 // logger so their rejection paths can leave their own WARN trail, and both
-// honor the shared probe skipper. Only the tenant seat reads owned. It reports the tenant seat it
-// installed.
-func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper, owned func(template string) bool) (seat tenantSeat) {
+// honor the shared probe skipper. Only the tenant seat reads inputs. It reports the tenant seat
+// it installed.
+func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper, inputs seatInputs) (seat tenantSeat) {
 	// Multi-tenant tenant resolver middleware (if enabled)
 	if cfg.Multitenant.Enabled {
 		resolver := buildTenantResolver(cfg)
@@ -282,7 +281,8 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 			// The seat skips the probes and, under a resolver that may read the path, the
 			// framework route roots (ADR-169); the forwarded-client-cert seat skips probes only.
 			seat.frameworkRoots, seat.rootsErr = frameworkRoots(cfg, resolver)
-			e.Use(tenantMiddlewareEcho(resolver, skipFrameworkRoots(skipProbe, seat.frameworkRoots), owned, log))
+			seat.checksPath = inputs.checkPath && multitenant.MayReadPath(resolver)
+			e.Use(tenantMiddlewareEcho(resolver, skipFrameworkRoots(skipProbe, seat.frameworkRoots), inputs, log))
 			seat.seated = true
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
@@ -312,13 +312,26 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 	return seat
 }
 
+// seatInputs is what the tenant seat reads besides its resolver: owned, the Server's tenant-owned
+// family record (nil means none, see tenantMiddlewareEcho); checkPath, set by the Server's seat
+// and clear on the public TenantMiddleware; and checker, which vouches for a path-read tenant
+// when checkPath is set (Options.TenantChecker; nil vouches for none, ADR-170).
+type seatInputs struct {
+	owned     func(template string) bool
+	checkPath bool
+	checker   multitenant.TenantChecker
+}
+
 // tenantSeat is what setupMiddlewares installed for tenant resolution: whether the seat is
 // installed, the framework route roots its skip covers (frameworkRoots), which route
-// admission reserves, and why those roots are unusable, which Start returns.
+// admission reserves, why those roots are unusable, which Start returns, and whether the seat
+// asks inputs.checker about a path-read tenant (ADR-170): the Server's seat under a resolver
+// that may read the path (multitenant.MayReadPath).
 type tenantSeat struct {
 	seated         bool
 	frameworkRoots []string
 	rootsErr       error
+	checksPath     bool
 }
 
 func newHeaderResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {

@@ -3,6 +3,12 @@
 **Status:** Accepted
 **Date:** 2026-07-05
 
+> **Reversed in part (2026-11-03, by [ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md)):**
+> "the tenant already in context" no longer holds for a path-read tenant the store does not hold.
+> Under a path-reading resolver such a tenant is never written, so global middleware runs with no
+> tenant in context, and the route's handler adapter answers 400 "Invalid tenant" afterwards. A
+> global gate that requires a tenant must pass a tenant-less request through.
+
 ## Context
 
 Applications need app-wide HTTP middleware — canonically an auth gate — that runs once
@@ -92,7 +98,8 @@ unsafe, so the app refuses to start rather than serve unguarded traffic.
 
 - Auth / API-key / audit gates install once, un-skippable, with the tenant already in context
   (see the amendments above: under a path-reading resolver the framework's `/_sys` and debug
-  routes carry none, ADR-169).
+  routes carry none, ADR-169, and a path-read tenant the store does not hold is never written,
+  ADR-170).
 - Runs after rate-limit / timeout / gzip / bodyLimit (innermost slot): an unauthenticated
   request still consumes rate-limit budget. This is an auth-gate hook, not a general
   "run early" hook.

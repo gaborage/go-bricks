@@ -60,7 +60,7 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 	relative := rg.relativePath(path)
 	fullPath := rg.fullPathFromRelative(relative)
 	reg := RouteRegistrant{HandlerName: extractHandlerName(handler), Package: handlerPackage(handler)}
-	rg.admitRoute(method, relative, fullPath, modellessDescriptor(method, fullPath, reg), adaptHandler(handler, rg.cfg), middleware)
+	rg.admitRoute(method, relative, fullPath, modellessDescriptor(method, fullPath, reg), adaptHandler(handler, rg.cfg, rg.admission.logger()), middleware)
 }
 
 // admitRoute stamps TenantOwned (after RegisterHandler's RouteOptions, so no option forges or

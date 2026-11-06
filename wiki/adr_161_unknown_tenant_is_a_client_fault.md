@@ -7,6 +7,12 @@
 > unknown-tenant WARN's `path` is the masked rendering of the matched template (`maskedPath`:
 > `/:tenant/orders` prints `/REDACTED/orders`), not the bare template, the rendering every
 > framework inbound sink prints.
+>
+> **Amended by [ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md) (#2212):** under
+> a path-reading resolver the seat does check existence for a path-read tenant: one the store's
+> `HasTenant` does not hold is never written, and the typed and raw handler adapters answer this
+> ADR's 400 before binding, so the raw adapter (`adaptHandler`) is a third caller of
+> `logUnknownTenantRefusal`. Header- and subdomain-won tenants keep this ADR's accessor refusal.
 
 ## Context
 
@@ -85,7 +91,10 @@ tenant the deployment does not serve passes the seat, and the handler runs (#222
    answers 500.
 8. **The seat does no existence check.** It checks form; existence belongs to the store, and the
    first tenant resource the request asks for answers it. An opt-in existence check at the seat
-   can come later and return the same sentinel, so the wire answer would not move.
+   can come later and return the same sentinel, so the wire answer would not move. (Amended by
+   ADR-170: under a path-reading resolver this no longer holds for a path-read tenant, which the
+   seat writes only when the store's `HasTenant` holds it; header- and subdomain-won tenants keep
+   this decision.)
 
 ## Consequences
 

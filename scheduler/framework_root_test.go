@@ -33,7 +33,7 @@ func TestSystemRoutesSkipPathTenant(t *testing.T) {
 	cfg.Multitenant.Resolver.Type = config.ResolverTypePath
 	cfg.Multitenant.Resolver.Path.Segment = 2
 	log := logger.New("disabled", true)
-	srv := server.New(cfg, log)
+	srv := server.NewWithOptions(cfg, log, server.Options{TenantChecker: testutil.TenantSet{}}) // needed to start (ADR-170)
 
 	m := NewModule()
 	m.config = cfg

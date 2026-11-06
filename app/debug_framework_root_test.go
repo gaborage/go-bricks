@@ -32,7 +32,7 @@ func TestDebugRoutesSkipPathTenant(t *testing.T) {
 	cfg.Debug.AllowedIPs = []string{localhostIPV4}
 	cfg.Debug.Endpoints.Goroutines = true
 	log := logger.New("disabled", true)
-	srv := server.New(cfg, log)
+	srv := server.NewWithOptions(cfg, log, server.Options{TenantChecker: testutil.TenantSet{}}) // needed to start (ADR-170)
 
 	require.NoError(t, NewDebugHandlers(nil, &cfg.Debug, log).RegisterDebugEndpoints(srv.RootGroup()))
 	srv.RootGroup().Add(http.MethodGet, "/_other/goroutines", func(c server.HandlerContext) error {

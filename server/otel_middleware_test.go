@@ -56,7 +56,7 @@ func TestOTelMiddlewareAbsentWhenObservabilityDisabled(t *testing.T) {
 	log := logger.New("disabled", false)
 	cfg := &config.Config{App: config.AppConfig{Name: testServiceName}}
 	// observabilityEnabled = false → the echo-otel middleware must not be registered.
-	setupMiddlewares(e, log, cfg, false, testHealthPath, testReadyPath, nil)
+	setupMiddlewares(e, log, cfg, false, testHealthPath, testReadyPath, seatInputs{})
 	var captured context.Context
 	e.GET("/test", func(c *echo.Context) error {
 		captured = c.Request().Context()
@@ -97,7 +97,7 @@ func setupTestServerWithTracing(t *testing.T) (*echo.Echo, *tracetest.InMemoryEx
 	// Setup middlewares (including OTel)
 	healthPath := testHealthPath
 	readyPath := testReadyPath
-	setupMiddlewares(e, log, cfg, true, healthPath, readyPath, nil)
+	setupMiddlewares(e, log, cfg, true, healthPath, readyPath, seatInputs{})
 
 	return e, exporter
 }
@@ -545,7 +545,7 @@ func TestOTelMiddlewareWithCustomBasePath(t *testing.T) {
 	// Setup middlewares with custom base path
 	healthPath := "/api/v1/health"
 	readyPath := "/api/v1/ready"
-	setupMiddlewares(e, log, cfg, true, healthPath, readyPath, nil)
+	setupMiddlewares(e, log, cfg, true, healthPath, readyPath, seatInputs{})
 
 	// Register route under base path
 	group := e.Group("/api/v1")
@@ -588,7 +588,7 @@ func setupTestServerWithMetrics(t *testing.T) (*echo.Echo, *obtest.TestMeterProv
 	}
 	log := logger.New("disabled", false)
 
-	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, nil)
+	setupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath, seatInputs{})
 
 	return e, mp
 }

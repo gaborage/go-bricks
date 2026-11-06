@@ -9,6 +9,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/observability"
 )
 
@@ -37,9 +38,11 @@ func newAppBootstrap(cfg *config.Config, log logger.Logger, opts *Options) *appB
 }
 
 // coreComponents resolves and creates the core application components.
-// Returns the signal handler and server runner instances.
-func (b *appBootstrap) coreComponents() (SignalHandler, ServerRunner) {
-	return resolveSignalHandler(b.opts), resolveServer(b.cfg, b.log, b.opts)
+// Returns the signal handler and server runner instances. checker is the resource source's
+// existence check (dependencyBundle.tenantChecker), which the server's tenant seat asks about a
+// path-read tenant (ADR-170).
+func (b *appBootstrap) coreComponents(checker multitenant.TenantChecker) (SignalHandler, ServerRunner) {
+	return resolveSignalHandler(b.opts), resolveServer(b.cfg, b.log, b.opts, checker)
 }
 
 // newManagerConfigBuilderFromConfig copies every operator-tunable manager setting
@@ -103,6 +106,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	resolver := newFactoryResolverForConfig(b.opts, b.cfg)
 	resourceSource := resolver.ResourceSource(b.cfg)
 	builtInStore := b.opts == nil || b.opts.ResourceSource == nil
+	tenantChecker, _ := resourceSource.(multitenant.TenantChecker)
 	plan, err := planResources(startupCtx, b.cfg, b.opts, resourceSource, builtInStore)
 	if err != nil {
 		return nil, err
@@ -181,6 +185,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 		cacheManager:     cacheManager,
 		provider:         provider,
 		observability:    obsProvider,
+		tenantChecker:    tenantChecker,
 	}, nil
 }
 

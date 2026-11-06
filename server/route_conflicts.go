@@ -211,6 +211,14 @@ func tenantOwnedConflict(method, path string, reg RouteRegistrant) RouteConflict
 	return RouteConflict{Method: method, Path: path, Duplicate: reg, Reason: RouteConflictReasonTenantOwned}
 }
 
+// logger is the Server's logger, nil on a nil admission (a test registrar built without one).
+func (a *routeAdmission) logger() logger.Logger {
+	if a == nil {
+		return nil
+	}
+	return a.log
+}
+
 func newRouteAdmission() *routeAdmission {
 	return &routeAdmission{seen: make(map[string]seenRoute)}
 }
