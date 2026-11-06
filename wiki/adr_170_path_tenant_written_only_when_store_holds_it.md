@@ -7,12 +7,11 @@
 ## Context
 
 A path resolver (`multitenant.resolver.type: path`, or a composite chain whose `path` member won)
-reads the tenant from a URL segment, which the caller writes. The seat checked only the grammar
-`^[a-z0-9-]{1,64}$`, which a 16-digit card number passes, and then wrote the id to the request
-context. From there every downstream printer carried it: the access line's `tenant` field, global
-and route middleware, the handler, and any consumer line that logs the tenant. The docs claimed a
-known-tenant lookup that nothing performed: a well-formed id the store does not hold was refused
-only at the first per-tenant accessor (ADR-161), after it had already been printed.
+reads the tenant from a URL segment, which the caller writes. The seat checked the id's form, not
+whether the store holds it, and then wrote the id to the request context, where global and route
+middleware and the handler took it for a tenant. The docs claimed a known-tenant lookup that
+nothing performed: a well-formed id the store does not hold was refused only at the first
+per-tenant accessor (ADR-161).
 
 ## Decision
 
@@ -41,8 +40,7 @@ only at the first per-tenant accessor (ADR-161), after it had already been print
    `Start` writes one INFO line (`log.type=action`): `[server.tenant] a tenant read from the
    request path is written only when the tenant store holds it (ADR-170) store=<%T>`, plus
    `tenants=<n>` for a `*config.TenantStore`; other servers write none.
-4. **The public `server.TenantMiddleware` is unchanged.** It asks no checker and writes every
-   resolved id; a later link (A1d) requires the check there.
+4. **The public `server.TenantMiddleware` is unchanged.**
 5. **Reversal of ADR-036.** ADR-036 promised global middleware "the tenant already in context".
    Under a path-reading resolver that no longer holds for a path tenant the store does not hold:
    global middleware runs with no tenant, and the request is refused at the adapter afterwards. A
@@ -58,8 +56,9 @@ tenant, and no response before the adapter differs by tenant existence.
 - **Refuse at the seat.** Rejected. The seat runs before route-group middleware, so an
   unauthenticated caller would learn which ids exist from 400-versus-401, and the 400 would skip
   the access line the seat sits outside of.
-- **Write the id and let the first accessor refuse (main).** Rejected. The id reaches every
-  printer first, and a route that never calls an accessor serves the unknown tenant.
+- **Write the id and let the first accessor refuse (main).** Rejected. Global and route middleware
+  and the handler take the id for a tenant first, and a route that never calls an accessor serves
+  the unknown tenant.
 - **Ask with a context-carrying lookup.** Rejected for now. The check is in memory, with no
   context, no I/O and no blocking (a stated Context-First exception); a source backed by a remote
   catalog refreshes its own set out of band and answers from it.

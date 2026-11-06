@@ -13531,9 +13531,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   answered 400 (`_sys` fails the grammar) or took a segment for a tenant. Under a resolver that
   may read the path, the tenant seat skips every route under those reserved roots, so global
   middleware sees no tenant there (C73.35). ADR-169.
-- gist: the tenant seat checked a path-read tenant's grammar, which a card number passes, and wrote
-  it to the request, so every downstream printer carried a caller-written segment the store may not
-  hold. Under a path-reading resolver the seat now writes a path-read id only when the App's
+- gist: the tenant seat never asked the store about a path-read tenant, so a well-formed id the
+  store does not hold reached the handler. Under a path-reading resolver the seat now writes a
+  path-read id only when the App's
   resource source answers `HasTenant` true; any other one is never written, and the handler adapter
   answers 400 "Invalid tenant" after route-group middleware and JOSE inbound, before binding
   (C73.36). ADR-170.
@@ -15438,30 +15438,26 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep -nE 'ResourceSource:|server\.New(WithOptions)?\(|multitenant\.GetTenant\(' -- '*.go'
   ```
 
-  In production, for a day before the upgrade, read what v0.72.0 writes (it logs no
-  `reason="unknown tenant"` WARN). First, compare the tenants your callers use against your
-  store's list: v0.72.0 writes the path-read id to the access line's `tenant` field, so take the
-  distinct `tenant` values on path-tenancy access lines, per `client.address`, and diff them
-  against `multitenant.tenants` (or the set your custom source holds). Second, count the
-  `ERROR "unhandled error"` lines on path-tenant routes, joined to their access line on
-  `request_id` (whose raw `url.path` names the route): a 500 whose `tenant` is off the list is the
-  first per-tenant accessor refusing it (`[C73.21]`). Each caller off the list got a 2xx (a route
-  that calls no accessor) or that 500 on v0.72.0, and gets 400 "Invalid tenant" after the upgrade,
-  before the handler.
+  Before the upgrade, use two signals v0.72.0 gives you (it logs no `reason="unknown tenant"`
+  WARN). First, compare the tenants your callers are provisioned with, from your own onboarding
+  or client-configuration records, against `multitenant.tenants` (or the set your custom source
+  holds). Second, count the `ERROR "unhandled error"` lines on path-tenant routes, joined to their
+  access line on `request_id` and grouped by `http.route`: a first per-tenant accessor refusing an
+  id the store does not hold is one cause (`[C73.21]`). A caller off the list gets 400 "Invalid
+  tenant" after the upgrade, before the handler.
 - gate: match = a path-reading resolver and one such hit. no-match = a header or subdomain
   resolver, multitenant off, or a built-in store listing every tenant the service serves, with no
   middleware that requires a tenant: nothing to do.
 - scope: the framework tenant seat on the App's engine and `server.New`'s, and its typed and raw
   handler adapters. Header- and subdomain-won tenants, resolution failures (still 400 at the
-  seat), `multitenant.SetTenant` and the public `server.TenantMiddleware` (which asks no checker
-  until a later link) are **unchanged**. The limiter already keys every request on the client
+  seat), `multitenant.SetTenant` and the public `server.TenantMiddleware` are **unchanged**. The
+  limiter already keys every request on the client
   address (`[C73.20]`), so an unknown path tenant draws on its caller's budget like any request;
   include 400s in a budget preflight over every non-probe status. Probes, which skip the seat,
   and the probe listener are untouched; `server.trustedproxies` still decides `client.address`.
   Global middleware no longer sees "the tenant already in context" (ADR-036) for such a request.
-- before (v0.72.0): the seat checked a path tenant against `^[a-z0-9-]{1,64}$` only and wrote it,
-  so `GET /tenants/<16-digit number>/cards/x` ran global and route middleware and the handler with
-  that id in context and on the access line's `tenant` field, and was refused, if at all, at the
+- before (v0.72.0): the seat never asked the store about a path tenant, so a well-formed id it does
+  not hold ran global and route middleware and the handler, and was refused, if at all, at the
   first per-tenant accessor (`[C73.21]`).
 - after: the seat writes a path-read id only when `server.Options.TenantChecker.HasTenant`
   answers true, and the server's `Start` writes one `[server.tenant] a tenant read from the
@@ -15484,10 +15480,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   build path-tenancy servers through the App, or pass `server.Options{TenantChecker: …}` to
   `server.NewWithOptions`; and make a global middleware that requires a tenant pass a tenant-less
   request through (`next()`) instead of answering it.
-- verify: with a path resolver and a store listing `acme`, `GET /tenants/acme/cards/x` answers 200
-  with `acme` in context, and `GET /tenants/<test card number>/cards/x` against a non-production
+- verify: with a path resolver and a store listing `acme`, `GET /tenants/acme/orders/x` answers 200
+  with `acme` in context, and `GET /tenants/unlisted/orders/x` against a non-production
   sink answers 400 "Invalid tenant" with one `reason="unknown tenant"` WARN, the handler never
-  runs, and no line carries the number; startup writes the one `[server.tenant] … (ADR-170)`
+  runs, and no line carries the id; startup writes the one `[server.tenant] … (ADR-170)`
   line, and the same server built with no checker fails `Start`.
 - ref: gaborage/go-bricks#2212 · [ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md) ·
   `server/tenant_middleware.go` (`tenantMiddlewareEcho`, `refuseUnknownPathTenant`) ·

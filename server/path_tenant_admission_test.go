@@ -26,9 +26,8 @@ import (
 const (
 	// admissionKnownTenant is the one tenant admissionChecker holds.
 	admissionKnownTenant = "acme"
-	// admissionTestPAN is a public test card number: it passes the tenant grammar, so only the
-	// existence check keeps it off the request (ADR-170).
-	admissionTestPAN = "4111111111111111"
+	// admissionUnknownTenant is a well-formed id the checker does not hold.
+	admissionUnknownTenant = "unlisted-tenant"
 	// admissionHeaderOnly is a header tenant the checker does not hold.
 	admissionHeaderOnly = "header-only"
 )
@@ -76,11 +75,11 @@ func registerAdmissionRoutes(srv *Server, log *testLogger, probe *admissionProbe
 		probe.handlerRuns++
 		probe.handlerID, _ = multitenant.GetTenant(c.RequestContext())
 	}
-	GET(hr, srv.ModuleGroup(), "/tenants/:tenant/cards/x", func(_ EmptyRequest, c HandlerContext) (helloResp, IAPIError) {
+	GET(hr, srv.ModuleGroup(), "/tenants/:tenant/orders/x", func(_ EmptyRequest, c HandlerContext) (helloResp, IAPIError) {
 		record(c)
 		return helloResp{Message: "ok"}, nil
 	})
-	POST(hr, srv.ModuleGroup(), "/tenants/:tenant/cards", func(_ admissionBody, c HandlerContext) (helloResp, IAPIError) {
+	POST(hr, srv.ModuleGroup(), "/tenants/:tenant/orders", func(_ admissionBody, c HandlerContext) (helloResp, IAPIError) {
 		record(c)
 		return helloResp{Message: "ok"}, nil
 	})
@@ -139,10 +138,10 @@ func TestPathTenantAdmissionWritesOnlyHeldPathTenants(t *testing.T) {
 		wantStatus int
 		wantID     string // the tenant the handler saw; "" when it did not run
 	}{
-		{name: "known_path_tenant", target: "/tenants/" + admissionKnownTenant + "/cards/x", checker: admissionChecker(), wantStatus: http.StatusOK, wantID: admissionKnownTenant},
-		{name: "header_tenant_never_asked", target: "/tenants/" + admissionTestPAN + "/cards/x", header: admissionHeaderOnly, checker: admissionChecker(), wantStatus: http.StatusOK, wantID: admissionHeaderOnly},
-		{name: "no_checker_holds_none", target: "/tenants/" + admissionKnownTenant + "/cards/x", wantStatus: http.StatusBadRequest},
-		{name: "unmatched_keeps_404", target: "/tenants/" + admissionTestPAN + "/nowhere", checker: admissionChecker(), wantStatus: http.StatusNotFound},
+		{name: "known_path_tenant", target: "/tenants/" + admissionKnownTenant + "/orders/x", checker: admissionChecker(), wantStatus: http.StatusOK, wantID: admissionKnownTenant},
+		{name: "header_tenant_never_asked", target: "/tenants/" + admissionUnknownTenant + "/orders/x", header: admissionHeaderOnly, checker: admissionChecker(), wantStatus: http.StatusOK, wantID: admissionHeaderOnly},
+		{name: "no_checker_holds_none", target: "/tenants/" + admissionKnownTenant + "/orders/x", wantStatus: http.StatusBadRequest},
+		{name: "unmatched_keeps_404", target: "/tenants/" + admissionUnknownTenant + "/nowhere", checker: admissionChecker(), wantStatus: http.StatusNotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,8 +161,8 @@ func TestPathTenantAdmissionWritesOnlyHeldPathTenants(t *testing.T) {
 	}
 }
 
-// TestPathTenantAdmissionUnknownTenantAnswersFromAdapter is the A1b tracer bullet: a path
-// tenant the checker does not hold, a test PAN here, is never written. Global middleware runs
+// TestPathTenantAdmissionUnknownTenantAnswersFromAdapter pins the refusal: a path tenant the
+// checker does not hold is never written. Global middleware runs
 // with no tenant, the handler never runs, the typed and raw adapters answer the 400 "Invalid
 // tenant" envelope with one masked WARN, the access line records the 400 with no tenant field,
 // and no line carries the id.
@@ -174,10 +173,10 @@ func TestPathTenantAdmissionUnknownTenantAnswersFromAdapter(t *testing.T) {
 		route  string // the target after /tenants/<id>
 		body   string
 	}{
-		{name: "typed_route", method: http.MethodGet, route: "cards/x"},
+		{name: "typed_route", method: http.MethodGet, route: "orders/x"},
 		{name: "raw_route", method: http.MethodGet, route: "raw"},
 		// The refusal comes before binding: a body that fails to bind still gets the tenant 400.
-		{name: "typed_route_before_binding", method: http.MethodPost, route: "cards", body: `{"name":`},
+		{name: "typed_route_before_binding", method: http.MethodPost, route: "orders", body: `{"name":`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,7 +189,7 @@ func TestPathTenantAdmissionUnknownTenantAnswersFromAdapter(t *testing.T) {
 				contentType = echo.MIMEApplicationJSON
 			}
 
-			rec := serveAdmission(srv, tc.method, "/tenants/"+admissionTestPAN+"/"+tc.route, "", contentType, tc.body)
+			rec := serveAdmission(srv, tc.method, "/tenants/"+admissionUnknownTenant+"/"+tc.route, "", contentType, tc.body)
 
 			assertInvalidTenantEnvelope(t, rec)
 			assert.Zero(t, probe.handlerRuns, "the handler never runs for an unknown path tenant")
@@ -208,8 +207,8 @@ func TestPathTenantAdmissionUnknownTenantAnswersFromAdapter(t *testing.T) {
 			}
 			require.Len(t, access, 1, "the refused request keeps its 4xx access line")
 			assert.NotContains(t, access[0].values, "tenant", "no tenant was written, so none is logged")
-			assert.NotContains(t, allLogText(log), admissionTestPAN, "no framework line carries the unknown id")
-			assert.NotContains(t, rec.Body.String(), admissionTestPAN)
+			assert.NotContains(t, allLogText(log), admissionUnknownTenant, "no framework line carries the unknown id")
+			assert.NotContains(t, rec.Body.String(), admissionUnknownTenant)
 		})
 	}
 }
@@ -233,7 +232,7 @@ func TestPathTenantAdmissionAuthGroupAnswers401ForEveryID(t *testing.T) {
 	})
 
 	known := serveAdmission(srv, http.MethodGet, "/tenants/"+admissionKnownTenant+"/secure/x", "", "", "")
-	unknown := serveAdmission(srv, http.MethodGet, "/tenants/"+admissionTestPAN+"/secure/x", "", "", "")
+	unknown := serveAdmission(srv, http.MethodGet, "/tenants/"+admissionUnknownTenant+"/secure/x", "", "", "")
 
 	assert.Equal(t, http.StatusUnauthorized, known.Code)
 	assert.Equal(t, http.StatusUnauthorized, unknown.Code)
@@ -251,11 +250,11 @@ func TestPathTenantAdmissionDrainedClientGetsSame429(t *testing.T) {
 		srv := newAdmissionServer(t, log, admissionChecker(), func(cfg *config.Config) { cfg.App.Rate.Limit = 1 })
 		registerAdmissionRoutes(srv, log, &admissionProbe{})
 		for range 2 {
-			serveAdmission(srv, http.MethodGet, "/tenants/"+admissionKnownTenant+"/cards/x", "", "", "")
+			serveAdmission(srv, http.MethodGet, "/tenants/"+admissionKnownTenant+"/orders/x", "", "", "")
 		}
 
-		known := serveAdmission(srv, http.MethodGet, "/tenants/"+admissionKnownTenant+"/cards/x", "", "", "")
-		unknown := serveAdmission(srv, http.MethodGet, "/tenants/"+admissionTestPAN+"/cards/x", "", "", "")
+		known := serveAdmission(srv, http.MethodGet, "/tenants/"+admissionKnownTenant+"/orders/x", "", "", "")
+		unknown := serveAdmission(srv, http.MethodGet, "/tenants/"+admissionUnknownTenant+"/orders/x", "", "", "")
 
 		require.Equal(t, http.StatusTooManyRequests, known.Code)
 		require.Equal(t, http.StatusTooManyRequests, unknown.Code)
@@ -298,7 +297,7 @@ func TestPathTenantAdmissionRunsAfterJOSEInbound(t *testing.T) {
 	sealed := jositest.SealForTest(t, []byte(`{"pan":"test-pan-001"}`), f.peerOutbound(), f.resolver)
 	tampered := []byte(sealed)
 	tampered[len(tampered)/2] ^= 0x01
-	target := "/tenants/" + admissionTestPAN + "/tokens"
+	target := "/tenants/" + admissionUnknownTenant + "/tokens"
 
 	preTrust := serveAdmission(srv, http.MethodPost, target, "", jose.ContentType, string(tampered))
 	assert.Contains(t, []int{http.StatusBadRequest, http.StatusUnauthorized}, preTrust.Code)
@@ -314,19 +313,19 @@ func TestPathTenantAdmissionRunsAfterJOSEInbound(t *testing.T) {
 	assert.Zero(t, runs)
 }
 
-// TestPublicTenantMiddlewareWritesPathTenantUnasked pins the public door's unchanged behavior
-// until A1d: TenantMiddleware asks no checker, so a path-read id is written as on main.
-func TestPublicTenantMiddlewareWritesPathTenantUnasked(t *testing.T) {
+// TestTenantMiddlewareWritesResolvedID pins that TenantMiddleware writes the id its resolver
+// returns.
+func TestTenantMiddlewareWritesResolvedID(t *testing.T) {
 	e := newTenantTestEcho()
 	var got string
-	e.GET("/tenants/:tenant/cards/x", func(c *echo.Context) error {
+	e.GET("/tenants/:tenant/orders/x", func(c *echo.Context) error {
 		got, _ = multitenant.GetTenant(c.Request().Context())
 		return c.String(http.StatusOK, "ok")
 	}, adaptMiddleware(TenantMiddleware(&multitenant.PathResolver{Segment: 2}, nil), nil))
 
 	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tenants/"+admissionTestPAN+"/cards/x", http.NoBody))
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tenants/"+admissionUnknownTenant+"/orders/x", http.NoBody))
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, admissionTestPAN, got)
+	assert.Equal(t, admissionUnknownTenant, got)
 }

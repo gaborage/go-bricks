@@ -2928,8 +2928,8 @@ roots no consumer can register under.
 
 **Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, a path tenant the store does not hold answers 400 "Invalid tenant" from the handler adapter and is never written to the request
 
-A path resolver's tenant is caller-written, and the seat checked only its grammar, which a 16-digit
-card number passes, before writing it where every downstream printer carried it. The framework seat
+A path resolver's tenant is caller-written, and the seat checked its form, not whether the store
+holds it, before writing it to the request. The framework seat
 now resolves through `multitenant.Resolve` and writes a path-read id only when
 `server.Options.TenantChecker.HasTenant` answers true; the App sets that checker from its resource
 source. Any other path id is never written: the request runs on with an id-free marker, and the
