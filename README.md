@@ -949,7 +949,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
    ```
 
    - The bridge automatically enriches Zerolog output with `trace_id`, `span_id`, and `log.type`.
-   - `server.LoggerWithConfig` emits action logs and registers the WARN/ERROR hook so requests with elevated severity stay in the trace stream.
+   - `server.LoggerWithConfig` emits one action log (the access line) per non-probe request and registers the WARN/ERROR hook: a WARN or ERROR line logged through the request context raises that request's access line to its level, beside the trace-stream lines, and never replaces it. A `log.level` above `info` still drops the INFO access line of a healthy 2xx.
 
 3. **Route the two log classes in your backend**
 

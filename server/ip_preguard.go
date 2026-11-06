@@ -81,7 +81,7 @@ func ipPreGuardEcho(threshold int, l logger.Logger) echo.MiddlewareFunc {
 	return middleware.RateLimiterWithConfig(config)
 }
 
-// logIPPreGuardRejection emits one WARN per request rejected by the IP
+// logIPPreGuardRejection emits one correlated WARN per request rejected by the IP
 // pre-guard (429). This middleware is registered outer to the access logger
 // and never calls next() on reject, so without this the request leaves no
 // server-side trail when observability is disabled. With a framework logger
@@ -93,21 +93,27 @@ func ipPreGuardEcho(threshold int, l logger.Logger) echo.MiddlewareFunc {
 // Method and client IP are caller-written (RealIP reads X-Forwarded-For /
 // X-Real-IP), so every field is rendered through logSafeValue — escaped and
 // byte-capped — on both paths: a newline or control byte in the request must
-// not forge a second log line or field.
+// not forge a second log line or field. The event is opened first (openWarn),
+// so a disabled WARN level renders nothing and reads no client address.
 func logIPPreGuardRejection(l logger.Logger, c *echo.Context) {
+	ev, ok := openWarn(l)
+	if !ok {
+		return
+	}
 	req := c.Request()
 	method := logSafeValue(req.Method)
 	path := logSafeValue(maskedPath(c))
 	client := logSafeValue(c.RealIP())
-	if l == nil {
-		log.Printf("WARN [server.ip_preguard] request rejected by IP pre-guard method=%s path=%s client=%s status=%d",
-			method, path, client, http.StatusTooManyRequests)
+	lc := correlateLine(c)
+	if ev == nil {
+		log.Printf("WARN [server.ip_preguard] request rejected by IP pre-guard method=%s path=%s client=%s status=%d%s",
+			method, path, client, http.StatusTooManyRequests, lc.text())
 		return
 	}
-	l.Warn().
+	lc.stamp(ev.
 		Str("method", method).
 		Str("path", path).
 		Str("client", client).
-		Int("status", http.StatusTooManyRequests).
+		Int("status", http.StatusTooManyRequests)).
 		Msg("[server.ip_preguard] request rejected by IP pre-guard")
 }

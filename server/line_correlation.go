@@ -27,8 +27,9 @@ type lineCorrelation struct {
 }
 
 // correlateLine reads c's correlation. It mints nothing and writes nothing to the response:
-// a line written before the request-id middleware ran carries an empty request id rather than
-// one no other line of the request shares.
+// a line written before the request-id middleware set the response's X-Request-ID (an outermost
+// panic guard line for a panic in that middleware) carries the inbound X-Request-ID if valid and
+// an empty request id otherwise, rather than one no other line of the request shares.
 func correlateLine(c *echo.Context) lineCorrelation {
 	lc := lineCorrelation{route: c.Path(), requestID: safeGetRequestID(c)}
 	if sc := trace.SpanContextFromContext(c.Request().Context()); sc.IsValid() {
@@ -49,10 +50,14 @@ func spanIDsHex(sc trace.SpanContext) (traceID, spanID string) {
 }
 
 // stamp adds the correlation fields to ev. request_id and correlation_id hold the same value,
-// as on the access line.
+// as on the access line. An empty route (no template: an unrouted context, or the JOSE line's
+// matchedRouteTemplate on a catch-all) is omitted, never written as an empty http.route, the
+// rule the JOSE failure counter keeps (#1816).
 func (lc *lineCorrelation) stamp(ev logger.LogEvent) logger.LogEvent {
-	ev = ev.Str(fieldHTTPRoute, lc.route).
-		Str(fieldRequestID, lc.requestID).
+	if lc.route != "" {
+		ev = ev.Str(fieldHTTPRoute, lc.route)
+	}
+	ev = ev.Str(fieldRequestID, lc.requestID).
 		Str(logger.FieldCorrelationID, lc.requestID)
 	if lc.traceID != "" {
 		ev = ev.Str(logger.FieldTraceID, lc.traceID).Str(logger.FieldSpanID, lc.spanID)
@@ -61,10 +66,13 @@ func (lc *lineCorrelation) stamp(ev logger.LogEvent) logger.LogEvent {
 }
 
 // text renders the same fields for the stdlib fallback a nil logger takes, as a suffix of
-// " key=value" pairs with the string values quoted.
+// " key=value" pairs with the string values quoted, under stamp's rule for an empty route.
 func (lc *lineCorrelation) text() string {
-	s := fmt.Sprintf(" %s=%q %s=%q %s=%q", fieldHTTPRoute, lc.route,
-		fieldRequestID, lc.requestID, logger.FieldCorrelationID, lc.requestID)
+	var s string
+	if lc.route != "" {
+		s = fmt.Sprintf(" %s=%q", fieldHTTPRoute, lc.route)
+	}
+	s += fmt.Sprintf(" %s=%q %s=%q", fieldRequestID, lc.requestID, logger.FieldCorrelationID, lc.requestID)
 	if lc.traceID != "" {
 		s += fmt.Sprintf(" %s=%s %s=%s", logger.FieldTraceID, lc.traceID, logger.FieldSpanID, lc.spanID)
 	}

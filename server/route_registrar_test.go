@@ -580,6 +580,13 @@ func observedRequest(method, target, tenant string, headers map[string][]string)
 	return req
 }
 
+// viaTrustedProxy makes req arrive from a private-range peer, which echo's extractor trusts
+// by default, so its X-Forwarded-For chain is walked rather than ignored.
+func viaTrustedProxy(req *http.Request) *http.Request {
+	req.RemoteAddr = "10.0.0.5:41234"
+	return req
+}
+
 // observedRow is one request shape TestObservedRequestAllocsStable pins.
 type observedRow struct {
 	name       string
@@ -663,7 +670,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// Recover turns the panic into a 500, which the request logger reports at ERROR.
 		{
-			name: "handler_panic_recovered", baseline: 145, wantStatus: http.StatusInternalServerError,
+			name: "handler_panic_recovered", baseline: 150, wantStatus: http.StatusInternalServerError,
 			req: observedRequest(http.MethodGet, "/boom", observedHeaderTenant, nil),
 		},
 		// The header resolver runs first, so it wins even where the path carries a tenant.
@@ -676,6 +683,15 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 			name: "path_won_tenant", baseline: 114, wantStatus: http.StatusOK,
 			req: observedRequest(http.MethodGet, observedPathTenant, "", nil),
 		},
+		// A private-range proxy relays the client in X-Forwarded-For, so every RealIP walks
+		// the chain: the limiter extracts the address and the access line reuses it (A1m,
+		// 126 -> 123: the access line's second walk is gone; the pre-guard's walk stays).
+		{
+			name: "xff_path_won_tenant", baseline: 123, wantStatus: http.StatusOK,
+			req: viaTrustedProxy(observedRequest(http.MethodGet, observedPathTenant, "", map[string][]string{
+				HeaderXForwardedFor: {"203.0.113.7"},
+			})),
+		},
 		// Neither resolver finds a tenant: rejected before route matching.
 		{
 			name: "tenant_rejected", baseline: 98, wantStatus: http.StatusBadRequest,
@@ -684,14 +700,14 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// Both forwarded-client-cert WARNs fire on a 200 (require is off).
 		{
-			name: "fcc_duplicate_header_warn", baseline: 131, wantStatus: http.StatusOK,
+			name: "fcc_duplicate_header_warn", baseline: 139, wantStatus: http.StatusOK,
 			warn: warnFCCDuplicate,
 			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, map[string][]string{
 				headerClientCertSubject: {"CN=one", "CN=two"},
 			}),
 		},
 		{
-			name: "fcc_leaf_parse_warn", baseline: 134, wantStatus: http.StatusOK,
+			name: "fcc_leaf_parse_warn", baseline: 142, wantStatus: http.StatusOK,
 			warn: warnFCCLeaf,
 			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, map[string][]string{
 				headerClientCertSubject: {"CN=client"},
@@ -725,7 +741,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		// Rate 1/s, burst 2 under a frozen clock: the warm-ups spend the burst and no token
 		// ever refills, so every measured request is denied and WARNs.
 		{
-			name: "ip_preguard_denied", baseline: 80, denyIP: true, wantStatus: http.StatusTooManyRequests,
+			name: "ip_preguard_denied", baseline: 83, denyIP: true, wantStatus: http.StatusTooManyRequests,
 			warn: warnIPPreGuard,
 			req:  observedRequest(http.MethodGet, "/orders", observedHeaderTenant, nil),
 		},

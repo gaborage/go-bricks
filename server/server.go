@@ -318,9 +318,11 @@ func httpErrorHandler(cfg *config.Config, log logger.Logger) echo.HTTPErrorHandl
 		if goerrors.As(err, &panicErr) {
 			// SECURITY: debug-gate the panic cause the same way as the unhandled-5xx
 			// path — a panicking driver/downstream error can embed PII/PCI, and the
-			// SensitiveDataFilter masks by field name, not message content.
+			// SensitiveDataFilter masks by field name, not message content. The line is
+			// correlated (correlateLine), so a handler panic joins its access line and span.
+			lc := correlateLine(c)
 			appendErrorDetail(
-				log.Error().Bytes("stack", panicErr.Stack).Str("request_id", safeGetRequestID(c)),
+				lc.stamp(log.Error().Bytes("stack", panicErr.Stack)),
 				panicErr.Unwrap(), cfg.App.Debug,
 			).Msg("Panic recovered")
 		}

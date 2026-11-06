@@ -3,9 +3,11 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -172,4 +174,61 @@ func TestOpenWarnGatesOnTheWarnLevel(t *testing.T) {
 	ev, ok = openWarn(&testLogger{})
 	assert.True(t, ok)
 	assert.NotNil(t, ev)
+}
+
+// TestServerErrorLinesCorrelateTheirRequest pins the error handler's two ERROR lines, a handler
+// panic's "Panic recovered" and a 5xx's "unhandled error", to their request, so a handler panic
+// joins its span like the outermost guard's line with the same message.
+func TestServerErrorLinesCorrelateTheirRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler echo.HandlerFunc
+		msg     string
+	}{
+		{name: "handler_panic", handler: func(*echo.Context) error { panic("boom") }, msg: "Panic recovered"},
+		{name: "unhandled_error", handler: func(*echo.Context) error { return errors.New("boom") }, msg: "unhandled error"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &testLogger{}
+			e := newEngine()
+			e.HTTPErrorHandler = httpErrorHandler(guardTestConfig(), l)
+			usePanicRecovery(e)
+			e.GET(correlationRoute, tc.handler)
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, correlatedRequest(t, true))
+
+			require.Equal(t, http.StatusInternalServerError, rec.Code)
+			entry := findLogEntry(l.logEntries(), tc.msg)
+			require.NotNil(t, entry, "no %q line", tc.msg)
+			assertLineCorrelated(t, *entry)
+		})
+	}
+}
+
+// TestUnhandledErrorFallbackCorrelatesItsLine pins the nil-logger stdlib fallback of the
+// "unhandled error" line.
+func TestUnhandledErrorFallbackCorrelatesItsLine(t *testing.T) {
+	buf := captureStdlibLog(t)
+	e := newEngine()
+	e.GET(correlationRoute, func(c *echo.Context) error {
+		logUnhandledError(nil, c, errors.New("boom"), false)
+		return nil
+	})
+	e.ServeHTTP(httptest.NewRecorder(), correlatedRequest(t, true))
+	line := strings.TrimSuffix(buf.String(), "\n")
+	assert.True(t, strings.HasSuffix(line, "ERROR unhandled error error_type=*errors.errorString"+correlationSuffix), "got %q", line)
+}
+
+// TestLineCorrelationOmitsAnEmptyRoute pins that no template never becomes an empty
+// http.route on either renderer (the JOSE failure line's rule, #1816).
+func TestLineCorrelationOmitsAnEmptyRoute(t *testing.T) {
+	lc := lineCorrelation{requestID: correlationRequestID}
+	assert.Equal(t, ` request_id="`+correlationRequestID+`" correlation_id="`+correlationRequestID+`"`, lc.text())
+
+	l := &testLogger{}
+	lc.stamp(l.Warn()).Msg("no route")
+	entries := l.logEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, []string{fieldRequestID, logger.FieldCorrelationID}, entries[0].fields)
 }

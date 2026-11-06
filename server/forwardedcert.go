@@ -6,7 +6,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 
@@ -274,10 +273,20 @@ func RequireForwardedClientCert(l logger.Logger) MiddlewareFunc {
 // RequireForwardedClientCert runs inside the access logger, whose 401 line
 // lacks the reason this WARN carries. Header values are never logged, only the
 // fixed reason string.
+//
+// All three forwarded-client-cert WARNs print client= from c.RealIP(), the
+// address the access line's client.address carries (behind a trusted proxy, the
+// X-Forwarded-For client), and peer= from the TCP peer (RemoteAddr), which
+// behind a load balancer is the balancer. Each opens its event first (openWarn),
+// so a disabled WARN level formats nothing and reads no address.
 func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
+	ev, ok := openWarn(l)
+	if !ok {
+		return
+	}
 	req := c.Request()
-	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] request rejected: missing identity method=%s path=%s client=%s status=%d reason=%q",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(req.RemoteAddr), http.StatusUnauthorized, "forwarded_client_cert_missing"))
+	warnCorrelated(ev, c, fmt.Sprintf("[server.forwardedclientcert] request rejected: missing identity method=%s path=%s client=%s peer=%s status=%d reason=%q",
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), http.StatusUnauthorized, "forwarded_client_cert_missing"))
 }
 
 // logForwardedClientCertDuplicateWarning emits one WARN whenever a request
@@ -289,9 +298,13 @@ func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 // each layer WARNs once. dupErr's message names only the offending header,
 // never a header value.
 func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, dupErr error) {
+	ev, ok := openWarn(l)
+	if !ok {
+		return
+	}
 	req := c.Request()
-	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] duplicated header detected method=%s path=%s client=%s reason=%q detail=%q",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(req.RemoteAddr), "forwarded_client_cert_duplicate", dupErr.Error()))
+	warnCorrelated(ev, c, fmt.Sprintf("[server.forwardedclientcert] duplicated header detected method=%s path=%s client=%s peer=%s reason=%q detail=%q",
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), "forwarded_client_cert_duplicate", dupErr.Error()))
 }
 
 // logForwardedClientCertLeafWarning emits a WARN whenever the -Leaf header
@@ -301,17 +314,11 @@ func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, du
 // parse failure reason and the encoded leaf's byte length are logged — never
 // header content.
 func logForwardedClientCertLeafWarning(l logger.Logger, c *echo.Context, parseErr error, encodedLeaf string) {
-	req := c.Request()
-	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] leaf certificate not decoded method=%s path=%s client=%s reason=%q leaf_bytes=%d",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(req.RemoteAddr), parseErr.Error(), len(encodedLeaf)))
-}
-
-// warnWithFallback routes msg through l.Warn, falling back to the stdlib log
-// package when l is nil (same fallback shape as logTenantRejection).
-func warnWithFallback(l logger.Logger, msg string) {
-	if l == nil {
-		log.Printf("WARN %s", msg)
+	ev, ok := openWarn(l)
+	if !ok {
 		return
 	}
-	l.Warn().Msg(msg)
+	req := c.Request()
+	warnCorrelated(ev, c, fmt.Sprintf("[server.forwardedclientcert] leaf certificate not decoded method=%s path=%s client=%s peer=%s reason=%q leaf_bytes=%d",
+		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), parseErr.Error(), len(encodedLeaf)))
 }
