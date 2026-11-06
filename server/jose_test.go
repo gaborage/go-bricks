@@ -908,3 +908,26 @@ func TestJOSEFailureOmitsRouteWhenNoTemplate(t *testing.T) {
 	assert.NotContains(t, recLog.last.fields, joseRouteAttr,
 		"%s must be absent from the log when no template matched", joseRouteAttr)
 }
+
+// TestJOSEFailureLogOmitsRouteOnAGroupCatchAll pins that the failure log takes its http.route
+// from matchedRouteTemplate, as the counter does, not from the correlation's c.Path(): on a
+// middleware-bearing group's catch-all c.Path() is the group's template though nothing matched.
+func TestJOSEFailureLogOmitsRouteOnAGroupCatchAll(t *testing.T) {
+	recLog := &recLogger{}
+	obs := newJOSEObservability(recLog, nil, nil)
+	var path string
+	e := newEngine()
+	e.Group("/api", func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			path = c.Path()
+			obs.recordFailure(c.Request().Context(), c, "inbound",
+				&joseAPIError{code: errCodeJOSEPlaintextRejected, message: "catch-all", status: http.StatusUnsupportedMediaType})
+			return next(c)
+		}
+	})
+	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/nowhere", http.NoBody))
+
+	require.NotEmpty(t, path, "premise: the group's catch-all leaves its template on c.Path()")
+	require.NotNil(t, recLog.last, "no failure log event was emitted")
+	assert.NotContains(t, recLog.last.fields, joseRouteAttr, "%s must be absent from the log on a catch-all", joseRouteAttr)
+}

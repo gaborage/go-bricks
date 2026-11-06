@@ -1195,17 +1195,7 @@ func mergeEnvelopeMeta(c *echo.Context, userMeta map[string]any, log logger.Logg
 	for k, v := range userMeta {
 		if _, reserved := reservedMetaKeys[k]; reserved {
 			if log != nil {
-				// SAFETY: c.Request() can be nil after Echo's TimeoutHandler invalidates
-				// the underlying writer. Fall back to a background context so the WARN
-				// still ships (without trace correlation) instead of panicking.
-				ctx := context.Background()
-				if req := c.Request(); req != nil {
-					ctx = req.Context()
-				}
-				log.WithContext(ctx).Warn().
-					Str("key", k).
-					Str("route", c.Path()).
-					Msg("envelope meta key collides with framework-managed key; handler value dropped")
+				logMetaKeyCollision(c, log, k)
 			}
 			continue
 		}
@@ -1214,6 +1204,24 @@ func mergeEnvelopeMeta(c *echo.Context, userMeta map[string]any, log logger.Logg
 	out[fieldTimestamp] = time.Now().UTC().Format(time.RFC3339)
 	out[fieldTraceID] = getTraceID(c)
 	return out
+}
+
+// logMetaKeyCollision writes the meta-key collision WARN through log, correlated
+// (correlateLine) and NOT bound to the request context: a bound WARN would fire the access
+// logger's severity hook and raise a 2xx access line to WARN, so the access line stays
+// status-derived. SAFETY: c.Request() can be nil after Echo's TimeoutHandler invalidates the
+// underlying writer; the WARN then still ships, without the correlation, instead of panicking.
+func logMetaKeyCollision(c *echo.Context, log logger.Logger, key string) {
+	ev, ok := openWarn(log)
+	if !ok {
+		return
+	}
+	ev = ev.Str("key", key).Str("route", c.Path())
+	if c.Request() != nil {
+		lc := correlateLine(c)
+		ev = lc.stamp(ev)
+	}
+	ev.Msg("envelope meta key collides with framework-managed key; handler value dropped")
 }
 
 // formatErrorResponse formats an error response with standardized structure.

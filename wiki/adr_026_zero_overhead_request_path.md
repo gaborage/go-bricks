@@ -82,6 +82,12 @@
 >   each: `logSafeValue`'s `%q` render (boxing and result, 2) and boxing that into the
 >   line's `Sprintf` (1). Reading `client=` from `c.RealIP()` instead of `RemoteAddr` costs
 >   nothing on the guard's request.
+> - **Access line kept on escalation (#2323), no row moves.** The request logger always
+>   writes the access line and passes the request's peak severity to `determineSeverity`;
+>   the JOSE failure and meta-key lines stamp the correlation instead of binding the
+>   request context. No guard row logs a line through the request context or reaches
+>   either line, so every row reads base == head; the cost those lines add is paid only
+>   when they fire.
 
 ## Context
 

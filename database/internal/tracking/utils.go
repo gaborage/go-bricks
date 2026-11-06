@@ -143,8 +143,9 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	//
 	// Request-severity note: the WARN (slow-query) and ERROR branches escalate request
 	// severity via the adapter's Msg/Msgf -> trackSeverity -> escalateSeverity hook (see
-	// logger/adapter.go and server/logger.go), which suppresses the per-request action
-	// summary. trackSeverity fires whenever the event level >= WarnLevel, independent of
+	// logger/adapter.go and server/logger.go), which raises the request's access line (the
+	// per-request action summary) to WARN or ERROR; the line is still written.
+	// trackSeverity fires whenever the event level >= WarnLevel, independent of
 	// Enabled(), so a WARN/ERROR that is DISABLED at the active LOG_LEVEL must still reach
 	// Msg to escalate. The Enabled() short-circuit below preserves this exactly: it still
 	// calls event.Msg before returning, so severity escalation is unchanged; only the field
@@ -156,7 +157,7 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	if !event.Enabled() {
 		// Preserve exact parity with the prior WithFields path: emitting a (dropped)
 		// WARN/ERROR still escalated request severity via the adapter's
-		// Msg -> trackSeverity hook, which suppresses the per-request action summary.
+		// Msg -> trackSeverity hook, which raises the request's access line to that level.
 		// Call Msg on the disabled event so that hook still fires; zerolog drops the
 		// line and no fields are built (the allocation win). For DEBUG (level < Warn)
 		// trackSeverity is a no-op, so the common success path stays free.
