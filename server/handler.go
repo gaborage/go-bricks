@@ -122,7 +122,7 @@ type TestContextSeeder interface {
 type routeTemplateSeeder struct{ template string }
 
 func (s routeTemplateSeeder) seedTestContext(c *HandlerContext) {
-	c.ectx.SetPath(s.template)
+	c.ectx.SetPath(s.template) //nolint:forbidigo // test seeder: writes the route template a test names, not a caller-written path (#2212)
 	c.ectx.Request().Pattern = s.template
 }
 
@@ -156,6 +156,10 @@ func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *confi
 }
 
 // Request returns the underlying *http.Request.
+//
+// SECURITY: its URL (URL.Path, RawPath, RawQuery), RequestURI, query and form values are bytes
+// the caller wrote, a card number in a path segment included; never log them. Log
+// RouteTemplate() instead, the template the access line carries as http.route (ADR-167).
 func (c HandlerContext) Request() *http.Request { return c.ectx.Request() }
 
 // RequestContext returns the request's context.Context. Convenience for the dominant
@@ -167,10 +171,10 @@ func (c HandlerContext) RequestContext() context.Context { return c.ectx.Request
 func (c HandlerContext) ResponseWriter() http.ResponseWriter { return c.ectx.Response() }
 
 // Param returns the path parameter for name (empty string if absent).
-func (c HandlerContext) Param(name string) string { return c.ectx.Param(name) }
+func (c HandlerContext) Param(name string) string { return c.ectx.Param(name) } //nolint:forbidigo // consumer door: hands the handler its own request value, which no framework sink prints
 
 // Query returns the first query-string value for name (empty string if absent).
-func (c HandlerContext) Query(name string) string { return c.ectx.QueryParam(name) }
+func (c HandlerContext) Query(name string) string { return c.ectx.QueryParam(name) } //nolint:forbidigo // consumer door: hands the handler its own request value, which no framework sink prints
 
 // RequestHeader returns the first request header value for name (empty string if absent).
 func (c HandlerContext) RequestHeader(name string) string { return c.ectx.Request().Header.Get(name) }
@@ -210,9 +214,14 @@ type PathParam struct {
 
 // RouteTemplate returns the registered route path that matched this request,
 // including any group/base-path prefix (e.g. "/api/cards/:cardId/status").
-// It is the template the application registered, NOT the concrete URL
-// (use Request().URL.Path for that). Empty before routing completes and on
-// unmatched (404) requests; on a top-level 405 the engine sets the best-matching
+// It is the template the application registered, NOT the concrete URL: read a
+// matched value through Param or PathParams. On a matched route it is the value
+// the access line and the framework's correlated WARN and ERROR lines carry as
+// http.route, so a log query keyed on it joins them. No framework sink prints the
+// request path (ADR-167); a handler that logs Request().URL.Path itself prints
+// what the caller sent, a card number in a segment included. Empty before
+// routing completes and on unmatched (404) requests; on a top-level 405 the
+// engine sets the best-matching
 // route's template (engine-defined, not a contract). Note the asymmetry under a
 // middleware-bearing group: a wrong-method or unmatched sub-path there resolves
 // to the group's implicit catch-all (a 404), so it returns "" rather than a
@@ -276,7 +285,7 @@ func (c HandlerContext) PathParams() []PathParam {
 	}
 	// echo's PathValues() returns a slice header ALIASING the pooled context's
 	// backing array (reused across requests) — element-wise copy is mandatory.
-	values := c.ectx.PathValues()
+	values := c.ectx.PathValues() //nolint:forbidigo // consumer door: hands the handler its own request value, which no framework sink prints
 	params := make([]PathParam, len(values))
 	for i, v := range values {
 		params[i] = PathParam{Name: v.Name, Value: v.Value}
@@ -304,9 +313,18 @@ func (c HandlerContext) SetPathParams(params []PathParam) {
 // from other packages.
 func (c HandlerContext) echoContext() *echo.Context { return c.ectx }
 
-// adaptHandler converts a go-bricks Handler into an echo.HandlerFunc for registration.
-func adaptHandler(h Handler, cfg *config.Config) echo.HandlerFunc {
-	return func(c *echo.Context) error { return h(newHandlerContext(c, cfg)) }
+// adaptHandler converts a go-bricks Handler into an echo.HandlerFunc for registration. A
+// request whose path tenant the seat refused gets the unknown-tenant 400 instead of h
+// (refuseUnknownPathTenant), written here, so the access line records the 400, with its WARN
+// logged through log.
+func adaptHandler(h Handler, cfg *config.Config, log logger.Logger) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if refused := refuseUnknownPathTenant(c); refused != nil {
+			logUnknownTenantRefusal(refused, c, log, cfg.App.Debug)
+			return formatErrorResponse(c, refused, cfg)
+		}
+		return h(newHandlerContext(c, cfg))
+	}
 }
 
 // adaptMiddleware converts a flat MiddlewareFunc into an echo.MiddlewareFunc. The
@@ -669,6 +687,9 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 		if apiErr := hw.runJOSEInbound(c); apiErr != nil {
 			return formatJOSEPlaintextError(c, apiErr)
 		}
+		if refused := refuseUnknownPathTenant(c); refused != nil {
+			return hw.dispatchResponse(c, nil, refused)
+		}
 
 		request, apiErr := hw.processor.process(c)
 		if apiErr != nil {
@@ -848,11 +869,11 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSc
 		return nil
 	}
 
-	if err := echo.BindPathValues(c, target); err != nil {
+	if err := echo.BindPathValues(c, target); err != nil { //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 		return newJSONBindError(err, fieldPathIsSchema)
 	}
 	if req.Method == http.MethodGet || req.Method == http.MethodDelete || req.Method == http.MethodHead || req.Method == echo.QUERY {
-		if err := echo.BindQueryParams(c, target); err != nil {
+		if err := echo.BindQueryParams(c, target); err != nil { //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 			return newJSONBindError(err, fieldPathIsSchema)
 		}
 	}
@@ -867,7 +888,7 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSc
 
 // bindParamValue binds one path parameter into fieldValue for a bindRequestPlanned entry.
 func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, fieldValue reflect.Value) error {
-	value := c.Param(paramName)
+	value := c.Param(paramName) //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if value != "" {
 		if err := setFieldValue(fieldValue, value); err != nil {
 			return newFieldBindError(bindSourceParam, paramName, err)
@@ -883,7 +904,7 @@ func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSli
 		return rb.bindQueryStringSlice(c, queryName, fieldValue)
 	}
 
-	value := c.QueryParam(queryName)
+	value := c.QueryParam(queryName) //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if value != "" {
 		if err := setFieldValue(fieldValue, value); err != nil {
 			return newFieldBindError(bindSourceQuery, queryName, err)
@@ -894,7 +915,7 @@ func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSli
 
 // bindQueryStringSlice binds repeated query parameters to a []string field
 func (rb *RequestBinder) bindQueryStringSlice(c *echo.Context, queryName string, fieldValue reflect.Value) error {
-	values := c.QueryParams()[queryName]
+	values := c.QueryParams()[queryName] //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if len(values) > 0 {
 		slice := reflect.MakeSlice(fieldValue.Type(), len(values), len(values))
 		for i, v := range values {
@@ -1186,17 +1207,7 @@ func mergeEnvelopeMeta(c *echo.Context, userMeta map[string]any, log logger.Logg
 	for k, v := range userMeta {
 		if _, reserved := reservedMetaKeys[k]; reserved {
 			if log != nil {
-				// SAFETY: c.Request() can be nil after Echo's TimeoutHandler invalidates
-				// the underlying writer. Fall back to a background context so the WARN
-				// still ships (without trace correlation) instead of panicking.
-				ctx := context.Background()
-				if req := c.Request(); req != nil {
-					ctx = req.Context()
-				}
-				log.WithContext(ctx).Warn().
-					Str("key", k).
-					Str("route", c.Path()).
-					Msg("envelope meta key collides with framework-managed key; handler value dropped")
+				logMetaKeyCollision(c, log, k)
 			}
 			continue
 		}
@@ -1205,6 +1216,24 @@ func mergeEnvelopeMeta(c *echo.Context, userMeta map[string]any, log logger.Logg
 	out[fieldTimestamp] = time.Now().UTC().Format(time.RFC3339)
 	out[fieldTraceID] = getTraceID(c)
 	return out
+}
+
+// logMetaKeyCollision writes the meta-key collision WARN through log, correlated
+// (correlateLine) and NOT bound to the request context: a bound WARN would fire the access
+// logger's severity hook and raise a 2xx access line to WARN, so the access line stays
+// status-derived. SAFETY: c.Request() can be nil after Echo's TimeoutHandler invalidates the
+// underlying writer; the WARN then still ships, without the correlation, instead of panicking.
+func logMetaKeyCollision(c *echo.Context, log logger.Logger, key string) {
+	ev, ok := openWarn(log)
+	if !ok {
+		return
+	}
+	ev = ev.Str("key", key).Str("route", c.Path())
+	if c.Request() != nil {
+		lc := correlateLine(c)
+		ev = lc.stamp(ev)
+	}
+	ev.Msg("envelope meta key collides with framework-managed key; handler value dropped")
 }
 
 // formatErrorResponse formats an error response with standardized structure.
@@ -1489,6 +1518,13 @@ func RegisterHandler[T any, R any](
 		panic("server: handler registration failed for " + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
 	}
 
+	// The route's package is its handler function's, so the GET/POST helpers and a direct
+	// RegisterHandler call give one answer: admission decides who may register under a framework
+	// route root by it (ADR-168). Set before the options, so an option reads it, and stamped again
+	// after them, so no RouteOption forges or clears it. A registrar embedding RouteRegistrar takes
+	// the fallback below, whose Add admits the server closure, so admission sees server there.
+	pkg := handlerPackage(handler)
+
 	// Create descriptor with type information
 	descriptor := RouteDescriptor{
 		Method:       method,
@@ -1496,13 +1532,14 @@ func RegisterHandler[T any, R any](
 		HandlerID:    formatHandlerID(method, fullPath),
 		RequestType:  reqType,
 		ResponseType: reflect.TypeOf(respType),
-		Package:      getCallerPackage(3), // getCallerPackage → RegisterHandler → GET/POST/etc → module
+		Package:      pkg,
 		HandlerName:  extractHandlerName(handler),
 	}
 
 	for _, opt := range opts {
 		opt(&descriptor)
 	}
+	descriptor.Package = pkg
 
 	// Scan request/response types for jose: tags and resolve every kid against the
 	// registry's resolver. Panics at startup on any failure (Fail Fast principle).
@@ -1708,45 +1745,49 @@ func WithLogger(log logger.Logger) HandlerRegistryOption {
 }
 
 // getCallerPackage extracts the package path of the calling function. skip is the number of
-// stack frames above getCallerPackage to inspect: the typed registration path passes 3
-// (getCallerPackage → RegisterHandler → GET/POST/etc → module), the raw RouteRegistrar.Add
-// path passes 2 (getCallerPackage → Add → module).
+// stack frames above getCallerPackage to inspect: Group and Use pass 2 (getCallerPackage →
+// Group/Use → module). A route is attributed from its handler instead (handlerPackage).
 func getCallerPackage(skip int) string {
 	pc, _, _, ok := runtime.Caller(skip)
 	if !ok {
 		return ""
 	}
-
 	fn := runtime.FuncForPC(pc)
 	if fn == nil {
 		return ""
 	}
+	return funcPackage(fn.Name())
+}
 
-	name := fn.Name()
+// handlerPackage returns the package path of the function a route registers: the package that
+// declares it, a method value's receiver package, or a closure's enclosing function's package.
+// Unlike a caller frame it does not depend on who called the registration (ADR-168). A nil
+// or non-function handler has none.
+func handlerPackage(handler any) string {
+	v := reflect.ValueOf(handler)
+	if v.Kind() != reflect.Func || v.IsNil() {
+		return ""
+	}
+	fn := runtime.FuncForPC(v.Pointer())
+	if fn == nil {
+		return ""
+	}
+	return funcPackage(fn.Name())
+}
 
-	// Extract package path from function name
-	// Function names are typically in the format: package/path.functionName
+// funcPackage extracts the package path from a runtime function name
+// (example.com/svc/orders.(*Handler).get-fm, example.com/svc/orders.Register.func1,
+// example.com/svc/orders.get[...]): everything before the first dot after the last slash. The
+// runtime escapes a dot in a path's last element (%2e), so that dot ends the path. A type
+// argument list is cut first, since it may name other packages.
+func funcPackage(name string) string {
+	if bracket := strings.IndexByte(name, '['); bracket >= 0 {
+		name = name[:bracket]
+	}
 	lastSlash := strings.LastIndex(name, "/")
-	if lastSlash >= 0 {
-		// Find the next dot after the last slash to separate package from function
-		remaining := name[lastSlash+1:]
-		if dot := strings.Index(remaining, "."); dot >= 0 {
-			return name[:lastSlash+1+dot]
-		}
+	if dot := strings.IndexByte(name[lastSlash+1:], '.'); dot >= 0 {
+		return name[:lastSlash+1+dot]
 	}
-
-	// Fallback: try to extract package from the beginning
-	if dot := strings.LastIndex(name, "."); dot >= 0 {
-		packagePart := name[:dot]
-		// Remove receiver type if present (e.g., package.(*Type).method -> package)
-		if parenIndex := strings.LastIndex(packagePart, "("); parenIndex >= 0 {
-			if dotIndex := strings.LastIndex(packagePart[:parenIndex], "."); dotIndex >= 0 {
-				return packagePart[:dotIndex]
-			}
-		}
-		return packagePart
-	}
-
 	return ""
 }
 

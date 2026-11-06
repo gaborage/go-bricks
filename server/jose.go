@@ -63,8 +63,9 @@ func (o *joseObservability) tracerOrNoop() trace.Tracer {
 }
 
 // recordFailure emits the structured failure log AND increments the counter. Centralized so
-// the two surfaces cannot drift: both carry code, direction and http.method, both carry
-// http.route under the same rule or omit it on both, and the log adds the rejection message.
+// the two surfaces cannot drift: both carry code, direction, http.method and the matched
+// route template as http.route, and the log adds the rejection message and the request's
+// correlation (correlateLine).
 // Divergence between log and metric surfaces is the kind of inconsistency that bites
 // operators during incidents.
 func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, direction string, apiErr IAPIError) {
@@ -102,13 +103,17 @@ func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, 
 	if o.logger == nil {
 		return
 	}
-	ev := o.logger.WithContext(ctx).Error().
+	// Not bound to the request context: a bound line would fire the access logger's
+	// severity hook and raise a client error's access line (a 415 on a plaintext POST) to
+	// ERROR, so the access line stays status-derived. The correlation joins the line to
+	// its request instead, with route as its http.route, so the log omits it exactly where
+	// the counter does.
+	lc := correlateLine(c)
+	lc.route = route
+	ev := lc.stamp(o.logger.Error().
 		Str("code", code).
 		Str("direction", direction).
-		Str("http.method", method)
-	if route != "" {
-		ev = ev.Str("http.route", route)
-	}
+		Str("http.method", method))
 	if jaerr != nil {
 		ev = ev.Str("message", jaerr.message)
 	}

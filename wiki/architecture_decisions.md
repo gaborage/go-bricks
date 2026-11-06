@@ -537,9 +537,12 @@ auth only), and emits the standard envelope on raw-response routes. Amended by A
 refuses global middleware beside a tenant-owned route family, whose routes the root tenant seat
 skips; after `Start`, `TenantOwnedGroup` panics, as does `RegisterGlobalMiddleware` beside a
 family. So the after-tenant-resolution guarantee holds in every binary that passes the startup
-check.
+check, except on the framework's `/_sys` and debug routes, which the seat skips under a
+path-reading resolver (amended by ADR-169), so global middleware sees no tenant there. check. Reversed in part by ADR-170 (2026-11-03): under a path-reading resolver, a path tenant the
+store does not hold is never written, so global middleware runs with no tenant in context and the
+handler adapter answers 400 afterwards.
 
-**Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved; single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
+**Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved (on every consumer route); single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
 
 ---
 
@@ -2748,8 +2751,11 @@ as `path`, never the tenant ID. Typed handlers reach the same answer through
 `server.NewUnknownTenantError(err)`, which is fail-closed: any cause that is not the sentinel answers
 500. One refusal writer serves `classifyError` and `handlerWrapper.dispatchResponse`; a raw-response or
 JOSE route renders the answer in its own shape. A dynamic store wraps the sentinel only when it knows
-the tenant does not exist. The seat still does no existence check. See [migrations.md](migrations.md)
-`[C73.21]`.
+the tenant does not exist. The seat still does no existence check (until ADR-170, for a path-read tenant). Amended by ADR-167: the WARN's
+`path` is the masked template rendering (`/REDACTED/orders`), not the template. Amended by ADR-170:
+under a path-reading resolver the seat writes a path-read tenant only when the store holds it, and
+the handler adapters answer this 400 for any other, the raw adapter through the same writer. See
+[migrations.md](migrations.md) `[C73.21]`.
 
 **Key Benefits:** a caller's unknown tenant is a client fault on every handler shape, it no longer
 pages an operator, and a store error that does not wrap `multitenant.ErrUnknownTenant` never
@@ -2856,6 +2862,85 @@ See [migrations.md](migrations.md) `[C73.28]`.
 calls to `SetupMiddlewares` fail to compile instead of rendering unusable paths at run time. An
 engine a consumer builds directly with `echo.New()` still runs, without the masking router or the
 framework chain, so it is outside the framework's guarantees.
+
+---
+
+### [ADR-167: Inbound Paths Render From the Matched Route Template](adr_167_inbound_paths_render_from_route_template.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path
+
+A request path is caller-written, so a card number in a segment reached the access log's
+`url.path` and message, the span's `url.path` and six framework WARN and ERROR lines as sent; the
+log filter matches field names and cannot catch it. Every one of those sinks now prints
+`maskedPath(c)`: the matched template with each parameter and the wildcard tail replaced by
+`REDACTED` (`GET /cards/<PAN>` prints `/cards/REDACTED`), the bare `REDACTED` when no template
+matched. The unknown-tenant WARN (ADR-161) and the family refusal ERROR (ADR-164) print the same
+rendering instead of the template. Each engine logs one `[server.paths]` INFO line at startup
+naming the rule, the listener and the token. `http.route` is unchanged. The probe skip keeps its raw-path comparison key inline, and the helper
+that also fed the access log and span is deleted. See [migrations.md](migrations.md) `[C73.29]`.
+
+**Key Benefits:** no request path byte reaches a framework-owned inbound sink, at zero allocations,
+and every seat prints one rendering. Out of scope, and unchanged: consumer reads of `Request().URL`
+or `HandlerContext.Param`, consumer error text, the request method token, and path-read tenant IDs
+(later #2212 links).
+
+---
+
+### [ADR-168: Framework Route Roots Are Reserved Under a Path-Reading Resolver](adr_168_framework_route_roots_reserved.md)
+
+**Date:** 2026-11-04 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, a consumer route, middleware-bearing group or tenant-owned family at or below `<base>/_sys` or the enabled debug prefix fails startup, as does an enabled `debug.pathprefix` at the engine root or at or above `server.path.base`; under every resolver `RouteDescriptor.Package` names the handler's package
+
+Under a resolver that may read the path (`multitenant.MayReadPath`), route admission reserves the
+framework route roots, the scheduler's `<base>/_sys` (`internal/pathutil.SystemPrefix`) and, with
+`debug.enabled`, `debug.pathprefix`: a route, middleware-bearing group or `TenantOwnedGroup`
+family at or below one, from any package but `scheduler` or `app`, other than the server's `GET`
+and `HEAD` probes, is a `RouteConflictReasonFrameworkRoot`
+conflict in the `*DuplicateRouteError`, or a panic after Start. A route's package is its handler
+function's, set before the `RouteOption`s and stamped again after them (an embedding registrar's typed fallback admits as
+`server`, which is not admitted); a caller frame named
+`app` or `server` for a direct `RegisterHandler` call or an embedding registrar. `server.New`
+refuses a debug prefix that would cover the module routes, naming `debug.pathprefix` and
+`server.path.base`. See [migrations.md](migrations.md) `[C73.34]`.
+
+**Key Benefits:** only framework handlers, and middleware on groups at or below a root, sit under
+the roots, which ADR-169's tenant skip relies on; middleware above a root and global middleware
+still run there.
+
+---
+
+### [ADR-169: Framework Routes Skip Tenant Resolution Under a Path-Reading Resolver](adr_169_framework_routes_skip_path_tenant.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, the framework's `/_sys` and debug routes carry no tenant, so global middleware sees none there, a composite chain's header or subdomain tenant included
+
+A path resolver read a tenant out of the framework's own routes: `<base>/_sys/job` failed the tenant
+grammar (400), and a segment such as `job` could be taken for a tenant. Under a resolver that may
+read the path (`multitenant.MayReadPath`), the tenant seat now skips every matched template under
+the framework route roots ADR-168 reserves, the scheduler root `<base>/_sys` and, with
+`debug.enabled`, `debug.pathprefix`, as it skips the probes; admission and the seat read one list,
+so the skip never reaches a consumer handler. See [migrations.md](migrations.md) `[C73.35]`.
+
+**Key Benefits:** the framework's own routes answer under path tenancy, and the skip is total over
+roots no consumer can register under.
+
+---
+
+### [ADR-170: A Path-Read Tenant Is Written Only When the Store Holds It](adr_170_path_tenant_written_only_when_store_holds_it.md)
+
+**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** under a path-reading tenant resolver, a path tenant the store does not hold answers 400 "Invalid tenant" from the handler adapter and is never written to the request
+
+A path resolver's tenant is caller-written, and the seat checked its form, not whether the store
+holds it, before writing it to the request. The framework seat
+now resolves through `multitenant.Resolve` and writes a path-read id only when
+`server.Options.TenantChecker.HasTenant` answers true; the App sets that checker from its resource
+source. Any other path id is never written: the request runs on with an id-free marker, and the
+typed and raw handler adapters answer 400 after route-group middleware and JOSE inbound
+verification, before binding, with the seat's `reason="unknown tenant"` WARN. A path-reading
+server with no checker fails `Start`; one with a checker writes a `[server.tenant]` startup line
+naming the store. Header- and subdomain-won tenants and the public `server.TenantMiddleware` are unchanged. Reverses ADR-036's
+"tenant already in context" for such requests. See [migrations.md](migrations.md) `[C73.36]`.
+
+**Key Benefits:** a caller-written path segment reaches no framework sink unless the store vouches
+for it, and no response before the adapter differs by tenant existence.
 
 ---
 
@@ -3668,7 +3753,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-166) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-170) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

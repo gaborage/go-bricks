@@ -18,6 +18,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/leasescope"
+	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -197,7 +198,7 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	cidrMiddleware := CIDRMiddleware(m.logger, allowlist, trustedProxies)
 
 	// Create a group for system endpoints with CIDR protection
-	sysGroup := r.Group("/_sys")
+	sysGroup := r.Group(pathutil.SystemPrefix)
 	sysGroup.Use(cidrMiddleware)
 
 	server.GET(hr, sysGroup, "/job", m.listJobsHandler)

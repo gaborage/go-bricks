@@ -975,8 +975,7 @@ func (packageCaller) callPackage() string {
 }
 
 func packageCallerNested() string {
-	// skip 3: getCallerPackage → packageCallerNested → callPackage → TestGetCallerPackage,
-	// mirroring the typed path's getCallerPackage → RegisterHandler → GET/POST → module depth.
+	// skip 3: getCallerPackage → packageCallerNested → callPackage → TestGetCallerPackage.
 	return getCallerPackage(3)
 }
 
@@ -1004,6 +1003,43 @@ func TestGetCallerPackage(t *testing.T) {
 	assert.NotEmpty(t, pkg)
 	assert.Contains(t, pkg, "github.com/gaborage/go-bricks/server")
 	assert.NotContains(t, pkg, "(")
+}
+
+func TestFuncPackage(t *testing.T) {
+	tests := []struct {
+		name string
+		fn   string
+		want string
+	}{
+		{name: "plain_function", fn: "example.com/svc/orders.get", want: "example.com/svc/orders"},
+		{name: "method_value", fn: "example.com/svc/orders.(*Handler).get-fm", want: "example.com/svc/orders"},
+		{name: "closure", fn: "example.com/svc/orders.Register.func1", want: "example.com/svc/orders"},
+		{name: "generic_names_another_package", fn: "example.com/svc/orders.get[...]", want: "example.com/svc/orders"},
+		{name: "type_argument_slash_is_cut", fn: "example.com/svc/orders.get[github.com/gaborage/go-bricks/scheduler.T]", want: "example.com/svc/orders"},
+		{name: "escaped_dot_in_last_element", fn: "gopkg.in/yaml%2ev3.get", want: "gopkg.in/yaml%2ev3"},
+		{name: "single_element_path", fn: "main.get", want: "main"},
+		{name: "no_dot", fn: "example.com/svc/orders", want: ""},
+		// Boundaries: a type argument list at index 0 leaves no name, and a dot right after the
+		// last slash ends the path there.
+		{name: "bracket_at_start_leaves_no_name", fn: "[example.com/svc/orders.T]", want: ""},
+		{name: "dot_right_after_last_slash", fn: "example.com/svc/.get", want: "example.com/svc/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, funcPackage(tt.fn))
+		})
+	}
+}
+
+func TestHandlerPackage(t *testing.T) {
+	var nilHandler func()
+	assert.Equal(t, serverPackagePath, handlerPackage(sampleHandlerFunc))
+	assert.Equal(t, serverPackagePath, handlerPackage(sampleReceiver{}.sampleMethod))
+	assert.Equal(t, serverPackagePath, handlerPackage(func() { /* closure */ }))
+	assert.Equal(t, "github.com/stretchr/testify/assert", handlerPackage(assert.Equal), "the declaring package, not the caller's")
+	assert.Empty(t, handlerPackage(nilHandler))
+	assert.Empty(t, handlerPackage(nil))
+	assert.Empty(t, handlerPackage(123))
 }
 
 // ==================== Pointer Type Support Tests ====================
@@ -2421,7 +2457,7 @@ func TestAdaptHandlerRoundTrip(t *testing.T) {
 
 	eh := adaptHandler(func(c HandlerContext) error {
 		return c.String(http.StatusTeapot, "brewed")
-	}, cfg)
+	}, cfg, nil)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()

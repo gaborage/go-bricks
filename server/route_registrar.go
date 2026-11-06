@@ -54,14 +54,13 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, descripto
 // alongside typed ones (issue #634). Typed handlers on the framework's routeGroup register
 // through routeGroup.addEcho, which never traverses Add, so no route is described twice.
 // Only the fields derivable at this seam are populated (method, full path, handler ID/name,
-// caller package); type- and JOSE-related fields stay zero-valued because raw handlers carry
+// the handler's package); type- and JOSE-related fields stay zero-valued because raw handlers carry
 // no request/response models. See routeAdmission.admit.
 func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
 	relative := rg.relativePath(path)
 	fullPath := rg.fullPathFromRelative(relative)
-	pkg := getCallerPackage(2) // getCallerPackage → Add → module (best-effort, as typed routes)
-	reg := RouteRegistrant{HandlerName: extractHandlerName(handler), Package: pkg}
-	rg.admitRoute(method, relative, fullPath, modellessDescriptor(method, fullPath, reg), adaptHandler(handler, rg.cfg), middleware)
+	reg := RouteRegistrant{HandlerName: extractHandlerName(handler), Package: handlerPackage(handler)}
+	rg.admitRoute(method, relative, fullPath, modellessDescriptor(method, fullPath, reg), adaptHandler(handler, rg.cfg, rg.admission.logger()), middleware)
 }
 
 // admitRoute stamps TenantOwned (after RegisterHandler's RouteOptions, so no option forges or

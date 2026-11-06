@@ -19,6 +19,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/racedetect"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -211,12 +212,10 @@ func TestRouteGroupAddEmitsRouteDescriptor(t *testing.T) {
 	assert.Equal(t, "/api/raw-widgets", d.Path)
 	assert.Equal(t, "GET:/api/raw-widgets", d.HandlerID)
 	assert.NotEmpty(t, d.HandlerName, "HandlerName falls back to the reflected function name")
-	// getCallerPackage(2) walks getCallerPackage → Add → this test function. Because the test is
-	// itself in package server, the attributed package is the server package. This pins the value
-	// but cannot, by construction, catch an under-shot skip that lands on Add's own frame (also
-	// package server) — validating that requires a caller in a different package.
+	// The handler is a closure in this test, which is in package server; a handler from another
+	// package is pinned through app's ModuleRegistry (TestModuleRoutesUnderFrameworkRootsRefused).
 	assert.Equal(t, "github.com/gaborage/go-bricks/server", d.Package,
-		"Package is derived from the registering caller's frame, same mechanism as typed routes")
+		"Package is the handler function's package, same mechanism as typed routes")
 
 	// Typed-only metadata stays zero-valued for raw routes.
 	assert.Nil(t, d.RequestType)
@@ -481,6 +480,10 @@ func TestDefaultMiddlewareChainAllocsStable(t *testing.T) {
 const (
 	observedHeaderTenant = "acme"
 	observedPathTenant   = "/t/globex/orders"
+	// observedKnownPathTenant is the one path tenant the observed server's checker holds;
+	// observedUnknownPathTenant names one it does not (ADR-170).
+	observedKnownPathTenant   = "globex"
+	observedUnknownPathTenant = "/t/initech/orders"
 	// observedOpenLimit keeps the limiter on but out of reach of any row's request count.
 	observedOpenLimit = 1_000_000
 	// observedOpenPreGuard keeps the pre-guard on and out of reach the same way, so every row
@@ -541,10 +544,11 @@ func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Ser
 		"server.forwardedclientcert.enabled": true,
 	})
 	require.NoError(t, err)
-	srv := New(cfg, log)
+	srv := NewWithOptions(cfg, log, Options{TenantChecker: testutil.TenantSet{observedKnownPathTenant: {}}})
 	require.NoError(t, srv.setupErr)
 
-	hr := NewHandlerRegistry(srv.cfg)
+	// The App's registry carries the framework logger, which the unknown-tenant refusal writes to.
+	hr := NewHandlerRegistry(srv.cfg, WithLogger(log))
 	ok := func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { return helloResp{Message: "ok"}, nil }
 	boom := func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) { panic("observed alloc guard") }
 	GET(hr, srv.ModuleGroup(), "/orders", ok)
@@ -580,6 +584,13 @@ func observedRequest(method, target, tenant string, headers map[string][]string)
 	return req
 }
 
+// viaTrustedProxy makes req arrive from a private-range peer, which echo's extractor trusts
+// by default, so its X-Forwarded-For chain is walked rather than ignored.
+func viaTrustedProxy(req *http.Request) *http.Request {
+	req.RemoteAddr = "10.0.0.5:41234"
+	return req
+}
+
 // observedRow is one request shape TestObservedRequestAllocsStable pins.
 type observedRow struct {
 	name       string
@@ -588,11 +599,12 @@ type observedRow struct {
 	family     bool // build the server with the tenant-owned family (newObservedServer)
 	wantStatus int
 	warn       string // substring of the only WARN sink allowed to fire, once per request
+	alsoWarn   string // substring of a second sink that also fires once per request; "" for none
 	baseline   int
 }
 
 // measureObservedRow warms, measures and checks one row.
-func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc observedRow) {
+func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc *observedRow) {
 	log := &guardLogger{}
 	srv := newObservedServer(t, log, tc.denyIP, tc.family)
 	// Warm one-time lazy state (and, for the denied row, spend the burst) before
@@ -604,19 +616,25 @@ func measureObservedRow(t *testing.T, exporter *tracetest.InMemoryExporter, tc o
 	}
 	require.Equal(t, tc.wantStatus, rec.Code, "the row does not exercise the shape it names")
 	exporter.Reset()
-	allWarns, sinkWarns := log.warnCount(""), log.warnCount(tc.warn)
+	allWarns, sinkWarns, alsoWarns := log.warnCount(""), log.warnCount(tc.warn), log.warnCount(tc.alsoWarn)
 
 	got := testing.AllocsPerRun(observedRuns, func() {
 		srv.echo.ServeHTTP(httptest.NewRecorder(), tc.req)
 	})
 
 	require.NotEmpty(t, exporter.GetSpans(), "the measured requests produced no span, so tracing is not covered")
-	wantWarns := 0
+	wantWarns, wantAlso := 0, 0
 	if tc.warn != "" {
 		wantWarns = observedRuns + 1
 	}
-	require.Equal(t, wantWarns, log.warnCount("")-allWarns, "the measured requests emitted an unpinned number of WARNs")
+	if tc.alsoWarn != "" {
+		wantAlso = observedRuns + 1
+	}
+	require.Equal(t, wantWarns+wantAlso, log.warnCount("")-allWarns, "the measured requests emitted an unpinned number of WARNs")
 	require.Equal(t, wantWarns, log.warnCount(tc.warn)-sinkWarns, "the WARNs did not come from the sink this row pins")
+	if tc.alsoWarn != "" {
+		require.Equal(t, wantAlso, log.warnCount(tc.alsoWarn)-alsoWarns, "the second sink this row pins did not fire once per request")
+	}
 	t.Logf("observed request %s allocs/op = %.1f (pinned %d)", tc.name, got, tc.baseline)
 	assert.InDelta(t, float64(tc.baseline), got, 0, "observed request allocs/op moved off the pinned baseline (ADR-026)")
 }
@@ -663,7 +681,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// Recover turns the panic into a 500, which the request logger reports at ERROR.
 		{
-			name: "handler_panic_recovered", baseline: 145, wantStatus: http.StatusInternalServerError,
+			name: "handler_panic_recovered", baseline: 150, wantStatus: http.StatusInternalServerError,
 			req: observedRequest(http.MethodGet, "/boom", observedHeaderTenant, nil),
 		},
 		// The header resolver runs first, so it wins even where the path carries a tenant.
@@ -676,22 +694,47 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 			name: "path_won_tenant", baseline: 114, wantStatus: http.StatusOK,
 			req: observedRequest(http.MethodGet, observedPathTenant, "", nil),
 		},
+		// A private-range proxy relays the client in X-Forwarded-For, so every RealIP walks
+		// the chain: the limiter extracts the address and the access line reuses it (A1m,
+		// 126 -> 123: the access line's second walk is gone; the pre-guard's walk stays).
+		{
+			name: "xff_path_won_tenant", baseline: 123, wantStatus: http.StatusOK,
+			req: viaTrustedProxy(observedRequest(http.MethodGet, observedPathTenant, "", map[string][]string{
+				HeaderXForwardedFor: {"203.0.113.7"},
+			})),
+		},
+		// A path tenant the checker does not hold: the seat writes no tenant, and the typed
+		// adapter answers the unknown-tenant 400 with the seat's WARN, and the access line
+		// still WARNs the 4xx (ADR-170).
+		{
+			name: "path_won_unknown_tenant", baseline: 133, wantStatus: http.StatusBadRequest,
+			warn: warnTenantRejected, alsoWarn: warnAccessLog4xx,
+			req: observedRequest(http.MethodGet, observedUnknownPathTenant, "", nil),
+		},
+		// The same behind a trusted proxy: the WARN's client reuses the limiter's address.
+		{
+			name: "xff_path_won_unknown_tenant", baseline: 142, wantStatus: http.StatusBadRequest,
+			warn: warnTenantRejected, alsoWarn: warnAccessLog4xx,
+			req: viaTrustedProxy(observedRequest(http.MethodGet, observedUnknownPathTenant, "", map[string][]string{
+				HeaderXForwardedFor: {"203.0.113.7"},
+			})),
+		},
 		// Neither resolver finds a tenant: rejected before route matching.
 		{
-			name: "tenant_rejected", baseline: 93, wantStatus: http.StatusBadRequest,
+			name: "tenant_rejected", baseline: 98, wantStatus: http.StatusBadRequest,
 			warn: warnTenantRejected,
 			req:  observedRequest(http.MethodGet, "/orders", "", nil),
 		},
 		// Both forwarded-client-cert WARNs fire on a 200 (require is off).
 		{
-			name: "fcc_duplicate_header_warn", baseline: 131, wantStatus: http.StatusOK,
+			name: "fcc_duplicate_header_warn", baseline: 139, wantStatus: http.StatusOK,
 			warn: warnFCCDuplicate,
 			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, map[string][]string{
 				headerClientCertSubject: {"CN=one", "CN=two"},
 			}),
 		},
 		{
-			name: "fcc_leaf_parse_warn", baseline: 134, wantStatus: http.StatusOK,
+			name: "fcc_leaf_parse_warn", baseline: 142, wantStatus: http.StatusOK,
 			warn: warnFCCLeaf,
 			req: observedRequest(http.MethodGet, "/orders", observedHeaderTenant, map[string][]string{
 				headerClientCertSubject: {"CN=client"},
@@ -725,7 +768,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		// Rate 1/s, burst 2 under a frozen clock: the warm-ups spend the burst and no token
 		// ever refills, so every measured request is denied and WARNs.
 		{
-			name: "ip_preguard_denied", baseline: 80, denyIP: true, wantStatus: http.StatusTooManyRequests,
+			name: "ip_preguard_denied", baseline: 83, denyIP: true, wantStatus: http.StatusTooManyRequests,
 			warn: warnIPPreGuard,
 			req:  observedRequest(http.MethodGet, "/orders", observedHeaderTenant, nil),
 		},
@@ -733,7 +776,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			run := func(t *testing.T) { measureObservedRow(t, exporter, tc) }
+			run := func(t *testing.T) { measureObservedRow(t, exporter, &tc) }
 			// A denyIP row runs inside a synctest bubble: the pre-guard's memory store reads
 			// time.Now, which a bubble advances only when every goroutine in it is durably
 			// blocked, and ServeHTTP never blocks, so the clock stands still for the whole row

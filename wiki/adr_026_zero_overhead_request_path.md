@@ -56,6 +56,38 @@
 > toolchain step, which is the go1.26.x reading that step exists to contrast;
 > `go.mod` pins go 1.27.0 and the guard comment records the baseline as measured on
 > go1.27.x, a patch-level difference that does not move these counts.
+>
+> **Amended (2026-11-04, #2212):** rows of the observed-request guard
+> (`TestObservedRequestAllocsStable`, `server/route_registrar_test.go`) moved by the
+> #2212 links, each re-pinned in the commit that moves it. The decision below is
+> unchanged, and every other row reads base == head.
+>
+> - **Correlated tenant-rejection WARN (#2322), `tenant_rejected` 93 → 98 — justified
+>   feature cost.** The WARN gains `http.route`, `request_id`, `correlation_id`, `trace_id`
+>   and `span_id`. One allocation is production: the trace and span ids are hex-encoded
+>   into one shared string. The other four are `guardLogger`'s field-slice growth (0 → 5
+>   fields). Against the real zerolog adapter a correlated line costs +2 allocations with a
+>   span and +1 without, paid only when the line fires.
+> - **Correlated error-handler ERRORs (#2329), `handler_panic_recovered` 145 → 150 —
+>   justified feature cost.** A handler panic's 500 writes two lines, the error handler's
+>   `Panic recovered` (+2) and `unhandled error` (+3), and both gain `http.route`,
+>   `correlation_id`, `trace_id` and `span_id`. One allocation per line is the shared
+>   hex string of the trace and span ids; the rest is `guardLogger`'s field-slice growth.
+>   The outermost panic guard's line is correlated too, but no row reaches it.
+> - **Correlated edge WARNs (#2212), `fcc_duplicate_header_warn` 131 → 139,
+>   `fcc_leaf_parse_warn` 134 → 142 and `ip_preguard_denied` 80 → 83 — justified feature
+>   cost.** Each WARN gains the correlation fields: +5 on each forwarded-client-cert line
+>   (one shared hex string, four of `guardLogger`'s field-slice growth, 0 → 5 fields) and +3
+>   on the pre-guard (the hex string and two of field-slice growth, 4 → 9 fields). The forwarded-client-cert lines also gain `peer=`, +3
+>   each: `logSafeValue`'s `%q` render (boxing and result, 2) and boxing that into the
+>   line's `Sprintf` (1). Reading `client=` from `c.RealIP()` instead of `RemoteAddr` costs
+>   nothing on the guard's request.
+> - **Access line kept on escalation (#2323), no row moves.** The request logger always
+>   writes the access line and passes the request's peak severity to `determineSeverity`;
+>   the JOSE failure and meta-key lines stamp the correlation instead of binding the
+>   request context. No guard row logs a line through the request context or reaches
+>   either line, so every row reads base == head; the cost those lines add is paid only
+>   when they fire.
 
 ## Context
 

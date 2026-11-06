@@ -1102,7 +1102,7 @@ func LoggingMiddleware(log logger.Logger) server.MiddlewareFunc {
 		err := next()
 		log.Info().
 			Str("method", c.Request().Method).
-			Str("path", c.Request().URL.Path).
+			Str("route", c.RouteTemplate()). // the template, never the URL: a path value can be card data
 			Dur("duration", time.Since(start)).
 			Msg("Request completed")
 		return err
@@ -1381,8 +1381,10 @@ Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) 
 
 ```go
 // RouteTemplate() = registered route incl. base path ("/users/:id"), NOT the concrete URL
-// ("/users/42" — use c.Request().URL.Path for that). Always non-empty inside consumer
-// middleware/handlers (they only run on matched routes); empty only on unrouted contexts.
+// ("/users/42"); it is the access line's http.route. Read a value via Param/PathParams; never
+// log Request().URL.Path, which is caller-written. Non-empty on a matched route; empty before
+// routing and on a 404 or 405 under a middleware-bearing group, whose catch-all matches no route
+// (see the RouteTemplate godoc).
 // PathParams() = matched params in route-template order (defensive copy, safe to retain;
 // empty when no route matched). NEVER use raw param values as metric labels — unbounded
 // cardinality, and path-embedded IDs (card/user IDs) would leak to the metrics vendor.
@@ -1391,6 +1393,17 @@ func RouteMetrics(c server.HandlerContext, next func() error) error {
 	err := next()
 	recordLatency(c.RouteTemplate(), time.Since(start)) // template only: low-cardinality, no PII
 	return err
+}
+
+// A handler's own line joins its access line on request_id + http.route. HandlerContext has no
+// request-id accessor: read the id from the request context with trace.IDFromContext
+// (go-bricks/trace), never from the inbound request header (caller-written, unvalidated).
+func logRefund(log logger.Logger, c server.HandlerContext) {
+	requestID, _ := trace.IDFromContext(c.RequestContext())
+	log.Info().
+		Str("http.route", c.RouteTemplate()).
+		Str("request_id", requestID).
+		Msg("refund accepted")
 }
 
 // SetPathParams replaces the set; Param(name) AND `param:"..."` binding observe it.
@@ -6563,7 +6576,7 @@ For application logs, exercise the production logger directly and capture into a
 | gRPC error: `frame too large, note that the frame header looked like an HTTP/1.1 header` | gRPC client connecting to an HTTP endpoint (e.g. port `4318` with `protocol: grpc`, or `https://...` scheme with gRPC) | Use `host:port` (no scheme) on port `4317` for gRPC; use `https://host:port/v1/...` on port `4318` for HTTP |
 | Spans appear in console (`endpoint: stdout`) but not in collector | App can't reach collector / TLS misconfiguration / batch hasn't flushed yet | Check connectivity, set `insecure: true` for in-cluster collectors, wait for batch flush (~5s prod) or trigger graceful shutdown |
 | Logs are emitted but `trace_id` field is empty | Logger called without trace context | Use `logger.WithContext(ctx).Info()...` (not `logger.Info()...`); ensure the handler context comes from `ctx.RequestContext()` |
-| Action logs missing for some requests | Slow request threshold not configured — only severity escalation produces non-INFO action logs | Set `observability.logs.slowrequestthreshold` or call `c.EscalateSeverity(level)` |
+| Action logs missing for some requests | Every non-probe request writes one action log, at INFO when healthy, so `log.level: warn` (or `error`) drops the action log of a healthy fast 2xx; probe paths are never logged | Keep `log.level: info`, or surface a request at WARN with `c.EscalateSeverity(zerolog.WarnLevel)`; a slow 2xx keeps level INFO (only its `result_code` turns WARN), so `observability.logs.slowrequestthreshold` does not surface it under `log.level: warn` |
 | INFO/DEBUG application logs are dropped | Default `samplingrate: 0.0` drops all `INFO`/`DEBUG` trace logs (action logs still emit at 100%) | Raise `observability.logs.samplingrate` (e.g. `0.1`); `ERROR`/`WARN` always export regardless |
 | Logs emitted via `otel.Logger(...)` or otelslog/otelzap never arrive | GoBricks registers no global LoggerProvider | Log through `deps.Logger` |
 | Custom metric is `nil` when recording | `observability.enabled: false` makes `deps.MeterProvider` a no-op, but the helper-returned instruments may still be `nil` if `Meter()` was never called | Always nil-check before recording: `if m.counter != nil { m.counter.Add(...) }` |

@@ -198,8 +198,9 @@ func TestLogSafeValue(t *testing.T) {
 // client IP (raw-header IPExtractor, the worst case) carries a newline, on
 // both the framework-logger path and the nil-logger stdlib fallback. Each
 // must produce exactly ONE line with the injected bytes rendered as escape
-// sequences (CodeQL go/log-injection). Shared by every server WARN sink that
-// renders request-derived values through logSafeValue.
+// sequences (CodeQL go/log-injection), and none of the path's bytes, since
+// the path renders from the matched template (#2212). Shared by every server
+// WARN sink that renders request-derived values through logSafeValue.
 func assertRejectionLogEscapesRequestValues(t *testing.T, emit func(l logger.Logger, c *echo.Context)) {
 	t.Helper()
 	const (
@@ -220,7 +221,10 @@ func assertRejectionLogEscapesRequestValues(t *testing.T, emit func(l logger.Log
 		require.Len(t, lines, 1, "injected newline must not forge a second log line: %q", lines)
 		assert.NotContains(t, lines[0], "\n")
 		assert.NotContains(t, lines[0], "\x00")
-		assert.Contains(t, lines[0], `path="/test status=200\n[server] forged=true\x00"`, "space and newline stay inside the quoted value")
+		// The path is the masked matched template, never request bytes (#2212): a context
+		// with no matched route renders the bare mask token.
+		assert.Contains(t, lines[0], `path="`+maskToken+`" `, "the path renders from the matched template")
+		assert.NotContains(t, lines[0], "forged=true", "no request path byte may reach the line")
 		assert.Contains(t, lines[0], `client="10.0.0.202\nclient=1.1.1.1`)
 	}
 

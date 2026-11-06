@@ -14,7 +14,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 **Group-Scoped 404 Route Labels (echo v5.3.0):** After the echo v5.3.0 upgrade, a 404 for an unmatched sub-path (or a wrong-method request) under a middleware-bearing group — e.g. the scheduler `/_sys` CIDR-gated group or the debug group — now resolves to that group's implicit `/*` catch-all, so its incoming-request span and metrics carry `http.route = "/<group-prefix>/*"` (span name `<METHOD> /<group-prefix>/*` — the span keeps the request method, e.g. `GET /<group-prefix>/*`, or `POST /<group-prefix>/*` for a wrong-method request) instead of the previous empty-route / bare-`GET` bucket. This is a low-cardinality change (one new series per middleware-bearing group prefix); operators with dashboards or alerts keyed on `http.route` for those 404s should expect the new series and re-point any query that matched the old empty/`GET` bucket.
 
-**Router-Keyed `url.path`:** The access log and the incoming-request span now both report `url.path` as the path the router keyed on (`URL.RawPath` when set, `URL.Path` otherwise) rather than the decoded path, so `url.path` and `http.route` always describe the same request — previously `GET /api/%68ealth` logged `url.path=/api/health` beside `http.route=/api/:id`. The value changes only for a request whose spelling differs from its canonical percent-encoding, because `net/url` leaves `RawPath` empty when the two agree: `/api/%68ealth` now logs as sent, while `/api/a%20b` still logs decoded as `/api/a b`. A dashboard or alert matching `url.path` exactly should expect the as-sent spelling for that subset; every other request is unchanged.
+**Masked `url.path`:** The access log (its `url.path` field and its message) and the incoming-request span report `url.path` as the matched route template with each parameter value and the wildcard tail replaced by `REDACTED`, never the request path: `GET /cards/<PAN>` on `/cards/:pan` logs `url.path=/cards/REDACTED` beside `http.route=/cards/:pan`, whether the value arrived plain or percent-encoded. A request that matched no template (a root 404) logs the bare `REDACTED`. The framework's WARN and ERROR lines (tenant rejection, tenant-owned family refusal, IP pre-guard, forwarded client cert, panic guard) print the same rendering as `path`. Each engine logs one `[server.paths]` INFO line as its listener starts, naming the rule, the listener (`application`, or `probe`) and the token (`REDACTED`). Key dashboards and alerts on `http.route`; read concrete paths at the edge. See [ADR-167](adr_167_inbound_paths_render_from_route_template.md).
 
 **Go Runtime Metrics:** Auto-exports memory, goroutines, GOMAXPROCS, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
 
@@ -47,7 +47,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 **Reserved log attribute namespaces:** a record attribute deliberately wins over the attribute a processor would stamp on key collision, so the OTel bridge reserves the resource-identity namespaces at the boundary where zerolog field names become record attributes. A top-level log field whose key starts with `service.` or `telemetry.sdk.`, or equals `deployment.environment.name`, is remapped under the `app.` prefix with its value preserved (`service.name` → `app.service.name`), and the first remap per bridge instance (one bridge per process in practice) emits a one-time WARN record (`reserved.keys` names the offending keys — never their values). `log.type` is intentionally not reserved. `app.*` keys are caller-supplied and unauthenticated — never treat them as service identity. Nested map values are not remapped: they flatten under their parent key and cannot collide with bare resource keys. See [ADR-055](adr_055_reserved_log_attribute_namespaces.md).
 
-**Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `c.EscalateSeverity(zerolog.WarnLevel)` (the `HandlerContext` method). Configure `observability.logs.slowrequestthreshold` for slow request detection.
+**Request Logging:** every HTTP request that is not a probe writes one access line (the action log summary), at the level its status and escalation give it; `log.level` still drops a line below it, so under `log.level: warn` a healthy fast 2xx writes none. HTTP requests track severity escalation via `requestLogContext`, which sets that line's level and `result_code`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `c.EscalateSeverity(zerolog.WarnLevel)` (the `HandlerContext` method; a level below WARN changes nothing). A WARN or ERROR line logged through the request context during the request (your own `log.WithContext(ctx).Warn()`, or a database query-tracking line such as a slow-query WARN) escalates the same way, even when `log.level` disables that line. None of them replaces the access line. The framework's own correlated lines (the JOSE failure line, the envelope meta-key WARN, and the lines in [Correlation Fields](#correlation-fields-and-exemplars)) are not bound to the request context, so they leave the access line status-derived: a plaintext POST to a JOSE route logs its access line at WARN for the 415. Configure `observability.logs.slowrequestthreshold` for slow request detection.
 
 **Testing:** Use `observability/testing` package:
 
@@ -166,7 +166,7 @@ fw, _, err = app.NewWithOptions(&app.Options{
 
 - **No content-pattern scanning.** A PAN embedded in a free-text error message (e.g., `errors.New("card 4111111111111111 failed")` logged via `log.Err(err)`) is *not* caught by field-name masking — the filter cannot see inside a value unless the value's type supplies its own log-safe shape (see *Self-redacting values*, below). One exception, and it is whole-field rather than content-aware: naming `error` in `log.sensitivefields` masks the ENTIRE message at `Err`, message and all, so nothing of it reaches the sink. For anything short of that, wire an error redactor at the `Err(err)` seam (see *Redacting error messages*, below); elsewhere, build a `sensitive.Scrub(...)` helper in your service layer.
 - **No per-tenant policies.** The filter is configured once at bootstrap and applied uniformly to every log line, regardless of tenant context. If different tenants have different masking requirements, you need either separate deployments or a custom logger wrapper at the handler layer.
-- **No metric/trace masking.** The filter only intercepts log records. OTel span attributes and metric labels go through different code paths. Treat span attributes as "would I publish this on a dashboard?" — never put a PAN in a span attribute.
+- **No metric masking, and no trace masking by the filter.** The filter only intercepts log records. OTel span attributes and metric labels go through different code paths. The framework's own inbound `url.path` span attribute is the masked route template ([ADR-167](adr_167_inbound_paths_render_from_route_template.md)), not the filter's doing; a span attribute you add yourself stays your responsibility: ask "would I publish this on a dashboard?" and never put a PAN in one.
 - **The framework's OWN span sinks never carry an error message, and that is not the filter's doing.** Every framework site that records an error on a span goes through `observability.RecordErrorByType`, which emits one `exception` event carrying `exception.type` (the error's outer `%T`) and NO `exception.message`, and sets `codes.Error` with that same type as the status description ([ADR-083](adr_083_span_sinks_record_errors_by_type.md)). The status DESCRIPTION is framework-authored rather than always the Go type: the HTTP client prefers its own classification (`transport_error`, `interceptor_failed`, …) and a 5xx's `HTTP 503`, and a scheduler job panic reads `panic` with the recovered value's type in the `job.panic_type` attribute. Every one of those is a framework constant; none is consumer text. A span exception event and a span status description leave the platform with the tracing exporter, under the vendor's retention and access model, so an error message the framework did not write — a job's, a handler's, an interceptor's — is not put there at all. The corresponding LOG line still carries the message: that sink is on-platform, and what it writes is the operator's to control — including through `FilterConfig.ErrorRedactor` below.
 - **Span attributes a consumer adds stay the consumer's responsibility.** The rule above covers the framework's own sinks only. `RecordErrorByType` is exported and available for a span your code started, but nothing enforces its use, and nothing scrubs an attribute you set.
 
@@ -300,6 +300,122 @@ the OTel ids exist only while a provider is registered. Inbound identifiers are
 validated before either is used ([ADR-070](adr_070_inbound_trace_identifier_validation.md)):
 a non-conforming one is discarded and replaced, so a value you sent may not be
 the value you see.
+
+The framework's own lines about one HTTP request that are correlated (the
+`[server.tenant]` rejection WARN; the `[server.ip_preguard]` WARN; the three
+`[server.forwardedclientcert]` WARNs; both `Panic recovered` ERRORs, the error
+handler's for a handler panic and the outermost panic guard's; the error
+handler's `unhandled error`; the JOSE failure line `jose: operation failed`; and
+the envelope meta-key collision WARN) carry the same correlation: `http.route`,
+`request_id`, `correlation_id`, and `trace_id`/`span_id` when the request's
+span context is valid, so each joins its request's span and the response's
+`X-Request-ID`. The tenant seat and the outermost panic guard run outside the
+access logger, so their lines have no access line to join; the error handler's
+lines report a panic or error that passed through the access logger, and a
+handler's `server.NewUnknownTenantError` refusal comes from inside it, so they
+also join that request's access line. On these lines `http.route` is the
+registered route template (`/cards/:id`), the same value the access line and
+the JOSE failure line carry, so one filter on it finds all of them (the JOSE line omits it where no template matched, as its failure counter does); the lines
+that carry a `path` field (the tenant WARN and the guard's line) carry the
+masked rendering
+(`/cards/REDACTED`, [ADR-167](adr_167_inbound_paths_render_from_route_template.md)).
+`request_id` and `correlation_id` hold the same value, read without minting one,
+so a panic-guard line written before the request-id middleware ran carries the
+caller's `X-Request-ID` when it is valid and is empty otherwise. With a nil
+logger the stdlib fallback appends the same fields as `key=value` text: the
+tenant WARN takes it under the public `TenantMiddleware` construction,
+`unhandled error` under a `server.NewHandlerRegistry` built without
+`server.WithLogger`, and the IP pre-guard and forwarded-client-cert WARNs under
+`IPPreGuard` and `RequireForwardedClientCert(nil)`. A WARN whose level is
+disabled returns before it is formatted or reads the client address. The
+forwarded-client-cert WARNs print `client=` as the access line's
+`client.address` (behind a trusted proxy, the `X-Forwarded-For` client) and
+`peer=` as the TCP peer. None of these lines is bound to the request context, so
+none raises the request's access line. A line logged through the request context
+does: a database query-tracking line (a slow-query WARN, a query ERROR) and a
+handler's or middleware's own `log.WithContext(ctx)` WARN or ERROR, enabled or
+not, as does `HandlerContext.EscalateSeverity` (see Request Logging above).
+
+### Runbook: from a framework line to its request
+
+Paths are masked in every framework sink
+([ADR-167](adr_167_inbound_paths_render_from_route_template.md)), so on-call joins
+lines by identifier, not by path:
+
+1. **Start from the framework line** (a `[server.tenant]`, `[server.ip_preguard]`
+   or `[server.forwardedclientcert]` WARN, a `Panic recovered` or `unhandled error`
+   ERROR, a `jose: operation failed` line, or the meta-key WARN). `http.route`
+   names the route; `path` shows its shape with every value `REDACTED`.
+2. **Or start from the response** a caller reports. Every enveloped response,
+   success or error, carries the request id as `meta.traceId` (the request id,
+   not the OTel `trace_id`), the response carries it as `X-Request-ID`, and the
+   IP pre-guard's and the rate limiter's 429 bodies carry it as
+   `error.request_id`. Search `request_id` or `correlation_id` for it.
+3. **Find the access line** (`log.type=action`) with the same `request_id`
+   (`correlation_id` holds the same value). Every non-probe request that reaches
+   the access logger writes one, at the level its status and escalation give it,
+   and no line replaces it. The framework lines in step 1 leave its level
+   status-derived; a line logged through the request context (a query-tracking
+   slow-query WARN or query ERROR, a handler's own WARN or ERROR, enabled or not)
+   and `EscalateSeverity` raise it, so a 200 can read `level=warn` or
+   `level=error`. These requests have none:
+   - a CORS preflight, which the CORS middleware answers before the access
+     logger runs (its span is its only record);
+   - a request the IP pre-guard refused (429);
+   - a request the tenant seat refused (400 `Invalid tenant`, with its
+     `[server.tenant]` WARN) or the engine-level forwarded-client-cert seat
+     refused (401, with its `request rejected: missing identity` WARN); both run
+     outer to the access logger, while a route group's
+     `RequireForwardedClientCert` runs inside it, so its 401 has one;
+   - a request whose panic the outermost guard caught (see below);
+   - a request whose access line `log.level` disables (an INFO line under
+     `log.level: warn`, such as a 200 that only drew a forwarded-client-cert
+     WARN).
+
+   The outermost guard's `Panic recovered` line carries `panic_type`, `method`
+   and `path` and no `stack`; the error handler's line for a handler panic
+   carries `stack`, and its request has an access line. The guard catches a
+   panic in a middleware outside the access logger's recovery (request id, OTel,
+   request enrich, CORS, IP pre-guard, the tenant and forwarded-client-cert
+   seats, or the access logger itself), so its request has no access line. Its
+   `request_id` is the request's own whenever the request-id middleware had run,
+   which is every such panic except one inside that middleware; then it is the
+   caller's `X-Request-ID` when valid, and empty otherwise. Tell a guard line by
+   its fields, not by its `request_id`.
+4. **Check the status against the caller's.** The access line's
+   `http.response.status_code` is read when the chain returns to the access
+   logger, before the error handler writes the response for a returned error:
+   the status of a returned echo HTTP error, otherwise the response status
+   written so far, which is 200 when nothing was written. A raw handler or a
+   middleware that returns an `IAPIError` or a plain error can therefore log 200
+   while the caller got the error's status (#2213); a typed handler's error is
+   written by the handler adapter first, so its status matches. Where they
+   disagree, trust the caller's status and the framework line.
+5. **Follow `trace_id` to the span** when tracing is on: every correlated line
+   carries the span's `trace_id`/`span_id` when the request's span context is
+   valid. With `observability.enabled: false` no span is created, and with
+   `observability.trace.enabled: false` no line carries them (see below): join on
+   `request_id` alone.
+6. **Identify the caller** from the access line's `client.address` and
+   `user_agent.original`, or the WARN's `client=`; on a forwarded-client-cert WARN
+   `peer=` is the load balancer, not the caller.
+7. **Join a business record through your own line.** Framework lines carry no
+   business key (an order or account reference). Log it on your own line through
+   `log.WithContext(ctx)`, which adds `trace_id`/`span_id` when the span is valid
+   but not `request_id`, and add the request id (`trace.IDFromContext(ctx)` from
+   the go-bricks `trace` package) as `request_id`, so the join survives with
+   tracing off. The business key must never be a card number or another value
+   the log filter masks.
+8. **Expect unmatched requests to collapse.** A request no route matched carries
+   its group's catch-all as `http.route` under a middleware-bearing group
+   (`<prefix>/*`, `path` `<prefix>/REDACTED`), and otherwise no template:
+   `http.route` is empty on the access line and omitted on a correlated line, and
+   `path` is the bare `REDACTED`. Every such request shares that one key, so tell
+   them apart by `request_id`, and read what each targeted at the edge (next
+   step).
+9. **Need the concrete path?** Read it at the edge (load balancer or WAF access
+   logs) by timestamp and client address, under the same data controls as any
+   card-data store; the framework keeps no copy.
 
 The scheduler's job summary line (`log.type=action` with `job.id`) stamps the
 run's framework id: a UUID minted once per run and shared by the normal-return and

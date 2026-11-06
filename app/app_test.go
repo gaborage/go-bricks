@@ -1731,26 +1731,26 @@ func TestResolveServer(t *testing.T) {
 			Server: mockServer,
 		}
 
-		result := resolveServer(cfg, log, opts)
+		result := resolveServer(cfg, log, opts, nil)
 		assert.Equal(t, mockServer, result)
 	})
 
 	t.Run("creates new server when none provided", func(t *testing.T) {
-		result := resolveServer(cfg, log, nil)
+		result := resolveServer(cfg, log, nil, nil)
 		assert.NotNil(t, result)
 	})
 
 	t.Run("creates new server with empty options", func(t *testing.T) {
 		opts := &Options{}
 
-		result := resolveServer(cfg, log, opts)
+		result := resolveServer(cfg, log, opts, nil)
 		assert.NotNil(t, result)
 	})
 
 	t.Run("creates new server with server options", func(t *testing.T) {
 		opts := &Options{ServerOptions: &server.Options{}}
 
-		result := resolveServer(cfg, log, opts)
+		result := resolveServer(cfg, log, opts, nil)
 		assert.IsType(t, &server.Server{}, result)
 	})
 
@@ -1758,7 +1758,7 @@ func TestResolveServer(t *testing.T) {
 		mockServer := &stubServerRunner{}
 		opts := &Options{Server: mockServer, ServerOptions: &server.Options{}}
 
-		result := resolveServer(cfg, log, opts)
+		result := resolveServer(cfg, log, opts, nil)
 		assert.Equal(t, mockServer, result)
 	})
 }

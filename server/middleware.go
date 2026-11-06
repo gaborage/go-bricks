@@ -25,10 +25,9 @@ import (
 // Outside tests only newServer, which server.New and server.NewWithOptions both reach,
 // calls it (ADR-166). observabilityEnabled gates the OTel HTTP instrumentation
 // middleware; healthPath and readyPath let the probe skipper bypass the probe endpoints.
-// owned is the Server's tenant-owned family record, which only the tenant seat reads
-// (see tenantMiddlewareEcho); nil means none. It reports whether it installed the
-// tenant seat.
-func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, owned func(template string) bool) (seated bool) {
+// inputs is what only the tenant seat reads (seatInputs). It reports the tenant seat it
+// installed (tenantSeat).
+func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string, inputs seatInputs) (seat tenantSeat) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,
 	// only covers what is downstream of ITSELF, and the eight middlewares
@@ -82,7 +81,7 @@ func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold, log))
 	}
 
-	seated = setupIdentityMiddlewares(e, log, cfg, skipProbe, owned)
+	seat = setupIdentityMiddlewares(e, log, cfg, skipProbe, inputs)
 
 	// Logger middleware with zerolog
 	e.Use(requestLoggerEcho(log, healthPath, readyPath))
@@ -125,7 +124,7 @@ func setupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	if cfg.Server.ResponseTime.Enabled {
 		e.Use(timingEcho())
 	}
-	return seated
+	return seat
 }
 
 // otelServerNameError reports why name cannot be the instrumentation's ServerName.
@@ -193,11 +192,11 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 	e.Use(sanitizePanicValue())
 }
 
-// overrideSpanURLPath rewrites the incoming-request span's url.path to the path the ROUTER
-// keyed on — the same value the access log records (routerPath, probe_skip.go). The library
-// fills url.path from r.URL.Path (echo-otel extractor.go), the DECODED spelling, so a
-// percent-encoded request would otherwise pair a path it never reached with the http.route on
-// that very span.
+// overrideSpanURLPath rewrites the incoming-request span's url.path to the matched template
+// with each parameter value and the wildcard tail masked (maskedPath) — the same value the
+// access log records. The library fills url.path from r.URL.Path (echo-otel extractor.go),
+// caller-written bytes, so a PAN in a path segment would otherwise reach the span (#2212). The
+// CORS preflight span is this span, so it renders the same way.
 //
 // Replaced in place rather than appended. The duplicate url.scheme in MetricAttributes above is
 // safe because the metric path resolves its attributes through attribute.NewSet; a duplicate
@@ -211,7 +210,7 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 func overrideSpanURLPath(c *echo.Context, _ *echootel.Values, attrs []attribute.KeyValue) []attribute.KeyValue {
 	for i := range attrs {
 		if attrs[i].Key == semconv.URLPathKey {
-			attrs[i].Value = attribute.StringValue(routerPath(c.Request()))
+			attrs[i].Value = attribute.StringValue(maskedPath(c))
 			break
 		}
 	}
@@ -272,16 +271,19 @@ func secureHeadersEcho() echo.MiddlewareFunc {
 // setupIdentityMiddlewares registers the identity-establishing middlewares
 // (tenant resolution, ALB forwarded-client-cert). Both run before the access
 // logger so their rejection paths can leave their own WARN trail, and both
-// honor the shared probe skipper. Only the tenant seat reads owned. It reports whether it
-// installed the tenant seat.
-func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper, owned func(template string) bool) (seated bool) {
+// honor the shared probe skipper. Only the tenant seat reads inputs. It reports the tenant seat
+// it installed.
+func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, skipProbe probeSkipper, inputs seatInputs) (seat tenantSeat) {
 	// Multi-tenant tenant resolver middleware (if enabled)
 	if cfg.Multitenant.Enabled {
 		resolver := buildTenantResolver(cfg)
 		if resolver != nil {
-			// Use skipper-aware middleware to bypass tenant resolution for health probes
-			e.Use(tenantMiddlewareEcho(resolver, skipProbe, owned, log))
-			seated = true
+			// The seat skips the probes and, under a resolver that may read the path, the
+			// framework route roots (ADR-169); the forwarded-client-cert seat skips probes only.
+			seat.frameworkRoots, seat.rootsErr = frameworkRoots(cfg, resolver)
+			seat.checksPath = inputs.checkPath && multitenant.MayReadPath(resolver)
+			e.Use(tenantMiddlewareEcho(resolver, skipFrameworkRoots(skipProbe, seat.frameworkRoots), inputs, log))
+			seat.seated = true
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
@@ -307,7 +309,29 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 		}
 		e.Use(forwardedClientCertMiddlewareEcho(fcc, skipProbe, log))
 	}
-	return seated
+	return seat
+}
+
+// seatInputs is what the tenant seat reads besides its resolver: owned, the Server's tenant-owned
+// family record (nil means none, see tenantMiddlewareEcho); checkPath, set by the Server's seat
+// and clear on the public TenantMiddleware; and checker, which vouches for a path-read tenant
+// when checkPath is set (Options.TenantChecker; nil vouches for none, ADR-170).
+type seatInputs struct {
+	owned     func(template string) bool
+	checkPath bool
+	checker   multitenant.TenantChecker
+}
+
+// tenantSeat is what setupMiddlewares installed for tenant resolution: whether the seat is
+// installed, the framework route roots its skip covers (frameworkRoots), which route
+// admission reserves, why those roots are unusable, which Start returns, and whether the seat
+// asks inputs.checker about a path-read tenant (ADR-170): the Server's seat under a resolver
+// that may read the path (multitenant.MayReadPath).
+type tenantSeat struct {
+	seated         bool
+	frameworkRoots []string
+	rootsErr       error
+	checksPath     bool
 }
 
 func newHeaderResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {

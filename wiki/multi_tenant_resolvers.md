@@ -39,11 +39,19 @@ name (Docker and Kubernetes yes, POSIX `export` no).
 A DYNAMIC source's IDs are not checked at startup — they arrive at request time and this resolver
 rule is their gate.
 
-**This is input sanitization, not access control.** The regex — and the subsequent known-tenant lookup — reject *garbage*, not *cross-tenant access*. A forged value naming a real tenant passes both checks and resolves fine. Resolution answers "which tenant does this request claim to be for"; it never checks whether the caller is entitled to that tenant. See [Tenant resolution is identification, not authorization](#tenant-resolution-is-identification-not-authorization).
+**This is input sanitization, not access control.** The regex — and, for a path-read tenant, the store's `HasTenant` check — reject *garbage*, not *cross-tenant access*. A forged value naming a real tenant passes both checks and resolves fine. Resolution answers "which tenant does this request claim to be for"; it never checks whether the caller is entitled to that tenant. See [Tenant resolution is identification, not authorization](#tenant-resolution-is-identification-not-authorization).
 
 ## Unknown tenants
 
-The seat checks a tenant's form, not its existence, so a well-formed tenant the deployment does not serve reaches the handler. The first per-tenant accessor the request calls (`deps.DB(ctx)`, `deps.Cache(ctx)`, `deps.Messaging(ctx)`) refuses it: for a key absent from `multitenant.tenants`, the built-in store returns an error that `errors.Is` `multitenant.ErrUnknownTenant`. The answer is the malformed-tenant one, 400 `BAD_REQUEST` "Invalid tenant", plus one WARN with `reason="unknown tenant"` whose `path` is the route template, never the tenant ID ([ADR-161](adr_161_unknown_tenant_is_a_client_fault.md)). A known tenant missing a section, the control-plane key `""` and named databases still answer 500, as server faults.
+**A path-read tenant is written only when the store holds it** ([ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md)). When a `path` resolver produced the id (a bare `path` resolver, or the `path` member of a composite chain), the seat asks the App's tenant resource source (`multitenant.TenantChecker`, which `*config.TenantStore` implements) before writing it. An id the store does not hold is never written: the request runs on with no tenant through global middleware, route-group middleware and JOSE inbound verification, and the typed or raw handler adapter then answers 400 `BAD_REQUEST` "Invalid tenant" before binding, with one WARN reading `reason="unknown tenant"` and the masked path. An unauthenticated caller on an auth group gets the group's 401 for every id, and an unmatched request keeps its 404/405. The App hands the server it builds its resource source's check (`server.Options.TenantChecker`), replacing any value in `app.Options.ServerOptions`; a server passed as `app.Options.Server` keeps its own. A server whose resolver may read the path and that has no checker (a hand-built one without `server.Options.TenantChecker`, or an App whose custom `app.Options.ResourceSource` has no `HasTenant`) fails `Start` before binding. With a checker, `Start` writes one INFO line, `[server.tenant] a tenant read from the request path is written only when the tenant store holds it (ADR-170) store=<type>`, plus `tenants=<n>` for a `*config.TenantStore`.
+
+Operating it:
+
+- **A custom resource source's `HasTenant`** must load its set before `app.New`, keep the last good set on a failed refresh, never shrink to empty because a refresh failed, never panic, and log each refresh's size. It is in memory: no context, no I/O, no blocking.
+- **Every path tenant answering 400 on one pod** (check the `[server.tenant]` startup line's store and count) means that pod's set is empty or stale; `Panic recovered` with no access line means its `HasTenant` panicked.
+- **Authenticated unknown-tenant 400s** read as catalog drift or credentialed enumeration. The principal appears only on the span's `enduser.id`, with `auth.jwt.telemetry.enduserid` on; otherwise correlate on `client.address` and `user_agent.original`.
+
+Header- and subdomain-won tenants are checked for form only, so a well-formed tenant the deployment does not serve reaches the handler. The first per-tenant accessor the request calls (`deps.DB(ctx)`, `deps.Cache(ctx)`, `deps.Messaging(ctx)`) refuses it: for a key absent from `multitenant.tenants`, the built-in store returns an error that `errors.Is` `multitenant.ErrUnknownTenant`. The answer is the malformed-tenant one, 400 `BAD_REQUEST` "Invalid tenant", plus one WARN with `reason="unknown tenant"` whose `path` is the masked route template (`/REDACTED/orders`), never the tenant ID ([ADR-161](adr_161_unknown_tenant_is_a_client_fault.md), [ADR-167](adr_167_inbound_paths_render_from_route_template.md)). A known tenant missing a section, the control-plane key `""` and named databases still answer 500, as server faults.
 
 - **Raw handlers and middleware** get it automatically: return the accessor's error, bare or wrapped with `%w`.
 - **Typed handlers** return it through `server.NewUnknownTenantError`. The door is fail-closed: a cause that is not the sentinel (nil, an outage, a timeout) answers 500, so it is safe for any accessor error. A `WithRawResponse` route renders the same `code` and `message` in its flat shape, and a JOSE route through its own error sink.
@@ -70,7 +78,7 @@ case err != nil:
 
 **A custom `app.Options.CacheConnector` still dials an unknown tenant:** it owns its dial, and the framework reads the store's error for that key as "no cache section". Refuse unknown tenants in the connector, or before the handler as below.
 
-**Refusing before the handler.** The handler runs until its first accessor, and a route that never calls one serves the unknown tenant. To refuse earlier, or in your own shape, attach a group middleware: it runs right after the seat, so the tenant is in context. It reads the tenant catalog and writes its own bytes:
+**Refusing before the handler (header- and subdomain-won tenants).** A path-read tenant the store does not hold never reaches this middleware with a tenant (above). For a header or subdomain tenant, the handler runs until its first accessor, and a route that never calls one serves the unknown tenant. To refuse earlier, or in your own shape, attach a group middleware: it runs after the seat, so a tenant the seat wrote is in context. It reads the tenant catalog and writes its own bytes:
 
 ```go
 func knownTenant(deps *app.ModuleDeps) server.MiddlewareFunc {
@@ -78,7 +86,7 @@ func knownTenant(deps *app.ModuleDeps) server.MiddlewareFunc {
 		ctx := c.RequestContext()
 		tenantID, ok := multitenant.GetTenant(ctx) // set by the seat, which runs first
 		if !ok {
-			return errors.New("knownTenant: no tenant in context") // 500: mounted without multitenant
+			return next() // none written: a path tenant the store does not hold, refused 400 by the handler adapter
 		}
 		catalog, err := deps.DBByName(ctx, "catalog")
 		if err != nil {
@@ -257,5 +265,13 @@ if err != nil {
 }
 ctx = multitenant.SetTenant(ctx, tenantID)
 ```
+
+### Path provenance
+
+`multitenant.Resolve(ctx, resolver, req)` returns the error `resolver.ResolveTenant` returns and, when that error is nil, its id (on error the id is empty), plus `fromPath`: true when a `*PathResolver` produced the id, or a resolver whose provenance is unknown. Provenance is judged on the concrete framework types alone, so a consumer type, even one embedding `*HeaderResolver`, counts as unknown (fail closed). `multitenant.MayReadPath(resolver)` is the static check: false only when every member able to produce an id is a header or subdomain resolver; a resolver tree that reaches itself answers true (fail closed).
+
+When `multitenant.enabled` is true and `MayReadPath` is true for the configured resolver, the root tenant seat skips the framework's own routes, as it skips the probes: everything under `<server.path.base>/_sys` (the scheduler's job API) and, only when `debug.enabled` is also true, everything under `debug.pathprefix`. Otherwise nothing is skipped. Those routes carry no tenant, a composite chain's header or subdomain tenant included ([ADR-169](adr_169_framework_routes_skip_path_tenant.md)). Startup refuses a consumer route, middleware-bearing group or `server.TenantOwnedGroup` family at or below either root, and, under those same conditions, an enabled `debug.pathprefix` that is empty or `/` (the engine root) or at or above `server.path.base`: that prefix is not skipped, Start fails naming both keys ([ADR-168](adr_168_framework_route_roots_reserved.md)).
+
+`multitenant.TenantChecker` (`HasTenant(tenantID string) bool`) is the in-memory existence check that `*config.TenantStore` implements. The framework seat asks it about every id `Resolve` reports `fromPath` ([Unknown tenants](#unknown-tenants), [ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md)); the public `server.TenantMiddleware` does not ask it yet. Its godoc carries the contract every implementation keeps. `tenantID` may be an unadmitted request value, so never log it, echo it, put it in an error, send it outbound, pass it to a `deps.*` call, or use it as a cache, store or metric key. Answer false for `""` and for any non-tenant key, `config.NamedDatabasePrefix` keys included. Be safe for concurrent use and hold the complete set before `app.New`. On a failed refresh, keep the last good set rather than shrink to empty. Never panic. The answer is existence, not authorization.
 
 For the multi-tenant resource resolution that consumes the tenant ID downstream (`deps.DB(ctx)`, `deps.Cache(ctx)`, etc.), see the per-subsystem wiki pages.

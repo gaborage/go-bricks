@@ -60,8 +60,13 @@ Every entry under `linters.exclusions.rules` is a GoBricks path and means nothin
 repo — `logger/adapter.go` (zerologlint), `cmd/seal-payload/` (an importas carve-out), and
 a few rules scoped to `_test.go`. Delete them all and add your own as findings justify.
 Drop the GoBricks-internal `forbidigo` patterns too: the two ADR-083 ones
-(`trace.Span.RecordError`, `semconv.Exception*`) and `echo.New(WithConfig)` (#2212, whose
-`msg` points at the unexported `server.newEngine`). They enforce GoBricks architecture
+(`trace.Span.RecordError`, `semconv.Exception*`), `echo.New(WithConfig)`, and all three
+inbound path-door patterns (#2212): `http.Request.(URL|RequestURI|PathValue|SetPathValue)`,
+the echo v5 path/query/form reads, and `server.HandlerContext.(Param|Query|PathParams)`. Drop
+the three together, with the exclusion rules keyed to their `msg`s: the second reuses the
+first's `msg` through the YAML anchor `*pathDoorMsg`, so keeping it alone fails
+`golangci-lint config verify` with `unknown anchor`. The `echo.New` and path-door `msg`s point
+at the unexported `server.newEngine` and `server.maskedPath`. They enforce GoBricks architecture
 decisions and mean nothing outside this repo. Keep the
 `otel.(Logger|GetLoggerProvider|SetLoggerProvider)` pattern, with `analyze-types: true`, if
 your app logs through GoBricks. GoBricks registers no global LoggerProvider, so records emitted
@@ -167,9 +172,10 @@ direction. GoBricks carried two `text: "var-naming: avoid package names"` stanza
 dead from revive v1.15.0 onward, when that check moved to a separate rule and the wording
 changed. Those two stanzas were suppressing nothing, and nothing said so — deleting them
 changed no findings. Prefer scoping by `path` and `linters` over matching message text.
-GoBricks' one exception is its `server/router_test.go` `forbidigo` stanza, which keys off the
-forbidden identifier because scoping by linter alone would also exempt the ADR-083 and otel
-patterns in that file.
+GoBricks' exceptions are `forbidigo` stanzas, where scoping by linter would lift every pattern:
+`server/router_test.go` keys off the identifier (``use of `echo\.New``), and the path-door
+stanzas key off the msg forbidigo's issue text quotes — each pattern shares or owns one, so an
+exclusion lifts exactly its patterns, and `.golangci.yml` writes that msg, so no release rewords it.
 
 Keep the `presets` list (`comments`, `common-false-positives`, `legacy`,
 `std-error-handling`) — those are generic.

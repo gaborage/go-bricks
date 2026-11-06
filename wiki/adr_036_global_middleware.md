@@ -3,6 +3,12 @@
 **Status:** Accepted
 **Date:** 2026-07-05
 
+> **Reversed in part (2026-11-03, by [ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md)):**
+> "the tenant already in context" no longer holds for a path-read tenant the store does not hold.
+> Under a path-reading resolver such a tenant is never written, so global middleware runs with no
+> tenant in context, and the route's handler adapter answers 400 "Invalid tenant" afterwards. A
+> global gate that requires a tenant must pass a tenant-less request through.
+
 ## Context
 
 Applications need app-wide HTTP middleware — canonically an auth gate — that runs once
@@ -69,9 +75,17 @@ chain, would run there with no tenant in context. Startup therefore refuses a bi
 least one non-nil global middleware is installed and a tenant-owned family is built, in either
 order. After `Start`, `TenantOwnedGroup` panics, and so does `RegisterGlobalMiddleware` beside a
 family. So in a binary that passes the startup check, global middleware runs after tenant
-resolution and the Consequences below hold as written. Running global middleware inside a family's
+resolution and the Consequences below hold as written, except on the framework routes the
+amendment below exempts. Running global middleware inside a family's
 pipeline, after its tenant is published, would lift the refusal additively, but it would make the
 global-middleware seat a second reader of route ownership.
+
+**Amendment (2026-11-03, [ADR-169](adr_169_framework_routes_skip_path_tenant.md)).** Under a
+tenant resolver that may read the path, the root tenant seat also skips the framework's own routes
+under `<base>/_sys` and an enabled `debug.pathprefix`, so global middleware runs there with no
+tenant in context, a composite chain's header or subdomain tenant included. Startup refuses a consumer route
+under those roots ([ADR-168](adr_168_framework_route_roots_reserved.md)), so on every consumer
+route the statement above still holds.
 
 The app invokes the server method through an optional (inline) type assertion rather than
 adding a method to the exported `ServerRunner` interface — keeping `ServerRunner`
@@ -83,7 +97,9 @@ unsafe, so the app refuses to start rather than serve unguarded traffic.
 ## Consequences
 
 - Auth / API-key / audit gates install once, un-skippable, with the tenant already in context
-  (see the amendment above).
+  (see the amendments above: under a path-reading resolver the framework's `/_sys` and debug
+  routes carry none, ADR-169, and a path-read tenant the store does not hold is never written,
+  ADR-170).
 - Runs after rate-limit / timeout / gzip / bodyLimit (innermost slot): an unauthenticated
   request still consumes rate-limit budget. This is an auth-gate hook, not a general
   "run early" hook.

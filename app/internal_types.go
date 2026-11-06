@@ -4,6 +4,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/observability"
 )
 
@@ -22,4 +23,7 @@ type dependencyBundle struct {
 	cacheManager     *cache.CacheManager
 	provider         ResourceProvider
 	observability    observability.Provider
+	// tenantChecker is the resource source's existence check, nil when the source has no
+	// HasTenant; the server's tenant seat asks it about a path-read tenant (ADR-170).
+	tenantChecker multitenant.TenantChecker
 }

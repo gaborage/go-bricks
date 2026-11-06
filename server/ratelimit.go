@@ -20,11 +20,13 @@ const (
 // resolved (ADR-160); the IP is derived through server.trustedproxies (ADR-057).
 // If requestsPerSecond is 0 or negative, rate limiting is disabled.
 //
-// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
-// echo-native logic lives in rateLimitEcho, which setupMiddlewares wires directly
-// on the default request path (ADR-026, no per-request baton).
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form. It keys on
+// c.RealIP() for every request, never on the access line's memoized address: that memo
+// belongs to the default chain's limiter (rateLimitEcho, which setupMiddlewares wires
+// directly on the default request path, ADR-026), and a consumer limiter attached
+// elsewhere must not depend on what an earlier middleware cached.
 func RateLimit(requestsPerSecond int) MiddlewareFunc {
-	return fromEchoMiddleware(rateLimitEcho(requestsPerSecond))
+	return fromEchoMiddleware(rateLimiterEcho(requestsPerSecond, middleware.DefaultSkipper, (*echo.Context).RealIP))
 }
 
 // TenantRateLimit returns a rate limiting middleware keyed on the tenant in the
@@ -44,11 +46,12 @@ func TenantRateLimit(requestsPerSecond int) MiddlewareFunc {
 	return fromEchoMiddleware(rateLimiterEcho(requestsPerSecond, withoutTenant, contextTenant))
 }
 
-// rateLimitEcho is the echo-native rate-limiting middleware constructor. Public
-// callers use RateLimit (echo-free); setupMiddlewares uses this form to keep the
-// default chain baton-free.
+// rateLimitEcho is the echo-native rate-limiting middleware constructor for the
+// default chain only: setupMiddlewares uses this form to keep it baton-free. The key
+// is clientAddress, so the access line reuses the address the limiter extracted.
+// Public callers use RateLimit, which keys on c.RealIP() instead.
 func rateLimitEcho(requestsPerSecond int) echo.MiddlewareFunc {
-	return rateLimiterEcho(requestsPerSecond, middleware.DefaultSkipper, (*echo.Context).RealIP)
+	return rateLimiterEcho(requestsPerSecond, middleware.DefaultSkipper, clientAddress)
 }
 
 func withoutTenant(ctx *echo.Context) bool {

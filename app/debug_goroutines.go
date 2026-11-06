@@ -18,9 +18,9 @@ func (d *DebugHandlers) handleGoroutines(c server.HandlerContext) error {
 	start := time.Now()
 
 	// Query parameters
-	includeStacks := c.Query("stacks") == "true"
-	detectLeaks := c.Query("leaks") == "true"
-	format := c.Query("format") // "json" (default) or "text"
+	includeStacks := c.Query("stacks") == "true" //nolint:forbidigo // debug handler reads its own query flags, compared against literals and never printed (#2212)
+	detectLeaks := c.Query("leaks") == "true"    //nolint:forbidigo // debug handler reads its own query flags, compared against literals and never printed (#2212)
+	format := c.Query("format")                  //nolint:forbidigo // debug handler reads its own query flag, "json" (default) or "text", compared against literals and never printed (#2212)
 
 	if format == "text" {
 		return d.handleGoroutinesText(c)

@@ -54,8 +54,9 @@ func WithRequestCounters(ctx context.Context) context.Context {
 	return context.WithValue(ctx, countersKey, &requestCounters{})
 }
 
-// WithSeverityHook attaches a severity hook to the context. The hook is used by the
-// logging adapter to propagate WARN/ERROR logs back to request middleware for routing.
+// WithSeverityHook attaches a severity hook to the context. The logging adapter calls it for
+// every WARN/ERROR line logged through the context, enabled or not, and the request
+// middleware raises the request's access line to that level; it never drops the line.
 func WithSeverityHook(ctx context.Context, hook func(zerolog.Level)) context.Context {
 	if ctx == nil || hook == nil {
 		return ctx

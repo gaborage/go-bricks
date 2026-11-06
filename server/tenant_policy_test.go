@@ -292,7 +292,10 @@ func TestTenantPolicyDenyWiringFaults(t *testing.T) {
 			require.Len(t, entries, 1)
 			assert.Equal(t, "error", entries[0].level)
 			assert.Contains(t, entries[0].msg, fmt.Sprintf("reason=%q", tt.reason))
-			assert.Contains(t, entries[0].msg, fmt.Sprintf("path=%q", tenantPolicyTestTemplate))
+			// The path is maskedPath: this test context has no masking engine, so it fails
+			// closed to the bare token; the engine-built rendering is pinned in
+			// tenant_family_test.go.
+			assert.Contains(t, entries[0].msg, fmt.Sprintf("path=%q", maskToken))
 			assert.NotContains(t, entries[0].msg, "status=")
 			assert.NotContains(t, entries[0].msg, secretTenantValue)
 			assert.NotContains(t, entries[0].msg, "ord-secret-9")

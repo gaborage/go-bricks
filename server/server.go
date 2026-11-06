@@ -39,8 +39,9 @@ type Server struct {
 	readyMu      sync.RWMutex
 	readyHandler echo.HandlerFunc
 	admission    *routeAdmission
-	setupErr     error                    // a construction-time configuration error Start returns before binding
-	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
+	setupErr     error                     // a construction-time configuration error Start returns before binding
+	pathChecker  multitenant.TenantChecker // the check the tenant seat asks about a path-read tenant; nil when it asks none (ADR-170)
+	boundAddr    atomic.Pointer[net.Addr]  // set via ListenerAddrFunc once Start's listener is bound; nil until then
 	ready        chan struct{}
 	started      atomic.Bool
 	// lifecycleMu serializes the readiness commit in onBeforeServe with Shutdown.
@@ -139,16 +140,22 @@ func normalizeRoutePath(route, defaultRoute string) string {
 
 // buildFullPath combines base path with route path
 func (s *Server) buildFullPath(route string) string {
-	if s.basePath == "" || s.basePath == "/" {
+	return joinBasePath(s.basePath, route)
+}
+
+// joinBasePath combines a normalized base path with a route path; frameworkRoots uses it for
+// the scheduler root, so the root and the route the scheduler registers share one rule.
+func joinBasePath(basePath, route string) string {
+	if basePath == "" || basePath == "/" {
 		return route
 	}
 
 	// If route is just "/", don't append it to avoid double slashes
 	if route == "/" {
-		return s.basePath
+		return basePath
 	}
 
-	return s.basePath + route
+	return basePath + route
 }
 
 // trustedProxyOptions turns the configured server.trustedproxies CIDR ranges
@@ -289,7 +296,21 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 	if observabilityEnabled {
 		s.setupErr = otelServerNameError(cfg.App.Name)
 	}
-	s.admission.seated = setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath, s.admission.owns)
+	seat := setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath,
+		seatInputs{owned: s.admission.owns, checkPath: true, checker: s.opts.TenantChecker})
+	// Admission reserves the framework route roots the seat computed for its resolver (ADR-168),
+	// and Start refuses a debug prefix that would cover the module routes.
+	s.admission.seated, s.admission.frameworkRoots = seat.seated, seat.frameworkRoots
+	s.setupErr = goerrors.Join(s.setupErr, seat.rootsErr)
+	// Under a resolver that may read the path the seat refuses every path tenant without a
+	// check, so Start refuses instead of booting a server that answers 400 to all of them; one
+	// served anyway (Echo() behind another listener) stays fail-closed (seatInputs.holds).
+	if seat.checksPath {
+		if s.opts.TenantChecker == nil {
+			s.setupErr = goerrors.Join(s.setupErr, errNoTenantChecker)
+		}
+		s.pathChecker = s.opts.TenantChecker
+	}
 
 	if s.probeAddr != "" {
 		s.probeEcho = newProbeEngine(e, cfg, log, healthRoute, readyRoute)
@@ -318,9 +339,11 @@ func httpErrorHandler(cfg *config.Config, log logger.Logger) echo.HTTPErrorHandl
 		if goerrors.As(err, &panicErr) {
 			// SECURITY: debug-gate the panic cause the same way as the unhandled-5xx
 			// path — a panicking driver/downstream error can embed PII/PCI, and the
-			// SensitiveDataFilter masks by field name, not message content.
+			// SensitiveDataFilter masks by field name, not message content. The line is
+			// correlated (correlateLine), so a handler panic joins its access line and span.
+			lc := correlateLine(c)
 			appendErrorDetail(
-				log.Error().Bytes("stack", panicErr.Stack).Str("request_id", safeGetRequestID(c)),
+				lc.stamp(log.Error().Bytes("stack", panicErr.Stack)),
 				panicErr.Unwrap(), cfg.App.Debug,
 			).Msg("Panic recovered")
 		}
@@ -417,7 +440,7 @@ func (s *Server) RegisterReadyHandler(handler Handler) {
 	if handler == nil {
 		s.readyHandler = s.readyCheck
 	} else {
-		s.readyHandler = adaptHandler(handler, s.cfg)
+		s.readyHandler = adaptHandler(handler, s.cfg, s.logger)
 	}
 }
 
@@ -525,6 +548,8 @@ func (s *Server) Start() error {
 		return err
 	}
 
+	logPathRendering(s.logger, listenerApplication)
+	logPathTenantCheck(s.logger, s.pathChecker)
 	s.logger.Info().
 		Str("service", s.cfg.App.Name).
 		Str("version", s.cfg.App.Version).
@@ -653,11 +678,67 @@ func (s *Server) startProbeListener(tlsCfg *tls.Config) (closeProbes func(), err
 
 	boundAddr := ln.Addr()
 	s.probeBoundAddr.Store(&boundAddr)
+	logPathRendering(s.logger, ListenerProbes)
 	s.logger.Info().
 		Str("address", boundAddr.String()).
 		Msg("Starting probe listener...")
 	go s.serveProbes(p.srv, ln)
 	return p.close, nil
+}
+
+// listenerApplication names the application listener on the [server.paths] line; the probe
+// listener is ListenerProbes, the name every other startup line uses.
+const listenerApplication = "application"
+
+// pathRenderingRule names the inbound-path rule of ADR-167 on the [server.paths] line.
+const pathRenderingRule = "masked_route_template"
+
+// logPathRendering states, once per engine as its listener starts, the rule every framework
+// inbound path sink on that listener follows (ADR-167): the access line's url.path and
+// message, the span's url.path and every framework WARN and ERROR path print the matched
+// route template with each parameter and the wildcard tail as the token, never request bytes.
+func logPathRendering(l logger.Logger, listener string) {
+	l.Info().
+		Str("log.type", "action"). // Mark as action log for dual-mode routing
+		Msgf("[server.paths] inbound paths render from the matched route template "+
+			"rule=%s listener=%s token=%s unmatched=%s",
+			pathRenderingRule, listener, maskToken, maskToken)
+}
+
+// errNoTenantChecker refuses Start for a server whose tenant seat may read the tenant from the
+// request path but has no server.Options.TenantChecker to ask about it (ADR-170).
+var errNoTenantChecker = goerrors.New("server: multitenant.resolver may read the tenant from the request path " +
+	"but server.Options.TenantChecker is nil, so every path tenant would answer 400: set it, or build the " +
+	"server through the App with a resource source that implements HasTenant (ADR-170)")
+
+// logPathTenantCheck states, once as the application listener starts, that the tenant seat
+// writes a path-read tenant only when checker holds it (ADR-170), naming the store's type and,
+// for the built-in *config.TenantStore, how many tenants it holds. A nil checker (a seat that
+// reads no path, or none at all) writes no line.
+func logPathTenantCheck(l logger.Logger, checker multitenant.TenantChecker) {
+	if checker == nil {
+		return
+	}
+	msg := fmt.Sprintf("[server.tenant] a tenant read from the request path is written only when "+
+		"the tenant store holds it (ADR-170) store=%T", checker)
+	if store, ok := checker.(*config.TenantStore); ok && store != nil {
+		msg += " tenants=" + strconv.Itoa(heldTenantCount(store))
+	}
+	l.Info().
+		Str("log.type", "action"). // Mark as action log for dual-mode routing
+		Msg(msg)
+}
+
+// heldTenantCount counts the ids store's HasTenant answers true for: every key but "" and a
+// config.NamedDatabasePrefix key.
+func heldTenantCount(store *config.TenantStore) int {
+	n := 0
+	for id := range store.Tenants() {
+		if store.HasTenant(id) {
+			n++
+		}
+	}
+	return n
 }
 
 // serveProbes runs the probe listener until it stops, sends any serve error other than

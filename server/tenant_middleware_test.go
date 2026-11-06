@@ -73,7 +73,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			capturer := &capturingLogger{}
 			e := newTenantTestEcho()
-			e.Use(tenantMiddlewareEcho(tc.resolver, nil, nil, capturer))
+			e.Use(tenantMiddlewareEcho(tc.resolver, nil, seatInputs{}, capturer))
 			e.GET("/tenant-check", func(c *echo.Context) error {
 				return c.String(http.StatusOK, "ok")
 			})
@@ -104,7 +104,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 	resolver := &fixedTenantResolver{tenantID: "", err: nil}
 	e := newTenantTestEcho()
-	e.Use(tenantMiddlewareEcho(resolver, nil, nil, nil))
+	e.Use(tenantMiddlewareEcho(resolver, nil, seatInputs{}, nil))
 	e.GET("/tenant-check", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
@@ -119,11 +119,11 @@ func TestTenantMiddlewareNilLoggerDoesNotPanic(t *testing.T) {
 }
 
 // TestTenantRejectionLogEscapesRequestValues varies the attacker-written
-// dimension of logTenantRejection: method, path and client IP must reach the
-// log escaped on both logger paths.
+// dimension of logTenantRejection: the client IP must reach the log escaped on
+// both logger paths, and the request path not at all.
 func TestTenantRejectionLogEscapesRequestValues(t *testing.T) {
 	assertRejectionLogEscapesRequestValues(t, func(l logger.Logger, c *echo.Context) {
-		logTenantRejection(l, c, tenantRejectionReason(nil), c.Request().URL.Path)
+		logTenantRejection(l, c, tenantRejectionReason(nil))
 	})
 }
 
@@ -214,9 +214,9 @@ func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testLog := &testLogger{}
 			srv := newTenantServer(tc.resolver, testLog)
-			route, path := "/orders", "/orders"
+			route, path, masked := "/orders", "/orders", "/orders"
 			if tc.resolver == config.ResolverTypePath {
-				route, path = "/:tenant/orders", "/"+unknownTenantID+"/orders"
+				route, path, masked = "/:tenant/orders", "/"+unknownTenantID+"/orders", "/"+maskToken+"/orders"
 			}
 			if tc.typed {
 				hr := NewHandlerRegistry(srv.cfg, WithLogger(testLog))
@@ -241,7 +241,7 @@ func TestUnknownTenantRefusalLogsReasonClassOnly(t *testing.T) {
 			require.Len(t, warns, 1, "exactly one WARN per refusal")
 			assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
 			assert.Contains(t, warns[0].msg, "status=400")
-			assert.Contains(t, warns[0].msg, fmt.Sprintf("path=%q", route), "the route template, never the URL")
+			assert.Contains(t, warns[0].msg, fmt.Sprintf("path=%q", masked), "the masked route template, never the URL")
 			for _, field := range append([]string{warns[0].msg}, slices.Collect(maps.Values(warns[0].values))...) {
 				assert.NotContains(t, field, unknownTenantID, "the tenant ID never reaches the line")
 				assert.NotContains(t, field, "configuration not found", "the error text never reaches the line")
@@ -381,6 +381,36 @@ func TestTenantSeatSkipsOwnedPrefix(t *testing.T) {
 			assert.Len(t, warns, wantWarns, "the seat answers, and logs, only a route no family owns")
 		})
 	}
+}
+
+// TestTenantRejectionCorrelatesItsLine pins the seat's rejection WARN to the request on both
+// logger paths.
+func TestTenantRejectionCorrelatesItsLine(t *testing.T) {
+	seat := func(l logger.Logger) echo.MiddlewareFunc {
+		return tenantMiddlewareEcho(&fixedTenantResolver{}, nil, seatInputs{}, l)
+	}
+	t.Run("framework_logger", func(t *testing.T) {
+		l := &testLogger{}
+		serveCorrelated(t, seat(l), correlatedRequest(t, true))
+		entries := l.logEntries()
+		require.Len(t, entries, 1)
+		assert.Contains(t, entries[0].msg, "[server.tenant] request rejected")
+		assertLineCorrelated(t, entries[0])
+	})
+	t.Run("nil_logger_stdlib_fallback", func(t *testing.T) {
+		buf := captureStdlibLog(t)
+		serveCorrelated(t, seat(nil), correlatedRequest(t, true))
+		line := strings.TrimSuffix(buf.String(), "\n")
+		assert.True(t, strings.HasSuffix(line, `reason="empty tenant"`+correlationSuffix), "got %q", line)
+	})
+	t.Run("disabled_warn_level_formats_nothing", func(t *testing.T) {
+		dl := &disabledLogger{ev: &disabledEvent{}}
+		reads := serveCorrelated(t, seat(dl), correlatedRequest(t, true))
+		assert.Zero(t, reads, "a disabled WARN level must not read the client address")
+		assert.False(t, dl.ev.msgCalled)
+		assert.Equal(t, int32(1), serveCorrelated(t, seat(&testLogger{}), correlatedRequest(t, true)),
+			"an enabled WARN reads the client address once")
+	})
 }
 
 // echoTenant answers 200 with the tenant on the request context, "" for none.

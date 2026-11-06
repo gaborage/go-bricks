@@ -417,6 +417,19 @@ on 1.27.
 # → Register it through the family's registrar, or move the route or group off the
 #   prefix (ancestor groups, ModuleGroup and RootGroup are fine)
 
+# "route registration refused (N conflict(s))" + "under a framework route root"
+# → Under a path-reading resolver (path, or composite with path), a route, a group
+#   carrying middleware or a TenantOwnedGroup family sits at or below <server.path.base>/_sys or an enabled
+#   debug.pathprefix, and its handler package is not scheduler or app (ADR-168)
+# → Move the route, group or family outside both roots; only the scheduler's job API and the
+#   App's debug group register there
+
+# "server: debug.pathprefix ... is at or above server.path.base ..."
+# → Under a path-reading resolver, an enabled debug.pathprefix of "", "/" or one at or
+#   above server.path.base would reserve every module route (ADR-168)
+# → Set debug.pathprefix to a non-root path below the engine root that neither equals nor
+#   covers a non-empty server.path.base (/_debug over /api)
+
 # "tenant-owned route family with global middleware: ..."
 # → The binary installs global middleware AND builds a server.TenantOwnedGroup family
 #   (errors.Is(err, server.ErrTenantFamilyWithGlobalMiddleware)). Global middleware would
