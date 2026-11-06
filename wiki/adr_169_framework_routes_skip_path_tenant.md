@@ -27,7 +27,7 @@ cover the module routes.
 
 ## Decision
 
-**Under a resolver that may read the path (`multitenant.MayReadPath`), the tenant seat skips
+**With `multitenant.enabled` and a resolver that may read the path (`multitenant.MayReadPath`), the tenant seat skips
 every matched route template under the framework route roots, as it skips the probes.** The roots
 are the ones ADR-168 reserves, `<base>/_sys` always plus `debug.pathprefix` when `debug.enabled`
 is true; admission and the seat read one list, so the seat skips exactly what admission reserves.
