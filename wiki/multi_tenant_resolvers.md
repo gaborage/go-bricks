@@ -258,4 +258,12 @@ if err != nil {
 ctx = multitenant.SetTenant(ctx, tenantID)
 ```
 
+### Path provenance
+
+`multitenant.Resolve(ctx, resolver, req)` returns the error `resolver.ResolveTenant` returns and, when that error is nil, its id (on error the id is empty), plus `fromPath`: true when a `*PathResolver` produced the id, or a resolver whose provenance is unknown. Provenance is judged on the concrete framework types alone, so a consumer type, even one embedding `*HeaderResolver`, counts as unknown (fail closed). `multitenant.MayReadPath(resolver)` is the static check: false only when every member able to produce an id is a header or subdomain resolver; a resolver tree that reaches itself answers true (fail closed).
+
+When `multitenant.enabled` is true and `MayReadPath` is true for the configured resolver, the root tenant seat skips the framework's own routes, as it skips the probes: everything under `<server.path.base>/_sys` (the scheduler's job API) and, only when `debug.enabled` is also true, everything under `debug.pathprefix`. Otherwise nothing is skipped. Those routes carry no tenant, a composite chain's header or subdomain tenant included ([ADR-169](adr_169_framework_routes_skip_path_tenant.md)). Startup refuses a consumer route, middleware-bearing group or `server.TenantOwnedGroup` family at or below either root, and, under those same conditions, an enabled `debug.pathprefix` that is empty or `/` (the engine root) or at or above `server.path.base`: that prefix is not skipped, Start fails naming both keys ([ADR-168](adr_168_framework_route_roots_reserved.md)).
+
+`multitenant.TenantChecker` (`HasTenant(tenantID string) bool`) is the in-memory existence check that `*config.TenantStore` implements. Its godoc carries the contract every implementation keeps. `tenantID` may be an unadmitted request value, so never log it, echo it, put it in an error, send it outbound, pass it to a `deps.*` call, or use it as a cache, store or metric key. Answer false for `""` and for any non-tenant key, `config.NamedDatabasePrefix` keys included. Be safe for concurrent use and hold the complete set before `app.New`. On a failed refresh, keep the last good set rather than shrink to empty. Never panic. The answer is existence, not authorization.
+
 For the multi-tenant resource resolution that consumes the tenant ID downstream (`deps.DB(ctx)`, `deps.Cache(ctx)`, etc.), see the per-subsystem wiki pages.

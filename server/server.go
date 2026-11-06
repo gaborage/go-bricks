@@ -139,16 +139,22 @@ func normalizeRoutePath(route, defaultRoute string) string {
 
 // buildFullPath combines base path with route path
 func (s *Server) buildFullPath(route string) string {
-	if s.basePath == "" || s.basePath == "/" {
+	return joinBasePath(s.basePath, route)
+}
+
+// joinBasePath combines a normalized base path with a route path; frameworkRoots uses it for
+// the scheduler root, so the root and the route the scheduler registers share one rule.
+func joinBasePath(basePath, route string) string {
+	if basePath == "" || basePath == "/" {
 		return route
 	}
 
 	// If route is just "/", don't append it to avoid double slashes
 	if route == "/" {
-		return s.basePath
+		return basePath
 	}
 
-	return s.basePath + route
+	return basePath + route
 }
 
 // trustedProxyOptions turns the configured server.trustedproxies CIDR ranges
@@ -289,7 +295,11 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 	if observabilityEnabled {
 		s.setupErr = otelServerNameError(cfg.App.Name)
 	}
-	s.admission.seated = setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath, s.admission.owns)
+	seat := setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath, s.admission.owns)
+	// Admission reserves the framework route roots the seat computed for its resolver (ADR-168),
+	// and Start refuses a debug prefix that would cover the module routes.
+	s.admission.seated, s.admission.frameworkRoots = seat.seated, seat.frameworkRoots
+	s.setupErr = goerrors.Join(s.setupErr, seat.rootsErr)
 
 	if s.probeAddr != "" {
 		s.probeEcho = newProbeEngine(e, cfg, log, healthRoute, readyRoute)

@@ -6,6 +6,12 @@ package pathutil
 
 import "strings"
 
+// SystemPrefix is the framework's system route prefix: the scheduler mounts its job API at
+// <server.path.base>/_sys, and debug.pathprefix defaults to it at the engine root. Under a
+// tenant resolver that may read the path, the server reserves <base>/_sys for framework
+// routes (ADR-168).
+const SystemPrefix = "/_sys"
+
 func EnsureLeadingSlash(path string) string {
 	if path == "" {
 		return "/"

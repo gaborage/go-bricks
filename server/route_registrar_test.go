@@ -211,12 +211,10 @@ func TestRouteGroupAddEmitsRouteDescriptor(t *testing.T) {
 	assert.Equal(t, "/api/raw-widgets", d.Path)
 	assert.Equal(t, "GET:/api/raw-widgets", d.HandlerID)
 	assert.NotEmpty(t, d.HandlerName, "HandlerName falls back to the reflected function name")
-	// getCallerPackage(2) walks getCallerPackage → Add → this test function. Because the test is
-	// itself in package server, the attributed package is the server package. This pins the value
-	// but cannot, by construction, catch an under-shot skip that lands on Add's own frame (also
-	// package server) — validating that requires a caller in a different package.
+	// The handler is a closure in this test, which is in package server; a handler from another
+	// package is pinned through app's ModuleRegistry (TestModuleRoutesUnderFrameworkRootsRefused).
 	assert.Equal(t, "github.com/gaborage/go-bricks/server", d.Package,
-		"Package is derived from the registering caller's frame, same mechanism as typed routes")
+		"Package is the handler function's package, same mechanism as typed routes")
 
 	// Typed-only metadata stays zero-valued for raw routes.
 	assert.Nil(t, d.RequestType)
