@@ -580,6 +580,13 @@ func observedRequest(method, target, tenant string, headers map[string][]string)
 	return req
 }
 
+// viaTrustedProxy makes req arrive from a private-range peer, which echo's extractor trusts
+// by default, so its X-Forwarded-For chain is walked rather than ignored.
+func viaTrustedProxy(req *http.Request) *http.Request {
+	req.RemoteAddr = "10.0.0.5:41234"
+	return req
+}
+
 // observedRow is one request shape TestObservedRequestAllocsStable pins.
 type observedRow struct {
 	name       string
@@ -675,6 +682,15 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		{
 			name: "path_won_tenant", baseline: 114, wantStatus: http.StatusOK,
 			req: observedRequest(http.MethodGet, observedPathTenant, "", nil),
+		},
+		// A private-range proxy relays the client in X-Forwarded-For, so every RealIP walks
+		// the chain: the limiter extracts the address and the access line reuses it (A1m,
+		// 126 -> 123: the access line's second walk is gone; the pre-guard's walk stays).
+		{
+			name: "xff_path_won_tenant", baseline: 123, wantStatus: http.StatusOK,
+			req: viaTrustedProxy(observedRequest(http.MethodGet, observedPathTenant, "", map[string][]string{
+				HeaderXForwardedFor: {"203.0.113.7"},
+			})),
 		},
 		// Neither resolver finds a tenant: rejected before route matching.
 		{

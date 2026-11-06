@@ -338,7 +338,7 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 		RequestID:   requestID,
 		TraceID:     getTraceID(c),
 		Traceparent: traceparent,
-		ClientAddr:  c.RealIP(),
+		ClientAddr:  clientAddress(c),
 		UserAgent:   c.Request().UserAgent(),
 	}
 }
