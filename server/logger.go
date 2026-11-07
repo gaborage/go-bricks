@@ -122,19 +122,22 @@ func (rl *requestLogger) shouldSkipPath(c *echo.Context) bool {
 	return isProbeRequest(c, rl.config.HealthPath, rl.config.ReadyPath)
 }
 
-// extractStatus extracts HTTP status code from error or response.
-// Prioritizes error status (for unmatched routes) over response status.
+// extractStatus returns the status the client receives. A committed response has been
+// sent, so its status is the answer (the same rule echo applies). Otherwise echo's error
+// handler runs only after this middleware returns, so the response still holds the pooled
+// reset 200: an error's status comes from statusForError, the function the error handler
+// itself uses, and a nil error leaves the response status as written (#2213).
 func (rl *requestLogger) extractStatus(c *echo.Context, err error) int {
-	// Try error first (handles Echo's default 404 for unmatched routes)
-	if status := extractStatusFromError(err); status != 0 {
-		return status
-	}
-
-	// Fallback to response status (handles explicit c.JSON(status, ...))
-	if resp, unwrapErr := echo.UnwrapResponse(c.Response()); unwrapErr == nil {
+	resp, unwrapErr := echo.UnwrapResponse(c.Response())
+	if unwrapErr == nil && resp.Committed {
 		return resp.Status
 	}
-
+	if err != nil {
+		return statusForError(err)
+	}
+	if unwrapErr == nil {
+		return resp.Status
+	}
 	return 0
 }
 
@@ -178,7 +181,7 @@ func logActionSummary(
 	// is disabled (e.g. LOG_LEVEL=warn on a healthy 2xx request). WithContext must
 	// run before the check: a context-bound logger may carry a different level, so
 	// enablement is only accurate after binding.
-	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, err, peak)
+	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, peak)
 	event := createLogEvent(log.WithContext(ctx), logLevel)
 	if !event.Enabled() {
 		return
@@ -236,12 +239,11 @@ func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEven
 }
 
 // determineSeverity calculates log severity and result_code based on HTTP status, latency,
-// errors, and peak, the highest level the request escalated to (zerolog.InfoLevel when it
+// and peak, the highest level the request escalated to (zerolog.InfoLevel when it
 // did not). Returns (logLevel, resultCode) tuple.
 func determineSeverity(
 	status int,
 	latency, threshold time.Duration,
-	err error,
 	peak zerolog.Level,
 ) (logLevel, resultCode string) {
 	const (
@@ -250,8 +252,9 @@ func determineSeverity(
 		codeInfo  = "INFO"
 	)
 
-	// ERROR: 5xx status, unhandled error, or an escalation to ERROR+
-	if status >= 500 || (err != nil && status == 0) || peak >= zerolog.ErrorLevel {
+	// ERROR: 5xx status (an unhandled error included: extractStatus resolves it to the
+	// status the error handler writes), or an escalation to ERROR+
+	if status >= 500 || peak >= zerolog.ErrorLevel {
 		return logger.LevelError, codeError
 	}
 
@@ -366,12 +369,9 @@ func extractTenantID(ctx context.Context) string {
 // extractStatusFromError extracts HTTP status code from echo.HTTPError.
 // Returns 0 if err is nil. Unwraps *echo.HTTPError.Code first, then falls back
 // to echo.StatusCode(err) for v5 sentinel errors (ErrNotFound, etc.) that
-// implement HTTPStatusCoder but aren't *echo.HTTPError; returns 0 if neither matches.
-//
-// This is necessary because Echo's error handler runs AFTER middleware completes,
-// so c.Response().Status may not be set yet when logger middleware reads it.
-// By extracting the status from the error directly, we can log the correct status
-// even before the error handler updates the response.
+// implement HTTPStatusCoder but aren't *echo.HTTPError; returns 0 if neither matches,
+// so a caller can tell "carries no status" apart (the tenant policy's errorStatus).
+// The access line does not use it: it resolves an error through statusForError.
 func extractStatusFromError(err error) int {
 	if err == nil {
 		return 0

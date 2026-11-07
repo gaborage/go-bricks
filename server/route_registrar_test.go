@@ -664,24 +664,26 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 			req: observedRequest(http.MethodGet, "/files/42/a/b/c.txt", observedHeaderTenant, nil),
 		},
 		{
-			name: "method_not_allowed_on_registered_route", baseline: 125, wantStatus: http.StatusMethodNotAllowed,
+			name: "method_not_allowed_on_registered_route", baseline: 126, wantStatus: http.StatusMethodNotAllowed,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodPost, "/orders", observedHeaderTenant, nil),
 		},
 		// 404 with no route template, then 404 through the /admin group's "/admin/*" catch-all.
+		// Every error row carries +1 since #2213: the access line resolves an uncommitted
+		// error through statusForError, whose IAPIError errors.As target escapes.
 		{
-			name: "unmatched_route", baseline: 122, wantStatus: http.StatusNotFound,
+			name: "unmatched_route", baseline: 123, wantStatus: http.StatusNotFound,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodGet, "/nowhere", observedHeaderTenant, nil),
 		},
 		{
-			name: "group_catch_all", baseline: 124, wantStatus: http.StatusNotFound,
+			name: "group_catch_all", baseline: 125, wantStatus: http.StatusNotFound,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodGet, "/admin/nowhere", observedHeaderTenant, nil),
 		},
 		// Recover turns the panic into a 500, which the request logger reports at ERROR.
 		{
-			name: "handler_panic_recovered", baseline: 150, wantStatus: http.StatusInternalServerError,
+			name: "handler_panic_recovered", baseline: 151, wantStatus: http.StatusInternalServerError,
 			req: observedRequest(http.MethodGet, "/boom", observedHeaderTenant, nil),
 		},
 		// The header resolver runs first, so it wins even where the path carries a tenant.
@@ -761,7 +763,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// The family's catch-all: the steps publish, then the framework 404.
 		{
-			name: "family_unknown_sub_path_not_found", baseline: 128, family: true, wantStatus: http.StatusNotFound,
+			name: "family_unknown_sub_path_not_found", baseline: 129, family: true, wantStatus: http.StatusNotFound,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodGet, observedFamilyPrefix+"/nowhere", "", nil),
 		},

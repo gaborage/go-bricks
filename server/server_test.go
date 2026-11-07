@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -132,8 +133,12 @@ func (e *testLogEvent) Str(key, value string) logger.LogEvent {
 	return e
 }
 
-func (e *testLogEvent) Int(key string, _ int) logger.LogEvent {
+func (e *testLogEvent) Int(key string, val int) logger.LogEvent {
 	e.fields = append(e.fields, key)
+	if e.values == nil {
+		e.values = make(map[string]string)
+	}
+	e.values[key] = strconv.Itoa(val)
 	return e
 }
 
