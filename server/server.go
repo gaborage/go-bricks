@@ -948,6 +948,42 @@ func internalErrorMessage(cfg *config.Config) string {
 	return msgInternalErrorProd
 }
 
+// statusForError is the HTTP status the error handler writes for err when the response is
+// not yet committed. The request logger calls it for an uncommitted response, and its arms
+// are classifyError's arms in classifyError's order, so the access line and the wire cannot
+// diverge (#2213): deadline 503, an IAPIError's own status, an unknown tenant 400, then the
+// echo status echoErrorStatus reads, which classifyError itself calls, else 500 (panics,
+// context.Canceled and plain errors alike). TestStatusForErrorAgreesWithClassifyError pins
+// the parity.
+func statusForError(err error) int {
+	if goerrors.Is(err, context.DeadlineExceeded) {
+		return http.StatusServiceUnavailable
+	}
+	var apiErr IAPIError
+	if goerrors.As(err, &apiErr) {
+		return apiErr.HTTPStatus()
+	}
+	if goerrors.Is(err, multitenant.ErrUnknownTenant) {
+		return http.StatusBadRequest
+	}
+	if status, _ := echoErrorStatus(err); status != 0 {
+		return status
+	}
+	return http.StatusInternalServerError
+}
+
+// echoErrorStatus reads the status echo's own error types carry: a wrapped *echo.HTTPError's
+// code (returned too, for its message), else an echo status-coder sentinel's (ErrNotFound,
+// ErrMethodNotAllowed, which are not *HTTPError in v5), else 0 — so a caller can tell an
+// error that carries no status apart (the tenant policy's errorStatus).
+func echoErrorStatus(err error) (int, *echo.HTTPError) {
+	var he *echo.HTTPError
+	if goerrors.As(err, &he) {
+		return he.Code, he
+	}
+	return echo.StatusCode(err), nil
+}
+
 func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Logger) IAPIError {
 	// Context deadline exceeded (timeout errors)
 	if goerrors.Is(err, context.DeadlineExceeded) {
@@ -971,21 +1007,18 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 	}
 
 	// Map echo.HTTPError, echo.HTTPStatusCoder, and untyped errors.
-	// In v5, sentinel errors like ErrNotFound are httpError (lowercase) which
-	// implements HTTPStatusCoder but NOT *HTTPError, so we check both interfaces.
-	status := http.StatusInternalServerError
+	status, he := echoErrorStatus(err)
 	msg := msgInternalErrorDebug
-	var he *echo.HTTPError
-	if goerrors.As(err, &he) {
-		status = he.Code
+	if he != nil {
 		// In v5, HTTPError.Message is always a string
 		if he.Message != "" {
 			msg = he.Message
 		}
-	} else if sc := echo.StatusCode(err); sc != 0 {
-		// Handles httpError sentinels (ErrNotFound, ErrMethodNotAllowed, etc.)
-		status = sc
-		msg = http.StatusText(sc)
+	} else if status != 0 {
+		// An httpError sentinel (ErrNotFound, ErrMethodNotAllowed, etc.)
+		msg = http.StatusText(status)
+	} else {
+		status = http.StatusInternalServerError
 	}
 
 	// In non-debug (production) hide internal details for 500s

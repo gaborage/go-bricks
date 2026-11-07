@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -661,7 +662,7 @@ func TestDetermineSeveritySlowRequestDisabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(200, tt.latency, tt.threshold, nil, zerolog.InfoLevel)
+			level, code := determineSeverity(200, tt.latency, tt.threshold, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -707,7 +708,7 @@ func TestDetermineSeveritySlowRequestEnabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(200, tt.latency, threshold, nil, zerolog.InfoLevel)
+			level, code := determineSeverity(200, tt.latency, threshold, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -723,36 +724,26 @@ func TestDetermineSeverityPrecedence(t *testing.T) {
 	tests := []struct {
 		name      string
 		status    int
-		err       error
 		wantLevel string
 		wantCode  string
 	}{
 		{
 			name:      "500 error overrides slow request",
 			status:    500,
-			err:       nil,
 			wantLevel: "error",
 			wantCode:  "ERROR",
 		},
 		{
 			name:      "400 warning overrides slow request",
 			status:    400,
-			err:       nil,
 			wantLevel: "warn",
 			wantCode:  "WARN",
-		},
-		{
-			name:      "unhandled error with zero status",
-			status:    0,
-			err:       http.ErrServerClosed,
-			wantLevel: "error",
-			wantCode:  "ERROR",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(tt.status, slowLatency, threshold, tt.err, zerolog.InfoLevel)
+			level, code := determineSeverity(tt.status, slowLatency, threshold, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -782,7 +773,7 @@ func TestDetermineSeverityEscalation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(tt.status, tt.latency, threshold, nil, tt.peak)
+			level, code := determineSeverity(tt.status, tt.latency, threshold, tt.peak)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -1412,42 +1403,46 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 func TestRequestLoggerExtractStatus(t *testing.T) {
 	rl := newRequestLogger(&recLogger{}, LoggerConfig{})
 
-	t.Run("error status takes precedence", func(t *testing.T) {
-		e := newEngine()
+	// resetContext mirrors the context echo hands the middleware chain on a live request:
+	// the pooled reset leaves the response uncommitted at 200 (e.NewContext starts at 0).
+	resetContext := func() *echo.Context {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
+		c := newEngine().NewContext(req, httptest.NewRecorder())
+		resp, err := echo.UnwrapResponse(c.Response())
+		require.NoError(t, err)
+		resp.Status = http.StatusOK
+		return c
+	}
 
-		// Set response status to 200
+	t.Run("sent status wins over a later error", func(t *testing.T) {
+		c := resetContext()
 		c.Response().WriteHeader(http.StatusOK)
 
-		// But return 404 error
-		err := echo.NewHTTPError(http.StatusNotFound, "not found")
+		status := rl.extractStatus(c, echo.NewHTTPError(http.StatusNotFound, "not found"))
+		assert.Equal(t, http.StatusOK, status, "a committed response logs the status it sent")
+	})
 
-		status := rl.extractStatus(c, err)
-		assert.Equal(t, 404, status, "Error status should take precedence over response status")
+	t.Run("uncommitted response takes the error's status", func(t *testing.T) {
+		status := rl.extractStatus(resetContext(), echo.NewHTTPError(http.StatusNotFound, "not found"))
+		assert.Equal(t, http.StatusNotFound, status)
+	})
+
+	t.Run("uncommitted response with a plain error logs 500", func(t *testing.T) {
+		status := rl.extractStatus(resetContext(), errors.New("boom"))
+		assert.Equal(t, http.StatusInternalServerError, status, "not the reset 200")
 	})
 
 	t.Run("response status when no error", func(t *testing.T) {
-		e := newEngine()
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
+		c := resetContext()
 		c.Response().WriteHeader(http.StatusCreated)
 
 		status := rl.extractStatus(c, nil)
-		assert.Equal(t, 201, status)
+		assert.Equal(t, http.StatusCreated, status)
 	})
 
-	t.Run("zero when no status written", func(t *testing.T) {
-		e := newEngine()
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		status := rl.extractStatus(c, nil)
-		assert.Equal(t, 0, status, "Should return 0 when no status has been written")
+	t.Run("reset status when nothing was written and no error", func(t *testing.T) {
+		status := rl.extractStatus(resetContext(), nil)
+		assert.Equal(t, http.StatusOK, status)
 	})
 }
 
