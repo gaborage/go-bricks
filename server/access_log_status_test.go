@@ -177,6 +177,8 @@ func TestStatusForErrorAgreesWithClassifyError(t *testing.T) {
 		{name: "wrapped_http_error", err: fmt.Errorf("w: %w", echo.NewHTTPError(http.StatusTeapot, "t")), want: http.StatusTeapot},
 		{name: "wrapped_sentinel", err: fmt.Errorf("w: %w", forbidden), want: http.StatusForbidden},
 		{name: "canceled", err: context.Canceled, want: http.StatusInternalServerError},
+		{name: "canceled_with_iapierror", err: errors.Join(context.Canceled, NewNotFoundError("x")), want: http.StatusNotFound},
+		{name: "unknown_tenant_with_http_error", err: errors.Join(multitenant.ErrUnknownTenant, echo.NewHTTPError(http.StatusTeapot, "t")), want: http.StatusBadRequest},
 		{name: "plain", err: errors.New("boom"), want: http.StatusInternalServerError},
 	}
 	cfg := newTestConfig("", "", "")
