@@ -383,14 +383,13 @@ lines by identifier, not by path:
    caller's `X-Request-ID` when valid, and empty otherwise. Tell a guard line by
    its fields, not by its `request_id`.
 4. **Check the status against the caller's.** The access line's
-   `http.response.status_code` is read when the chain returns to the access
-   logger, before the error handler writes the response for a returned error:
-   the status of a returned echo HTTP error, otherwise the response status
-   written so far, which is 200 when nothing was written. A raw handler or a
-   middleware that returns an `IAPIError` or a plain error can therefore log 200
-   while the caller got the error's status (#2213); a typed handler's error is
-   written by the handler adapter first, so its status matches. Where they
-   disagree, trust the caller's status and the framework line.
+   `http.response.status_code` is the status the caller received (#2213). A
+   response already sent, by a write or a flush, logs its sent status even when
+   the handler then returned an error; otherwise a returned error logs the status
+   the error handler answers it with, from the same classification. A status no
+   response can carry is answered and logged as 500. Where they still disagree
+   (a hijacked connection has no HTTP status), trust the caller's status and
+   the framework line.
 5. **Follow `trace_id` to the span** when tracing is on: every correlated line
    carries the span's `trace_id`/`span_id` when the request's span context is
    valid. With `observability.enabled: false` no span is created, and with

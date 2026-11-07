@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -2025,6 +2026,50 @@ func TestClassifyErrorUnknownTenantIsClientFault(t *testing.T) {
 			for _, e := range unhandled {
 				assert.Equal(t, "error", e.level)
 			}
+		})
+	}
+}
+
+// TestStatusForErrorAgreesWithClassifyError pins that the access line's status and the
+// wire's come from one classification: statusForError and the response classifyError
+// builds agree for every arm, for errors that match more than one, and for a status the
+// wire cannot carry.
+func TestStatusForErrorAgreesWithClassifyError(t *testing.T) {
+	var forbidden error = echo.ErrForbidden
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "deadline", err: context.DeadlineExceeded, want: http.StatusServiceUnavailable},
+		{name: "deadline_wrapping_iapierror", err: errors.Join(context.DeadlineExceeded, NewNotFoundError("x")), want: http.StatusServiceUnavailable},
+		{name: "iapierror", err: NewNotFoundError("x"), want: http.StatusNotFound},
+		{name: "iapierror_beside_http_error", err: errors.Join(NewConflictError("x"), echo.NewHTTPError(http.StatusTeapot, "t")), want: http.StatusConflict},
+		{name: "unknown_tenant", err: fmt.Errorf("w: %w", multitenant.ErrUnknownTenant), want: http.StatusBadRequest},
+		{name: "wrapped_http_error", err: fmt.Errorf("w: %w", echo.NewHTTPError(http.StatusTeapot, "t")), want: http.StatusTeapot},
+		{name: "wrapped_sentinel", err: fmt.Errorf("w: %w", forbidden), want: http.StatusForbidden},
+		{name: "canceled", err: context.Canceled, want: http.StatusInternalServerError},
+		{name: "canceled_with_iapierror", err: errors.Join(context.Canceled, NewNotFoundError("x")), want: http.StatusNotFound},
+		{name: "unknown_tenant_with_http_error", err: errors.Join(multitenant.ErrUnknownTenant, echo.NewHTTPError(http.StatusTeapot, "t")), want: http.StatusBadRequest},
+		{name: "plain", err: errors.New("boom"), want: http.StatusInternalServerError},
+		{name: "unknown_tenant_with_iapierror", err: errors.Join(multitenant.ErrUnknownTenant, NewNotFoundError("x")), want: http.StatusNotFound},
+		{name: "method_not_allowed_sentinel", err: echo.ErrMethodNotAllowed, want: http.StatusMethodNotAllowed},
+		{name: "panic_stack_wrapping_iapierror", err: &middleware.PanicStackError{Err: NewConflictError("x")}, want: http.StatusConflict},
+		{name: "http_error_code_0", err: &echo.HTTPError{Code: 0}, want: http.StatusInternalServerError},
+		{name: "iapierror_status_0", err: NewBaseAPIError("Z", "z", 0), want: http.StatusInternalServerError},
+		{name: "iapierror_status_600", err: NewBaseAPIError("Z", "z", 600), want: http.StatusInternalServerError},
+		{name: "iapierror_status_599", err: NewBaseAPIError("Z", "z", 599), want: 599},
+		{name: "iapierror_status_199", err: NewBaseAPIError("Z", "z", 199), want: http.StatusInternalServerError},
+		{name: "iapierror_status_200", err: NewBaseAPIError("Z", "z", 200), want: http.StatusOK},
+		{name: "typed_nil_iapierror", err: (*BaseAPIError)(nil), want: http.StatusInternalServerError},
+	}
+	cfg := newTestConfig("", "", "")
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	c := newEngine().NewContext(req, httptest.NewRecorder())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, statusForError(tt.err))
+			assert.Equal(t, tt.want, classifyError(tt.err, c, cfg, &testLogger{}).HTTPStatus())
 		})
 	}
 }

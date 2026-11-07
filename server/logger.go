@@ -91,6 +91,8 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		}
 
+		reqCtx.writer.ResponseWriter = c.Response()
+		c.SetResponse(&reqCtx.writer)
 		err := next(c)
 
 		// Calculate request latency (thread-safe read)
@@ -122,10 +124,11 @@ func (rl *requestLogger) shouldSkipPath(c *echo.Context) bool {
 }
 
 // extractStatus returns the status the client receives. Echo's error handler runs only after
-// this middleware returns, so an uncommitted response still holds the pooled reset 200: an
-// error then resolves through statusForError, the function the error handler itself uses
+// this middleware returns, so an unsent response still holds the pooled reset 200: an error
+// then resolves through statusForError, the classification the error handler answers with
 // (#2213). Everything else is echo's own ResolveResponseStatus, whose committed-status-wins
-// rule is the sent-first rule.
+// rule is the sent-first rule; a flush commits first (flushCommitWriter), so a flushed
+// response counts as sent.
 func (rl *requestLogger) extractStatus(c *echo.Context, err error) int {
 	if err != nil && !isResponseCommitted(c) {
 		return statusForError(err)
@@ -246,8 +249,10 @@ func determineSeverity(
 	)
 
 	// ERROR: 5xx status (an unhandled error included: extractStatus resolves it to the
-	// status the error handler writes), or an escalation to ERROR+
-	if status >= 500 || peak >= zerolog.ErrorLevel {
+	// status the error handler writes), a status no response carries (0 included: a
+	// backstop, since the error handler answers an out-of-range status with 500), or an
+	// escalation to ERROR+
+	if status >= 500 || status < 100 || peak >= zerolog.ErrorLevel {
 		return logger.LevelError, codeError
 	}
 

@@ -664,26 +664,26 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 			req: observedRequest(http.MethodGet, "/files/42/a/b/c.txt", observedHeaderTenant, nil),
 		},
 		{
-			name: "method_not_allowed_on_registered_route", baseline: 126, wantStatus: http.StatusMethodNotAllowed,
+			name: "method_not_allowed_on_registered_route", baseline: 122, wantStatus: http.StatusMethodNotAllowed,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodPost, "/orders", observedHeaderTenant, nil),
 		},
 		// 404 with no route template, then 404 through the /admin group's "/admin/*" catch-all.
-		// Every error row carries +1 since #2213: the access line resolves an uncommitted
-		// error through statusForError, whose IAPIError errors.As target escapes.
+		// Error rows dropped by up to 4 with #2213: error classification reads with
+		// errors.AsType, whose target does not escape, where errors.As targets allocated.
 		{
-			name: "unmatched_route", baseline: 123, wantStatus: http.StatusNotFound,
+			name: "unmatched_route", baseline: 119, wantStatus: http.StatusNotFound,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodGet, "/nowhere", observedHeaderTenant, nil),
 		},
 		{
-			name: "group_catch_all", baseline: 125, wantStatus: http.StatusNotFound,
+			name: "group_catch_all", baseline: 121, wantStatus: http.StatusNotFound,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodGet, "/admin/nowhere", observedHeaderTenant, nil),
 		},
 		// Recover turns the panic into a 500, which the request logger reports at ERROR.
 		{
-			name: "handler_panic_recovered", baseline: 151, wantStatus: http.StatusInternalServerError,
+			name: "handler_panic_recovered", baseline: 147, wantStatus: http.StatusInternalServerError,
 			req: observedRequest(http.MethodGet, "/boom", observedHeaderTenant, nil),
 		},
 		// The header resolver runs first, so it wins even where the path carries a tenant.
@@ -721,9 +721,10 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 				HeaderXForwardedFor: {"203.0.113.7"},
 			})),
 		},
-		// Neither resolver finds a tenant: rejected before route matching.
+		// Neither resolver finds a tenant: rejected before route matching. 98 -> 97 with
+		// #2213: echoErrorStatus reads with errors.AsType.
 		{
-			name: "tenant_rejected", baseline: 98, wantStatus: http.StatusBadRequest,
+			name: "tenant_rejected", baseline: 97, wantStatus: http.StatusBadRequest,
 			warn: warnTenantRejected,
 			req:  observedRequest(http.MethodGet, "/orders", "", nil),
 		},
@@ -754,8 +755,9 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", nil),
 		},
 		// Deny answers the client fault with a bodyless 403, which the access logger WARNs.
+		// 115 -> 113 with #2213: echoErrorStatus reads with errors.AsType.
 		{
-			name: "family_route_denied", baseline: 115, family: true, wantStatus: http.StatusForbidden,
+			name: "family_route_denied", baseline: 113, family: true, wantStatus: http.StatusForbidden,
 			warn: warnAccessLog4xx,
 			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", map[string][]string{
 				observedDenyHeader: {"1"},
@@ -763,7 +765,7 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 		},
 		// The family's catch-all: the steps publish, then the framework 404.
 		{
-			name: "family_unknown_sub_path_not_found", baseline: 129, family: true, wantStatus: http.StatusNotFound,
+			name: "family_unknown_sub_path_not_found", baseline: 125, family: true, wantStatus: http.StatusNotFound,
 			warn: warnAccessLog4xx,
 			req:  observedRequest(http.MethodGet, observedFamilyPrefix+"/nowhere", "", nil),
 		},
