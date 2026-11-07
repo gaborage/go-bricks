@@ -134,12 +134,7 @@ func (e *testLogEvent) Str(key, value string) logger.LogEvent {
 }
 
 func (e *testLogEvent) Int(key string, val int) logger.LogEvent {
-	e.fields = append(e.fields, key)
-	if e.values == nil {
-		e.values = make(map[string]string)
-	}
-	e.values[key] = strconv.Itoa(val)
-	return e
+	return e.Str(key, strconv.Itoa(val))
 }
 
 func (e *testLogEvent) Int64(key string, _ int64) logger.LogEvent {

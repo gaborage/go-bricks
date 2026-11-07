@@ -20,19 +20,18 @@ import (
 )
 
 const (
-	accessStatusField = "http.response.status_code"
 	panicRecoveredMsg = "Panic recovered"
 	accessPanicSecret = "SECRET-VALUE-2213"
 )
 
 // newAccessLogServer builds a server through New with every handler outcome #2213 names
-// registered as a module route. The middleware timeout is short so the timeout row fires.
+// registered as a module route. The middleware timeout is short so the timeout row fires fast.
 func newAccessLogServer(t *testing.T, log logger.Logger, observability bool) *Server {
 	t.Helper()
 	cfg, err := config.LoadFromMap(map[string]any{
 		"observability.enabled":     observability,
 		"app.name":                  testServiceName,
-		"server.timeout.middleware": "50ms",
+		"server.timeout.middleware": "10ms",
 	})
 	require.NoError(t, err)
 	srv := New(cfg, log)
@@ -112,7 +111,7 @@ func TestAccessLogStatusMatchesTheWire(t *testing.T) {
 
 					require.Equal(t, tt.wantCode, rec.Code, "wire status")
 					access := findAccessLine(t, log)
-					assert.Equal(t, strconv.Itoa(rec.Code), access.values[accessStatusField],
+					assert.Equal(t, strconv.Itoa(rec.Code), access.values[otelHTTPStatusCode],
 						"access line status must equal the status the client received")
 					assert.Equal(t, tt.wantLevel, access.level, "access line level")
 					assert.Equal(t, strings.ToUpper(tt.wantLevel), access.values["result_code"], "result_code")
@@ -128,7 +127,7 @@ func findAccessLine(t *testing.T, log *testLogger) testLogEntry {
 	t.Helper()
 	var found []testLogEntry
 	for _, entry := range log.logEntries() {
-		if _, ok := entry.values[accessStatusField]; ok {
+		if _, ok := entry.values[otelHTTPStatusCode]; ok {
 			found = append(found, entry)
 		}
 	}

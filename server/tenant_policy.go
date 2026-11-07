@@ -202,7 +202,8 @@ func errorStatus(err error) int {
 	if errors.As(err, &apiErr) {
 		return apiErr.HTTPStatus()
 	}
-	return extractStatusFromError(err)
+	status, _ := echoErrorStatus(err)
+	return status
 }
 
 func isClientStatus(status int) bool {

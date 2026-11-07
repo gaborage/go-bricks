@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	goerrors "errors"
 	"strconv"
 	"time"
 
@@ -122,23 +121,17 @@ func (rl *requestLogger) shouldSkipPath(c *echo.Context) bool {
 	return isProbeRequest(c, rl.config.HealthPath, rl.config.ReadyPath)
 }
 
-// extractStatus returns the status the client receives. A committed response has been
-// sent, so its status is the answer (the same rule echo applies). Otherwise echo's error
-// handler runs only after this middleware returns, so the response still holds the pooled
-// reset 200: an error's status comes from statusForError, the function the error handler
-// itself uses, and a nil error leaves the response status as written (#2213).
+// extractStatus returns the status the client receives. Echo's error handler runs only after
+// this middleware returns, so an uncommitted response still holds the pooled reset 200: an
+// error then resolves through statusForError, the function the error handler itself uses
+// (#2213). Everything else is echo's own ResolveResponseStatus, whose committed-status-wins
+// rule is the sent-first rule.
 func (rl *requestLogger) extractStatus(c *echo.Context, err error) int {
-	resp, unwrapErr := echo.UnwrapResponse(c.Response())
-	if unwrapErr == nil && resp.Committed {
-		return resp.Status
-	}
-	if err != nil {
+	if err != nil && !isResponseCommitted(c) {
 		return statusForError(err)
 	}
-	if unwrapErr == nil {
-		return resp.Status
-	}
-	return 0
+	_, status := echo.ResolveResponseStatus(c.Response(), nil)
+	return status
 }
 
 // LoggerWithConfig returns a request logging middleware with custom configuration.
@@ -364,26 +357,4 @@ func extractTenantID(ctx context.Context) string {
 		return tenantID
 	}
 	return ""
-}
-
-// extractStatusFromError extracts HTTP status code from echo.HTTPError.
-// Returns 0 if err is nil. Unwraps *echo.HTTPError.Code first, then falls back
-// to echo.StatusCode(err) for v5 sentinel errors (ErrNotFound, etc.) that
-// implement HTTPStatusCoder but aren't *echo.HTTPError; returns 0 if neither matches,
-// so a caller can tell "carries no status" apart (the tenant policy's errorStatus).
-// The access line does not use it: it resolves an error through statusForError.
-func extractStatusFromError(err error) int {
-	if err == nil {
-		return 0
-	}
-	var he *echo.HTTPError
-	if goerrors.As(err, &he) {
-		return he.Code
-	}
-	// In v5, sentinel errors (ErrNotFound, ErrMethodNotAllowed, etc.) are httpError
-	// (lowercase) which implements HTTPStatusCoder but not *HTTPError.
-	if sc := echo.StatusCode(err); sc != 0 {
-		return sc
-	}
-	return 0
 }
