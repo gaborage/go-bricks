@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	goerrors "errors"
 	"strconv"
 	"time"
 
@@ -92,6 +91,8 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		}
 
+		reqCtx.writer.ResponseWriter = c.Response()
+		c.SetResponse(&reqCtx.writer)
 		err := next(c)
 
 		// Calculate request latency (thread-safe read)
@@ -122,20 +123,18 @@ func (rl *requestLogger) shouldSkipPath(c *echo.Context) bool {
 	return isProbeRequest(c, rl.config.HealthPath, rl.config.ReadyPath)
 }
 
-// extractStatus extracts HTTP status code from error or response.
-// Prioritizes error status (for unmatched routes) over response status.
+// extractStatus returns the status the client receives. Echo's error handler runs only after
+// this middleware returns, so an unsent response still holds the pooled reset 200: an error
+// then resolves through statusForError, the classification the error handler answers with
+// (#2213). Everything else is echo's own ResolveResponseStatus, whose committed-status-wins
+// rule is the sent-first rule; a flush commits first (flushCommitWriter), so a flushed
+// response counts as sent.
 func (rl *requestLogger) extractStatus(c *echo.Context, err error) int {
-	// Try error first (handles Echo's default 404 for unmatched routes)
-	if status := extractStatusFromError(err); status != 0 {
-		return status
+	if err != nil && !isResponseCommitted(c) {
+		return statusForError(err)
 	}
-
-	// Fallback to response status (handles explicit c.JSON(status, ...))
-	if resp, unwrapErr := echo.UnwrapResponse(c.Response()); unwrapErr == nil {
-		return resp.Status
-	}
-
-	return 0
+	_, status := echo.ResolveResponseStatus(c.Response(), nil)
+	return status
 }
 
 // LoggerWithConfig returns a request logging middleware with custom configuration.
@@ -178,7 +177,7 @@ func logActionSummary(
 	// is disabled (e.g. LOG_LEVEL=warn on a healthy 2xx request). WithContext must
 	// run before the check: a context-bound logger may carry a different level, so
 	// enablement is only accurate after binding.
-	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, err, peak)
+	logLevel, resultCode := determineSeverity(status, latency, cfg.SlowRequestThreshold, peak)
 	event := createLogEvent(log.WithContext(ctx), logLevel)
 	if !event.Enabled() {
 		return
@@ -236,12 +235,11 @@ func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEven
 }
 
 // determineSeverity calculates log severity and result_code based on HTTP status, latency,
-// errors, and peak, the highest level the request escalated to (zerolog.InfoLevel when it
+// and peak, the highest level the request escalated to (zerolog.InfoLevel when it
 // did not). Returns (logLevel, resultCode) tuple.
 func determineSeverity(
 	status int,
 	latency, threshold time.Duration,
-	err error,
 	peak zerolog.Level,
 ) (logLevel, resultCode string) {
 	const (
@@ -250,8 +248,11 @@ func determineSeverity(
 		codeInfo  = "INFO"
 	)
 
-	// ERROR: 5xx status, unhandled error, or an escalation to ERROR+
-	if status >= 500 || (err != nil && status == 0) || peak >= zerolog.ErrorLevel {
+	// ERROR: 5xx status (an unhandled error included: extractStatus resolves it to the
+	// status the error handler writes), a status no response carries (0 included: a
+	// backstop, since the error handler answers an out-of-range status with 500), or an
+	// escalation to ERROR+
+	if status >= 500 || status < 100 || peak >= zerolog.ErrorLevel {
 		return logger.LevelError, codeError
 	}
 
@@ -361,29 +362,4 @@ func extractTenantID(ctx context.Context) string {
 		return tenantID
 	}
 	return ""
-}
-
-// extractStatusFromError extracts HTTP status code from echo.HTTPError.
-// Returns 0 if err is nil. Unwraps *echo.HTTPError.Code first, then falls back
-// to echo.StatusCode(err) for v5 sentinel errors (ErrNotFound, etc.) that
-// implement HTTPStatusCoder but aren't *echo.HTTPError; returns 0 if neither matches.
-//
-// This is necessary because Echo's error handler runs AFTER middleware completes,
-// so c.Response().Status may not be set yet when logger middleware reads it.
-// By extracting the status from the error directly, we can log the correct status
-// even before the error handler updates the response.
-func extractStatusFromError(err error) int {
-	if err == nil {
-		return 0
-	}
-	var he *echo.HTTPError
-	if goerrors.As(err, &he) {
-		return he.Code
-	}
-	// In v5, sentinel errors (ErrNotFound, ErrMethodNotAllowed, etc.) are httpError
-	// (lowercase) which implements HTTPStatusCoder but not *HTTPError.
-	if sc := echo.StatusCode(err); sc != 0 {
-		return sc
-	}
-	return 0
 }

@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bufio"
+	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -16,14 +19,46 @@ const RequestLogContextKey = "_request_log_ctx"
 // It's stored in Echo's context (via c.Set/c.Get) to track severity escalation, which
 // raises the level of the request's action log summary.
 //
-// Thread-safety: All fields are protected by mu to allow concurrent access from
-// multiple goroutines (e.g., severity hook callbacks, async request handlers).
+// Thread-safety: mu protects every field but writer, to allow concurrent access from
+// multiple goroutines (e.g., severity hook callbacks, async request handlers); writer is set
+// once, by the request logger, before the chain below it runs.
 type requestLogContext struct {
-	mu            sync.Mutex    // Protects all fields below
+	mu            sync.Mutex    // Protects the fields below, writer excepted
 	startTime     time.Time     // Request start time
 	peakSeverity  zerolog.Level // Highest level escalated to during the request
 	clientAddr    string        // c.RealIP(), memoized by clientAddress
 	hasClientAddr bool          // True once clientAddr is filled
+	// writer is the request's response writer once the request logger installs it; a field,
+	// so installing it allocates nothing beyond this struct (ADR-026).
+	writer flushCommitWriter
+}
+
+// flushCommitWriter commits the echo response before it flushes, so a flushed response counts
+// as sent. net/http answers a Flush on an unwritten header with an implicit 200, but echo sets
+// Response.Committed only in WriteHeader, so without this a handler that flushed and then
+// returned an error was logged with the error's status while the client had a 200 (#2213),
+// and the error handler wrote a superfluous header. A hijacked connection has no HTTP status
+// to compare, so Hijack only passes through.
+type flushCommitWriter struct {
+	http.ResponseWriter
+}
+
+// Flush writes the pending status first when nothing is written yet, then flushes.
+func (w *flushCommitWriter) Flush() {
+	if resp, err := echo.UnwrapResponse(w.ResponseWriter); err == nil && !resp.Committed {
+		w.WriteHeader(resp.Status)
+	}
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Hijack passes through, so a w.(http.Hijacker) assertion keeps working.
+func (w *flushCommitWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+// Unwrap returns the wrapped writer, so echo.UnwrapResponse and http.ResponseController reach it.
+func (w *flushCommitWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func newRequestLogContext() *requestLogContext {

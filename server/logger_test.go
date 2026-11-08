@@ -4,8 +4,11 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -661,7 +664,7 @@ func TestDetermineSeveritySlowRequestDisabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(200, tt.latency, tt.threshold, nil, zerolog.InfoLevel)
+			level, code := determineSeverity(200, tt.latency, tt.threshold, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -707,7 +710,7 @@ func TestDetermineSeveritySlowRequestEnabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(200, tt.latency, threshold, nil, zerolog.InfoLevel)
+			level, code := determineSeverity(200, tt.latency, threshold, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -723,36 +726,26 @@ func TestDetermineSeverityPrecedence(t *testing.T) {
 	tests := []struct {
 		name      string
 		status    int
-		err       error
 		wantLevel string
 		wantCode  string
 	}{
 		{
 			name:      "500 error overrides slow request",
 			status:    500,
-			err:       nil,
 			wantLevel: "error",
 			wantCode:  "ERROR",
 		},
 		{
 			name:      "400 warning overrides slow request",
 			status:    400,
-			err:       nil,
 			wantLevel: "warn",
 			wantCode:  "WARN",
-		},
-		{
-			name:      "unhandled error with zero status",
-			status:    0,
-			err:       http.ErrServerClosed,
-			wantLevel: "error",
-			wantCode:  "ERROR",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(tt.status, slowLatency, threshold, tt.err, zerolog.InfoLevel)
+			level, code := determineSeverity(tt.status, slowLatency, threshold, zerolog.InfoLevel)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -778,11 +771,14 @@ func TestDetermineSeverityEscalation(t *testing.T) {
 		{name: "warn_peak_raises_slow_request", status: 200, latency: time.Second, peak: zerolog.WarnLevel, wantLevel: "warn", wantCode: "WARN"},
 		{name: "warn_peak_keeps_5xx", status: 500, peak: zerolog.WarnLevel, wantLevel: "error", wantCode: "ERROR"},
 		{name: "info_peak_keeps_2xx", status: 200, peak: zerolog.InfoLevel, wantLevel: "info", wantCode: "INFO"},
+		{name: "status_0_is_error", status: 0, peak: zerolog.InfoLevel, wantLevel: "error", wantCode: "ERROR"},
+		{name: "status_99_is_error", status: 99, peak: zerolog.InfoLevel, wantLevel: "error", wantCode: "ERROR"},
+		{name: "status_100_is_info", status: 100, peak: zerolog.InfoLevel, wantLevel: "info", wantCode: "INFO"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			level, code := determineSeverity(tt.status, tt.latency, threshold, nil, tt.peak)
+			level, code := determineSeverity(tt.status, tt.latency, threshold, tt.peak)
 			require.Equal(t, tt.wantLevel, level, logLevelMismatchMsg)
 			require.Equal(t, tt.wantCode, code, resultCodeMismatch)
 		})
@@ -1412,42 +1408,46 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 func TestRequestLoggerExtractStatus(t *testing.T) {
 	rl := newRequestLogger(&recLogger{}, LoggerConfig{})
 
-	t.Run("error status takes precedence", func(t *testing.T) {
-		e := newEngine()
+	// resetContext mirrors the context echo hands the middleware chain on a live request:
+	// the pooled reset leaves the response uncommitted at 200 (e.NewContext starts at 0).
+	resetContext := func() *echo.Context {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
+		c := newEngine().NewContext(req, httptest.NewRecorder())
+		resp, err := echo.UnwrapResponse(c.Response())
+		require.NoError(t, err)
+		resp.Status = http.StatusOK
+		return c
+	}
 
-		// Set response status to 200
+	t.Run("sent status wins over a later error", func(t *testing.T) {
+		c := resetContext()
 		c.Response().WriteHeader(http.StatusOK)
 
-		// But return 404 error
-		err := echo.NewHTTPError(http.StatusNotFound, "not found")
+		status := rl.extractStatus(c, echo.NewHTTPError(http.StatusNotFound, "not found"))
+		assert.Equal(t, http.StatusOK, status, "a committed response logs the status it sent")
+	})
 
-		status := rl.extractStatus(c, err)
-		assert.Equal(t, 404, status, "Error status should take precedence over response status")
+	t.Run("uncommitted response takes the error's status", func(t *testing.T) {
+		status := rl.extractStatus(resetContext(), echo.NewHTTPError(http.StatusNotFound, "not found"))
+		assert.Equal(t, http.StatusNotFound, status)
+	})
+
+	t.Run("uncommitted response with a plain error logs 500", func(t *testing.T) {
+		status := rl.extractStatus(resetContext(), errors.New("boom"))
+		assert.Equal(t, http.StatusInternalServerError, status, "not the reset 200")
 	})
 
 	t.Run("response status when no error", func(t *testing.T) {
-		e := newEngine()
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
+		c := resetContext()
 		c.Response().WriteHeader(http.StatusCreated)
 
 		status := rl.extractStatus(c, nil)
-		assert.Equal(t, 201, status)
+		assert.Equal(t, http.StatusCreated, status)
 	})
 
-	t.Run("zero when no status written", func(t *testing.T) {
-		e := newEngine()
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		rec := httptest.NewRecorder()
-		c := e.NewContext(req, rec)
-
-		status := rl.extractStatus(c, nil)
-		assert.Equal(t, 0, status, "Should return 0 when no status has been written")
+	t.Run("reset status when nothing was written and no error", func(t *testing.T) {
+		status := rl.extractStatus(resetContext(), nil)
+		assert.Equal(t, http.StatusOK, status)
 	})
 }
 
@@ -1697,4 +1697,211 @@ func TestMetaKeyCollisionWarnSkipsADisabledLevel(t *testing.T) {
 	out := mergeEnvelopeMeta(c, map[string]any{fieldTimestamp: "x"}, dl)
 	assert.False(t, dl.ev.msgCalled, "a disabled WARN level must write no collision line")
 	assert.NotEqual(t, "x", out[fieldTimestamp], "the framework key stays authoritative")
+}
+
+const (
+	panicRecoveredMsg = "Panic recovered"
+	accessPanicSecret = "SECRET-VALUE-2213"
+)
+
+// newAccessLogServer builds a server through New with every handler outcome #2213 names
+// registered as a module route. The middleware timeout is short so the timeout row fires fast.
+func newAccessLogServer(t *testing.T, log logger.Logger, observability bool) *Server {
+	t.Helper()
+	cfg, err := config.LoadFromMap(map[string]any{
+		"observability.enabled":     observability,
+		"app.name":                  testServiceName,
+		"server.timeout.middleware": "10ms",
+	})
+	require.NoError(t, err)
+	srv := New(cfg, log)
+	require.NoError(t, srv.setupErr)
+
+	hr := NewHandlerRegistry(srv.cfg, WithLogger(log))
+	r := srv.ModuleGroup()
+	r.Add(http.MethodGet, "/raw/panic", func(HandlerContext) error { panic(accessPanicSecret) })
+	r.Add(http.MethodGet, "/raw/plain", func(HandlerContext) error { return errors.New("plain failure") })
+	r.Add(http.MethodGet, "/raw/canceled", func(HandlerContext) error { return context.Canceled })
+	r.Add(http.MethodGet, "/raw/notfound", func(HandlerContext) error { return NewNotFoundError("widget") })
+	r.Add(http.MethodGet, "/raw/unknowntenant", func(HandlerContext) error {
+		return fmt.Errorf("resolve: %w", multitenant.ErrUnknownTenant)
+	})
+	r.Add(http.MethodGet, "/raw/deadline", func(HandlerContext) error { return context.DeadlineExceeded })
+	r.Add(http.MethodGet, "/raw/timeout", func(c HandlerContext) error {
+		<-c.RequestContext().Done()
+		return nil
+	})
+	r.Add(http.MethodGet, "/raw/sent-then-error", func(c HandlerContext) error {
+		if err := c.String(http.StatusOK, "sent"); err != nil {
+			return err
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "too late")
+	})
+	r.Add(http.MethodGet, "/raw/wrapped-httperror", func(HandlerContext) error {
+		return fmt.Errorf("wrap: %w", echo.NewHTTPError(http.StatusConflict, "conflict"))
+	})
+	r.Add(http.MethodGet, "/raw/wrapped-sentinel", func(HandlerContext) error {
+		var sentinel error = echo.ErrForbidden
+		return fmt.Errorf("wrap: %w", sentinel)
+	})
+	// A flushed response is sent: net/http writes an implicit 200 on Flush.
+	flushThen := func(flush func(http.ResponseWriter), err error) Handler {
+		return func(c HandlerContext) error {
+			flush(c.ResponseWriter())
+			return err
+		}
+	}
+	viaFlusher := func(w http.ResponseWriter) { w.(http.Flusher).Flush() }
+	viaController := func(w http.ResponseWriter) { _ = http.NewResponseController(w).Flush() }
+	r.Add(http.MethodGet, "/raw/flush-plain", flushThen(viaFlusher, errors.New("plain failure")))
+	r.Add(http.MethodGet, "/raw/flush-canceled", flushThen(viaFlusher, context.Canceled))
+	r.Add(http.MethodGet, "/raw/flush-httperror", flushThen(viaFlusher, echo.NewHTTPError(http.StatusNotFound, "late")))
+	r.Add(http.MethodGet, "/raw/controller-flush-plain", flushThen(viaController, errors.New("plain failure")))
+	r.Add(http.MethodGet, "/raw/controller-flush-canceled", flushThen(viaController, context.Canceled))
+	r.Add(http.MethodGet, "/raw/controller-flush-httperror", flushThen(viaController, echo.NewHTTPError(http.StatusNotFound, "late")))
+	// A status outside 100-599 is a consumer bug; the wire answers 500 for it.
+	r.Add(http.MethodGet, "/raw/httperror-code-0", func(HandlerContext) error { return &echo.HTTPError{Code: 0, Message: "zero"} })
+	r.Add(http.MethodGet, "/raw/iapierror-status-0", func(HandlerContext) error { return NewBaseAPIError("ZERO", "zero", 0) })
+	r.Add(http.MethodGet, "/raw/iapierror-status-42", func(HandlerContext) error { return NewBaseAPIError("LOW", "low", 42) })
+	r.Add(http.MethodGet, "/raw/iapierror-status-1000", func(HandlerContext) error { return NewBaseAPIError("HIGH", "high", 1000) })
+	r.Add(http.MethodGet, "/raw/typed-nil-iapierror", func(HandlerContext) error {
+		var apiErr *BaseAPIError
+		return apiErr
+	})
+	GET(hr, r, "/typed/panic", func(EmptyRequest, HandlerContext) (helloResp, IAPIError) {
+		panic(accessPanicSecret)
+	})
+	GET(hr, r, "/typed/notfound", func(EmptyRequest, HandlerContext) (helloResp, IAPIError) {
+		return helloResp{}, NewNotFoundError("widget")
+	})
+	return srv
+}
+
+// TestAccessLogStatusMatchesTheWire pins #2213: for every handler outcome, the access
+// line's status, level and result_code equal what the client received. It runs with
+// observability off and on because the OTel middleware sits outside the request logger;
+// the span sink itself is asserted by otel_middleware_test.go (assertSpanCarriesPanicTypeOnly),
+// since this test runs under the global no-op tracer.
+func TestAccessLogStatusMatchesTheWire(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		wantCode  int
+		wantLevel string
+		wantPanic bool
+		gzip      bool
+	}{
+		{name: "raw_panic", path: "/raw/panic", wantCode: 500, wantLevel: logger.LevelError, wantPanic: true},
+		{name: "typed_panic", path: "/typed/panic", wantCode: 500, wantLevel: logger.LevelError, wantPanic: true},
+		{name: "raw_plain_error", path: "/raw/plain", wantCode: 500, wantLevel: logger.LevelError},
+		{name: "raw_context_canceled", path: "/raw/canceled", wantCode: 500, wantLevel: logger.LevelError},
+		{name: "raw_iapierror_not_found", path: "/raw/notfound", wantCode: 404, wantLevel: logger.LevelWarn},
+		{name: "raw_unknown_tenant", path: "/raw/unknowntenant", wantCode: 400, wantLevel: logger.LevelWarn},
+		{name: "raw_deadline_exceeded", path: "/raw/deadline", wantCode: 503, wantLevel: logger.LevelError},
+		{name: "middleware_timeout", path: "/raw/timeout", wantCode: 503, wantLevel: logger.LevelError},
+		{name: "raw_sent_200_then_http_error", path: "/raw/sent-then-error", wantCode: 200, wantLevel: logger.LevelInfo},
+		{name: "raw_wrapped_http_error", path: "/raw/wrapped-httperror", wantCode: 409, wantLevel: logger.LevelWarn},
+		{name: "raw_wrapped_echo_sentinel", path: "/raw/wrapped-sentinel", wantCode: 403, wantLevel: logger.LevelWarn},
+		{name: "typed_iapierror_not_found", path: "/typed/notfound", wantCode: 404, wantLevel: logger.LevelWarn},
+		{name: "unmatched_route", path: "/no/such/route", wantCode: 404, wantLevel: logger.LevelWarn},
+		{name: "flush_then_plain_error", path: "/raw/flush-plain", wantCode: 200, wantLevel: logger.LevelInfo},
+		{name: "flush_then_context_canceled", path: "/raw/flush-canceled", wantCode: 200, wantLevel: logger.LevelInfo},
+		{name: "flush_then_http_error", path: "/raw/flush-httperror", wantCode: 200, wantLevel: logger.LevelInfo},
+		{name: "controller_flush_then_plain_error", path: "/raw/controller-flush-plain", wantCode: 200, wantLevel: logger.LevelInfo},
+		{name: "controller_flush_then_context_canceled", path: "/raw/controller-flush-canceled", wantCode: 200, wantLevel: logger.LevelInfo},
+		{name: "controller_flush_then_http_error", path: "/raw/controller-flush-httperror", wantCode: 200, wantLevel: logger.LevelInfo},
+		{name: "gzip_flush_then_plain_error", path: "/raw/flush-plain", wantCode: 200, wantLevel: logger.LevelInfo, gzip: true},
+		{name: "http_error_code_0", path: "/raw/httperror-code-0", wantCode: 500, wantLevel: logger.LevelError},
+		{name: "iapierror_status_0", path: "/raw/iapierror-status-0", wantCode: 500, wantLevel: logger.LevelError},
+		{name: "iapierror_status_42", path: "/raw/iapierror-status-42", wantCode: 500, wantLevel: logger.LevelError},
+		{name: "iapierror_status_1000", path: "/raw/iapierror-status-1000", wantCode: 500, wantLevel: logger.LevelError},
+		{name: "typed_nil_iapierror", path: "/raw/typed-nil-iapierror", wantCode: 500, wantLevel: logger.LevelError},
+	}
+
+	for _, observability := range []bool{false, true} {
+		t.Run("observability_"+strconv.FormatBool(observability), func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					log := &testLogger{}
+					srv := newAccessLogServer(t, log, observability)
+
+					req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.path, http.NoBody)
+					if tt.gzip {
+						req.Header.Set(echo.HeaderAcceptEncoding, "gzip")
+					}
+					rec := httptest.NewRecorder()
+					srv.echo.ServeHTTP(rec, req)
+
+					require.Equal(t, tt.wantCode, rec.Code, "wire status")
+					access := findAccessLine(t, log)
+					assert.Equal(t, strconv.Itoa(rec.Code), access.values[otelHTTPStatusCode],
+						"access line status must equal the status the client received")
+					assert.Equal(t, tt.wantLevel, access.level, "access line level")
+					assert.Equal(t, strings.ToUpper(tt.wantLevel), access.values["result_code"], "result_code")
+
+					assertPanicLines(t, log, rec, tt.wantPanic, access)
+				})
+			}
+		})
+	}
+}
+
+func findAccessLine(t *testing.T, log *testLogger) testLogEntry {
+	t.Helper()
+	var found []testLogEntry
+	for _, entry := range log.logEntries() {
+		if _, ok := entry.values[otelHTTPStatusCode]; ok {
+			found = append(found, entry)
+		}
+	}
+	require.Len(t, found, 1, "exactly one access line per request")
+	return found[0]
+}
+
+// assertPanicLines checks exactly one "Panic recovered" line per panic (a fix running the
+// error handler twice would double it), that the access line's error field keeps the
+// C60.23 `panic (type:` shape, and that the panic value reaches no sink (ADR-081).
+func assertPanicLines(t *testing.T, log *testLogger, rec *httptest.ResponseRecorder, wantPanic bool, access testLogEntry) {
+	t.Helper()
+	recovered := 0
+	for _, entry := range log.logEntries() {
+		if entry.msg == panicRecoveredMsg {
+			recovered++
+		}
+		assert.NotContains(t, entry.msg, accessPanicSecret)
+		for _, v := range entry.values {
+			assert.NotContains(t, v, accessPanicSecret)
+		}
+	}
+	assert.NotContains(t, rec.Body.String(), accessPanicSecret)
+	if !wantPanic {
+		assert.Zero(t, recovered, "no panic, no Panic recovered line")
+		return
+	}
+	assert.Equal(t, 1, recovered, "exactly one Panic recovered line per panic")
+	assert.Contains(t, access.values["error"], "panic (type:", "C60.23 row 6 error-field shape")
+}
+
+// TestFlushCommitWriterCommitsBeforeFlushAndPassesThrough pins that a flush commits the
+// pending status, and that the writer the request logger installs still unwraps to echo's
+// response and still answers a direct http.Hijacker assertion.
+func TestFlushCommitWriterCommitsBeforeFlushAndPassesThrough(t *testing.T) {
+	rec := httptest.NewRecorder()
+	resp := echo.NewResponse(rec, nil)
+	resp.Status = http.StatusOK
+	var w http.ResponseWriter = &flushCommitWriter{ResponseWriter: resp}
+
+	unwrapped, err := echo.UnwrapResponse(w)
+	require.NoError(t, err)
+	assert.Same(t, resp, unwrapped)
+
+	hj, ok := w.(http.Hijacker)
+	require.True(t, ok, "a direct Hijacker assertion must keep working")
+	_, _, err = hj.Hijack()
+	require.ErrorIs(t, err, http.ErrNotSupported, "the recorder cannot hijack; the call reached it")
+
+	w.(http.Flusher).Flush()
+	assert.True(t, resp.Committed, "a flush commits the response")
+	assert.True(t, rec.Flushed)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }

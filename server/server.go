@@ -927,9 +927,6 @@ func customErrorHandler(c *echo.Context, err error, cfg *config.Config, log logg
 	_ = formatter(c, apiErr, cfg)
 }
 
-// classifyError converts an arbitrary error into a structured IAPIError.
-// It handles context.DeadlineExceeded, IAPIError, echo.HTTPError, and
-// untyped errors, applying production sanitization and server-error logging.
 // The 500 body's message text. Production hides the internal wording; debug
 // keeps it. They are constants, and internalErrorMessage is the single reader,
 // because the panic guard outside Echo's Recover renders its own 500 without
@@ -948,45 +945,124 @@ func internalErrorMessage(cfg *config.Config) string {
 	return msgInternalErrorProd
 }
 
-func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Logger) IAPIError {
-	// Context deadline exceeded (timeout errors)
+// errorClass is the one classification of a handler error: the status the error handler
+// answers with, which the access line logs too (#2213), and what builds the response.
+type errorClass struct {
+	status int       // always a status the wire can carry (isWireErrorStatus)
+	apiErr IAPIError // set by the IAPIError arm: the response as-is
+	msg    string    // the echo and fallback arms' message
+	arm    errorArm  // the arms whose response classifyError builds itself
+}
+
+// errorArm names the deadline and unknown-tenant arms; their responses are built only by
+// classifyError, so statusForError's path allocates none.
+type errorArm uint8
+
+const (
+	armOther errorArm = iota
+	armDeadline
+	armUnknownTenant
+)
+
+// internalErrorClass is the 500 an error with no status the wire can carry gets.
+var internalErrorClass = errorClass{status: http.StatusInternalServerError, msg: msgInternalErrorDebug}
+
+// classifyErrorClass applies the arms in order: deadline 503, an IAPIError's own status, an
+// unknown tenant 400, the status echo's own error types carry, else 500 (panics,
+// context.Canceled and plain errors alike). A status the wire cannot carry, a typed-nil
+// IAPIError included, falls back to 500, so log and wire both read 500. It reads with
+// errors.AsType, whose target does not escape, so a request pays no allocation for it however
+// many times it is classified (ADR-026).
+func classifyErrorClass(err error) errorClass {
 	if goerrors.Is(err, context.DeadlineExceeded) {
+		return errorClass{status: http.StatusServiceUnavailable, arm: armDeadline}
+	}
+	if apiErr, ok := goerrors.AsType[apiErrorInChain](err); ok {
+		if status := apiErrorStatus(apiErr); isWireErrorStatus(status) {
+			return errorClass{status: status, apiErr: apiErr}
+		}
+		return internalErrorClass
+	}
+	if goerrors.Is(err, multitenant.ErrUnknownTenant) {
+		return errorClass{status: http.StatusBadRequest, arm: armUnknownTenant}
+	}
+	status, he := echoErrorStatus(err)
+	class := errorClass{status: status, msg: msgInternalErrorDebug}
+	if he != nil && he.Message != "" {
+		class.msg = he.Message // in v5, HTTPError.Message is always a string
+	} else if he == nil && status != 0 {
+		class.msg = http.StatusText(status) // an httpError sentinel (ErrNotFound, ErrMethodNotAllowed, ...)
+	}
+	if !isWireErrorStatus(status) {
+		class.status = http.StatusInternalServerError
+	}
+	return class
+}
+
+// apiErrorInChain is an IAPIError as errors.AsType can look for one: every link of an error
+// chain is an error, so it finds exactly what errors.As with an IAPIError target finds.
+type apiErrorInChain interface {
+	error
+	IAPIError
+}
+
+// statusForError is the status the error handler answers err with on an uncommitted
+// response; the request logger logs it for that case (#2213).
+func statusForError(err error) int {
+	return classifyErrorClass(err).status
+}
+
+// isWireErrorStatus reports whether the error handler can answer with status as written. A
+// 1xx is informational, so net/http follows it with an implicit 200; 0 becomes echo's default
+// 200; outside 100-999 net/http panics.
+func isWireErrorStatus(status int) bool {
+	return status >= http.StatusOK && status <= 599
+}
+
+// apiErrorStatus reads a consumer IAPIError's status, or 0 when HTTPStatus panics: a typed-nil
+// pointer returned as an error, the classic Go gotcha, must not take the access line down.
+func apiErrorStatus(apiErr IAPIError) (status int) {
+	defer func() {
+		if recover() != nil {
+			status = 0
+		}
+	}()
+	return apiErr.HTTPStatus()
+}
+
+// echoErrorStatus reads the status echo's own error types carry: a wrapped *echo.HTTPError's
+// code (returned too, for its message), else an echo status-coder sentinel's (ErrNotFound,
+// ErrMethodNotAllowed, which are not *HTTPError in v5), else 0 — so a caller can tell an
+// error that carries no status apart (the tenant policy's errorStatus).
+func echoErrorStatus(err error) (int, *echo.HTTPError) {
+	if he, ok := goerrors.AsType[*echo.HTTPError](err); ok {
+		return he.Code, he
+	}
+	return echo.StatusCode(err), nil
+}
+
+// classifyError converts err into the IAPIError the error handler renders, from the one
+// classification statusForError reads (classifyErrorClass), applying production
+// sanitization and server-error logging.
+func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Logger) IAPIError {
+	class := classifyErrorClass(err)
+	if class.arm == armDeadline {
 		return NewServiceUnavailableError("Request processing timed out")
 	}
-
-	// Already a structured API error — use as-is. A type assertion, not its own errors.As,
-	// finds the unknown-tenant refusal: an escaping target allocates on every error (ADR-026).
-	var apiErr IAPIError
-	if goerrors.As(err, &apiErr) {
-		if unknownTenant, ok := apiErr.(*UnknownTenantError); ok {
+	if class.apiErr != nil {
+		// A type assertion, not its own errors.As, finds the unknown-tenant refusal.
+		if unknownTenant, ok := class.apiErr.(*UnknownTenantError); ok {
 			logUnknownTenantRefusal(unknownTenant, c, log, cfg.App.Debug)
 		}
-		return apiErr
+		return class.apiErr
 	}
-
-	if goerrors.Is(err, multitenant.ErrUnknownTenant) {
+	if class.arm == armUnknownTenant {
 		unknownTenant := NewUnknownTenantError(err)
 		logUnknownTenantRefusal(unknownTenant, c, log, cfg.App.Debug)
 		return unknownTenant
 	}
 
-	// Map echo.HTTPError, echo.HTTPStatusCoder, and untyped errors.
-	// In v5, sentinel errors like ErrNotFound are httpError (lowercase) which
-	// implements HTTPStatusCoder but NOT *HTTPError, so we check both interfaces.
-	status := http.StatusInternalServerError
-	msg := msgInternalErrorDebug
-	var he *echo.HTTPError
-	if goerrors.As(err, &he) {
-		status = he.Code
-		// In v5, HTTPError.Message is always a string
-		if he.Message != "" {
-			msg = he.Message
-		}
-	} else if sc := echo.StatusCode(err); sc != 0 {
-		// Handles httpError sentinels (ErrNotFound, ErrMethodNotAllowed, etc.)
-		status = sc
-		msg = http.StatusText(sc)
-	}
+	status, msg := class.status, class.msg
 
 	// In non-debug (production) hide internal details for 500s
 	if !cfg.App.Debug && status == http.StatusInternalServerError {
