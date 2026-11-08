@@ -949,19 +949,23 @@ func internalErrorMessage(cfg *config.Config) string {
 // answers with, which the access line logs too (#2213), and what builds the response.
 type errorClass struct {
 	status int       // always a status the wire can carry (isWireErrorStatus)
-	apiErr IAPIError // the IAPIError arm: the response as-is
+	apiErr IAPIError // set by the IAPIError arm: the response as-is
 	msg    string    // the echo and fallback arms' message
-	arm    errorArm
+	arm    errorArm  // the arms whose response classifyError builds itself
 }
 
+// errorArm names the deadline and unknown-tenant arms; their responses are built only by
+// classifyError, so statusForError's path allocates none.
 type errorArm uint8
 
 const (
-	armFallback errorArm = iota
+	armOther errorArm = iota
 	armDeadline
-	armAPIError
 	armUnknownTenant
 )
+
+// internalErrorClass is the 500 an error with no status the wire can carry gets.
+var internalErrorClass = errorClass{status: http.StatusInternalServerError, msg: msgInternalErrorDebug}
 
 // classifyErrorClass applies the arms in order: deadline 503, an IAPIError's own status, an
 // unknown tenant 400, the status echo's own error types carry, else 500 (panics,
@@ -975,9 +979,9 @@ func classifyErrorClass(err error) errorClass {
 	}
 	if apiErr, ok := goerrors.AsType[apiErrorInChain](err); ok {
 		if status := apiErrorStatus(apiErr); isWireErrorStatus(status) {
-			return errorClass{status: status, apiErr: apiErr, arm: armAPIError}
+			return errorClass{status: status, apiErr: apiErr}
 		}
-		return errorClass{status: http.StatusInternalServerError, msg: msgInternalErrorDebug}
+		return internalErrorClass
 	}
 	if goerrors.Is(err, multitenant.ErrUnknownTenant) {
 		return errorClass{status: http.StatusBadRequest, arm: armUnknownTenant}
@@ -1045,7 +1049,7 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 	if class.arm == armDeadline {
 		return NewServiceUnavailableError("Request processing timed out")
 	}
-	if class.arm == armAPIError {
+	if class.apiErr != nil {
 		// A type assertion, not its own errors.As, finds the unknown-tenant refusal.
 		if unknownTenant, ok := class.apiErr.(*UnknownTenantError); ok {
 			logUnknownTenantRefusal(unknownTenant, c, log, cfg.App.Debug)

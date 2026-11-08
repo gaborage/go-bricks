@@ -48,9 +48,7 @@ func (w *flushCommitWriter) Flush() {
 	if resp, err := echo.UnwrapResponse(w.ResponseWriter); err == nil && !resp.Committed {
 		w.WriteHeader(resp.Status)
 	}
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 // Hijack passes through, so a w.(http.Hijacker) assertion keeps working.

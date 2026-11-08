@@ -755,9 +755,9 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", nil),
 		},
 		// Deny answers the client fault with a bodyless 403, which the access logger WARNs.
-		// 115 -> 113 with #2213: echoErrorStatus reads with errors.AsType.
+		// 115 -> 111 with #2213: errorStatus reads with errors.AsType.
 		{
-			name: "family_route_denied", baseline: 113, family: true, wantStatus: http.StatusForbidden,
+			name: "family_route_denied", baseline: 111, family: true, wantStatus: http.StatusForbidden,
 			warn: warnAccessLog4xx,
 			req: observedRequest(http.MethodGet, observedFamilyPrefix+"/orders", "", map[string][]string{
 				observedDenyHeader: {"1"},

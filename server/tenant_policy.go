@@ -196,11 +196,11 @@ func (p TenantPolicy) deny(c HandlerContext, l logger.Logger, fault error) error
 }
 
 // errorStatus returns the HTTP status err carries as an IAPIError or an echo.HTTPStatusCoder
-// (*echo.HTTPError included), or 0.
+// (*echo.HTTPError included), or 0. It reads an IAPIError as the error handler's
+// classification does (apiErrorStatus), so a typed nil carries no status here either.
 func errorStatus(err error) int {
-	var apiErr IAPIError
-	if errors.As(err, &apiErr) {
-		return apiErr.HTTPStatus()
+	if apiErr, ok := errors.AsType[apiErrorInChain](err); ok {
+		return apiErrorStatus(apiErr)
 	}
 	status, _ := echoErrorStatus(err)
 	return status
