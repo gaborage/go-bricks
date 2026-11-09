@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -187,9 +188,24 @@ func useOTelMiddleware(e *echo.Echo, cfg *config.Config, skipProbe probeSkipper)
 
 			return attrs
 		},
-		SpanStartAttributes: overrideSpanURLPath,
+		SpanStartAttributes: spanStartAttributes,
 	}))
 	e.Use(sanitizePanicValue())
+}
+
+// spanStartAttributes adjusts the incoming-request span's start attributes: url.path through
+// overrideSpanURLPath, and http.request.method_original dropped when echo-otel rendered
+// http.request.method as otherMethod, so the span's cardinality never follows a caller-chosen
+// method token. A case variant of a known method keeps its original, a bounded set. Omitted
+// rather than rewritten: an attribute named "original" holding `_OTHER` would be wrong data.
+func spanStartAttributes(c *echo.Context, v *echootel.Values, attrs []attribute.KeyValue) []attribute.KeyValue {
+	attrs = overrideSpanURLPath(c, v, attrs)
+	if v.HTTPMethod == otherMethod {
+		attrs = slices.DeleteFunc(attrs, func(a attribute.KeyValue) bool {
+			return a.Key == semconv.HTTPRequestMethodOriginalKey
+		})
+	}
+	return attrs
 }
 
 // overrideSpanURLPath rewrites the incoming-request span's url.path to the matched template

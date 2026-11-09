@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -303,6 +304,36 @@ func formatStatusForMessage(status int) string {
 	return strconv.Itoa(status)
 }
 
+// otherMethod is how the OTel HTTP semantic conventions render a request method outside the
+// known set.
+const otherMethod = "_OTHER"
+
+// knownMethods is the semantic conventions' default known set (RFC 9110, PATCH, QUERY), the
+// table echo-otel judges the span's http.request.method against, so the access line and the
+// span agree. Echo's router also routes PROPFIND and REPORT, but semconv does not know them.
+var knownMethods = map[string]struct{}{
+	http.MethodConnect: {},
+	http.MethodDelete:  {},
+	http.MethodGet:     {},
+	http.MethodHead:    {},
+	http.MethodOptions: {},
+	http.MethodPatch:   {},
+	http.MethodPost:    {},
+	http.MethodPut:     {},
+	http.MethodTrace:   {},
+	echo.QUERY:         {},
+}
+
+// semconvMethod returns method when it is in the known set and otherMethod otherwise, so the
+// access line's cardinality never follows a caller-chosen token. The match is exact, as the
+// router's is: a case variant of a known method renders otherMethod.
+func semconvMethod(method string) string {
+	if _, ok := knownMethods[method]; ok {
+		return method
+	}
+	return otherMethod
+}
+
 // extractRequestMetadata extracts HTTP request metadata from Echo context.
 // Handles nil response and empty headers safely by falling back to request headers.
 func extractRequestMetadata(c *echo.Context) requestMetadata {
@@ -331,7 +362,7 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 	}
 
 	return requestMetadata{
-		Method: c.Request().Method,
+		Method: semconvMethod(c.Request().Method),
 		// url.path is the matched template with each parameter value and the wildcard tail
 		// masked, never request bytes (#2212): a PAN in a segment cannot reach the line.
 		URLPath:     maskedPath(c),
