@@ -15056,11 +15056,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   family instead, so no 404 under a family prefix reaches it, and a family never inherits its
   parent group's middleware, so a gate the parent carries moves to the family's `Use`, which
   runs after `TenantPolicy.Tenant`, or to `TenantPolicy.Authenticate`, which runs before it and
-  is the place for authentication `Tenant` depends on; and it covers only routes registered
+  is the place for authentication `Tenant` depends on (an uncommitted 4xx a step there returns
+  goes to `TenantPolicy.Deny`, whose default `server.DenyBodyless` answers with no body, so set
+  `Deny` to keep a JSON error body clients rely on); and it covers only routes registered
   after the `Use` call (ADR-036), where `e.Use` on a hand-built engine covered earlier routes too,
-  so a gate moved at the same point misses them with no error, and a child group copies its
-  parent's middleware when it is created, so a later `Use` on the parent misses every route of an
-  existing child; call `Use` before the routes and child groups it must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
+  so a gate moved at the same point misses them with no error, and an ordinary child group copies
+  its parent's middleware when it is created, so a later `Use` on the parent misses every route of
+  an existing child (a child inside a family reads its ancestors' middleware at each route's
+  registration instead, so it misses only routes registered before the `Use`); call `Use` before the routes and child groups it must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
   which skips the health and ready routes (a gate that must cover them is enforced separately) and
   which startup refuses beside a tenant-owned route family with
   `server.ErrTenantFamilyWithGlobalMiddleware` (ADR-164). A bare `server.New` caller's door for
