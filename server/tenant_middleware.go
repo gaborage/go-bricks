@@ -177,7 +177,7 @@ func logTenantRejection(l logger.Logger, c *echo.Context, reason string) {
 	}
 	req := c.Request()
 	warnCorrelated(ev, c, fmt.Sprintf("[server.tenant] request rejected: invalid tenant method=%s path=%s client=%s status=%d reason=%q",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(clientAddress(c)), http.StatusBadRequest, reason))
+		logSafeValue(semconvMethod(req.Method)), logSafeValue(maskedPath(c)), logSafeValue(clientAddress(c)), http.StatusBadRequest, reason))
 }
 
 // logUnknownTenantRefusal writes the one line an UnknownTenantError leaves. A 400

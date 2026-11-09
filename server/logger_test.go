@@ -1944,6 +1944,36 @@ func TestSemconvMethodAllocsStable(t *testing.T) {
 	}
 }
 
+// unknownMethodToken is a request method outside the semconv known set.
+const unknownMethodToken = "FROBNICATE"
+
+// assertLineRendersMethodOther serves an unknownMethodToken request to a route whose handler
+// calls emit, and asserts the one line emit writes renders the method as otherMethod, in its
+// `method` field or its message, and carries the token nowhere.
+func assertLineRendersMethodOther(t *testing.T, emit func(l logger.Logger, c *echo.Context)) {
+	t.Helper()
+	l := &testLogger{}
+	e := newEngine()
+	e.Add(unknownMethodToken, "/m", func(c *echo.Context) error {
+		emit(l, c)
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	require.Equal(t, http.StatusNoContent, serveEngine(e, unknownMethodToken, "/m").Code)
+	entries := l.logEntries()
+	require.Len(t, entries, 1, "the sink writes one line")
+	entry := entries[0]
+	if method, ok := entry.values["method"]; ok {
+		assert.Equal(t, otherMethod, strings.Trim(method, `"`), "the structured method field")
+	} else {
+		assert.Contains(t, entry.msg, `method="`+otherMethod+`"`, "the quoted method in the message")
+	}
+	assert.NotContains(t, entry.msg, unknownMethodToken, "the token must not reach the message")
+	for key, value := range entry.values {
+		assert.NotContains(t, value, unknownMethodToken, "the token must not reach field %s", key)
+	}
+}
+
 // TestRequestMethodOutsideTheKnownSetRendersOther pins the semconv known-method rule on both
 // request sinks through New: an unknown method renders `_OTHER` on the access line and the span,
 // with no http.request.method_original; a case variant keeps the span's bounded original.
@@ -1957,7 +1987,7 @@ func TestRequestMethodOutsideTheKnownSetRendersOther(t *testing.T) {
 		wantOriginal string
 	}{
 		{name: "known_method", method: http.MethodGet, wantLine: http.MethodGet, wantSpan: http.MethodGet},
-		{name: "unknown_token", method: "FROBNICATE", wantLine: other, wantSpan: other},
+		{name: "unknown_token", method: unknownMethodToken, wantLine: other, wantSpan: other},
 		{name: "case_variant_of_known_method", method: "get", wantLine: other, wantSpan: http.MethodGet, wantOriginal: "get"},
 	}
 	for _, tt := range tests {

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -376,5 +377,13 @@ func TestTenantPolicyReturnsNextErrorUntouched(t *testing.T) {
 
 		require.Same(t, stepErr, err)
 		assert.False(t, denied)
+	})
+}
+
+// TestTenantRefusalRendersUnknownMethodAsOther pins the semconv known-method rule on the
+// tenant-owned family's refusal ERROR: a method outside the known set prints `_OTHER`.
+func TestTenantRefusalRendersUnknownMethodAsOther(t *testing.T) {
+	assertLineRendersMethodOther(t, func(l logger.Logger, c *echo.Context) {
+		logTenantRefusal(newHandlerContext(c, nil), l, reasonDenyError)
 	})
 }

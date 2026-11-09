@@ -286,7 +286,7 @@ func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 	}
 	req := c.Request()
 	warnCorrelated(ev, c, fmt.Sprintf("[server.forwardedclientcert] request rejected: missing identity method=%s path=%s client=%s peer=%s status=%d reason=%q",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), http.StatusUnauthorized, "forwarded_client_cert_missing"))
+		logSafeValue(semconvMethod(req.Method)), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), http.StatusUnauthorized, "forwarded_client_cert_missing"))
 }
 
 // logForwardedClientCertDuplicateWarning emits one WARN whenever a request
@@ -304,7 +304,7 @@ func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, du
 	}
 	req := c.Request()
 	warnCorrelated(ev, c, fmt.Sprintf("[server.forwardedclientcert] duplicated header detected method=%s path=%s client=%s peer=%s reason=%q detail=%q",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), "forwarded_client_cert_duplicate", dupErr.Error()))
+		logSafeValue(semconvMethod(req.Method)), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), "forwarded_client_cert_duplicate", dupErr.Error()))
 }
 
 // logForwardedClientCertLeafWarning emits a WARN whenever the -Leaf header
@@ -320,5 +320,5 @@ func logForwardedClientCertLeafWarning(l logger.Logger, c *echo.Context, parseEr
 	}
 	req := c.Request()
 	warnCorrelated(ev, c, fmt.Sprintf("[server.forwardedclientcert] leaf certificate not decoded method=%s path=%s client=%s peer=%s reason=%q leaf_bytes=%d",
-		logSafeValue(req.Method), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), parseErr.Error(), len(encodedLeaf)))
+		logSafeValue(semconvMethod(req.Method)), logSafeValue(maskedPath(c)), logSafeValue(c.RealIP()), logSafeValue(req.RemoteAddr), parseErr.Error(), len(encodedLeaf)))
 }

@@ -74,7 +74,7 @@ func (o *joseObservability) recordFailure(ctx context.Context, c *echo.Context, 
 	}
 	jaerr, _ := apiErr.(*joseAPIError)
 	code := apiErr.ErrorCode()
-	method := c.Request().Method
+	method := semconvMethod(c.Request().Method)
 	// Empty unless the engine matched a template — see matchedRouteTemplate
 	// (server/handler.go) for why a caller-chosen path must never reach a route-keyed
 	// surface. Omitting beats substituting here because the OTel HTTP semantic
