@@ -174,8 +174,10 @@ changed. Those two stanzas were suppressing nothing, and nothing said so — del
 changed no findings. Prefer scoping by `path` and `linters` over matching message text.
 GoBricks' exceptions are `forbidigo` stanzas, where scoping by linter would lift every pattern:
 `server/router_test.go` keys off the identifier (``use of `echo\.New``), and the path-door
-stanzas key off the msg forbidigo's issue text quotes — each pattern shares or owns one, so an
-exclusion lifts exactly its patterns, and `.golangci.yml` writes that msg, so no release rewords it.
+stanzas key off the msg forbidigo's issue text quotes — each exclusion keys on a msg substring,
+and `.golangci.yml` writes those msgs, so no release rewords them. The shared stanzas' text appears
+in all three door msgs, so they lift every door pattern for tests and the outbound packages; only
+the `server/` stanza's text is unique to the HandlerContext pattern.
 
 Keep the `presets` list (`comments`, `common-false-positives`, `legacy`,
 `std-error-handling`) — those are generic.
