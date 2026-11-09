@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v5"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -25,10 +27,21 @@ const msgInvalidTenant = "Invalid tenant"
 // Constructed here with a nil logger — see tenantMiddlewareEcho for the
 // framework-logger form.
 //
-// It writes every resolved id, a path-read one included: it asks no TenantChecker, unlike the
-// seat server.New installs (ADR-170).
-func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc) MiddlewareFunc {
-	return fromEchoMiddleware(tenantMiddlewareEcho(resolver, skipperFromRequest(skipper), seatInputs{}, nil))
+// exists may be nil only when the resolver cannot read the request path (multitenant.MayReadPath:
+// the framework's header and subdomain resolvers, alone, validated or composed). For any other
+// resolver a nil exists panics here, at construction, as does a non-nil exists that cannot answer
+// (vetExistence).
+func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc, exists multitenant.TenantChecker) MiddlewareFunc {
+	if exists == nil && multitenant.MayReadPath(resolver) {
+		panic("server: TenantMiddleware: the resolver may read the request path, so a tenant existence check is required (ADR-172): " +
+			"pass the multitenant.TenantChecker that serves your tenants' resources")
+	}
+	if exists != nil {
+		if err := vetExistence(exists); err != nil {
+			panic("server: TenantMiddleware: " + err.Error())
+		}
+	}
+	return fromEchoMiddleware(tenantMiddlewareEcho(resolver, skipperFromRequest(skipper), seatInputs{checker: exists}, nil))
 }
 
 // tenantMiddlewareEcho is the echo-native tenant-resolution middleware constructor.
@@ -41,10 +54,10 @@ func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc) 
 // template-keyed probe predicate, and a public SkipperFunc arrives through
 // skipperFromRequest. in.owned reports whether a matched route template belongs to a tenant-owned
 // family, whose own steps resolve the tenant: the seat skips it and leaves seatSkippedKey as
-// evidence. A nil owned skips nothing. With in.checkPath set, an id read from the path
-// (multitenant.Resolve) is written only when in.checker holds it; any other one is never written,
-// and the request carries the id-free unknownPathTenantKey instead, for the handler adapter to
-// refuse (ADR-170). A nil checker holds no id. l may be nil, in which case the warning falls back
+// evidence. A nil owned skips nothing. An id read from the path (multitenant.Resolve) is
+// written only when in.checker holds it; any other one is never written, and the request
+// carries the id-free unknownPathTenantKey instead, for the handler adapter to refuse
+// (ADR-170). A nil checker holds no id. l may be nil, in which case the warning falls back
 // to the stdlib log package (mirrors corsWarnf).
 func tenantMiddlewareEcho(resolver multitenant.TenantResolver, skipper probeSkipper, in seatInputs, l logger.Logger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -75,7 +88,7 @@ func seatTenant(c *echo.Context, next echo.HandlerFunc, resolver multitenant.Ten
 		logTenantRejection(l, c, tenantRejectionReason(err))
 		return NewBadRequestError(msgInvalidTenant)
 	}
-	if fromPath && in.checkPath && !in.holds(tenantID) {
+	if fromPath && !in.holds(tenantID) || conflictsWithSeated(c, tenantID) {
 		c.Set(unknownPathTenantKey, true)
 		return next(c)
 	}
@@ -90,14 +103,28 @@ func seatTenant(c *echo.Context, next echo.HandlerFunc, resolver multitenant.Ten
 const seatSkippedKey = "_tenant_seat_skipped"
 
 // unknownPathTenantKey marks a request whose path-read tenant the seat's TenantChecker does not
-// vouch for (ADR-170). It carries no id, and the seat writes none: the request runs on with no
-// tenant until the route's handler adapter refuses it (refuseUnknownPathTenant).
+// vouch for (ADR-170), or whose resolved tenant disagrees with one already in context (ADR-172).
+// It carries no id, and the seat writes none: the request runs on with the context it had until
+// the route's handler adapter refuses it (refuseUnknownPathTenant).
 const unknownPathTenantKey = "_tenant_unknown_path"
 
-// holds reports whether in.checker holds tenantID; a nil checker holds none, so path tenancy
-// without a checker fails closed.
+// conflictsWithSeated reports whether the request already carries a tenant other than tenantID:
+// two resolvers that disagree are refused like an unknown path tenant, and neither id is written.
+func conflictsWithSeated(c *echo.Context, tenantID string) bool {
+	seated, ok := multitenant.GetTenant(c.Request().Context())
+	return ok && seated != tenantID
+}
+
+// holds reports whether in.checker holds tenantID (holdsTenant).
 func (in seatInputs) holds(tenantID string) bool {
-	return in.checker != nil && in.checker.HasTenant(tenantID)
+	return holdsTenant(in.checker, tenantID)
+}
+
+// holdsTenant reports whether checker holds tenantID; a nil checker holds none, so path tenancy
+// without a checker fails closed. Only a plain tenant key is asked about: a key carrying
+// config.NamedDatabasePrefix is no tenant id, whatever the checker would answer.
+func holdsTenant(checker multitenant.TenantChecker, tenantID string) bool {
+	return checker != nil && !strings.HasPrefix(tenantID, config.NamedDatabasePrefix) && checker.HasTenant(tenantID)
 }
 
 // refuseUnknownPathTenant is the handler adapters' refusal of a request the seat marked

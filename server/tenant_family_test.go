@@ -20,6 +20,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/pathutil"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/jose"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -53,12 +54,26 @@ func newTenantFamilyServer(t *testing.T, basePath string) *Server {
 }
 
 // newTenantFamilyServerWithConfig is newTenantFamilyServer with the config supplied by the caller.
+// Its tenant existence check holds every non-empty id (anyTenant), so a family's Tenant step
+// is refused only where a test chooses the check.
 func newTenantFamilyServerWithConfig(t *testing.T, cfg *config.Config) *Server {
+	t.Helper()
+	return newTenantFamilyServerWithChecker(t, cfg, anyTenant{})
+}
+
+// newTenantFamilyServerWithChecker is newTenantFamilyServerWithConfig with the tenant existence
+// check supplied by the caller (nil for none).
+func newTenantFamilyServerWithChecker(t *testing.T, cfg *config.Config, checker multitenant.TenantChecker) *Server {
 	t.Helper()
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
-	return New(cfg, &testLogger{})
+	return NewWithOptions(cfg, &testLogger{}, Options{TenantChecker: checker})
 }
+
+// anyTenant is a tenant existence check that holds every non-empty id.
+type anyTenant struct{}
+
+func (anyTenant) HasTenant(tenantID string) bool { return tenantID != "" }
 
 // serveFamilyRequest sends GET path through srv's engine carrying the seat tenant.
 func serveFamilyRequest(srv *Server, path string) *httptest.ResponseRecorder {
@@ -229,6 +244,54 @@ func TestTenantOwnedGroupRefusesWithoutTenantSeat(t *testing.T) {
 
 	assertRegistrationPanics(t, "tenant seat is not installed", build)
 	assert.Empty(t, srv.admission.familyPrefixes())
+}
+
+// TestTenantOwnedGroupRefusesWithoutTenantChecker pins that a family refuses a server with no
+// tenant existence check, since its Tenant step's id could never be verified.
+func TestTenantOwnedGroupRefusesWithoutTenantChecker(t *testing.T) {
+	srv := newTenantFamilyServerWithChecker(t, newTenantFamilyConfig(""), nil)
+	build := func() { TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant)) }
+
+	assertRegistrationPanics(t, "tenant existence check", build)
+	assert.Empty(t, srv.admission.familyPrefixes())
+}
+
+// TestTenantOwnedGroupRefusesCheckerThatCannotAnswer pins that a family probes the server's check
+// at registration and refuses one that panics or answers true for the empty id.
+func TestTenantOwnedGroupRefusesCheckerThatCannotAnswer(t *testing.T) {
+	srv := newTenantFamilyServerWithChecker(t, newTenantFamilyConfig(""), everyTenantChecker{})
+	build := func() { TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(familyTenant)) }
+
+	assertRegistrationPanics(t, vetTrueText, build)
+	assert.Empty(t, srv.admission.familyPrefixes())
+}
+
+// TestTenantOwnedGroupVerifiesTenantAgainstChecker pins that the id a family's Tenant step
+// returns is published only when the server's tenant existence check holds it; any other id is
+// a 400 client fault answered by Deny, and the handler never runs.
+func TestTenantOwnedGroupVerifiesTenantAgainstChecker(t *testing.T) {
+	tests := []struct {
+		name       string
+		tenant     string
+		wantStatus int
+	}{
+		{name: "held_tenant", tenant: familyTenant, wantStatus: http.StatusOK},
+		{name: "unheld_tenant", tenant: "unheld-family-tenant", wantStatus: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newTenantFamilyServerWithChecker(t, newTenantFamilyConfig(""), testutil.TenantSet{familyTenant: {}})
+			fam := TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy(tt.tenant))
+			ran := false
+			fam.Add(http.MethodGet, "/x", func(c HandlerContext) error {
+				ran = true
+				return c.String(http.StatusOK, "ok")
+			})
+			rec := serveFamilyRequest(srv, "/fam/x")
+			assert.Equal(t, tt.wantStatus, rec.Code)
+			assert.Equal(t, tt.wantStatus == http.StatusOK, ran)
+		})
+	}
 }
 
 func TestTenantOwnedGroupAllowsSegmentSiblingPrefix(t *testing.T) {
@@ -889,7 +952,7 @@ func TestTenantOwnedGroupLogsRefusalsToServerLogger(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
 	testLog := &testLogger{}
-	srv := New(newTenantFamilyConfig(""), testLog)
+	srv := NewWithOptions(newTenantFamilyConfig(""), testLog, Options{TenantChecker: anyTenant{}})
 	TenantOwnedGroup(srv.ModuleGroup(), "/fam", fixedTenantPolicy("Acme")).Add(http.MethodGet, "/orders", answerWith("orders"))
 
 	assertFrameworkError(t, serveFamilyRequest(srv, "/fam/orders"), http.StatusInternalServerError, errCodeInternalError)

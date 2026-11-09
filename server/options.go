@@ -19,15 +19,17 @@ type Options struct {
 	// allocation-light: it is on the handshake path of every connection.
 	TLSVerifyPeerCertificate func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error
 
-	// TenantChecker vouches for a tenant id read from the request path (ADR-170). Under
-	// multitenant.enabled the tenant seat writes a path-read id to the request only when
-	// HasTenant answers true; any other path-read id is never written, and the route's handler
-	// adapter answers 400 "Invalid tenant". Under a resolver that may read the path
+	// TenantChecker is the tenant existence check (ADR-170, ADR-172). Under multitenant.enabled
+	// the tenant seat writes a path-read id to the request only when HasTenant answers true; any
+	// other path-read id is never written, and the route's handler adapter answers 400 "Invalid
+	// tenant". Header- and subdomain-read tenants are not asked at the seat. A tenant-owned
+	// family's Tenant step publishes only an id it holds, under any resolver, and
+	// TenantOwnedGroup panics on a Server without one. Under a resolver that may read the path
 	// (multitenant.MayReadPath) a nil checker refuses Start before binding; a server served
 	// anyway vouches for no id, so every path-read tenant is refused. With a checker, Start
-	// writes one [server.tenant] INFO line naming it. Header- and subdomain-read tenants are never
-	// asked. A check that is a nil pointer, or whose HasTenant("") panics or answers true, refuses
-	// Start. The App sets it on the server it builds from its tenant resource source and refuses
-	// a value given here through app.Options.ServerOptions (ADR-171).
+	// writes one [server.tenant] INFO line naming it. A check that is a nil pointer, or whose
+	// HasTenant("") panics or answers true, refuses Start. The App sets it on the server it builds
+	// from its tenant resource source and refuses a value given here through
+	// app.Options.ServerOptions (ADR-171).
 	TenantChecker multitenant.TenantChecker
 }

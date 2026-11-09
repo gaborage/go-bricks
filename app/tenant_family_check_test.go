@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -127,7 +128,7 @@ func runFamilyScenario(t *testing.T, sc *familyScenario) *familyRun {
 		cfg.Multitenant = config.MultitenantConfig{Enabled: true, Resolver: config.ResolverConfig{Type: config.ResolverTypeHeader}}
 	}
 	run := &familyRun{log: &capturingLogger{}}
-	run.srv = &familyStubServer{Server: server.New(cfg, logger.New("error", false)), families: slices.Clone(sc.seeded), script: sc.script}
+	run.srv = &familyStubServer{Server: server.NewWithOptions(cfg, logger.New("error", false), server.Options{TenantChecker: testutil.TenantSet{"acme": {}}}), families: slices.Clone(sc.seeded), script: sc.script}
 	a := newConfiguredApp(t, cfg, &Options{Server: run.srv, PostRegisterRoutes: func([]server.RouteDescriptor) error {
 		run.hookCalls++
 		return nil

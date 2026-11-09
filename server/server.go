@@ -298,10 +298,10 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 		s.setupErr = otelServerNameError(cfg.App.Name)
 	}
 	seat := setupMiddlewares(e, log, cfg, observabilityEnabled && s.setupErr == nil, healthPath, readyPath,
-		seatInputs{owned: s.admission.owns, checkPath: true, checker: s.opts.TenantChecker})
+		seatInputs{owned: s.admission.owns, checker: s.opts.TenantChecker})
 	// Admission reserves the framework route roots the seat computed for its resolver (ADR-168),
 	// and Start refuses a debug prefix that would cover the module routes.
-	s.admission.seated, s.admission.frameworkRoots = seat.seated, seat.frameworkRoots
+	s.admission.seated, s.admission.frameworkRoots, s.admission.checker = seat.seated, seat.frameworkRoots, s.opts.TenantChecker
 	s.setupErr = goerrors.Join(s.setupErr, seat.rootsErr)
 	// Under a resolver that may read the path the seat refuses every path tenant without a
 	// check, so Start refuses instead of booting a server that answers 400 to all of them; one

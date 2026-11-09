@@ -101,6 +101,8 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 //   - p.Tenant is nil;
 //   - multitenant is disabled, or the Server installed no tenant seat because its
 //     tenant resolver could not be built;
+//   - the Server has no tenant existence check (Options.TenantChecker), or its check cannot
+//     answer (a nil pointer, or HasTenant("") panics or answers true; ADR-172);
 //   - prefix is "" or "/" (the panic names the full prefix);
 //   - the full prefix has a :param or * segment, covers the health or ready path, or
 //     equals, covers or sits under another family's prefix on a segment boundary;
@@ -147,6 +149,13 @@ func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 		// like any other route there.
 		return &routeGroup{group: rg.admission.engine.Group(full), prefix: full, cfg: rg.cfg, admission: rg.admission}
 	}
+	if rg.admission.checker == nil {
+		panic(tenantFamilyRefusal(full, "the Server has no tenant existence check to verify the family's tenant with: "+
+			"build it through the App, whose tenant resource source implements multitenant.TenantChecker, or pass Options.TenantChecker (ADR-172)"))
+	}
+	if err := vetExistence(rg.admission.checker); err != nil {
+		panic(tenantFamilyRefusal(full, err.Error()))
+	}
 	if reason, claimed := rg.admission.claimFamily(full); !claimed {
 		panic(tenantFamilyRefusal(full, reason))
 	}
@@ -155,7 +164,7 @@ func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	fam := &tenantFamily{
 		prefix:    full,
 		log:       rg.admission.log,
-		steps:     adaptMiddleware(p.middleware(rg.admission.log), rg.cfg),
+		steps:     adaptMiddleware(p.middleware(rg.admission.log, rg.admission.checker), rg.cfg),
 		catchAlls: map[string]struct{}{catchAllKey(full + "/*"): {}},
 	}
 	group := rg.admission.engine.Group(full)
@@ -174,10 +183,11 @@ func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	}
 }
 
-// middleware runs p as a flat MiddlewareFunc, logging its refusals to l.
-func (p TenantPolicy) middleware(l logger.Logger) MiddlewareFunc {
+// middleware runs p as a flat MiddlewareFunc, logging its refusals to l and verifying the
+// published tenant with checker.
+func (p TenantPolicy) middleware(l logger.Logger, checker multitenant.TenantChecker) MiddlewareFunc {
 	return func(c HandlerContext, next func() error) error {
-		_, _, err := p.run(c, l, next)
+		_, _, err := p.run(c, l, checker, next)
 		return err
 	}
 }

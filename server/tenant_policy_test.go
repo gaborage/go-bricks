@@ -221,7 +221,7 @@ func TestTenantPolicyRunsAuthenticateBeforeTenant(t *testing.T) {
 		},
 	}
 
-	id, denied, err := p.run(c, nil, func() error {
+	id, denied, err := p.run(c, nil, nil, func() error {
 		order = append(order, "next")
 		tenantInNext, _ = multitenant.GetTenant(c.RequestContext())
 		return nil
@@ -283,7 +283,7 @@ func TestTenantPolicyDenyWiringFaults(t *testing.T) {
 			p := resolvingPolicy("", fmt.Errorf("tenant %s: %w", secretTenantValue, multitenant.ErrTenantResolutionFailed))
 			p.Deny = tt.deny
 
-			id, denied, err := p.run(c, tl, func() error { return nil })
+			id, denied, err := p.run(c, tl, nil, func() error { return nil })
 
 			tt.check(t, err)
 			assert.True(t, denied)
@@ -315,7 +315,7 @@ func TestTenantPolicyFailsClosedWithoutTenant(t *testing.T) {
 		},
 	}
 
-	id, denied, err := p.run(c, tl, func() error { return nil })
+	id, denied, err := p.run(c, tl, nil, func() error { return nil })
 
 	var fault *tenantFaultError
 	require.ErrorAs(t, err, &fault)
@@ -339,7 +339,7 @@ func TestTenantPolicyReturnsCommittedStepErrorUntouched(t *testing.T) {
 		Deny:   denyMustNotRun(t),
 	}
 
-	id, denied, err := p.run(c, tl, func() error { return nil })
+	id, denied, err := p.run(c, tl, nil, func() error { return nil })
 
 	require.ErrorIs(t, err, stepErr)
 	assert.False(t, denied)
@@ -355,7 +355,7 @@ func TestTenantPolicyReturnsNextErrorUntouched(t *testing.T) {
 		p := resolvingPolicy("acme", nil)
 		p.Deny = denyMustNotRun(t)
 
-		id, denied, err := p.run(c, nil, func() error { return nextErr })
+		id, denied, err := p.run(c, nil, nil, func() error { return nextErr })
 
 		require.Same(t, nextErr, err)
 		assert.False(t, denied)
@@ -372,7 +372,7 @@ func TestTenantPolicyReturnsNextErrorUntouched(t *testing.T) {
 		}}
 		p.Deny = denyMustNotRun(t)
 
-		_, denied, err := p.run(c, nil, func() error { return nextErr })
+		_, denied, err := p.run(c, nil, nil, func() error { return nextErr })
 
 		require.Same(t, stepErr, err)
 		assert.False(t, denied)

@@ -281,7 +281,7 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 			// The seat skips the probes and, under a resolver that may read the path, the
 			// framework route roots (ADR-169); the forwarded-client-cert seat skips probes only.
 			seat.frameworkRoots, seat.rootsErr = frameworkRoots(cfg, resolver)
-			seat.checksPath = inputs.checkPath && multitenant.MayReadPath(resolver)
+			seat.checksPath = multitenant.MayReadPath(resolver)
 			e.Use(tenantMiddlewareEcho(resolver, skipFrameworkRoots(skipProbe, seat.frameworkRoots), inputs, log))
 			seat.seated = true
 		} else {
@@ -313,20 +313,19 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 }
 
 // seatInputs is what the tenant seat reads besides its resolver: owned, the Server's tenant-owned
-// family record (nil means none, see tenantMiddlewareEcho); checkPath, set by the Server's seat
-// and clear on the public TenantMiddleware; and checker, which vouches for a path-read tenant
-// when checkPath is set (Options.TenantChecker; nil vouches for none, ADR-170).
+// family record (nil means none, see tenantMiddlewareEcho); and checker, which vouches for a
+// path-read tenant (Options.TenantChecker on the Server's seat, the exists argument on the public
+// TenantMiddleware; nil vouches for none, ADR-170).
 type seatInputs struct {
-	owned     func(template string) bool
-	checkPath bool
-	checker   multitenant.TenantChecker
+	owned   func(template string) bool
+	checker multitenant.TenantChecker
 }
 
 // tenantSeat is what setupMiddlewares installed for tenant resolution: whether the seat is
 // installed, the framework route roots its skip covers (frameworkRoots), which route
 // admission reserves, why those roots are unusable, which Start returns, and whether the seat
-// asks inputs.checker about a path-read tenant (ADR-170): the Server's seat under a resolver
-// that may read the path (multitenant.MayReadPath).
+// asks inputs.checker about a path-read tenant (ADR-170): whenever its resolver may read the
+// path (multitenant.MayReadPath).
 type tenantSeat struct {
 	seated         bool
 	frameworkRoots []string
