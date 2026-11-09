@@ -1947,27 +1947,40 @@ func TestSemconvMethodAllocsStable(t *testing.T) {
 // unknownMethodToken is a request method outside the semconv known set.
 const unknownMethodToken = "FROBNICATE"
 
-// assertLineRendersMethodOther serves an unknownMethodToken request to a route whose handler
-// calls emit, and asserts the one line emit writes renders the method as otherMethod, in its
-// `method` field or its message, and carries the token nowhere.
-func assertLineRendersMethodOther(t *testing.T, emit func(l logger.Logger, c *echo.Context)) {
+// emitOneLine serves a method request for target to route on a fresh engine whose handler calls
+// emit, and returns the one line emit wrote.
+func emitOneLine(t *testing.T, method, route, target string, emit func(l logger.Logger, c *echo.Context)) testLogEntry {
 	t.Helper()
 	l := &testLogger{}
 	e := newEngine()
-	e.Add(unknownMethodToken, "/m", func(c *echo.Context) error {
+	e.Add(method, route, func(c *echo.Context) error {
 		emit(l, c)
 		return c.NoContent(http.StatusNoContent)
 	})
 
-	require.Equal(t, http.StatusNoContent, serveEngine(e, unknownMethodToken, "/m").Code)
+	require.Equal(t, http.StatusNoContent, serveEngine(e, method, target).Code)
 	entries := l.logEntries()
 	require.Len(t, entries, 1, "the sink writes one line")
-	entry := entries[0]
-	if method, ok := entry.values["method"]; ok {
-		assert.Equal(t, otherMethod, strings.Trim(method, `"`), "the structured method field")
-	} else {
-		assert.Contains(t, entry.msg, `method="`+otherMethod+`"`, "the quoted method in the message")
+	return entries[0]
+}
+
+// assertLineValue asserts entry carries want under key, as a structured field (quoted or not:
+// logSafeValue quotes, the panic guard does not) or as key="want" in its message.
+func assertLineValue(t *testing.T, entry testLogEntry, key, want string) {
+	t.Helper()
+	if got, ok := entry.values[key]; ok {
+		assert.Equal(t, want, strings.Trim(got, `"`), "the structured %s field", key)
+		return
 	}
+	assert.Contains(t, entry.msg, key+`="`+want+`"`, "the quoted %s in the message", key)
+}
+
+// assertLineRendersMethodOther asserts the one line emit writes for an unknownMethodToken
+// request renders the method as otherMethod and carries the token nowhere.
+func assertLineRendersMethodOther(t *testing.T, emit func(l logger.Logger, c *echo.Context)) {
+	t.Helper()
+	entry := emitOneLine(t, unknownMethodToken, "/m", "/m", emit)
+	assertLineValue(t, entry, "method", otherMethod)
 	assert.NotContains(t, entry.msg, unknownMethodToken, "the token must not reach the message")
 	for key, value := range entry.values {
 		assert.NotContains(t, value, unknownMethodToken, "the token must not reach field %s", key)

@@ -325,9 +325,8 @@ var knownMethods = map[string]struct{}{
 }
 
 // semconvMethod returns method when it is in the known set and otherMethod otherwise, so no
-// framework line or metric that names the request method (the access line, the WARN and
-// ERROR lines, the JOSE failure counter) follows a caller-chosen token in cardinality. The
-// match is exact, as the router's is: a case variant of a known method renders otherMethod.
+// framework line or metric naming the request method follows a caller-chosen token in
+// cardinality. The match is exact, as the router's is: a case variant renders otherMethod.
 func semconvMethod(method string) string {
 	if _, ok := knownMethods[method]; ok {
 		return method
