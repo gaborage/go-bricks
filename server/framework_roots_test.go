@@ -305,7 +305,7 @@ func TestTenantOwnedGroupUnderFrameworkRootRefused(t *testing.T) {
 			t.Cleanup(DefaultRouteRegistry.Clear)
 			cfg := frameworkRootsConfig(tt.resolverType)
 			cfg.Server.Path.Base = "/api"
-			srv := New(cfg, logger.New("disabled", true))
+			srv := NewWithOptions(cfg, logger.New("disabled", true), Options{TenantChecker: anyTenant{}})
 			ran := false
 			TenantOwnedGroup(srv.ModuleGroup(), tt.prefix, TenantPolicy{Tenant: func(HandlerContext) (string, error) {
 				ran = true
@@ -332,7 +332,7 @@ func TestTenantOwnedGroupUnderFrameworkRootRefused(t *testing.T) {
 func TestTenantOwnedGroupUnderFrameworkRootAfterStartPanics(t *testing.T) {
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
-	srv := New(frameworkRootsConfig(config.ResolverTypePath), logger.New("disabled", true))
+	srv := NewWithOptions(frameworkRootsConfig(config.ResolverTypePath), logger.New("disabled", true), Options{TenantChecker: anyTenant{}})
 	srv.admission.seal()
 	assert.PanicsWithError(t,
 		"server: registration after Start: route registration refused (1 conflict(s))\n"+

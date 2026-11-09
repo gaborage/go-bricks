@@ -2936,7 +2936,7 @@ source. Any other path id is never written: the request runs on with an id-free 
 typed and raw handler adapters answer 400 after route-group middleware and JOSE inbound
 verification, before binding, with the seat's `reason="unknown tenant"` WARN. A path-reading
 server with no checker fails `Start`; one with a checker writes a `[server.tenant]` startup line
-naming the store. Header- and subdomain-won tenants and the public `server.TenantMiddleware` are unchanged. Reverses ADR-036's
+naming the store. Header- and subdomain-won tenants are unchanged, and so was the public `server.TenantMiddleware` until ADR-172 gave it the same check. Reverses ADR-036's
 "tenant already in context" for such requests. See [migrations.md](migrations.md) `[C73.36]`.
 
 **Key Benefits:** a caller-written path segment reaches no framework sink unless the store vouches
@@ -2959,6 +2959,27 @@ true refuses `Start`. Amends ADR-170 decision 3. See [migrations.md](migrations.
 
 **Key Benefits:** one existence authority, and wiring that cannot answer fails before anything is
 dialed.
+
+---
+
+### [ADR-172: Every Tenant Door Asks the Tenant Existence Check](adr_172_public_tenant_middleware_takes_existence_check.md)
+
+**Date:** 2026-11-08 | **Status:** Accepted | **Breaking:** `server.TenantMiddleware` takes a third parameter, `exists multitenant.TenantChecker`, and nil panics at construction for a resolver that may read the path; `TenantOwnedGroup` panics on a Server with no tenant existence check; a path tenant the check does not hold, a family tenant it does not hold, or a resolved tenant that disagrees with the seated one answers 400
+
+The public `server.TenantMiddleware` wrote any id its resolver returned, and a tenant-owned
+family's `Tenant` step published any id that passed the grammar, where the framework seat has
+checked a path-read id since ADR-170. The public door now takes the check as its third argument
+and asks it the same way; `exists` may be nil only for the framework header and subdomain
+resolvers, and a check that fails ADR-171's construction probe panics at construction. A family
+publishes its tenant only when the Server's `Options.TenantChecker` holds it: a grammar-valid id it
+does not hold reaches its policy's `Deny` (400), a grammar-failing id a framework 500, and `TenantOwnedGroup` panics on a Server with no check. In the seat and the
+public door a resolved id that differs from a tenant already in context writes nothing and the
+adapter answers 400. Every door validates the tenant-ID grammar, wrapping a hand-built resolver in
+the default pattern, refuses reserved-prefix ids, and asks only about plain tenant keys. Refusals come from the adapter
+so that no response before it differs by tenant existence. See [migrations.md](migrations.md) `[C73.39]`.
+
+**Key Benefits:** every door to the request context applies one rule for a tenant, and a door
+wired without a check fails at construction instead of serving.
 
 ---
 
@@ -3771,7 +3792,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-171) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-172) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

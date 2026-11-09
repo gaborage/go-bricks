@@ -739,7 +739,7 @@ func newTrespassTestServer(t *testing.T) *Server {
 	t.Helper()
 	DefaultRouteRegistry.Clear()
 	t.Cleanup(DefaultRouteRegistry.Clear)
-	srv := newProbeTestServer(newTenantFamilyConfig(""), &testLogger{})
+	srv := newServer(newTenantFamilyConfig(""), &testLogger{}, withEphemeralProbeListener(), withOptions(Options{TenantChecker: anyTenant{}}))
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 	return srv
 }

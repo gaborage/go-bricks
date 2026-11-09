@@ -2638,7 +2638,7 @@ func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
 
 	resolver := &multitenant.HeaderResolver{HeaderName: HeaderXTenantID}
 	skipper := CreateProbeSkipper("/health", "/ready")
-	tm := TenantMiddleware(resolver, skipper)
+	tm := TenantMiddleware(resolver, skipper, nil)
 	rg.Use(tm)
 
 	rg.Add(http.MethodGet, "/tenant-check", func(c HandlerContext) error {

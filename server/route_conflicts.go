@@ -13,6 +13,7 @@ import (
 
 	"github.com/gaborage/go-bricks/internal/pathutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // ErrDuplicateRoute is what every *DuplicateRouteError matches, whatever the Reason of its
@@ -183,14 +184,15 @@ type routeAdmission struct {
 	mu             sync.Mutex
 	seen           map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts      []RouteConflict
-	engine         *echo.Echo               // the application engine; written once by New, before any registrar exists
-	log            logger.Logger            // the Server's logger; written once by New, before any registrar exists
-	probePaths     []string                 // full health and ready paths on the application listener; written once by New
-	seated         bool                     // whether New installed the tenant seat; written once by New
-	frameworkRoots []string                 // prefixes reserved for framework routes (frameworkRoots); written once by New
-	started        bool                     // set by seal, when Start reads the conflicts
-	families       []string                 // each tenant-owned family's full prefix, in build order
-	owned          atomic.Pointer[[]string] // families, republished copy-on-write for owns
+	engine         *echo.Echo                // the application engine; written once by New, before any registrar exists
+	log            logger.Logger             // the Server's logger; written once by New, before any registrar exists
+	probePaths     []string                  // full health and ready paths on the application listener; written once by New
+	seated         bool                      // whether New installed the tenant seat; written once by New
+	checker        multitenant.TenantChecker // Options.TenantChecker, which families verify their tenant with; written once by New
+	frameworkRoots []string                  // prefixes reserved for framework routes (frameworkRoots); written once by New
+	started        bool                      // set by seal, when Start reads the conflicts
+	families       []string                  // each tenant-owned family's full prefix, in build order
+	owned          atomic.Pointer[[]string]  // families, republished copy-on-write for owns
 
 	// registered is every admitted route (family routes and probes included) and every
 	// middleware-bearing group not built through a family, covered or not, in registration

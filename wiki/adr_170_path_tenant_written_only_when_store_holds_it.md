@@ -48,7 +48,7 @@ per-tenant accessor (ADR-161).
    `Start` writes one INFO line (`log.type=action`): `[server.tenant] a tenant read from the
    request path is written only when the tenant store holds it (ADR-170) store=<%T>`, plus
    `tenants=<n>` for a `*config.TenantStore`; other servers write none.
-4. **The public `server.TenantMiddleware` is unchanged.**
+4. **The public `server.TenantMiddleware` is unchanged.** Amended by ADR-172 (2026-11-08): it takes a tenant existence check and checks a path-read id the same way.
 5. **Reversal of ADR-036.** ADR-036 promised global middleware "the tenant already in context".
    Under a path-reading resolver that no longer holds for a path tenant the store does not hold:
    global middleware runs with no tenant, and the request is refused at the adapter afterwards. A

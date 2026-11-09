@@ -47,7 +47,7 @@ func TestTenantOwnedGroupServesSmallestFamily(t *testing.T) {
 	cfg.Server.Timeout.Write = 5 * time.Second
 	cfg.Multitenant.Enabled = true
 	cfg.Multitenant.Resolver.Type = config.ResolverTypeHeader
-	srv := server.New(cfg, logger.New("disabled", true))
+	srv := server.NewWithOptions(cfg, logger.New("disabled", true), server.Options{TenantChecker: testutil.TenantSet{"acme": {}}})
 
 	hr := server.NewHandlerRegistry(cfg)
 	whoami := func(_ familyOrdersReq, c server.HandlerContext) (familyOrdersResp, server.IAPIError) {

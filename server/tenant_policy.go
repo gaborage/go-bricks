@@ -63,7 +63,7 @@ func (p TenantPolicy) ResolveForTest(c HandlerContext) (tenantID string, denied 
 	if p.Tenant == nil {
 		panic("server: TenantPolicy.Tenant is nil")
 	}
-	return p.run(c, nil, func() error { return nil })
+	return p.run(c, nil, nil, func() error { return nil })
 }
 
 const (
@@ -77,9 +77,11 @@ const (
 	reasonTenantReplaced    = "tenant replaced after the family published it"
 )
 
-// run runs Authenticate, Tenant, the grammar check and the publish, then next innermost,
-// so an error from next passes back up through the steps and is returned untouched.
-func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) (tenantID string, denied bool, err error) {
+// run runs Authenticate, Tenant, the grammar check, the existence check and the publish, then
+// next innermost, so an error from next passes back up through the steps and is returned
+// untouched. An id checker does not hold is the Tenant step's 400 client fault (ADR-172); a nil
+// checker (ResolveForTest) skips the existence check.
+func (p TenantPolicy) run(c HandlerContext, l logger.Logger, checker multitenant.TenantChecker, next func() error) (tenantID string, denied bool, err error) {
 	var backstop *tenantFaultError
 	chainErr := runSteps(c, p.Authenticate, func() error {
 		id, tenantErr := p.Tenant(c)
@@ -90,6 +92,9 @@ func (p TenantPolicy) run(c HandlerContext, l logger.Logger, next func() error) 
 		if multitenant.ValidateTenantID(id) != nil {
 			backstop = newTenantFault(c, l, reasonGrammarBackstop, nil)
 			return backstop
+		}
+		if checker != nil && !holdsTenant(checker, id) {
+			return NewUnknownTenantError(multitenant.ErrUnknownTenant)
 		}
 		published := multitenant.SetTenant(c.RequestContext(), id)
 		c.SetRequestContext(published)

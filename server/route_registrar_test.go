@@ -544,7 +544,7 @@ func newObservedServer(t *testing.T, log *guardLogger, denyIP, family bool) *Ser
 		"server.forwardedclientcert.enabled": true,
 	})
 	require.NoError(t, err)
-	srv := NewWithOptions(cfg, log, Options{TenantChecker: testutil.TenantSet{observedKnownPathTenant: {}}})
+	srv := NewWithOptions(cfg, log, Options{TenantChecker: testutil.TenantSet{observedKnownPathTenant: {}, observedHeaderTenant: {}}})
 	require.NoError(t, srv.setupErr)
 
 	// The App's registry carries the framework logger, which the unknown-tenant refusal writes to.

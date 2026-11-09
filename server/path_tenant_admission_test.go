@@ -314,18 +314,18 @@ func TestPathTenantAdmissionRunsAfterJOSEInbound(t *testing.T) {
 }
 
 // TestTenantMiddlewareWritesResolvedID pins that TenantMiddleware writes the id its resolver
-// returns.
+// returns once its check holds it.
 func TestTenantMiddlewareWritesResolvedID(t *testing.T) {
 	e := newTenantTestEcho()
 	var got string
 	e.GET("/tenants/:tenant/orders/x", func(c *echo.Context) error {
 		got, _ = multitenant.GetTenant(c.Request().Context())
 		return c.String(http.StatusOK, "ok")
-	}, adaptMiddleware(TenantMiddleware(&multitenant.PathResolver{Segment: 2}, nil), nil))
+	}, adaptMiddleware(TenantMiddleware(&multitenant.PathResolver{Segment: 2}, nil, admissionChecker()), nil))
 
 	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tenants/"+admissionUnknownTenant+"/orders/x", http.NoBody))
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tenants/"+admissionKnownTenant+"/orders/x", http.NoBody))
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, admissionUnknownTenant, got)
+	assert.Equal(t, admissionKnownTenant, got)
 }

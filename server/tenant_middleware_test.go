@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -17,8 +18,10 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -148,7 +151,7 @@ func TestTenantMiddlewareHonorsConsumerSkipper(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	e := newTenantTestEcho()
 	resolver := &multitenant.HeaderResolver{HeaderName: HeaderXTenantID}
-	e.Use(adaptMiddleware(TenantMiddleware(resolver, CreateProbeSkipper("/health", "/ready")), cfg))
+	e.Use(adaptMiddleware(TenantMiddleware(resolver, CreateProbeSkipper("/health", "/ready"), nil), cfg))
 	e.GET("/health", func(c *echo.Context) error { return c.String(http.StatusOK, "ok") })
 	e.GET("/:id", func(c *echo.Context) error { return c.String(http.StatusOK, "module") })
 
@@ -162,7 +165,7 @@ func TestTenantMiddlewareHonorsConsumerSkipper(t *testing.T) {
 // constructor: without a skipper nothing is exempt, so even a probe path resolves a tenant.
 func TestTenantMiddlewareNilSkipperResolvesEveryRoute(t *testing.T) {
 	e := newTenantTestEcho()
-	e.Use(adaptMiddleware(TenantMiddleware(&multitenant.HeaderResolver{HeaderName: HeaderXTenantID}, nil), &config.Config{App: config.AppConfig{Env: "development"}}))
+	e.Use(adaptMiddleware(TenantMiddleware(&multitenant.HeaderResolver{HeaderName: HeaderXTenantID}, nil, nil), &config.Config{App: config.AppConfig{Env: "development"}}))
 	e.GET("/health", func(c *echo.Context) error { return c.String(http.StatusOK, "ok") })
 
 	assert.Equal(t, http.StatusBadRequest, serveEngine(e, http.MethodGet, "/health").Code,
@@ -417,4 +420,379 @@ func TestTenantRejectionCorrelatesItsLine(t *testing.T) {
 func echoTenant(c HandlerContext) error {
 	tenantID, _ := multitenant.GetTenant(c.RequestContext())
 	return c.String(http.StatusOK, tenantID)
+}
+
+// embeddedHeaderResolver is a consumer resolver type multitenant does not define, so the
+// door cannot tell what it reads.
+type embeddedHeaderResolver struct {
+	*multitenant.HeaderResolver
+}
+
+// TestTenantMiddlewareRequiresCheckerForPathReadingResolver pins that the public door panics at
+// construction without a tenant existence check whenever its resolver may read the request
+// path, and builds without one for the framework's header and subdomain resolvers.
+func TestTenantMiddlewareRequiresCheckerForPathReadingResolver(t *testing.T) {
+	path := &multitenant.PathResolver{Segment: 2}
+	header := &multitenant.HeaderResolver{HeaderName: HeaderXTenantID}
+	subdomain := &multitenant.SubdomainResolver{RootDomain: "example.com"}
+	tests := []struct {
+		name      string
+		resolver  multitenant.TenantResolver
+		wantPanic bool
+	}{
+		{name: "path_resolver", resolver: path, wantPanic: true},
+		{name: "validating_path", resolver: &multitenant.ValidatingResolver{Resolver: path}, wantPanic: true},
+		{name: "composite_with_path", resolver: &multitenant.CompositeResolver{Resolvers: []multitenant.TenantResolver{header, path}}, wantPanic: true},
+		{name: "consumer_type_embedding_header", resolver: embeddedHeaderResolver{header}, wantPanic: true},
+		{name: "header_resolver", resolver: header},
+		{name: "subdomain_resolver", resolver: subdomain},
+		{name: "composite_header_subdomain", resolver: &multitenant.CompositeResolver{Resolvers: []multitenant.TenantResolver{header, subdomain}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			build := func() { TenantMiddleware(tt.resolver, nil, nil) }
+			if !tt.wantPanic {
+				assert.NotPanics(t, build)
+				return
+			}
+			assert.PanicsWithValue(t, "server: TenantMiddleware: the resolver may read the request path, so a tenant existence check is required (ADR-172): "+
+				"pass the multitenant.TenantChecker that serves your tenants' resources", build)
+		})
+	}
+}
+
+// countingChecker answers true for every non-empty id and counts the calls for one. The
+// construction-time probe asks about "" and is not counted.
+type countingChecker struct{ calls int }
+
+func (c *countingChecker) HasTenant(tenantID string) bool {
+	if tenantID == "" {
+		return false
+	}
+	c.calls++
+	return true
+}
+
+// newPublicDoorGroup builds an engine with one route group running the before middlewares,
+// then the public TenantMiddleware with resolver and exists.
+func newPublicDoorGroup(resolver multitenant.TenantResolver, exists multitenant.TenantChecker, before ...MiddlewareFunc) (*echo.Echo, RouteRegistrar) {
+	e := newTenantTestEcho()
+	rg := newRouteGroup(e.Group(""), "", &config.Config{App: config.AppConfig{Env: config.EnvDevelopment}})
+	for _, mw := range before {
+		rg.Use(mw)
+	}
+	rg.Use(TenantMiddleware(resolver, nil, exists))
+	return e, rg
+}
+
+// servePublicDoor registers GET /tenants/:tenant/x under newPublicDoorGroup and serves req
+// through it. It reports the status, the tenant the handler saw ("" when it did not run or saw
+// none) and whether the handler ran.
+func servePublicDoor(resolver multitenant.TenantResolver, exists multitenant.TenantChecker, req *http.Request, before ...MiddlewareFunc) (status int, seen string, ran bool) {
+	e, rg := newPublicDoorGroup(resolver, exists, before...)
+	rg.Add(http.MethodGet, "/tenants/:tenant/x", func(c HandlerContext) error {
+		ran = true
+		seen, _ = multitenant.GetTenant(c.RequestContext())
+		return c.String(http.StatusOK, "ok")
+	})
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	return rec.Code, seen, ran
+}
+
+// doorRequest is a GET of target.
+func doorRequest(target string) *http.Request {
+	return httptest.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+}
+
+// TestTenantMiddlewareChecksPathReadTenant pins that the public door writes a path-read tenant
+// only when its check holds it: a held id reaches the handler, and any other id answers 400
+// from the handler adapter with no tenant written. An empty store is accepted at construction,
+// since a consumer may fill it after wiring, and then holds no tenant. A consumer resolver type
+// keeps its own refusal (400 at the door), and an id it allows is still asked of the check.
+func TestTenantMiddlewareChecksPathReadTenant(t *testing.T) {
+	path := &multitenant.PathResolver{Segment: 2}
+	claimT1 := claimBoundResolver{PathResolver: path, claim: "t1"}
+	tests := []struct {
+		name       string
+		resolver   multitenant.TenantResolver
+		exists     multitenant.TenantChecker
+		target     string
+		wantStatus int
+		wantSeen   string
+	}{
+		{name: "held_tenant", resolver: path, exists: testutil.TenantSet{"t1": {}}, target: "/tenants/t1/x", wantStatus: http.StatusOK, wantSeen: "t1"},
+		{name: "unheld_tenant", resolver: path, exists: testutil.TenantSet{"t1": {}}, target: "/tenants/t2/x", wantStatus: http.StatusBadRequest},
+		{name: "empty_tenant_store", resolver: path, exists: config.NewTenantStore(&config.Config{}), target: "/tenants/t1/x", wantStatus: http.StatusBadRequest},
+		{name: "outside_claim", resolver: claimT1, exists: testutil.TenantSet{"t1": {}, "t2": {}}, target: "/tenants/t2/x", wantStatus: http.StatusBadRequest},
+		{name: "claimed_and_held", resolver: claimT1, exists: testutil.TenantSet{"t1": {}}, target: "/tenants/t1/x", wantStatus: http.StatusOK, wantSeen: "t1"},
+		{name: "claimed_not_held", resolver: claimT1, exists: testutil.TenantSet{"t2": {}}, target: "/tenants/t1/x", wantStatus: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, seen, _ := servePublicDoor(tt.resolver, tt.exists, doorRequest(tt.target))
+			assert.Equal(t, tt.wantStatus, status)
+			assert.Equal(t, tt.wantSeen, seen)
+		})
+	}
+}
+
+// TestTenantMiddlewareSeatsOnlyPlainTenantKeys pins that a path segment carrying the named
+// database prefix is never treated as a tenant: it answers 400 even under a check that would
+// answer true, and the check is not consulted.
+func TestTenantMiddlewareSeatsOnlyPlainTenantKeys(t *testing.T) {
+	check := &countingChecker{}
+	status, seen, _ := servePublicDoor(&multitenant.PathResolver{Segment: 2}, check, doorRequest("/tenants/"+config.NamedDatabasePrefix+"reports/x"))
+	assert.Equal(t, http.StatusBadRequest, status)
+	assert.Empty(t, seen)
+	assert.Zero(t, check.calls, "the check is not asked about a prefixed key")
+}
+
+// TestTenantMiddlewareRefusesUnknownPathTenantBeforeHandler pins, through server.New with
+// observability on, that an id the public door's check does not hold is never written: the
+// module middleware after the door runs with no tenant, the handler never runs, the client
+// gets 400, and the segment appears on no log line, in no response body and in no span, in its
+// sent or its decoded spelling. Escaped and padded segments are refused the same way.
+func TestTenantMiddlewareRefusesUnknownPathTenantBeforeHandler(t *testing.T) {
+	const decoded = "zeta-tenant" // what the escaped and padded segments spell once decoded
+	tests := []struct {
+		name    string
+		segment string   // the segment as sent in the URL
+		needles []string // spellings that must reach no sink
+	}{
+		{name: "unlisted_segment_refused", segment: "unlisted-path-tenant", needles: []string{"unlisted-path-tenant"}},
+		{name: "escaped_segment_refused", segment: "%7Aeta-tenant", needles: []string{"%7Aeta-tenant", decoded}},
+		{name: "padded_segment_refused", segment: "%20" + decoded, needles: []string{"%20" + decoded, decoded}},
+		{name: "newline_padded_segment_refused", segment: "%0A" + decoded, needles: []string{"%0A" + decoded, decoded}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			door := TenantMiddleware(&multitenant.PathResolver{Segment: 2}, nil, testutil.TenantSet{"t1": {}})
+			got := serveModuleDoor(t, door, doorRequest("/tenants/"+tt.segment+"/x"))
+			got.assertRefused(t, tt.needles...)
+		})
+	}
+}
+
+// TestTenantMiddlewareRefusesInvalidHeaderTenant pins, through server.New with observability on,
+// that every door validates the tenant-ID grammar and refuses a reserved-prefix id, whatever the
+// resolver: a bare header resolver's value that fails the grammar or carries the reserved prefix
+// answers 400, module middleware and the handler see no tenant, and the value reaches no sink.
+// A resolver that is already a ValidatingResolver keeps its own grammar, and a reserved-prefix
+// id is refused even when that grammar admits it.
+func TestTenantMiddlewareRefusesInvalidHeaderTenant(t *testing.T) {
+	const headerName = "X-Door-Tenant"
+	reserved := config.NamedDatabasePrefix + "reports"
+	header := &multitenant.HeaderResolver{HeaderName: headerName}
+	permissive := &multitenant.ValidatingResolver{Resolver: header, TenantRegex: regexp.MustCompile(`^[A-Za-z0-9_:-]+$`)}
+	tests := []struct {
+		name     string
+		resolver multitenant.TenantResolver
+		value    string
+		wantSeen string // "" when the request must be refused
+	}{
+		{name: "plain_header_tenant_seated", resolver: header, value: "t1", wantSeen: "t1"},
+		{name: "grammar_failing_header_refused", resolver: header, value: "Bad_Tenant"},
+		{name: "reserved_prefix_header_refused", resolver: header, value: reserved},
+		{name: "own_grammar_kept", resolver: permissive, value: "Bad_Tenant", wantSeen: "Bad_Tenant"},
+		{name: "reserved_prefix_under_own_grammar_refused", resolver: permissive, value: reserved},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := doorRequest("/tenants/x")
+			req.Header.Set(headerName, tt.value)
+			got := serveModuleDoor(t, TenantMiddleware(tt.resolver, nil, nil), req)
+			if tt.wantSeen != "" {
+				assert.Equal(t, http.StatusOK, got.rec.Code)
+				assert.Equal(t, []string{tt.wantSeen}, got.middlewareSaw)
+				return
+			}
+			got.assertRefused(t, tt.value)
+		})
+	}
+}
+
+// moduleDoorResult is what serveModuleDoor observed for one request.
+type moduleDoorResult struct {
+	rec           *httptest.ResponseRecorder
+	testLog       *testLogger
+	spans         tracetest.SpanStubs
+	middlewareSaw []string
+	handlerRan    bool
+}
+
+// serveModuleDoor serves req through server.New with observability on, under a module group
+// /tenants running door and then a module middleware that records the tenant it sees.
+func serveModuleDoor(t *testing.T, door MiddlewareFunc, req *http.Request) moduleDoorResult {
+	t.Helper()
+	exporter := installTestTracerProvider(t)
+	got := moduleDoorResult{testLog: &testLogger{}}
+	srv := newAccessLogServer(t, got.testLog, true)
+
+	moduleMiddleware := func(c HandlerContext, next func() error) error {
+		if id, ok := multitenant.GetTenant(c.RequestContext()); ok {
+			got.middlewareSaw = append(got.middlewareSaw, id)
+		}
+		return next()
+	}
+	g := srv.ModuleGroup().Group("/tenants", door, moduleMiddleware)
+	handler := func(c HandlerContext) error {
+		got.handlerRan = true
+		return c.String(http.StatusOK, "ok")
+	}
+	g.Add(http.MethodGet, "/x", handler)
+	g.Add(http.MethodGet, "/:tenant/x", handler)
+
+	got.rec = httptest.NewRecorder()
+	srv.echo.ServeHTTP(got.rec, req)
+	got.spans = exporter.GetSpans()
+	return got
+}
+
+// assertRefused fails unless the request answered 400 before the handler, module middleware saw
+// no tenant, and no needle reached any sink.
+func (got moduleDoorResult) assertRefused(t *testing.T, needles ...string) {
+	t.Helper()
+	assert.Equal(t, http.StatusBadRequest, got.rec.Code)
+	assert.False(t, got.handlerRan, "the handler never runs")
+	assert.Empty(t, got.middlewareSaw, "module middleware runs with no tenant written")
+	require.NotEmpty(t, got.spans)
+	for _, needle := range needles {
+		assertNoSinkCarries(t, needle, got.rec, got.testLog, got.spans)
+	}
+}
+
+// assertNoSinkCarries fails when needle appears in the response body, any log line or field,
+// or any span status, attribute or event attribute.
+func assertNoSinkCarries(t *testing.T, needle string, rec *httptest.ResponseRecorder, testLog *testLogger, spans tracetest.SpanStubs) {
+	t.Helper()
+	assert.NotContains(t, rec.Body.String(), needle)
+	for _, entry := range testLog.logEntries() {
+		assert.NotContains(t, entry.msg, needle)
+		for k, v := range entry.values {
+			assert.NotContains(t, v, needle, "log field %s", k)
+		}
+	}
+	for i := range spans {
+		span := &spans[i]
+		assert.NotContains(t, span.Status.Description, needle)
+		for _, attr := range span.Attributes {
+			assert.NotContains(t, attr.Value.String(), needle, "span attribute %s", attr.Key)
+		}
+		for _, ev := range span.Events {
+			for _, attr := range ev.Attributes {
+				assert.NotContains(t, attr.Value.String(), needle, "span event attribute %s", attr.Key)
+			}
+		}
+	}
+}
+
+// claimBoundResolver is a consumer resolver that reads the path through an embedded
+// *multitenant.PathResolver and refuses any id other than the caller's claim.
+type claimBoundResolver struct {
+	*multitenant.PathResolver
+	claim string
+}
+
+func (r claimBoundResolver) ResolveTenant(ctx context.Context, req *http.Request) (string, error) {
+	id, err := r.PathResolver.ResolveTenant(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if id != r.claim {
+		return "", errors.New("tenant outside the caller's claim")
+	}
+	return id, nil
+}
+
+// TestTenantMiddlewareRateLimitKeysOnClient pins server.RateLimit behind the public door: one
+// client's budget is shared by every path tenant it names, held or not, so a drained client
+// gets the same 429 for a held and an unheld tenant.
+func TestTenantMiddlewareRateLimitKeysOnClient(t *testing.T) {
+	e, rg := newPublicDoorGroup(&multitenant.PathResolver{Segment: 2}, testutil.TenantSet{"t1": {}})
+	rg.Use(RateLimit(1))
+	rg.Add(http.MethodGet, "/tenants/:tenant/x", func(c HandlerContext) error { return c.String(http.StatusOK, "ok") })
+
+	serve := func(tenant string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tenants/"+tenant+"/x", http.NoBody)
+		req.RemoteAddr = "203.0.113.7:4000"
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec
+	}
+	require.Equal(t, http.StatusOK, serve("t1").Code)
+	require.Equal(t, http.StatusBadRequest, serve("t2").Code, "the unheld tenant spends the same client budget")
+
+	held, unheld := serve("t1"), serve("t2")
+	assert.Equal(t, http.StatusTooManyRequests, held.Code)
+	assert.Equal(t, http.StatusTooManyRequests, unheld.Code)
+	for _, h := range []string{"X-Ratelimit-Limit", "X-Ratelimit-Remaining", "Retry-After"} {
+		assert.Equal(t, held.Header().Values(h), unheld.Header().Values(h), h)
+	}
+}
+
+// TestTenantMiddlewareRefusesConflictingSeatedTenant pins the public door behind a tenant that is
+// already in context: an id that agrees passes, and one the check refuses or that names another
+// tenant answers 400 from the handler adapter, with the seated tenant neither kept for the
+// handler nor overwritten.
+func TestTenantMiddlewareRefusesConflictingSeatedTenant(t *testing.T) {
+	held := testutil.TenantSet{"acme": {}, "t1": {}}
+	seatAcme := func(c HandlerContext, next func() error) error {
+		c.SetRequestContext(multitenant.SetTenant(c.RequestContext(), "acme"))
+		return next()
+	}
+	tests := []struct {
+		name       string
+		resolver   multitenant.TenantResolver
+		target     string
+		header     string
+		wantStatus int
+		wantSeen   string
+	}{
+		{name: "same_path_tenant", resolver: &multitenant.PathResolver{Segment: 2}, target: "/tenants/acme/x", wantStatus: http.StatusOK, wantSeen: "acme"},
+		{name: "unheld_path_tenant", resolver: &multitenant.PathResolver{Segment: 2}, target: "/tenants/t9/x", wantStatus: http.StatusBadRequest},
+		{name: "other_held_path_tenant", resolver: &multitenant.PathResolver{Segment: 2}, target: "/tenants/t1/x", wantStatus: http.StatusBadRequest},
+		{name: "other_header_tenant", resolver: &multitenant.HeaderResolver{HeaderName: "X-Door-Tenant"}, target: "/tenants/acme/x", header: "t1", wantStatus: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := doorRequest(tt.target)
+			if tt.header != "" {
+				req.Header.Set("X-Door-Tenant", tt.header)
+			}
+			status, seen, ran := servePublicDoor(tt.resolver, held, req, seatAcme)
+			assert.Equal(t, tt.wantStatus, status)
+			assert.Equal(t, tt.wantSeen, seen)
+			assert.Equal(t, tt.wantStatus == http.StatusOK, ran, "the handler runs only when the tenants agree")
+		})
+	}
+}
+
+// TestTenantMiddlewareRefusesCheckerThatCannotAnswer pins that the public door probes a non-nil
+// check at construction and panics with the probe's text when the check is a nil pointer, panics,
+// or answers true for the empty id; an empty store passes the probe.
+func TestTenantMiddlewareRefusesCheckerThatCannotAnswer(t *testing.T) {
+	path := &multitenant.PathResolver{Segment: 2}
+	header := &multitenant.HeaderResolver{HeaderName: HeaderXTenantID}
+	tests := []struct {
+		name      string
+		resolver  multitenant.TenantResolver
+		exists    multitenant.TenantChecker
+		wantPanic string
+	}{
+		{name: "nil_tenant_store", resolver: path, exists: (*config.TenantStore)(nil), wantPanic: vetNilStoreText},
+		{name: "true_for_empty", resolver: path, exists: everyTenantChecker{}, wantPanic: vetTrueText},
+		{name: "panicking_check", resolver: header, exists: funcTenantChecker(nil), wantPanic: vetPanicText},
+		{name: "empty_tenant_store", resolver: path, exists: config.NewTenantStore(&config.Config{})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			build := func() { TenantMiddleware(tt.resolver, nil, tt.exists) }
+			if tt.wantPanic == "" {
+				assert.NotPanics(t, build)
+				return
+			}
+			assert.PanicsWithValue(t, "server: TenantMiddleware: "+tt.wantPanic, build)
+		})
+	}
 }
