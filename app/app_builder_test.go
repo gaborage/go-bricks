@@ -1516,3 +1516,105 @@ func TestAppBuilderStepsRequireInstalledSlots(t *testing.T) {
 		})
 	}
 }
+
+// checkingResourceSource is a static resource source that also answers HasTenant.
+type checkingResourceSource struct {
+	dynamicResourceSource
+}
+
+func (*checkingResourceSource) HasTenant(tenantID string) bool { return tenantID == "acme" }
+
+// pathTenancyWiringConfig is a dial-free config under resolver, with one static tenant when
+// tenants is set.
+func pathTenancyWiringConfig(multitenant bool, resolver string, tenants bool) *config.Config {
+	cfg := defaultTestConfig()
+	cfg.Database = config.DatabaseConfig{}
+	cfg.Messaging = config.MessagingConfig{}
+	cfg.Multitenant.Enabled = multitenant
+	cfg.Multitenant.Resolver.Type = resolver
+	cfg.Multitenant.Resolver.Path.Segment = 1
+	cfg.Multitenant.Resolver.Header = "X-Tenant-ID"
+	if resolver == config.ResolverTypeComposite {
+		cfg.Multitenant.Resolver.Order = []string{config.ResolverTypeHeader, config.ResolverTypePath}
+	}
+	if tenants {
+		cfg.Multitenant.Tenants = map[string]config.TenantEntry{
+			"acme": {Database: config.DatabaseConfig{Type: dbTypePostgres, Host: localHost, Port: 5432, Database: "acme", Username: "acme"}},
+		}
+	}
+	return cfg
+}
+
+// TestNewWithConfigRefusesPathTenancyWiringTheStoreCannotVouchFor pins the wiring refusals
+// WithConfig runs after the source agreement check, before any dial: ServerOptions.TenantChecker
+// under any resolver; under a resolver that reads the path, a supplied Options.Server, a resource
+// source without HasTenant, and the built-in store holding no tenant. Each refusal's text is
+// exact, and the same wiring under a header resolver, or with multitenant off, builds.
+func TestNewWithConfigRefusesPathTenancyWiringTheStoreCannotVouchFor(t *testing.T) {
+	const (
+		checkerText = "failed to create app: invalid configuration: ServerOptions.TenantChecker is set, but app asks the " +
+			"tenant resource source which tenants exist (ADR-171): drop it"
+		serverText = "failed to create app: invalid configuration: multitenant.resolver reads the request path, so " +
+			"Options.Server replaces the server app wires to the tenant store (ADR-171); drop it or use ServerOptions"
+		sourceText = "failed to create app: invalid configuration: multitenant.resolver reads the request path, so " +
+			"Options.ResourceSource must implement multitenant.TenantChecker (ADR-171)"
+		emptyText = "failed to create app: invalid configuration: multitenant.resolver reads the request path, but " +
+			"multitenant.tenants holds no tenant, so every path tenant would answer 400 (ADR-171)"
+	)
+	tests := []struct {
+		name          string
+		multitenant   bool
+		resolver      string
+		tenants       bool // the built-in store holds a tenant
+		server        bool // Options.Server is supplied
+		serverChecker bool // ServerOptions.TenantChecker is set
+		source        TenantStore
+		wantErr       string
+	}{
+		{name: "path_built_in_store_with_tenant", multitenant: true, resolver: config.ResolverTypePath, tenants: true},
+		{name: "path_checking_source", multitenant: true, resolver: config.ResolverTypePath, source: &checkingResourceSource{}},
+		{name: "path_server_options_checker", multitenant: true, resolver: config.ResolverTypePath, tenants: true, serverChecker: true, wantErr: checkerText},
+		{name: "header_server_options_checker", multitenant: true, resolver: config.ResolverTypeHeader, tenants: true, serverChecker: true, wantErr: checkerText},
+		{name: "single_tenant_server_options_checker", serverChecker: true, wantErr: checkerText},
+		{name: "path_supplied_server", multitenant: true, resolver: config.ResolverTypePath, tenants: true, server: true, wantErr: serverText},
+		{name: "path_source_without_has_tenant", multitenant: true, resolver: config.ResolverTypePath, source: &dynamicResourceSource{}, wantErr: sourceText},
+		{name: "path_built_in_store_without_tenant", multitenant: true, resolver: config.ResolverTypePath, wantErr: emptyText},
+		{name: "composite_built_in_store_without_tenant", multitenant: true, resolver: config.ResolverTypeComposite, wantErr: emptyText},
+		{name: "header_supplied_server", multitenant: true, resolver: config.ResolverTypeHeader, tenants: true, server: true},
+		{name: "header_source_without_has_tenant", multitenant: true, resolver: config.ResolverTypeHeader, source: &dynamicResourceSource{}},
+		{name: "header_built_in_store_without_tenant", multitenant: true, resolver: config.ResolverTypeHeader},
+		{name: "multitenant_off_path_type_supplied_server", resolver: config.ResolverTypePath, server: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := pathTenancyWiringConfig(tt.multitenant, tt.resolver, tt.tenants)
+			var dials int
+			opts := &Options{
+				ResourceSource: tt.source,
+				DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+					dials++
+					return &testmocks.MockDatabase{}, nil
+				},
+				MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+					dials++
+					return testmocks.NewMockAMQPClient()
+				},
+			}
+			if tt.server {
+				opts.Server = newMockServer()
+			}
+			if tt.serverChecker {
+				opts.ServerOptions = &server.Options{TenantChecker: &checkingResourceSource{}}
+			}
+
+			if tt.wantErr == "" {
+				require.NoError(t, NewAppBuilder().WithConfig(cfg, opts).Error())
+				return
+			}
+			app, _, err := NewWithConfig(cfg, opts)
+			require.EqualError(t, err, tt.wantErr)
+			assert.Nil(t, app)
+			assert.Zero(t, dials, "refused before any dial")
+		})
+	}
+}

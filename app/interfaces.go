@@ -34,6 +34,13 @@ type ServerRunner interface {
 // open: a raw handler or middleware returning it answers 500, or 503 when it wraps
 // context.DeadlineExceeded, and a typed handler returning it through
 // server.NewUnknownTenantError answers 500.
+//
+// A store may also implement multitenant.TenantChecker (HasTenant(tenantID string) bool),
+// as the built-in store does; the App then asks it which tenants exist. HasTenant answers
+// from memory: no I/O, it never blocks and never panics, it answers false for "", it holds
+// the complete set before app.New, and it keeps the last good set on a failed refresh. Under
+// multitenant.enabled with a resolver that reads the request path, a custom
+// Options.ResourceSource must implement it or app.New fails (ADR-171).
 type TenantStore interface {
 	database.DBConfigProvider
 	messaging.BrokerURLProvider
