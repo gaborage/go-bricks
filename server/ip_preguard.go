@@ -101,7 +101,7 @@ func logIPPreGuardRejection(l logger.Logger, c *echo.Context) {
 		return
 	}
 	req := c.Request()
-	method := logSafeValue(req.Method)
+	method := logSafeValue(semconvMethod(req.Method))
 	path := logSafeValue(maskedPath(c))
 	client := logSafeValue(c.RealIP())
 	lc := correlateLine(c)

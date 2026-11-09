@@ -4770,7 +4770,7 @@ When `deps.MeterProvider`, `deps.Tracer`, and `deps.Logger` are wired (default w
 
 | Signal | Name | Attributes |
 |---|---|---|
-| Counter | `jose.failures.total` | `code` (e.g. `JOSE_DECRYPT_FAILED`), `direction` (`inbound`/`outbound`), `http.method`, `http.route` (matched route template only — omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
+| Counter | `jose.failures.total` | `code` (e.g. `JOSE_DECRYPT_FAILED`), `direction` (`inbound`/`outbound`), `http.method` (`_OTHER` outside the semconv known set), `http.route` (matched route template only — omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
 | Histogram | `jose.operation.duration` | `operation` (`decode_request`/`encode_response`) |
 | Span | `jose.decode_request` | `jose.direction`; `jose.error.code` on failure |
 | Span | `jose.encode_response` | `jose.direction`; `jose.error.code` on failure |
@@ -5620,7 +5620,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Go runtime | `go.memory.limit`, emitted only when a Go memory limit is set (`GOMEMLIMIT` or `debug.SetMemoryLimit`) | UpDownCounter (By) | — |
 | Go runtime | `go.memory.allocated` (By) / `go.memory.allocations` | Counter | — |
 | Go runtime | `go.schedule.duration`, which comes from the runtime producer and so stays cumulative with explicit buckets whatever `temporality` and `histogramaggregation` say | Histogram (s) | — |
-| JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method`, `http.route` (omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
+| JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method` (`_OTHER` outside the semconv known set), `http.route` (omitted when the engine reports no template: an unmatched path, or a middleware-bearing group's catch-all) |
 | JOSE | `jose.operation.duration` | Histogram | `operation` |
 
 **Auto-emitted logs** (zerolog → OTel logs bridge):

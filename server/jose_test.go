@@ -931,3 +931,32 @@ func TestJOSEFailureLogOmitsRouteOnAGroupCatchAll(t *testing.T) {
 	require.NotNil(t, recLog.last, "no failure log event was emitted")
 	assert.NotContains(t, recLog.last.fields, joseRouteAttr, "%s must be absent from the log on a catch-all", joseRouteAttr)
 }
+
+// TestJOSEFailureRendersUnknownMethodAsOther pins the semconv known-method rule on both JOSE
+// failure surfaces: a method outside the known set reaches the counter's and the log's
+// http.method as `_OTHER`, so the counter's series never follow a caller-chosen token.
+func TestJOSEFailureRendersUnknownMethodAsOther(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	recLog := &recLogger{}
+	obs := newJOSEObservability(recLog, nil, mp)
+
+	req := httptest.NewRequestWithContext(context.Background(), unknownMethodToken, "/tokens", http.NoBody)
+	c := newEngine().NewContext(req, httptest.NewRecorder())
+	obs.recordFailure(context.Background(), c, "inbound",
+		&joseAPIError{code: errCodeJOSEPlaintextRejected, message: "unknown method", status: http.StatusUnsupportedMediaType})
+
+	m := obtest.FindMetric(mp.Collect(t), joseFailureCounter)
+	require.NotNil(t, m, "counter %s was never recorded", joseFailureCounter)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data for %s, got %T", joseFailureCounter, m.Data)
+	require.Len(t, sum.DataPoints, 1)
+	method, onCounter := sum.DataPoints[0].Attributes.Value("http.method")
+	require.True(t, onCounter, "the counter must carry http.method")
+	assert.Equal(t, otherMethod, method.AsString(), "counter http.method")
+
+	require.NotNil(t, recLog.last, "no failure log event was emitted")
+	assert.Equal(t, otherMethod, recLog.last.fields["http.method"], "log http.method")
+	for key, value := range recLog.last.fields {
+		assert.NotContains(t, value, unknownMethodToken, "the token must not reach log field %s", key)
+	}
+}

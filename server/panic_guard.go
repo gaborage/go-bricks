@@ -32,7 +32,7 @@ func reportPanic(log logger.Logger, c *echo.Context, r any) {
 	lc := correlateLine(c)
 	lc.stamp(log.Error().
 		Str("panic_type", fmt.Sprintf("%T", r)).
-		Str("method", req.Method).
+		Str("method", semconvMethod(req.Method)).
 		Str("path", maskedPath(c))).
 		Msg("Panic recovered")
 }

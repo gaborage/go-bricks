@@ -244,7 +244,7 @@ func (f *tenantFaultError) Unwrap() error { return f.cause }
 // logTenantRejection.
 func logTenantRefusal(c HandlerContext, l logger.Logger, reason string) {
 	msg := fmt.Sprintf("[server.tenant] family request refused: method=%s path=%s reason=%q",
-		logSafeValue(c.Request().Method), logSafeValue(maskedPath(c.ectx)), reason)
+		logSafeValue(semconvMethod(c.Request().Method)), logSafeValue(maskedPath(c.ectx)), reason)
 	if l == nil {
 		log.Printf("ERROR %s", msg)
 		return

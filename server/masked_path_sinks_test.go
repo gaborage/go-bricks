@@ -56,24 +56,9 @@ func TestFrameworkLinesRenderTheMaskedPath(t *testing.T) {
 	for _, sink := range sinks {
 		for _, tc := range maskedPathTargets {
 			t.Run(sink.name+"/"+tc.name, func(t *testing.T) {
-				l := &testLogger{}
-				e := newEngine()
-				e.GET(probeSkipModuleRoute, func(c *echo.Context) error {
-					sink.emit(l, c)
-					return c.NoContent(http.StatusNoContent)
-				})
-
-				require.Equal(t, http.StatusNoContent, serveEngine(e, http.MethodGet, tc.target).Code)
-				entries := l.logEntries()
-				require.Len(t, entries, 1, "the sink writes one line")
-				entry := entries[0]
+				entry := emitOneLine(t, http.MethodGet, probeSkipModuleRoute, tc.target, sink.emit)
 				assert.Equal(t, sink.level, entry.level)
-				if path, ok := entry.values["path"]; ok {
-					// ip_preguard quotes its fields (logSafeValue); the panic guard does not.
-					assert.Equal(t, masked, strings.Trim(path, `"`), "the structured path field")
-				} else {
-					assert.Contains(t, entry.msg, `path="`+masked+`"`, "the quoted path in the message")
-				}
+				assertLineValue(t, entry, "path", masked)
 				for _, text := range append([]string{entry.msg}, slices.Collect(maps.Values(entry.values))...) {
 					assert.NotContains(t, text, parityPAN[:8], "no PAN byte run may reach the line")
 					assert.NotContains(t, text, parityPAN[8:], "no PAN byte run may reach the line")

@@ -430,3 +430,9 @@ func TestIPPreGuardRejectionCorrelatesItsLine(t *testing.T) {
 		assert.Equal(t, int32(1), trip(t, &testLogger{}), "an enabled WARN reads the client address once")
 	})
 }
+
+// TestIPPreGuardRejectionRendersUnknownMethodAsOther pins the semconv known-method rule on the
+// IP pre-guard WARN: a method outside the known set prints `_OTHER`.
+func TestIPPreGuardRejectionRendersUnknownMethodAsOther(t *testing.T) {
+	assertLineRendersMethodOther(t, logIPPreGuardRejection)
+}

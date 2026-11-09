@@ -726,3 +726,23 @@ func TestForwardedClientCertWarnsCorrelateTheirLines(t *testing.T) {
 		})
 	}
 }
+
+// TestForwardedClientCertWarningsRenderUnknownMethodAsOther pins the semconv known-method rule on
+// the three forwarded-client-cert WARNs: a method outside the known set prints `_OTHER`.
+func TestForwardedClientCertWarningsRenderUnknownMethodAsOther(t *testing.T) {
+	sinks := []struct {
+		name string
+		emit func(l logger.Logger, c *echo.Context)
+	}{
+		{name: "missing_identity", emit: logForwardedClientCertRejection},
+		{name: "duplicate_header", emit: func(l logger.Logger, c *echo.Context) {
+			logForwardedClientCertDuplicateWarning(l, c, errors.New("duplicated header"))
+		}},
+		{name: "leaf_not_decoded", emit: func(l logger.Logger, c *echo.Context) {
+			logForwardedClientCertLeafWarning(l, c, errors.New("bad leaf"), "leaf")
+		}},
+	}
+	for _, sink := range sinks {
+		t.Run(sink.name, func(t *testing.T) { assertLineRendersMethodOther(t, sink.emit) })
+	}
+}

@@ -796,3 +796,9 @@ func TestTenantMiddlewareRefusesCheckerThatCannotAnswer(t *testing.T) {
 		})
 	}
 }
+
+// TestTenantRejectionRendersUnknownMethodAsOther pins the semconv known-method rule on the
+// tenant-rejection WARN: a method outside the known set prints `_OTHER`.
+func TestTenantRejectionRendersUnknownMethodAsOther(t *testing.T) {
+	assertLineRendersMethodOther(t, func(l logger.Logger, c *echo.Context) { logTenantRejection(l, c, "empty tenant") })
+}

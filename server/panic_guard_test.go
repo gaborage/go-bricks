@@ -220,3 +220,9 @@ func TestOutermostRecoverCorrelatesItsLine(t *testing.T) {
 	assert.Equal(t, "Panic recovered", entries[0].msg)
 	assertLineCorrelated(t, entries[0])
 }
+
+// TestReportPanicRendersUnknownMethodAsOther pins the semconv known-method rule on the panic
+// guard's ERROR: a method outside the known set prints `_OTHER`.
+func TestReportPanicRendersUnknownMethodAsOther(t *testing.T) {
+	assertLineRendersMethodOther(t, func(l logger.Logger, c *echo.Context) { reportPanic(l, c, "boom") })
+}

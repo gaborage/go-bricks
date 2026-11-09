@@ -13,12 +13,16 @@ import (
 	"testing"
 	"time"
 
+	echootel "github.com/labstack/echo-otel/v5"
 	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/racedetect"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -1904,4 +1908,133 @@ func TestFlushCommitWriterCommitsBeforeFlushAndPassesThrough(t *testing.T) {
 	assert.True(t, resp.Committed, "a flush commits the response")
 	assert.True(t, rec.Flushed)
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// semconvMethodSink keeps the measured semconvMethod results live.
+var semconvMethodSink string
+
+// TestSemconvMethodMatchesEchoOTelKnownSet pins the access line's known set to the one
+// echo-otel judges the span's http.request.method against: every method in knownMethods is
+// known to echo-otel as itself, and a method echo-otel renders _OTHER (Echo's routable
+// PROPFIND and REPORT included) renders otherMethod here.
+func TestSemconvMethodMatchesEchoOTelKnownSet(t *testing.T) {
+	spanMethod := func(method string) string {
+		var v echootel.Values
+		_ = v.ExtractRequest(httptest.NewRequestWithContext(context.Background(), method, "/", http.NoBody))
+		return v.HTTPMethod
+	}
+	for method := range knownMethods {
+		assert.Equal(t, method, semconvMethod(method))
+		assert.Equal(t, method, spanMethod(method), "echo-otel must know %s", method)
+	}
+	for _, method := range []string{echo.PROPFIND, echo.REPORT, "FROBNICATE", "get", "Post", ""} {
+		assert.Equal(t, otherMethod, semconvMethod(method), "method %q", method)
+	}
+	for _, method := range []string{echo.PROPFIND, echo.REPORT, "FROBNICATE"} {
+		assert.Equal(t, otherMethod, spanMethod(method), "echo-otel must render %s as _OTHER", method)
+	}
+}
+
+func TestSemconvMethodAllocsStable(t *testing.T) {
+	if racedetect.Enabled {
+		t.Skip("testing.AllocsPerRun is unreliable under -race; alloc baseline enforced by make test-alloc")
+	}
+	for _, method := range []string{http.MethodGet, "FROBNICATE"} {
+		assert.Zero(t, testing.AllocsPerRun(100, func() { semconvMethodSink = semconvMethod(method) }), "method %q", method)
+	}
+}
+
+// unknownMethodToken is a request method outside the semconv known set.
+const unknownMethodToken = "FROBNICATE"
+
+// emitOneLine serves a method request for target to route on a fresh engine whose handler calls
+// emit, and returns the one line emit wrote.
+func emitOneLine(t *testing.T, method, route, target string, emit func(l logger.Logger, c *echo.Context)) testLogEntry {
+	t.Helper()
+	l := &testLogger{}
+	e := newEngine()
+	e.Add(method, route, func(c *echo.Context) error {
+		emit(l, c)
+		return c.NoContent(http.StatusNoContent)
+	})
+
+	require.Equal(t, http.StatusNoContent, serveEngine(e, method, target).Code)
+	entries := l.logEntries()
+	require.Len(t, entries, 1, "the sink writes one line")
+	return entries[0]
+}
+
+// assertLineValue asserts entry carries want under key, as a structured field (quoted or not:
+// logSafeValue quotes, the panic guard does not) or as key="want" in its message.
+func assertLineValue(t *testing.T, entry testLogEntry, key, want string) {
+	t.Helper()
+	if got, ok := entry.values[key]; ok {
+		assert.Equal(t, want, strings.Trim(got, `"`), "the structured %s field", key)
+		return
+	}
+	assert.Contains(t, entry.msg, key+`="`+want+`"`, "the quoted %s in the message", key)
+}
+
+// assertLineRendersMethodOther asserts the one line emit writes for an unknownMethodToken
+// request renders the method as otherMethod and carries the token nowhere.
+func assertLineRendersMethodOther(t *testing.T, emit func(l logger.Logger, c *echo.Context)) {
+	t.Helper()
+	entry := emitOneLine(t, unknownMethodToken, "/m", "/m", emit)
+	assertLineValue(t, entry, "method", otherMethod)
+	assert.NotContains(t, entry.msg, unknownMethodToken, "the token must not reach the message")
+	for key, value := range entry.values {
+		assert.NotContains(t, value, unknownMethodToken, "the token must not reach field %s", key)
+	}
+}
+
+// TestRequestMethodOutsideTheKnownSetRendersOther pins the semconv known-method rule on both
+// request sinks through New: an unknown method renders `_OTHER` on the access line and the span,
+// with no http.request.method_original; a case variant keeps the span's bounded original.
+func TestRequestMethodOutsideTheKnownSetRendersOther(t *testing.T) {
+	const other = "_OTHER"
+	tests := []struct {
+		name         string
+		method       string
+		wantLine     string
+		wantSpan     string
+		wantOriginal string
+	}{
+		{name: "known_method", method: http.MethodGet, wantLine: http.MethodGet, wantSpan: http.MethodGet},
+		{name: "unknown_token", method: unknownMethodToken, wantLine: other, wantSpan: other},
+		{name: "case_variant_of_known_method", method: "get", wantLine: other, wantSpan: http.MethodGet, wantOriginal: "get"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exporter := installTestTracerProvider(t)
+			log := &testLogger{}
+			srv := newAccessLogServer(t, log, true)
+
+			req := httptest.NewRequestWithContext(context.Background(), tt.method, "/raw/plain", http.NoBody)
+			srv.echo.ServeHTTP(httptest.NewRecorder(), req)
+
+			access := findAccessLine(t, log)
+			assert.Equal(t, tt.wantLine, access.values[otelHTTPMethod], "access line http.request.method")
+			assert.True(t, strings.HasPrefix(access.msg, tt.wantLine+" "),
+				"access line message starts with the rendered method: %q", access.msg)
+
+			spans := exporter.GetSpans()
+			require.Len(t, spans, 1)
+			attrs := map[attribute.Key]string{}
+			for _, attr := range spans[0].Attributes {
+				attrs[attr.Key] = attr.Value.String()
+			}
+			assert.Equal(t, tt.wantSpan, attrs[semconv.HTTPRequestMethodKey], "span http.request.method")
+			original, hasOriginal := attrs[semconv.HTTPRequestMethodOriginalKey]
+			assert.Equal(t, tt.wantOriginal != "", hasOriginal, "span http.request.method_original presence")
+			assert.Equal(t, tt.wantOriginal, original, "span http.request.method_original")
+
+			if tt.wantOriginal == "" && tt.wantLine == other {
+				assert.NotContains(t, access.msg, tt.method, "the token must not reach the access message")
+				assert.NotContains(t, spans[0].Name, tt.method, "the token must not reach the span name")
+				for key, value := range attrs {
+					assert.NotContains(t, value, tt.method, "the token must not reach span attribute %s", key)
+				}
+			}
+		})
+	}
 }
