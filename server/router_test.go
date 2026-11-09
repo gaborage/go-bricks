@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/racedetect"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const parityPAN = "4111111111111111"
@@ -313,5 +314,40 @@ func TestMaskingRouterParity(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestNewEngineAgreesWithPathResolver pins the framework engine's router config against
+// multitenant.PathResolver: the resolved tenant is the value the engine binds to the route
+// parameter at the same segment, so a router-config change that decodes or re-splits paths fails
+// here (ADR-174).
+func TestNewEngineAgreesWithPathResolver(t *testing.T) {
+	resolver := &multitenant.PathResolver{Segment: 2}
+	var param, tenant string
+	var resolveErr error
+	e := newEngine()
+	e.GET("/:p/:tenant/orders", func(c *echo.Context) error {
+		param = c.Param("tenant")
+		tenant, resolveErr = resolver.ResolveTenant(c.Request().Context(), c.Request())
+		return nil
+	})
+	for _, tc := range []struct{ name, path string }{
+		{name: "plain", path: "/a/acme/orders"},
+		{name: "encoded_slash_in_earlier_segment", path: "/a%2Fb/acme/orders"},
+		{name: "encoded_double_slash", path: "/a%2F%2Fb/acme/orders"},
+		{name: "encoded_tenant_segment", path: "/a/%61cme/orders"},
+		{name: "space_padded_tenant_segment", path: "/a/%20acme/orders"},
+		{name: "space_padded_tenant_with_raw_path", path: "/a%2Fb/%20acme/orders"},
+		{name: "whitespace_only_tenant_segment", path: "/a/%20/orders"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			param, tenant, resolveErr = "", "", nil
+			e.ServeHTTP(httptest.NewRecorder(),
+				httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, http.NoBody))
+
+			require.NotEmpty(t, param, "the route must match")
+			require.NoError(t, resolveErr)
+			assert.Equal(t, param, tenant, "resolver and engine must read the same segment")
+		})
 	}
 }

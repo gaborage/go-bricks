@@ -3001,6 +3001,23 @@ never replaced by the body.
 
 ---
 
+### [ADR-174: `PathResolver` Reads the Path the Router Matches](adr_174_path_resolver_reads_routed_path.md)
+
+**Date:** 2026-11-08 | **Status:** Accepted | **Breaking:** a tenant segment or `PathResolver.Prefix` that arrives percent-encoded no longer resolves: `/%61cme/...` reads `%61cme`, which the tenant-ID grammar refuses with 400, and an encoded prefix no longer matches
+
+`multitenant.PathResolver` split the decoded `URL.Path` while echo's router matches `URL.RawPath`
+whenever net/url keeps one, so an encoded slash in an earlier segment shifted the resolver's
+segment index but not the router's, and the tenant in context and the route's own path parameter
+could name different segments. The resolver now splits `cmp.Or(RawPath, Path)`, the router's own
+selection, and returns the segment as sent, still escaped, as the router binds parameter values.
+No signature or configuration key moves. See [migrations.md](migrations.md) `[C73.42]`.
+
+**Key Benefits:** the tenant and a route parameter at the same position always name the same
+segment, which ADR-170's existence check cannot guarantee when both ids are tenants the store
+holds.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3810,7 +3827,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-173) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-174) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -5,9 +5,11 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"testing"
 
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -601,6 +603,54 @@ func TestPathResolverResolveTenant(t *testing.T) {
 			path:     "/itsp/clientE//",
 			expected: "clientE",
 		},
+		{
+			name:     "encoded_slash_does_not_shift_segment",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/a%2Fb/acme/orders",
+			expected: "acme",
+		},
+		{
+			name:     "encoded_segment_returned_as_sent",
+			resolver: &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:     "/itsp/%61cme/orders",
+			expected: "%61cme",
+		},
+		{
+			name:     "space_padded_segment_returned_untrimmed",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/a/%20acme/orders",
+			expected: " acme",
+		},
+		{
+			name:     "whitespace_only_segment_returned_as_sent",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/a/%20/orders",
+			expected: " ",
+		},
+		{
+			name:     "encoded_space_under_raw_path_returned_escaped",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/a%2Fb/%20/orders",
+			expected: "%20",
+		},
+		{
+			name:     "escaped_segment_keeps_raw_spelling",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/a/%7Aeta-tenant/orders",
+			expected: "%7Aeta-tenant",
+		},
+		{
+			name:     "newline_padded_segment_not_trimmed",
+			resolver: &PathResolver{Segment: 2},
+			path:     "/a/%0Aacme/orders",
+			expected: "\nacme",
+		},
+		{
+			name:        "encoded_prefix_not_matched",
+			resolver:    &PathResolver{Segment: 2, Prefix: "/itsp"},
+			path:        "/%69tsp/acme/orders",
+			expectError: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -909,4 +959,40 @@ func TestSubdomainResolverLowercaseHostAllocsStable(t *testing.T) {
 	})
 
 	assert.InDelta(t, 0, allocs, 0, "allocs/op for an already-lowercase host")
+}
+
+// TestPathResolverAgreesWithRouterParam pins that the resolved tenant is the value echo's
+// router binds to the same segment's path parameter, under the framework's router config
+// (raw path when net/url keeps one, parameter values left escaped).
+func TestPathResolverAgreesWithRouterParam(t *testing.T) {
+	router := echo.NewRouter(echo.RouterConfig{AllowOverwritingRoute: true})
+	_, err := router.Add(echo.Route{
+		Method:  http.MethodGet,
+		Path:    "/:p/:tenant/orders",
+		Handler: func(*echo.Context) error { return nil },
+	})
+	require.NoError(t, err)
+	resolver := &PathResolver{Segment: 2}
+
+	for _, tc := range []struct{ name, path string }{
+		{name: "plain", path: "/a/acme/orders"},
+		{name: "encoded_slash_in_earlier_segment", path: "/a%2Fb/acme/orders"},
+		{name: "encoded_tenant_segment", path: "/a/%61cme/orders"},
+		{name: "encoded_double_slash", path: "/a%2F%2Fb/acme/orders"},
+		{name: "space_padded_tenant_segment", path: "/a/%20acme/orders"},
+		{name: "space_padded_tenant_with_raw_path", path: "/a%2Fb/%20acme/orders"},
+		{name: "whitespace_only_tenant_segment", path: "/a/%20/orders"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := setupPathRequest(tc.path)
+			c := echo.NewContext(req, httptest.NewRecorder())
+			router.Route(c)
+			param := c.Param("tenant")
+			require.NotEmpty(t, param, "the route must match")
+
+			tenantID, err := resolver.ResolveTenant(context.Background(), req)
+			require.NoError(t, err)
+			assert.Equal(t, param, tenantID, "resolver and router must read the same segment")
+		})
+	}
 }

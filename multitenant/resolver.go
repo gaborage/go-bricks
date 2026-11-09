@@ -1,6 +1,7 @@
 package multitenant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net"
@@ -223,6 +224,14 @@ func (r *ValidatingResolver) resolve(ctx context.Context, req *http.Request) (te
 // extraction for requests whose path equals Prefix exactly or starts with
 // "Prefix/" — non-matching paths return ErrTenantResolutionFailed so the
 // composite chain (if any) can fall through to other resolvers.
+//
+// The resolver reads the path the framework's echo router matches: URL.RawPath
+// when net/url keeps one, URL.Path otherwise. The prefix is compared and the
+// segment returned as sent, still percent-escaped and untrimmed, exactly as the
+// router binds a path parameter at that position (/a%2Fb/acme/x, segment 2, is
+// "acme"; /%61cme/x, segment 1, is "%61cme", which the tenant-ID grammar
+// refuses). A router that unescapes path values, such as net/http's ServeMux,
+// can bind a different value for the same segment.
 type PathResolver struct {
 	Segment int
 	Prefix  string
@@ -231,11 +240,13 @@ type PathResolver struct {
 // ResolveTenant implements TenantResolver.
 func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (string, error) {
 	_ = ctx
-	if r == nil || req == nil || r.Segment <= 0 || req.URL == nil { //nolint:forbidigo // tenant resolution reads the raw path to extract the segment; the path never reaches a sink (#2212)
+	if r == nil || req == nil || r.Segment <= 0 || req.URL == nil { //nolint:forbidigo // tenant resolution reads the routed path to extract the segment; the path never reaches a sink (#2212)
 		return "", ErrTenantResolutionFailed
 	}
 
-	path := req.URL.Path //nolint:forbidigo // tenant resolution reads the raw path to extract the segment; the path never reaches a sink (#2212)
+	// Split the path echo's router matches (RawPath when set, else Path; see CreateProbeSkipper
+	// in server/probe_skip.go) and keep segments escaped, as the router binds them.
+	path := cmp.Or(req.URL.RawPath, req.URL.Path) //nolint:forbidigo // tenant resolution reads the routed path to extract the segment; the path never reaches a sink (#2212)
 	normalizedPrefix := pathutil.NormalizePrefix(r.Prefix)
 	if normalizedPrefix != "" {
 		if _, ok := pathutil.StripPathPrefix(path, normalizedPrefix); !ok {
@@ -259,11 +270,9 @@ func (r *PathResolver) ResolveTenant(ctx context.Context, req *http.Request) (st
 	if r.Segment > len(parts) {
 		return "", ErrTenantResolutionFailed
 	}
-	tenantID := strings.TrimSpace(parts[r.Segment-1])
-	if tenantID == "" {
-		return "", ErrTenantResolutionFailed
-	}
-	return tenantID, nil
+	// Returned as the router binds it: untrimmed, so a whitespace segment reaches the tenant-ID
+	// grammar instead of being silently rewritten (the loop above already refused empty ones).
+	return parts[r.Segment-1], nil
 }
 
 // TenantChecker reports whether a tenant id names a tenant the deployment holds;
