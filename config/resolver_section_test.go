@@ -260,3 +260,25 @@ func TestResolverOrderValidationRejectsUnknown(t *testing.T) {
 		})
 	}
 }
+
+// TestResolverConfigReadsPath pins which resolver configurations read the request path: the
+// path resolver, and a composite whose order holds path; nothing else.
+func TestResolverConfigReadsPath(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ResolverConfig
+		want bool
+	}{
+		{name: "path", cfg: ResolverConfig{Type: ResolverTypePath}, want: true},
+		{name: "composite_with_path", cfg: ResolverConfig{Type: ResolverTypeComposite, Order: []string{ResolverTypeHeader, ResolverTypePath}}, want: true},
+		{name: "composite_without_path", cfg: ResolverConfig{Type: ResolverTypeComposite, Order: []string{ResolverTypeHeader, ResolverTypeSubdomain}}},
+		{name: "header_with_path_order", cfg: ResolverConfig{Type: ResolverTypeHeader, Order: []string{ResolverTypePath}}},
+		{name: "subdomain", cfg: ResolverConfig{Type: ResolverTypeSubdomain}},
+		{name: "unset"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.cfg.ReadsPath())
+		})
+	}
+}

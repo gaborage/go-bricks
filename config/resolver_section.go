@@ -109,14 +109,19 @@ func domainDelivered(domain string) bool {
 	return strings.TrimPrefix(strings.TrimSpace(domain), ".") != ""
 }
 
+// ReadsPath reports whether the configured resolver reads the tenant from the request path:
+// the path resolver, or a composite whose order holds path.
+func (c *ResolverConfig) ReadsPath() bool {
+	return c.Type == ResolverTypePath ||
+		(c.Type == ResolverTypeComposite && slices.Contains(c.Order, ResolverTypePath))
+}
+
 // validatePathResolverFields enforces path-segment + prefix rules for the path
 // resolver and for composite configurations that opt into a path sub-resolver
 // (cfg.Order containing "path" indicates intent to include path — Order is
 // required and validated before this runs, so it is always explicit here).
 func validatePathResolverFields(cfg *ResolverConfig) error {
-	required := cfg.Type == ResolverTypePath ||
-		(cfg.Type == ResolverTypeComposite && slices.Contains(cfg.Order, ResolverTypePath))
-	if !required {
+	if !cfg.ReadsPath() {
 		return nil
 	}
 	if cfg.Path.Segment <= 0 {

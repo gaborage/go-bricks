@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -308,6 +309,8 @@ func newServer(cfg *config.Config, log logger.Logger, opts ...serverOption) *Ser
 	if seat.checksPath {
 		if s.opts.TenantChecker == nil {
 			s.setupErr = goerrors.Join(s.setupErr, errNoTenantChecker)
+		} else {
+			s.setupErr = goerrors.Join(s.setupErr, vetExistence(s.opts.TenantChecker))
 		}
 		s.pathChecker = s.opts.TenantChecker
 	}
@@ -710,6 +713,25 @@ func logPathRendering(l logger.Logger, listener string) {
 var errNoTenantChecker = goerrors.New("server: multitenant.resolver may read the tenant from the request path " +
 	"but server.Options.TenantChecker is nil, so every path tenant would answer 400: set it, or build the " +
 	"server through the App with a resource source that implements HasTenant (ADR-170)")
+
+// vetExistence refuses a check that cannot answer: a nil pointer (a nil *config.TenantStore
+// answers false for every id, so it would refuse every path tenant), or one whose HasTenant("")
+// panics or answers true. It runs once, at construction, never on the request path, and renders
+// a panic by type only (ADR-081).
+func vetExistence(exists multitenant.TenantChecker) (err error) {
+	if v := reflect.ValueOf(exists); v.Kind() == reflect.Pointer && v.IsNil() {
+		return fmt.Errorf("tenant existence check %T is a nil pointer (ADR-171)", exists)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("tenant existence check %T panicked on HasTenant(\"\") (panic type: %T) (ADR-171)", exists, r)
+		}
+	}()
+	if exists.HasTenant("") {
+		return fmt.Errorf("tenant existence check %T answers true for the empty tenant id (ADR-171)", exists)
+	}
+	return nil
+}
 
 // logPathTenantCheck states, once as the application listener starts, that the tenant seat
 // writes a path-read tenant only when checker holds it (ADR-170), naming the store's type and,

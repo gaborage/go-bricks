@@ -4,6 +4,14 @@
 **Date:** 2026-11-03
 **Related:** [ADR-036](adr_036_global_middleware.md) (global middleware, reversed in part here) · [ADR-160](adr_160_rate_limit_keys_on_client_ip.md) (rate limit keys on the client IP) · [ADR-161](adr_161_unknown_tenant_is_a_client_fault.md) (unknown tenant is a client fault) · [ADR-167](adr_167_inbound_paths_render_from_route_template.md) (masked inbound paths) · [ADR-169](adr_169_framework_routes_skip_path_tenant.md) (framework routes skip the path tenant) · #2212
 
+> **Amended (2026-11-08, ADR-171):** two statements in decision 3 no longer hold. The App no
+> longer replaces a `TenantChecker` given in `app.Options.ServerOptions`: `app.New` refuses it
+> under any resolver. Under path tenancy a server passed as `app.Options.Server` is not used as
+> given: `app.New` refuses it, and also a resource source without `HasTenant` and a built-in
+> store holding no tenant, all before any dial. A check that is a nil pointer, or whose
+> `HasTenant("")` panics or answers true, also refuses `Start`. See
+> [ADR-171](adr_171_app_refuses_tenant_wiring_store_cannot_vouch_for.md).
+
 ## Context
 
 A path resolver (`multitenant.resolver.type: path`, or a composite chain whose `path` member won)

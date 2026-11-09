@@ -9,6 +9,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -55,6 +56,10 @@ func (b *Builder) WithConfig(cfg *config.Config, opts *Options) *Builder {
 		b.err = fmt.Errorf("invalid configuration: %w", err)
 		return b
 	}
+	if err := checkPathTenantExistence(cfg, opts); err != nil {
+		b.err = fmt.Errorf("invalid configuration: %w", err)
+		return b
+	}
 
 	b.cfg = cfg
 	b.opts = opts
@@ -88,6 +93,54 @@ func checkSourceAgreement(cfg *config.Config, opts *Options) error {
 		"under multitenant.enabled with a per-tenant outbox or inbox, which rejects dynamic, keep static and have the store report false"
 	return err
 }
+
+// checkPathTenantExistence refuses wiring in which the tenant resource source cannot be the one
+// existence check the server asks about a tenant read from the request path (ADR-171). It runs
+// on a validated cfg, after checkSourceAgreement and before any resource is dialed.
+// ServerOptions.TenantChecker is refused under every resolver, because app replaces it with the
+// resource source's check. Under multitenant.enabled with a resolver that reads the path it also
+// refuses a supplied Options.Server, which app cannot wire to the store, a resource source
+// without HasTenant, and the built-in store holding no tenant, which would refuse every one.
+func checkPathTenantExistence(cfg *config.Config, opts *Options) error {
+	var serverOpts *server.Options
+	var supplied ServerRunner
+	var source TenantStore
+	if opts != nil {
+		serverOpts, supplied, source = opts.ServerOptions, opts.Server, opts.ResourceSource
+	}
+	if serverOpts != nil && serverOpts.TenantChecker != nil {
+		return errServerOptionsTenantChecker
+	}
+	if !cfg.Multitenant.Enabled || !cfg.Multitenant.Resolver.ReadsPath() {
+		return nil
+	}
+	if supplied != nil {
+		return errPathTenancySuppliedServer
+	}
+	if source != nil {
+		if _, ok := source.(multitenant.TenantChecker); !ok {
+			return errPathTenancyNoTenantChecker
+		}
+		return nil
+	}
+	// Validate admits no "" or config.NamedDatabasePrefix key, so every configured tenant is
+	// one the built-in store's HasTenant holds.
+	if len(cfg.Multitenant.Tenants) == 0 {
+		return errPathTenancyNoTenant
+	}
+	return nil
+}
+
+var (
+	errServerOptionsTenantChecker = errors.New("ServerOptions.TenantChecker is set, but app asks the " +
+		"tenant resource source which tenants exist (ADR-171): drop it")
+	errPathTenancySuppliedServer = errors.New("multitenant.resolver reads the request path, so " +
+		"Options.Server replaces the server app wires to the tenant store (ADR-171); drop it or use ServerOptions")
+	errPathTenancyNoTenantChecker = errors.New("multitenant.resolver reads the request path, so " +
+		"Options.ResourceSource must implement multitenant.TenantChecker (ADR-171)")
+	errPathTenancyNoTenant = errors.New("multitenant.resolver reads the request path, but " +
+		"multitenant.tenants holds no tenant, so every path tenant would answer 400 (ADR-171)")
+)
 
 // CreateLogger creates and configures the application logger.
 func (b *Builder) CreateLogger() *Builder {

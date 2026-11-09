@@ -2944,6 +2944,24 @@ for it, and no response before the adapter differs by tenant existence.
 
 ---
 
+### [ADR-171: app.New Refuses Tenant Wiring the Resource Source Cannot Vouch For](adr_171_app_refuses_tenant_wiring_store_cannot_vouch_for.md)
+
+**Date:** 2026-11-08 | **Status:** Accepted | **Breaking:** `app.New` refuses `ServerOptions.TenantChecker`, and under path tenancy `Options.Server`, a resource source without `HasTenant` and an empty built-in store; `Start` refuses a check that is a nil pointer, panics or answers true for `""`
+
+ADR-170 made the resource source the one authority on which tenants exist, but the App replaced a
+`ServerOptions.TenantChecker` without a word and used a supplied `Options.Server` with its own
+checker. `checkPathTenantExistence` now runs in `Builder.WithConfig`, before any dial, and refuses
+`ServerOptions.TenantChecker` under any resolver; under `multitenant.enabled` with a resolver that
+reads the path (`ResolverConfig.ReadsPath`) it also refuses `Options.Server`, a resource source
+without `HasTenant`, and a built-in store holding no tenant. The server probes its check once at
+construction (`vetExistence`): a nil pointer, a `HasTenant("")` that panics or one that answers
+true refuses `Start`. Amends ADR-170 decision 3. See [migrations.md](migrations.md) `[C73.38]`.
+
+**Key Benefits:** one existence authority, and wiring that cannot answer fails before anything is
+dialed.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3753,7 +3771,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-170) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-171) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -2073,3 +2073,86 @@ func TestStatusForErrorAgreesWithClassifyError(t *testing.T) {
 		})
 	}
 }
+
+// funcTenantChecker calls its func in HasTenant, so a nil one panics there without being a pointer.
+type funcTenantChecker func(tenantID string) bool
+
+func (f funcTenantChecker) HasTenant(tenantID string) bool { return f(tenantID) }
+
+// nilSafeTenantChecker answers false without dereferencing its receiver, so a typed nil answers.
+type nilSafeTenantChecker struct{}
+
+func (*nilSafeTenantChecker) HasTenant(string) bool { return false }
+
+// everyTenantChecker answers true for every id, the empty one included.
+type everyTenantChecker struct{}
+
+func (everyTenantChecker) HasTenant(string) bool { return true }
+
+const (
+	vetPanicText = `tenant existence check server.funcTenantChecker panicked on HasTenant("") ` +
+		`(panic type: runtime.errorString) (ADR-171)`
+	vetTrueText     = "tenant existence check server.everyTenantChecker answers true for the empty tenant id (ADR-171)"
+	vetNilStoreText = "tenant existence check *config.TenantStore is a nil pointer (ADR-171)"
+	vetNilSafeText  = "tenant existence check *server.nilSafeTenantChecker is a nil pointer (ADR-171)"
+)
+
+// TestVetExistence pins the construction-time probe: a typed-nil pointer check (the built-in
+// store's included, whose HasTenant answers false), a check whose HasTenant("") panics, and one
+// that answers true are refused with the check's type in the text, never a panic value; the
+// built-in store, empty or not, and a consumer check answering false pass.
+func TestVetExistence(t *testing.T) {
+	tests := []struct {
+		name    string
+		checker multitenant.TenantChecker
+		wantErr string
+	}{
+		{name: "nil_built_in_store", checker: (*config.TenantStore)(nil), wantErr: vetNilStoreText},
+		{name: "nil_pointer_that_answers", checker: (*nilSafeTenantChecker)(nil), wantErr: vetNilSafeText},
+		{name: "panics_on_empty_id", checker: funcTenantChecker(nil), wantErr: vetPanicText},
+		{name: "answers_true_for_empty_id", checker: everyTenantChecker{}, wantErr: vetTrueText},
+		{name: "empty_built_in_store", checker: config.NewTenantStore(&config.Config{})},
+		{name: "consumer_check_answering_false", checker: &nilSafeTenantChecker{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := vetExistence(tt.checker)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestStartRefusesTenantCheckerFailingTheProbe pins the wiring refusal for a check that cannot
+// answer: under a resolver that may read the path, a check vetExistence refuses makes Start
+// refuse before binding with its text; a header resolver asks no check, so the same checks start.
+func TestStartRefusesTenantCheckerFailingTheProbe(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver string
+		checker  multitenant.TenantChecker
+		wantErr  string
+	}{
+		{name: "path_nil_built_in_store", resolver: config.ResolverTypePath, checker: (*config.TenantStore)(nil), wantErr: vetNilStoreText},
+		{name: "path_panics", resolver: config.ResolverTypePath, checker: funcTenantChecker(nil), wantErr: vetPanicText},
+		{name: "path_answers_true", resolver: config.ResolverTypePath, checker: everyTenantChecker{}, wantErr: vetTrueText},
+		{name: "composite_answers_true", resolver: config.ResolverTypeComposite, checker: everyTenantChecker{}, wantErr: vetTrueText},
+		{name: "header_nil_built_in_store", resolver: config.ResolverTypeHeader, checker: (*config.TenantStore)(nil)},
+		{name: "header_panics", resolver: config.ResolverTypeHeader, checker: funcTenantChecker(nil)},
+		{name: "header_answers_true", resolver: config.ResolverTypeHeader, checker: everyTenantChecker{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewWithOptions(pathTenantCheckConfig(tt.resolver), &testLogger{}, Options{TenantChecker: tt.checker})
+			if tt.wantErr == "" {
+				require.NoError(t, srv.setupErr)
+				return
+			}
+			require.EqualError(t, srv.Start(), tt.wantErr)
+			assert.Nil(t, srv.boundAddr.Load(), "refused before binding")
+		})
+	}
+}
