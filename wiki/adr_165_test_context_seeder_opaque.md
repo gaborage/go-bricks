@@ -25,7 +25,8 @@ exported type, so the framework could not change it without a breaking change.
 ## Decision
 
 **`TestContextOption` is removed and replaced by `TestContextSeeder`, an interface with one
-unexported method.** Only types in package `server` can implement it, so the package's
+unexported method.** Only package `server` can define that method (a consumer wrapper can only
+forward to a seeder it holds), so the package's
 constructors are the only source of a working seeder. The type is renamed as well as sealed
 because an exported single-method interface takes an -er name (ADR-013); the break is already
 paid for, so the rename rides with it. `WithRouteTemplate` keeps its name and behavior and now
@@ -48,8 +49,9 @@ returns `TestContextSeeder`; `NewHandlerContextForTest` keeps its name and takes
 - Breaking at compile time only; see C73.27. Every spelling of `server.TestContextOption` stops
   compiling, including a consumer helper's `opts ...server.TestContextOption` parameter, which
   becomes `opts ...server.TestContextSeeder`.
-- A consumer struct that embeds `server.TestContextSeeder` still satisfies the interface, but it
-  carries a nil seeder that panics when `NewHandlerContextForTest` applies it.
+- A consumer struct that embeds `server.TestContextSeeder` still satisfies the interface and
+  forwards to the seeder it holds; one embedding a nil seeder panics when
+  `NewHandlerContextForTest` applies it.
 - `TestTestContextSeederIsOpaque` in `server/handler_test.go` fails if the type stops being an
   interface or gains an exported method.
 - No configuration key and no production code path changes.

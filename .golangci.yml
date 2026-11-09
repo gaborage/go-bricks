@@ -18,7 +18,7 @@ linters:
     - errname                   # checks that error variables/types follow the errFoo/FooError convention
     - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
     - exhaustive                # checks exhaustiveness of enum switch statements
-    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083; the global LoggerProvider; echo engines outside server.newEngine (#2212))
+    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083; the global LoggerProvider; echo engines outside server.newEngine (#2212); inbound request-URL/path/query reads and echo form reads outside server.maskedPath (#2212))
     - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present
@@ -87,13 +87,14 @@ linters:
         - pattern: ^echo\.New(WithConfig)?$
           pkg: ^github\.com/labstack/echo/v5$
           msg: build echo engines through server.newEngine (#2212) — a foreign engine has no maskingRouter, so every path it serves renders as the bare REDACTED.
-        # The inbound path door (#2212 L3): three patterns over request-URL, path, query and form
-        # reads, pinned by receiver type (net/http's Request, echo v5's Context and package
+        # The inbound path door (#2212 L3): three patterns over request-URL, path and query reads
+        # and echo's form reads (net/http's form accessors are not covered), pinned by receiver type (net/http's Request, echo v5's Context and package
         # funcs, and the framework's own HandlerContext path/query doors), so a variable name
         # cannot dodge them. Repo-wide: the exclusions below lift them only for tests, the
-        # outbound-request packages, and (for the HandlerContext pattern alone) server/, whose
-        # framework code calls its own HandlerContext doors; every other framework read carries
-        # a reasoned nolint.
+        # outbound-request packages, and (for the HandlerContext pattern alone) server/, which
+        # declares those doors; no non-test server/ code calls them today, so that exclusion
+        # lifts nothing and keeps a future framework-internal call a deliberate choice; every
+        # other framework read carries a reasoned nolint.
         - pattern: ^http\.Request\.(URL|RequestURI|PathValue|SetPathValue)$
           pkg: ^net/http$
           msg: &pathDoorMsg 'inbound path: render it through server.maskedPath (#2212) — request-URL, path, query and form values are caller-written bytes (a PAN in a segment), so a sink prints only the masked route template.'
@@ -246,16 +247,15 @@ linters:
           - forbidigo
         path: server/router_test\.go
         text: 'use of `echo\.New'
-      # The inbound path door binds all framework code except where a request URL is not an
-      # inbound path: httpclient/ (the request the client sends and its redirects),
+      # The inbound path door binds all framework code except where a request URL is outbound
+      # or test-only: httpclient/ (the request the client sends and its redirects),
       # migration/source/ (a source URL it fetches), auth/jwks.go (the JWKS fetch request),
       # auth/testing/ (the stub issuer's own handler), and tests, which build and assert the
-      # requests they send. server/ is lifted for the HandlerContext pattern only, since its
-      # framework code calls its own doors; its URL and echo reads stay forbidden.
+      # requests they send. server/ is lifted for the HandlerContext pattern only (it declares
+      # those doors; today the lift suppresses nothing); its URL and echo reads stay forbidden.
       # multitenant/resolver.go reads inbound paths and carries a reasoned nolint instead.
-      # forbidigo's issue text
-      # quotes the source spelling (`req.URL`), not the type-expanded name, so these key off
-      # the door msgs, which no other pattern carries.
+      # forbidigo's issue text quotes the source spelling (`req.URL`), not the type-expanded
+      # name, so these key off the door msgs, which no other pattern carries.
       - linters:
           - forbidigo
         path: (^|/)(httpclient/|migration/source/|auth/jwks\.go$|auth/testing/)

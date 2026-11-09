@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-11-03
+**Issue:** #2212
 **Amends:** [ADR-034](adr_034_echo_boundary_types.md) (closes its Phase-1 scope note that kept `SetupMiddlewares` exported)
 **Related:** [ADR-026](adr_026_zero_overhead_request_path.md) (the `observabilityEnabled` parameter) · [ADR-034](adr_034_echo_boundary_types.md) (no `echo.*` type on the consumer surface) · [ADR-135](adr_135_dead_public_surface.md) (dead public surface is deleted, not deprecated) · #2212
 
@@ -13,8 +14,8 @@ exported door that took an `*echo.Echo`, so it let a consumer build their own en
 `echo.New()` and give it the framework chain.
 
 Every engine go-bricks builds now comes from the unexported `newEngine`, whose router is the
-masking router that learns each accepted template's masked rendering at registration (#2212, L2
-and L2e). An engine built outside the framework carries no such router. #2212 renders every
+masking router that learns each accepted template's masked rendering at registration
+(#2212). An engine built outside the framework carries no such router. #2212 renders every
 inbound path seat from that router, so on a foreign engine each path would print as the bare
 `REDACTED`, or not at all, and nothing would say why. Inside the framework, `newServer` (which
 `server.New` and `server.NewWithOptions` both reach) already called the unexported `setupMiddlewares` directly, which also takes the Server's tenant-owned
@@ -50,7 +51,9 @@ outside this decision.
   `app.GlobalMiddlewareRegisterer` (ADR-036). None of them moves. A bare `server.New` caller's
   door for engine-wide middleware is `Server.RegisterGlobalMiddleware`, which skips the health and
   ready routes.
-- This link changes no request path, no middleware order and no rendering; the path seats move to
+- A service that mounted a hand-built engine under its own `http.Server` or a parent mux
+  has no replacement: `*Server` is not an `http.Handler` and owns its listener (`Start`).
+- This change moves no request path, no middleware order and no rendering; the path seats move to
   the masking router in later #2212 links.
 
 ## References

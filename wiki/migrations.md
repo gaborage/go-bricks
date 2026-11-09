@@ -14979,8 +14979,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: `git grep -nE 'TestContextOption|NewHandlerContextForTest\(' -- '*.go'`. Every
   `TestContextOption` hit is a match. For each `NewHandlerContextForTest(` hit, read the call
-  through its closing parenthesis: any argument after the third that is not a
-  `server.WithRouteTemplate(` call is a match, though it holds no type-name token — a func literal
+  through its closing parenthesis: any argument after the third that is neither a
+  `WithRouteTemplate(` call (under any import alias) nor a forwarded `opts...` is a match, though
+  it holds no type-name token — a func literal
   (`func(c *server.HandlerContext) { … }`), a named func value of type
   `func(*server.HandlerContext)`, a variable or a helper call alike. After the bump,
   `go vet ./...` names each spelling, conversion, func argument or call left.
@@ -14998,27 +14999,31 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `server.TestContextOption(func(c *server.HandlerContext) { c.Config = cfg })`, or the bare func
   literal as a `NewHandlerContextForTest` argument, compiled and ran.
 - after: `TestContextOption` does not exist. `TestContextSeeder` is an interface whose one method
-  is unexported, so only package `server` builds one. A struct embedding the interface compiles
-  but holds a nil seeder, which panics when `NewHandlerContextForTest` applies it.
+  is unexported, so only package `server` defines the seeding method. A struct embedding the
+  interface compiles and forwards to the seeder it holds; one embedding a nil seeder panics when
+  `NewHandlerContextForTest` applies it.
 - apply: rename every `server.TestContextOption` spelling to `server.TestContextSeeder`, a
   helper's `opts ...server.TestContextOption` parameter and a `[]server.TestContextOption`
   slice included. Delete each consumer-written option. When it set `c.Config`, pass that config
   as the `cfg` argument: `server.NewHandlerContextForTest(w, r, cfg, server.WithRouteTemplate(t))`.
   When it seeded the route template, use `server.WithRouteTemplate`. Any other mutation it made
   (`c.Set`, `c.SetRequest`, `c.SetRequestContext`, `c.SetPathParams`) moves onto the returned
-  context after construction, in the order the old options ran. A replacement request goes in as
+  context after construction, in the order the old options ran. `WithRouteTemplate` now always
+  runs first, so a mutation that ran before it and read route state now sees the template: review
+  those by hand. A replacement request goes in as
   the `r` argument, so `WithRouteTemplate` stamps its `Pattern`; where it must still be swapped
   with `c.SetRequest` after construction, re-apply the template to it (set the new request's
   `Pattern` to the template), since `SetRequest` keeps the context's template but not the old
   request's `Pattern`.
-- verify: `go vet ./...` passes, and `git grep -n 'TestContextOption' -- '*.go'` returns no hit.
-  A migrated helper's `opts...` and an aliased import pass; the compiler, not the detect's reading,
-  rejects whatever option is left.
+- verify: `go vet ./...` passes, plus `go vet -tags=<tags> ./...` for each build tag, and each
+  tag combination (`-tags=integration,postgres`), your test files carry, and
+  `git grep -n 'TestContextOption' -- '*.go'` returns no hit. A migrated helper's `opts...` and an
+  aliased import pass.
 - ref: gaborage/go-bricks#2212 · [ADR-165](adr_165_test_context_seeder_opaque.md) ·
   `server/handler.go` (`TestContextSeeder`, `WithRouteTemplate`, `NewHandlerContextForTest`) ·
   [testing.md](testing.md#server--handlercontext-testing)
 
-### [C73.28] `server.SetupMiddlewares` is unexported; build the server with `server.New` or the App · compile-break · when: match
+### [C73.28] `server.SetupMiddlewares` is unexported; build the server with `server.New`, `server.NewWithOptions` or the App · compile-break · when: match
 
 - detect: `git grep -nw SetupMiddlewares -- '*.go'`, keeping calls on the `server` package. After
   the bump, `go vet ./...`, which also type-checks test files, names the first call left in each
@@ -15036,14 +15041,29 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   framework builds.
 - apply: replace the hand-built engine with `server.New(cfg, log)` or
   `server.NewWithOptions(cfg, log, opts)`, or let the App build the server, and register routes
-  through its `RouteRegistrar`. Move middleware the hand-built engine carried to
+  through its `RouteRegistrar`. `*Server` is not an `http.Handler` and owns its listener
+  (`Start`), so a service that mounted the hand-built engine under its own `http.Server` or a
+  parent mux has no replacement and must let the server listen itself. Move middleware the
+  hand-built engine carried to
   `RouteRegistrar.Use`, a route group, or `app.GlobalMiddlewareRegisterer`. Engine-wide middleware
   moved to `RouteRegistrar.Use` or a group narrows its scope: it runs only under the group's
   prefix, where a 404 reaches it too (echo's `Group.Use` registers a catch-all) with an empty
-  `RouteTemplate()`, and never on traffic outside the prefix; and it covers only routes registered
+  `RouteTemplate()`, and never on traffic outside the prefix; a wrong-method request under the
+  prefix also hits that catch-all, so it answers 404 where the hand-built engine answered 405,
+  with no error at build or startup, except at a path a wildcard route of the group holds for
+  another method, which answers 405 without the group's middleware; on a `TenantOwnedGroup`
+  registrar or a `Group` below it, `Use` attaches the middleware to each route registered later
+  through that registrar or a group below it (not a sibling group's routes) instead, so no 404 under a family prefix reaches it, and a family never inherits its
+  parent group's middleware, so a gate the parent carries moves to the family's `Use`, which
+  runs after `TenantPolicy.Tenant`, or to `TenantPolicy.Authenticate`, which runs before it and
+  is the place for authentication `Tenant` depends on (an uncommitted 4xx a step there returns
+  goes to `TenantPolicy.Deny`, whose default `server.DenyBodyless` answers with no body, so set
+  `Deny` to keep a JSON error body clients rely on); and it covers only routes registered
   after the `Use` call (ADR-036), where `e.Use` on a hand-built engine covered earlier routes too,
-  so a gate moved at the same point misses them with no error; call `Use` before the routes it
-  must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
+  so a gate moved at the same point misses them with no error, and an ordinary child group copies
+  its parent's middleware when it is created, so a later `Use` on the parent misses every route of
+  an existing child (a child inside a family reads its ancestors' middleware at each route's
+  registration instead, so it misses only routes registered before the `Use`); call `Use` before the routes and child groups it must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
   which skips the health and ready routes (a gate that must cover them is enforced separately) and
   which startup refuses beside a tenant-owned route family with
   `server.ErrTenantFamilyWithGlobalMiddleware` (ADR-164). A bare `server.New` caller's door for
@@ -15057,7 +15077,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `[C41.4]`'s after: there is no call left to add the parameter to.
 - verify: `go vet ./...` passes and the detect returns no hit.
 - ref: [ADR-166](adr_166_setup_middlewares_unexported.md) · `server/middleware.go`
-  (`setupMiddlewares`) · `server/server.go` (`New`) · `server/router.go` (`newEngine`) ·
+  (`setupMiddlewares`) · `server/server.go` (`newServer`) · `server/router.go` (`newEngine`) ·
   gaborage/go-bricks#2212
 
 ### [C73.29] `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path · silent-behavior · when: always
