@@ -49,8 +49,9 @@ returns `TestContextSeeder`; `NewHandlerContextForTest` keeps its name and takes
 - Breaking at compile time only; see C73.27. Every spelling of `server.TestContextOption` stops
   compiling, including a consumer helper's `opts ...server.TestContextOption` parameter, which
   becomes `opts ...server.TestContextSeeder`.
-- A consumer struct that embeds `server.TestContextSeeder` still satisfies the interface, but it
-  carries a nil seeder that panics when `NewHandlerContextForTest` applies it.
+- A consumer struct that embeds `server.TestContextSeeder` still satisfies the interface and
+  forwards to the seeder it holds; one embedding a nil seeder panics when
+  `NewHandlerContextForTest` applies it.
 - `TestTestContextSeederIsOpaque` in `server/handler_test.go` fails if the type stops being an
   interface or gains an exported method.
 - No configuration key and no production code path changes.

@@ -18,7 +18,7 @@ linters:
     - errname                   # checks that error variables/types follow the errFoo/FooError convention
     - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
     - exhaustive                # checks exhaustiveness of enum switch statements
-    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083; the global LoggerProvider; echo engines outside server.newEngine (#2212); inbound request-URL/path/query/form reads outside server.maskedPath (#2212))
+    - forbidigo                 # forbids identifiers by pattern (here: raw span-error recording, ADR-083; the global LoggerProvider; echo engines outside server.newEngine (#2212); inbound request-URL/path/query reads and echo form reads outside server.maskedPath (#2212))
     - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present

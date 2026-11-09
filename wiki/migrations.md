@@ -15015,9 +15015,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   with `c.SetRequest` after construction, re-apply the template to it (set the new request's
   `Pattern` to the template), since `SetRequest` keeps the context's template but not the old
   request's `Pattern`.
-- verify: `go vet ./...` passes, plus `go vet -tags=<tag> ./...` for each build tag your test
-  files carry, and `git grep -n 'TestContextOption' -- '*.go'` returns no hit. A migrated helper's
-  `opts...` and an aliased import pass.
+- verify: `go vet ./...` passes, plus `go vet -tags=<tags> ./...` for each build tag, and each
+  tag combination (`-tags=integration,postgres`), your test files carry, and
+  `git grep -n 'TestContextOption' -- '*.go'` returns no hit. A migrated helper's `opts...` and an
+  aliased import pass.
 - ref: gaborage/go-bricks#2212 · [ADR-165](adr_165_test_context_seeder_opaque.md) ·
   `server/handler.go` (`TestContextSeeder`, `WithRouteTemplate`, `NewHandlerContextForTest`) ·
   [testing.md](testing.md#server--handlercontext-testing)
@@ -15049,12 +15050,16 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   prefix, where a 404 reaches it too (echo's `Group.Use` registers a catch-all) with an empty
   `RouteTemplate()`, and never on traffic outside the prefix; a wrong-method request under the
   prefix also hits that catch-all, so it answers 404 where the hand-built engine answered 405,
-  with no error at build or startup; on a `TenantOwnedGroup` registrar or a `Group` below it,
-  `Use` attaches the middleware to each later route of the family instead, so no 404 under a
-  family prefix reaches it; and it covers only routes registered
+  with no error at build or startup, except at a path a wildcard route of the group holds for
+  another method, which answers 405 without the group's middleware; on a `TenantOwnedGroup`
+  registrar or a `Group` below it, `Use` attaches the middleware to each later route of the
+  family instead, so no 404 under a family prefix reaches it, and a family never inherits its
+  parent group's middleware, so a gate the parent carries must be registered on the family or in
+  its policy; and it covers only routes registered
   after the `Use` call (ADR-036), where `e.Use` on a hand-built engine covered earlier routes too,
-  so a gate moved at the same point misses them with no error; call `Use` before the routes it
-  must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
+  so a gate moved at the same point misses them with no error, and a child group copies its
+  parent's middleware when it is created, so a later `Use` on the parent misses every route of an
+  existing child; call `Use` before the routes and child groups it must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
   which skips the health and ready routes (a gate that must cover them is enforced separately) and
   which startup refuses beside a tenant-owned route family with
   `server.ErrTenantFamilyWithGlobalMiddleware` (ADR-164). A bare `server.New` caller's door for
