@@ -2971,8 +2971,8 @@ family's `Tenant` step published any id that passed the grammar, where the frame
 checked a path-read id since ADR-170. The public door now takes the check as its third argument
 and asks it the same way; `exists` may be nil only for the framework header and subdomain
 resolvers, and a check that fails ADR-171's construction probe panics at construction. A family
-publishes its tenant only when the Server's `Options.TenantChecker` holds it, else its policy's
-`Deny` answers 400, and `TenantOwnedGroup` panics on a Server with no check. In the seat and the
+publishes its tenant only when the Server's `Options.TenantChecker` holds it: a grammar-valid id it
+does not hold reaches its policy's `Deny` (400), a grammar-failing id a framework 500, and `TenantOwnedGroup` panics on a Server with no check. In the seat and the
 public door a resolved id that differs from a tenant already in context writes nothing and the
 adapter answers 400. Every door validates the tenant-ID grammar, wrapping a hand-built resolver in
 the default pattern, refuses reserved-prefix ids, and asks only about plain tenant keys. Refusals come from the adapter
