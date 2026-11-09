@@ -15054,8 +15054,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   another method, which answers 405 without the group's middleware; on a `TenantOwnedGroup`
   registrar or a `Group` below it, `Use` attaches the middleware to each later route of the
   family instead, so no 404 under a family prefix reaches it, and a family never inherits its
-  parent group's middleware, so a gate the parent carries must be registered on the family or in
-  its policy; and it covers only routes registered
+  parent group's middleware, so a gate the parent carries moves to the family's `Use`, which
+  runs after `TenantPolicy.Tenant`, or to `TenantPolicy.Authenticate`, which runs before it and
+  is the place for authentication `Tenant` depends on; and it covers only routes registered
   after the `Use` call (ADR-036), where `e.Use` on a hand-built engine covered earlier routes too,
   so a gate moved at the same point misses them with no error, and a child group copies its
   parent's middleware when it is created, so a later `Use` on the parent misses every route of an
