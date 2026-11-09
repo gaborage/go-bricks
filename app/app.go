@@ -150,10 +150,10 @@ func resolveSignalHandler(opts *Options) SignalHandler {
 }
 
 // resolveServer returns the provided server, or builds one whose tenant seat asks checker, the
-// tenant resource source's existence check, about a path-read tenant (ADR-170). checker replaces
-// any ServerOptions.TenantChecker: the resource source is the one authority on which tenants
-// exist. A nil checker (a source with no HasTenant) vouches for no path-read tenant, so under a
-// resolver that may read the path the server's Start refuses.
+// tenant resource source's existence check, about a path-read tenant (ADR-170): the resource
+// source is the one authority on which tenants exist. Builder.WithConfig has already refused a
+// ServerOptions.TenantChecker, and under path tenancy a provided server or a source with no
+// HasTenant (ADR-171).
 func resolveServer(cfg *config.Config, log logger.Logger, opts *Options, checker multitenant.TenantChecker) ServerRunner {
 	if opts != nil && opts.Server != nil {
 		log.Debug().Msg("Using provided server instance")

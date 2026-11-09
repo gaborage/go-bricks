@@ -102,17 +102,23 @@ func checkSourceAgreement(cfg *config.Config, opts *Options) error {
 // refuses a supplied Options.Server, which app cannot wire to the store, a resource source
 // without HasTenant, and the built-in store holding no tenant, which would refuse every one.
 func checkPathTenantExistence(cfg *config.Config, opts *Options) error {
-	if opts != nil && opts.ServerOptions != nil && opts.ServerOptions.TenantChecker != nil {
+	var serverOpts *server.Options
+	var supplied ServerRunner
+	var source TenantStore
+	if opts != nil {
+		serverOpts, supplied, source = opts.ServerOptions, opts.Server, opts.ResourceSource
+	}
+	if serverOpts != nil && serverOpts.TenantChecker != nil {
 		return errServerOptionsTenantChecker
 	}
 	if !cfg.Multitenant.Enabled || !cfg.Multitenant.Resolver.ReadsPath() {
 		return nil
 	}
-	if opts != nil && opts.Server != nil {
+	if supplied != nil {
 		return errPathTenancySuppliedServer
 	}
-	if opts != nil && opts.ResourceSource != nil {
-		if _, ok := opts.ResourceSource.(multitenant.TenantChecker); !ok {
+	if source != nil {
+		if _, ok := source.(multitenant.TenantChecker); !ok {
 			return errPathTenancyNoTenantChecker
 		}
 		return nil
