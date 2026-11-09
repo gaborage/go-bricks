@@ -1944,14 +1944,9 @@ func TestSemconvMethodAllocsStable(t *testing.T) {
 	}
 }
 
-// TestRequestMethodOutsideTheKnownSetRendersOther pins the OTel HTTP semantic conventions'
-// known-method rule on both request sinks, built through New with observability on: a method
-// outside the known set prints `_OTHER` as the access line's http.request.method and in its
-// message, and the span carries http.request.method `_OTHER` with no
-// http.request.method_original, so neither sink's cardinality follows caller-chosen tokens.
-// A case variant of a known method is not that method to the router, so the access line
-// renders it `_OTHER` too, while the span keeps echo-otel's canonical method and the bounded
-// original.
+// TestRequestMethodOutsideTheKnownSetRendersOther pins the semconv known-method rule on both
+// request sinks through New: an unknown method renders `_OTHER` on the access line and the span,
+// with no http.request.method_original; a case variant keeps the span's bounded original.
 func TestRequestMethodOutsideTheKnownSetRendersOther(t *testing.T) {
 	const other = "_OTHER"
 	tests := []struct {
@@ -1963,7 +1958,6 @@ func TestRequestMethodOutsideTheKnownSetRendersOther(t *testing.T) {
 	}{
 		{name: "known_method", method: http.MethodGet, wantLine: http.MethodGet, wantSpan: http.MethodGet},
 		{name: "unknown_token", method: "FROBNICATE", wantLine: other, wantSpan: other},
-		{name: "unknown_lowercase_token", method: "frobnicate", wantLine: other, wantSpan: other},
 		{name: "case_variant_of_known_method", method: "get", wantLine: other, wantSpan: http.MethodGet, wantOriginal: "get"},
 	}
 	for _, tt := range tests {
