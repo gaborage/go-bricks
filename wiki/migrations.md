@@ -15022,7 +15022,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `server/handler.go` (`TestContextSeeder`, `WithRouteTemplate`, `NewHandlerContextForTest`) ·
   [testing.md](testing.md#server--handlercontext-testing)
 
-### [C73.28] `server.SetupMiddlewares` is unexported; build the server with `server.New` or the App · compile-break · when: match
+### [C73.28] `server.SetupMiddlewares` is unexported; build the server with `server.New`, `server.NewWithOptions` or the App · compile-break · when: match
 
 - detect: `git grep -nw SetupMiddlewares -- '*.go'`, keeping calls on the `server` package. After
   the bump, `go vet ./...`, which also type-checks test files, names the first call left in each
@@ -15040,11 +15040,18 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   framework builds.
 - apply: replace the hand-built engine with `server.New(cfg, log)` or
   `server.NewWithOptions(cfg, log, opts)`, or let the App build the server, and register routes
-  through its `RouteRegistrar`. Move middleware the hand-built engine carried to
+  through its `RouteRegistrar`. `*Server` is not an `http.Handler` and owns its listener
+  (`Start`), so a service that mounted the hand-built engine under its own `http.Server` or a
+  parent mux has no replacement and must let the server listen itself. Move middleware the
+  hand-built engine carried to
   `RouteRegistrar.Use`, a route group, or `app.GlobalMiddlewareRegisterer`. Engine-wide middleware
   moved to `RouteRegistrar.Use` or a group narrows its scope: it runs only under the group's
   prefix, where a 404 reaches it too (echo's `Group.Use` registers a catch-all) with an empty
-  `RouteTemplate()`, and never on traffic outside the prefix; and it covers only routes registered
+  `RouteTemplate()`, and never on traffic outside the prefix; a wrong-method request under the
+  prefix also hits that catch-all, so it answers 404 where the hand-built engine answered 405,
+  with no error at build or startup; on a `TenantOwnedGroup` registrar or a `Group` below it,
+  `Use` attaches the middleware to each later route of the family instead, so no 404 under a
+  family prefix reaches it; and it covers only routes registered
   after the `Use` call (ADR-036), where `e.Use` on a hand-built engine covered earlier routes too,
   so a gate moved at the same point misses them with no error; call `Use` before the routes it
   must cover. Keep middleware that must see unmatched traffic on `app.GlobalMiddlewareRegisterer`,
@@ -15061,7 +15068,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `[C41.4]`'s after: there is no call left to add the parameter to.
 - verify: `go vet ./...` passes and the detect returns no hit.
 - ref: [ADR-166](adr_166_setup_middlewares_unexported.md) · `server/middleware.go`
-  (`setupMiddlewares`) · `server/server.go` (`New`) · `server/router.go` (`newEngine`) ·
+  (`setupMiddlewares`) · `server/server.go` (`newServer`) · `server/router.go` (`newEngine`) ·
   gaborage/go-bricks#2212
 
 ### [C73.29] `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path · silent-behavior · when: always
