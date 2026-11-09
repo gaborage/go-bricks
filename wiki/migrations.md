@@ -15052,8 +15052,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   prefix also hits that catch-all, so it answers 404 where the hand-built engine answered 405,
   with no error at build or startup, except at a path a wildcard route of the group holds for
   another method, which answers 405 without the group's middleware; on a `TenantOwnedGroup`
-  registrar or a `Group` below it, `Use` attaches the middleware to each later route of the
-  family instead, so no 404 under a family prefix reaches it, and a family never inherits its
+  registrar or a `Group` below it, `Use` attaches the middleware to each route registered later
+  through that registrar or a group below it (not a sibling group's routes) instead, so no 404 under a family prefix reaches it, and a family never inherits its
   parent group's middleware, so a gate the parent carries moves to the family's `Use`, which
   runs after `TenantPolicy.Tenant`, or to `TenantPolicy.Authenticate`, which runs before it and
   is the place for authentication `Tenant` depends on (an uncommitted 4xx a step there returns
