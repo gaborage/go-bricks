@@ -14979,8 +14979,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 - detect: `git grep -nE 'TestContextOption|NewHandlerContextForTest\(' -- '*.go'`. Every
   `TestContextOption` hit is a match. For each `NewHandlerContextForTest(` hit, read the call
-  through its closing parenthesis: any argument after the third that is not a
-  `server.WithRouteTemplate(` call is a match, though it holds no type-name token — a func literal
+  through its closing parenthesis: any argument after the third that is neither a
+  `WithRouteTemplate(` call (under any import alias) nor a forwarded `opts...` is a match, though
+  it holds no type-name token — a func literal
   (`func(c *server.HandlerContext) { … }`), a named func value of type
   `func(*server.HandlerContext)`, a variable or a helper call alike. After the bump,
   `go vet ./...` names each spelling, conversion, func argument or call left.
@@ -14998,22 +14999,25 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `server.TestContextOption(func(c *server.HandlerContext) { c.Config = cfg })`, or the bare func
   literal as a `NewHandlerContextForTest` argument, compiled and ran.
 - after: `TestContextOption` does not exist. `TestContextSeeder` is an interface whose one method
-  is unexported, so only package `server` builds one. A struct embedding the interface compiles
-  but holds a nil seeder, which panics when `NewHandlerContextForTest` applies it.
+  is unexported, so only package `server` defines the seeding method. A struct embedding the
+  interface compiles and forwards to the seeder it holds; one embedding a nil seeder panics when
+  `NewHandlerContextForTest` applies it.
 - apply: rename every `server.TestContextOption` spelling to `server.TestContextSeeder`, a
   helper's `opts ...server.TestContextOption` parameter and a `[]server.TestContextOption`
   slice included. Delete each consumer-written option. When it set `c.Config`, pass that config
   as the `cfg` argument: `server.NewHandlerContextForTest(w, r, cfg, server.WithRouteTemplate(t))`.
   When it seeded the route template, use `server.WithRouteTemplate`. Any other mutation it made
   (`c.Set`, `c.SetRequest`, `c.SetRequestContext`, `c.SetPathParams`) moves onto the returned
-  context after construction, in the order the old options ran. A replacement request goes in as
+  context after construction, in the order the old options ran. `WithRouteTemplate` now always
+  runs first, so a mutation that ran before it and read route state now sees the template: review
+  those by hand. A replacement request goes in as
   the `r` argument, so `WithRouteTemplate` stamps its `Pattern`; where it must still be swapped
   with `c.SetRequest` after construction, re-apply the template to it (set the new request's
   `Pattern` to the template), since `SetRequest` keeps the context's template but not the old
   request's `Pattern`.
-- verify: `go vet ./...` passes, and `git grep -n 'TestContextOption' -- '*.go'` returns no hit.
-  A migrated helper's `opts...` and an aliased import pass; the compiler, not the detect's reading,
-  rejects whatever option is left.
+- verify: `go vet ./...` passes, plus `go vet -tags=<tag> ./...` for each build tag your test
+  files carry, and `git grep -n 'TestContextOption' -- '*.go'` returns no hit. A migrated helper's
+  `opts...` and an aliased import pass.
 - ref: gaborage/go-bricks#2212 · [ADR-165](adr_165_test_context_seeder_opaque.md) ·
   `server/handler.go` (`TestContextSeeder`, `WithRouteTemplate`, `NewHandlerContextForTest`) ·
   [testing.md](testing.md#server--handlercontext-testing)

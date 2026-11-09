@@ -2835,7 +2835,7 @@ The option type behind `NewHandlerContextForTest` was a public func type, so a c
 its own option, although one could do nothing a caller cannot do through `cfg` or on the returned
 context, and the framework could not change how an option seeds the synthetic context without breaking
 consumers. The type is renamed `TestContextSeeder`, the -er name an exported single-method
-interface takes (ADR-013), and only package `server` can implement it. `WithRouteTemplate` and
+interface takes (ADR-013), and only package `server` can define its seeding method. `WithRouteTemplate` and
 `NewHandlerContextForTest` keep their names and behavior and now spell the new type. See
 [migrations.md](migrations.md) `[C73.27]`.
 
