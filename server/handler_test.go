@@ -20,6 +20,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/racedetect"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -274,11 +275,9 @@ func TestRequestBinderPrecedenceHeaderOverridesBody(t *testing.T) {
 	assert.Equal(t, 3, seen.ID, "path param must override JSON body value")
 }
 
-// TestRequestBinderPrecedenceAbsentQueryParamKeepsBody documents the boundary of
-// the contract: the URL overlay only overwrites when the URL value is non-empty,
-// so an absent query param leaves the JSON body value in place. A change that
-// made URL-wins unconditional would break this test.
-func TestRequestBinderPrecedenceAbsentQueryParamKeepsBody(t *testing.T) {
+// TestRequestBinderPrecedenceAbsentQueryParamDropsBody pins that a query-tagged field takes
+// only its URL value: with the query param absent, the JSON body value is dropped (ADR-173).
+func TestRequestBinderPrecedenceAbsentQueryParamDropsBody(t *testing.T) {
 	e, binder, cfg := newTypedPipeline(t)
 
 	var seen numericRequest
@@ -288,29 +287,27 @@ func TestRequestBinderPrecedenceAbsentQueryParamKeepsBody(t *testing.T) {
 	}
 	h := WrapHandler(handler, binder, cfg)
 
-	// No `limit` query param; body supplies limit=999. Body value survives.
+	// No `limit` query param; body supplies limit=999. The field stays zero.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(`{"limit":999}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
 	require.NoError(t, h(c))
-	assert.Equal(t, uint16(999), seen.Limit, "absent query param must not clobber the body value")
+	assert.Zero(t, seen.Limit, "the body must not supply a query-bound field")
 }
 
-// TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody pins the sharp edge of the
-// "only when present" qualifier, and is the reason a dual-tagged identifier is not a
-// security control on its own. An empty path segment still MATCHES the route, so
-// c.Param returns "", the overlay's non-empty guard skips the field, and the JSON body
-// value survives. This test routes through the real router (not SetPathValues) because
-// that is the only way the empty-segment match arises.
-// See wiki/handler_patterns.md#binding-source-precedence.
-func TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody(t *testing.T) {
+// TestRequestBinderPrecedenceEmptyPathSegmentDropsBody pins that an empty path segment,
+// which still MATCHES the route with c.Param == "", leaves a param-tagged field zero instead
+// of keeping the JSON body value, so the field's own validation answers 400 (ADR-173). It
+// routes through the real router (not SetPathValues) because that is the only way the
+// empty-segment match arises. See wiki/handler_patterns.md#binding-source-precedence.
+func TestRequestBinderPrecedenceEmptyPathSegmentDropsBody(t *testing.T) {
 	e, binder, cfg := newTypedPipeline(t)
 
-	var seen advancedBindReq
+	ran := false
 	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
-		seen = req
+		ran = true
 		return req, nil
 	}, binder, cfg)
 	e.POST("/users/:id/detail", h)
@@ -320,14 +317,13 @@ func TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, rec.Code, "an empty path segment still matches the route")
-	assert.Equal(t, 999, seen.ID, "empty path param does not overwrite, so the body value survives")
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "the zero ID fails validate:min=1")
+	assert.False(t, ran, "the handler never sees the body's ID")
 }
 
-// TestRequestBinderPrecedenceEmptyQueryParamKeepsBody covers a present-but-empty query
-// key (?limit=), which is distinct from the absent key covered above: bindQueryValue
-// guards on the VALUE being non-empty, so both cases leave the body value in place.
-func TestRequestBinderPrecedenceEmptyQueryParamKeepsBody(t *testing.T) {
+// TestRequestBinderPrecedenceEmptyQueryParamDropsBody covers a present-but-empty query key
+// (?limit=), distinct from the absent key above: both leave the field zero, never the body's.
+func TestRequestBinderPrecedenceEmptyQueryParamDropsBody(t *testing.T) {
 	e, binder, cfg := newTypedPipeline(t)
 
 	var seen numericRequest
@@ -336,19 +332,19 @@ func TestRequestBinderPrecedenceEmptyQueryParamKeepsBody(t *testing.T) {
 		return req, nil
 	}, binder, cfg)
 
-	// `limit` is present but empty; the body supplies 999. Body value survives.
+	// `limit` is present but empty; the body supplies 999. The field stays zero.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x?limit=", strings.NewReader(`{"limit":999}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
 	require.NoError(t, h(c))
-	assert.Equal(t, uint16(999), seen.Limit, "an empty query value must not clobber the body value")
+	assert.Zero(t, seen.Limit, "the body must not supply a query-bound field")
 }
 
-// TestRequestBinderPrecedenceAbsentHeaderKeepsBody pins the header side of the guard:
-// bindHeaderValue returns early when the header is absent, so the body value survives.
-func TestRequestBinderPrecedenceAbsentHeaderKeepsBody(t *testing.T) {
+// TestRequestBinderPrecedenceAbsentHeaderDropsBody pins the header side: with the header
+// absent, a header-tagged field stays zero instead of keeping the body value (ADR-173).
+func TestRequestBinderPrecedenceAbsentHeaderDropsBody(t *testing.T) {
 	e, binder, cfg := newTypedPipeline(t)
 
 	var seen advancedBindReq
@@ -357,14 +353,15 @@ func TestRequestBinderPrecedenceAbsentHeaderKeepsBody(t *testing.T) {
 		return req, nil
 	}, binder, cfg)
 
-	// No X-Items header at all; the body supplies headerVals. Body value survives.
+	// No X-Items header at all; the body supplies headerVals. The field stays zero.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(`{"id":1,"headerVals":["from-body"]}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
+	c.SetPathValues(echo.PathValues{{Name: "id", Value: "1"}})
 
 	require.NoError(t, h(c))
-	assert.Equal(t, []string{"from-body"}, seen.HeaderVals, "an absent header must not clobber the body value")
+	assert.Nil(t, seen.HeaderVals, "the body must not supply a header-bound field")
 }
 
 // TestRequestBinderPrecedenceEmptyHeaderClearsSliceField pins the one place the overlay
@@ -2891,8 +2888,8 @@ func TestBindJSONBodyTrailingContent(t *testing.T) {
 
 const mergePatchJSON = "application/merge-patch+json"
 
-// BodyDecodePath and BodyDecodeQuery are embedded so only bindJSONBody's side-binding
-// reaches their fields: buildBindingPlan reads top-level tags only.
+// BodyDecodePath and BodyDecodeQuery are embedded, so their fields bind through the plan's
+// promoted-field entries (ADR-173).
 type (
 	BodyDecodePath struct {
 		ID int `param:"id"`
@@ -2914,6 +2911,7 @@ type bodyDecodeCall struct {
 	contentType string
 	pathID      string // stands in for the router's path match; empty sets none
 	body        io.Reader
+	header      http.Header
 }
 
 // serveBodyDecode runs one request through WrapHandler and returns the request the
@@ -2928,7 +2926,12 @@ func serveBodyDecode[T any](t *testing.T, call *bodyDecodeCall) (bound T, conten
 	}, NewRequestBinder(), devDebugConfig())
 
 	req := httptest.NewRequestWithContext(context.Background(), call.method, call.target, call.body)
-	req.Header.Set(echo.HeaderContentType, call.contentType)
+	if call.contentType != "" {
+		req.Header.Set(echo.HeaderContentType, call.contentType)
+	}
+	for k, v := range call.header {
+		req.Header[k] = v
+	}
 	rec = httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	if call.pathID != "" {
@@ -2980,9 +2983,10 @@ func TestBindJSONBodyByMediaType(t *testing.T) {
 	}
 }
 
-// TestBindJSONBodySideBindsByMethod pins the side-binding a JSON body brings: path values
-// bind on every method, query params only on GET, DELETE, HEAD and QUERY.
-func TestBindJSONBodySideBindsByMethod(t *testing.T) {
+// TestBindJSONBodyLeavesURLValuesToThePlan pins that a JSON body brings no side-binding: the
+// framework's plan binds embedded path and query fields on every method, as it does top-level
+// ones and under every other Content-Type (ADR-173).
+func TestBindJSONBodyLeavesURLValuesToThePlan(t *testing.T) {
 	contentTypes := []struct {
 		name        string
 		contentType string
@@ -2990,29 +2994,21 @@ func TestBindJSONBodySideBindsByMethod(t *testing.T) {
 		{name: "application_json", contentType: echo.MIMEApplicationJSON},
 		{name: "merge_patch_json", contentType: mergePatchJSON},
 	}
-	methods := []struct {
-		method   string
-		wantPage int
-	}{
-		{method: http.MethodGet, wantPage: 3},
-		{method: http.MethodDelete, wantPage: 3},
-		{method: http.MethodHead, wantPage: 3},
-		{method: echo.QUERY, wantPage: 3},
-		{method: http.MethodPost},
-		{method: http.MethodPut},
-		{method: http.MethodPatch},
+	methods := []string{
+		http.MethodGet, http.MethodDelete, http.MethodHead, echo.QUERY,
+		http.MethodPost, http.MethodPut, http.MethodPatch,
 	}
 	for _, ct := range contentTypes {
-		for _, m := range methods {
-			t.Run(ct.name+"_"+strings.ToLower(m.method), func(t *testing.T) {
+		for _, method := range methods {
+			t.Run(ct.name+"_"+strings.ToLower(method), func(t *testing.T) {
 				bound, _, rec := serveBodyDecode[bodyDecodeReq](t, &bodyDecodeCall{
-					method: m.method, target: "/items/5?page=3", contentType: ct.contentType, pathID: "5",
+					method: method, target: "/items/5?page=3", contentType: ct.contentType, pathID: "5",
 					body: strings.NewReader(`{"name":"ada"}`),
 				})
 				require.Equal(t, http.StatusOK, rec.Code)
 				assert.Equal(t, bodyDecodeReq{
 					BodyDecodePath:  BodyDecodePath{ID: 5},
-					BodyDecodeQuery: BodyDecodeQuery{Page: m.wantPage},
+					BodyDecodeQuery: BodyDecodeQuery{Page: 3},
 					Name:            "ada",
 				}, bound)
 			})
@@ -3032,7 +3028,7 @@ func TestBindJSONBodyParamOnlyTypeAcceptsJSONBody(t *testing.T) {
 }
 
 // TestBindJSONBodyFailureParityAcrossMediaTypes pins that a +json request fails exactly as an
-// application/json one: the same decode and side-binding summaries, trailing garbage refused,
+// application/json one: the same decode and plan-binding summaries, trailing garbage refused,
 // a trailing newline accepted.
 func TestBindJSONBodyFailureParityAcrossMediaTypes(t *testing.T) {
 	serve := func(contentType, pathID, body string) *httptest.ResponseRecorder {
@@ -3106,7 +3102,8 @@ const wideJSONOnlyRequestBody = `{"f1":"a","f2":"b","f3":"c","f4":"d","f5":"e","
 // what makes the measurement about replay rather than tag parsing.
 func BenchmarkBindRequestPlanned(b *testing.B) {
 	binder := NewRequestBinder()
-	plan := buildBindingPlan(reflect.TypeOf(wideJSONOnlyRequest{}))
+	plan, err := buildBindingPlan(reflect.TypeOf(wideJSONOnlyRequest{}))
+	require.NoError(b, err)
 	require.Empty(b, plan, "wide JSON-only struct carries no binding tags")
 
 	e := newEngine()
@@ -3140,7 +3137,7 @@ func BenchmarkBindRequestJSONOnlyWideStruct(b *testing.B) {
 }
 
 // planBindingPinReq exercises all three tag sources (including a []string query and a
-// []string header), plus a tagged-but-unexported field and a fully untagged field, for
+// []string header), plus an untagged unexported field and a fully untagged field, for
 // TestBindingPlanShapeAndBoundValues.
 type planBindingPinReq struct {
 	ID          int      `param:"id"`
@@ -3148,7 +3145,7 @@ type planBindingPinReq struct {
 	Tags        []string `query:"tags"`
 	Accept      string   `header:"X-Accept"`
 	AcceptMulti []string `header:"X-Accept-Multi"`
-	unexported  string   `query:"shouldNeverBind"`
+	unexported  string
 	Untagged    string
 }
 
@@ -3160,14 +3157,15 @@ type planBindingPinReq struct {
 // comma-split + trim, missing/empty values left at zero).
 func TestBindingPlanShapeAndBoundValues(t *testing.T) {
 	reqType := reflect.TypeOf(planBindingPinReq{})
-	plan := buildBindingPlan(reqType)
+	plan, planErr := buildBindingPlan(reqType)
+	require.NoError(t, planErr)
 
 	require.Equal(t, []boundField{
-		{index: 0, source: bindSourceParam, name: "id"},
-		{index: 1, source: bindSourceQuery, name: "search"},
-		{index: 2, source: bindSourceQuery, name: "tags", isSlice: true},
-		{index: 3, source: bindSourceHeader, name: "X-Accept"},
-		{index: 4, source: bindSourceHeader, name: "X-Accept-Multi", isSlice: true},
+		{index: []int{0}, source: bindSourceParam, name: "id"},
+		{index: []int{1}, source: bindSourceQuery, name: "search"},
+		{index: []int{2}, source: bindSourceQuery, name: "tags", isSlice: true},
+		{index: []int{3}, source: bindSourceHeader, name: "X-Accept"},
+		{index: []int{4}, source: bindSourceHeader, name: "X-Accept-Multi", isSlice: true},
 	}, plan, "unexported and untagged fields must be excluded from the plan")
 
 	tests := []struct {
@@ -3193,7 +3191,7 @@ func TestBindingPlanShapeAndBoundValues(t *testing.T) {
 				assert.Equal(t, []string{"a", "b"}, got.Tags)
 				assert.Equal(t, "json", got.Accept)
 				assert.Equal(t, []string{"a", "b", "c"}, got.AcceptMulti)
-				assert.Empty(t, got.unexported, "unexported field must never be touched despite carrying a query tag")
+				assert.Empty(t, got.unexported, "unexported field must never be touched")
 				assert.Empty(t, got.Untagged, "untagged field must stay zero value")
 			},
 		},
@@ -3242,13 +3240,14 @@ type dualTagRequest struct {
 // tags produces one plan entry per tag in param->query->header order, and that
 // bindRequestPlanned replays them so the last-applied source wins (header > query > param).
 func TestBuildBindingPlanWithinFieldOrderAndLastWriteWins(t *testing.T) {
-	plan := buildBindingPlan(reflect.TypeOf(dualTagRequest{}))
+	plan, planErr := buildBindingPlan(reflect.TypeOf(dualTagRequest{}))
+	require.NoError(t, planErr)
 	require.Equal(t, []boundField{
-		{index: 0, source: bindSourceParam, name: "v"},
-		{index: 0, source: bindSourceQuery, name: "v"},
-		{index: 1, source: bindSourceParam, name: "t"},
-		{index: 1, source: bindSourceQuery, name: "t"},
-		{index: 1, source: bindSourceHeader, name: "X-T"},
+		{index: []int{0}, source: bindSourceParam, name: "v"},
+		{index: []int{0}, source: bindSourceQuery, name: "v"},
+		{index: []int{1}, source: bindSourceParam, name: "t"},
+		{index: []int{1}, source: bindSourceQuery, name: "t"},
+		{index: []int{1}, source: bindSourceHeader, name: "X-T"},
 	}, plan, "each tag on a field appends one entry, param before query before header")
 
 	newCtx := func() *echo.Context {
@@ -3499,7 +3498,8 @@ func TestBindNamedStringSliceElementType(t *testing.T) {
 		},
 	}
 
-	plan := buildBindingPlan(reflect.TypeOf(namedSliceReq{}))
+	plan, planErr := buildBindingPlan(reflect.TypeOf(namedSliceReq{}))
+	require.NoError(t, planErr)
 	binder := NewRequestBinder()
 
 	newCtx := func(setup func(*http.Request)) *echo.Context {
@@ -3637,4 +3637,544 @@ func TestUnknownTenantErrorOnRawResponseRoute(t *testing.T) {
 	warns, _ := splitTenantRefusalLogs(testLog.logEntries())
 	require.Len(t, warns, 1, "the raw-response sink still logs the one refusal WARN")
 	assert.Contains(t, warns[0].msg, `reason="unknown tenant"`)
+}
+
+// Promoted-field binding (ADR-173): every Go-promoted param/query/header field binds from the
+// framework's plan under every Content-Type, and a URL or header value wins over a JSON body
+// value for the same field at any depth.
+type (
+	PromotedPath struct {
+		ID int `param:"id"`
+	}
+	PromotedQuery struct {
+		Page int `query:"page"`
+	}
+	PromotedHeader struct {
+		Trace string `header:"X-Trace"`
+	}
+	promotedHidden struct {
+		Hidden int `param:"id"`
+	}
+	PromotedDual struct {
+		Ref string `param:"id" json:"ref"`
+	}
+)
+
+type promotedValueReq struct {
+	PromotedPath
+	PromotedQuery
+	PromotedHeader
+	Name string `json:"name"`
+}
+
+type promotedPointerReq struct {
+	*PromotedPath
+	*PromotedQuery
+	Name string `json:"name"`
+}
+
+type promotedUnexportedReq struct {
+	promotedHidden
+	Name string `json:"name"`
+}
+
+type promotedUnexportedPointerReq struct {
+	*promotedHidden
+}
+
+type promotedDualReq struct {
+	PromotedDual
+	Ref2 string `param:"id" json:"ref2"`
+}
+
+type namedNestedTagReq struct {
+	Inner PromotedPath `json:"inner"`
+}
+
+type namedNestedPointerTagReq struct {
+	Inner *PromotedPath `json:"inner"`
+}
+
+type structTypedTagReq struct {
+	Paging PromotedQuery `query:"paging"`
+}
+
+type timeLikeTagReq struct {
+	Since unbindableTime `query:"since"`
+}
+
+type PromotedPathAlt struct {
+	ID int `param:"id"`
+}
+
+type shadowedTagReq struct {
+	PromotedPath
+	ID int `json:"id"`
+}
+
+type ambiguousTagReq struct {
+	PromotedPath
+	PromotedPathAlt
+}
+
+type taggedEmbedReq struct {
+	PromotedQuery `query:"paging"`
+}
+
+type PromotedDeep struct {
+	PromotedPath
+}
+
+type hiddenDeepFirstReq struct {
+	PromotedDeep
+	PromotedPath
+}
+
+type hiddenDeepLastReq struct {
+	PromotedPath
+	PromotedDeep
+}
+
+type PromotedNestedHolder struct {
+	Inner PromotedPath `json:"inner"`
+}
+
+type hiddenNestedHolderReq struct {
+	PromotedNestedHolder
+	Inner int `json:"inner2"`
+}
+
+type nestedHiddenTagReq struct {
+	Inner shadowedTagReq `json:"inner"`
+}
+
+type unexportedTagReq struct {
+	id string `param:"id"` //nolint:unused // registration-refusal fixture: the tag is the subject
+}
+
+type nestedSliceTagReq struct {
+	Items []PromotedQuery `json:"items"`
+}
+
+type nestedMapTagReq struct {
+	ByID map[string]*PromotedHeader `json:"byId"`
+}
+
+type (
+	CycleCommon struct {
+		Tenant string `header:"X-Tenant"`
+		Meta   *CycleMeta
+	}
+	CycleMeta struct {
+		Origin *CycleCommon
+	}
+	cycleEmbedFirstReq struct {
+		CycleCommon
+		Other CycleMeta
+	}
+	cycleEmbedLastReq struct {
+		Other CycleMeta
+		CycleCommon
+	}
+	SelfNode struct {
+		ID   string `query:"id"`
+		Next *SelfNode
+	}
+	selfNodeReq struct {
+		SelfNode
+	}
+)
+
+type nestedGridTagReq struct {
+	Grid [][]PromotedQuery `json:"grid"`
+}
+
+// textMoney binds through UnmarshalText; its promoted fields are judged like any embed's.
+type textMoney struct {
+	Inner struct{ X int } `query:"inner"`
+}
+
+func (m *textMoney) UnmarshalText([]byte) error { return nil }
+
+type textEmbedTagReq struct {
+	textMoney
+}
+
+type intSliceTagReq struct {
+	IDs []int `query:"ids"`
+}
+
+type mapTagReq struct {
+	Labels map[string]string `header:"X-Labels"`
+}
+
+type paramSliceTagReq struct {
+	IDs []string `param:"id"`
+}
+
+// textCode binds through encoding.TextUnmarshaler, a kind (array) the binder has no setter for.
+type textCode [4]byte
+
+func (c *textCode) UnmarshalText(b []byte) error {
+	if len(b) != len(c) {
+		return errors.New("textCode: want 4 bytes")
+	}
+	copy(c[:], b)
+	return nil
+}
+
+// textLevel is an int kind whose UnmarshalText takes names only: its plain int setter wins.
+type textLevel int
+
+func (l *textLevel) UnmarshalText(b []byte) error {
+	if string(b) != "high" {
+		return errors.New("textLevel: unknown name")
+	}
+	*l = 9
+	return nil
+}
+
+// textScopes is a string-kind slice that splits on spaces through UnmarshalText.
+type textScopes []string
+
+func (s *textScopes) UnmarshalText(b []byte) error {
+	*s = strings.Fields(string(b))
+	return nil
+}
+
+type PromotedText struct {
+	Code   textCode   `query:"code"`
+	Level  textLevel  `query:"level"`
+	Scopes textScopes `param:"id"`
+}
+
+type promotedTextReq struct {
+	PromotedText
+	Ptr *textCode `header:"X-Code"`
+}
+
+type caseVariantReq struct {
+	ID   string `param:"ID"`
+	Page string `query:"page"`
+}
+
+var promotedContentTypes = []struct {
+	name        string
+	contentType string
+	json        bool
+}{
+	{name: "application_json", contentType: echo.MIMEApplicationJSON, json: true},
+	{name: "merge_patch_json", contentType: mergePatchJSON, json: true},
+	{name: "mixed_case_application_json", contentType: "Application/JSON", json: true},
+	{name: "text_plain", contentType: echo.MIMETextPlain},
+	{name: "no_content_type", contentType: ""},
+}
+
+// promotedCall drives one POST /items/5?page=3 with X-Trace: t1 and, for a JSON type, a body
+// that names the same fields with other values.
+func promotedCall(contentType, body string) *bodyDecodeCall {
+	return &bodyDecodeCall{
+		method: http.MethodPost, target: "/items/5?page=3", contentType: contentType, pathID: "5",
+		body: strings.NewReader(body),
+	}
+}
+
+func withHeader(call *bodyDecodeCall, name, value string) *bodyDecodeCall {
+	call.header = http.Header{http.CanonicalHeaderKey(name): {value}}
+	return call
+}
+
+// TestBindingPlanBindsPromotedFieldsUnderEveryContentType pins that embedded value, pointer and
+// unexported-type fields bind from the path, query and headers under every Content-Type, and that
+// a JSON body naming the same keys never overrides them.
+func TestBindingPlanBindsPromotedFieldsUnderEveryContentType(t *testing.T) {
+	const body = `{"id":7,"ID":7,"page":9,"Page":9,"trace":"body","Trace":"body","hidden":7,"Hidden":7,"name":"ada"}`
+	for _, ct := range promotedContentTypes {
+		t.Run(ct.name, func(t *testing.T) {
+			wantName := ""
+			if ct.json {
+				wantName = "ada"
+			}
+
+			value, _, rec := serveBodyDecode[promotedValueReq](t, withHeader(promotedCall(ct.contentType, body), "X-Trace", "t1"))
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, promotedValueReq{
+				PromotedPath:   PromotedPath{ID: 5},
+				PromotedQuery:  PromotedQuery{Page: 3},
+				PromotedHeader: PromotedHeader{Trace: "t1"},
+				Name:           wantName,
+			}, value)
+
+			pointer, _, rec := serveBodyDecode[promotedPointerReq](t, promotedCall(ct.contentType, body))
+			require.Equal(t, http.StatusOK, rec.Code)
+			require.NotNil(t, pointer.PromotedPath)
+			require.NotNil(t, pointer.PromotedQuery)
+			assert.Equal(t, 5, pointer.ID)
+			assert.Equal(t, 3, pointer.Page)
+
+			hidden, _, rec := serveBodyDecode[promotedUnexportedReq](t, promotedCall(ct.contentType, body))
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, 5, hidden.Hidden)
+		})
+	}
+}
+
+// TestBindingPlanPathWinsOverBodyAtEveryDepth pins the precedence for a field tagged both
+// param and json, top-level and embedded: the path value wins under every JSON media type.
+func TestBindingPlanPathWinsOverBodyAtEveryDepth(t *testing.T) {
+	for _, ct := range promotedContentTypes {
+		if !ct.json {
+			continue
+		}
+		t.Run(ct.name, func(t *testing.T) {
+			got, _, rec := serveBodyDecode[promotedDualReq](t, promotedCall(ct.contentType, `{"ref":"7","ref2":"7"}`))
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, "5", got.Ref, "embedded")
+			assert.Equal(t, "5", got.Ref2, "top-level")
+		})
+	}
+}
+
+// TestBindingPlanEmptyURLValueNeverTakesTheBody pins that a param-, query- or header-tagged
+// field with no json tag, top-level or embedded, is never filled from the body by its Go name:
+// an empty path segment, an absent query value and an absent or empty header leave it zero
+// under every JSON media type.
+func TestBindingPlanEmptyURLValueNeverTakesTheBody(t *testing.T) {
+	type OrgRef struct {
+		Org string `param:"org"`
+	}
+	type orgReq struct {
+		OrgRef
+		Team string `query:"team"`
+		Name string `json:"name"`
+	}
+	type topOrgReq struct {
+		Org    string `param:"org"`
+		Team   string `query:"team"`
+		Tenant string `header:"X-Tenant-ID"`
+	}
+	const body = `{"Org":"victim","org":"victim","Team":"victim","team":"victim","Tenant":"victim","tenant":"victim","name":"ada"}`
+	for _, ct := range promotedContentTypes {
+		if !ct.json {
+			continue
+		}
+		t.Run(ct.name, func(t *testing.T) {
+			e, binder, cfg := newTypedPipeline(t)
+			var embedded orgReq
+			e.POST("/orgs/:org/users", WrapHandler(func(req orgReq, _ HandlerContext) (helloResp, IAPIError) {
+				embedded = req
+				return helloResp{}, nil
+			}, binder, cfg))
+			var top topOrgReq
+			e.POST("/top/:org/users", WrapHandler(func(req topOrgReq, _ HandlerContext) (helloResp, IAPIError) {
+				top = req
+				return helloResp{}, nil
+			}, binder, cfg))
+
+			for _, target := range []string{"/orgs//users", "/top//users"} {
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, target, strings.NewReader(body))
+				req.Header.Set(echo.HeaderContentType, ct.contentType)
+				rec := httptest.NewRecorder()
+				e.ServeHTTP(rec, req)
+				require.Equal(t, http.StatusOK, rec.Code, target)
+			}
+			assert.Equal(t, orgReq{Name: "ada"}, embedded)
+			assert.Equal(t, topOrgReq{}, top, "absent header")
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/top/acme/users", strings.NewReader(body))
+			req.Header.Set(echo.HeaderContentType, ct.contentType)
+			req.Header.Set("X-Tenant-ID", "")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, topOrgReq{Org: "acme"}, top, "present-but-empty header binds \"\"")
+		})
+	}
+}
+
+// TestBindingPlanLeavesPointerEmbedNilWithoutAValue pins that a pointer embed is allocated only
+// when a value binds into it, and that walking past a nil one does not panic.
+func TestBindingPlanLeavesPointerEmbedNilWithoutAValue(t *testing.T) {
+	got, _, rec := serveBodyDecode[promotedPointerReq](t, &bodyDecodeCall{
+		method: http.MethodPost, target: "/items", contentType: echo.MIMEApplicationJSON,
+		body: strings.NewReader(`{"name":"ada"}`),
+	})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Nil(t, got.PromotedPath)
+	assert.Nil(t, got.PromotedQuery)
+	assert.Equal(t, "ada", got.Name)
+}
+
+// TestBindingPlanMatchesKeysExactly pins that a case-variant key binds under no Content-Type:
+// param:"ID" does not read route :id, and ?PAGE=3 does not fill query:"page".
+func TestBindingPlanMatchesKeysExactly(t *testing.T) {
+	for _, ct := range promotedContentTypes {
+		t.Run(ct.name, func(t *testing.T) {
+			got, _, rec := serveBodyDecode[caseVariantReq](t, &bodyDecodeCall{
+				method: http.MethodGet, target: "/items/5?PAGE=3", contentType: ct.contentType, pathID: "5",
+				body: strings.NewReader(""),
+			})
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, caseVariantReq{}, got)
+		})
+	}
+}
+
+// TestBindingPlanMalformedPromotedPathIntAnswersOneSummary pins that a malformed embedded path
+// int answers 400 under every Content-Type, with the same summary as a malformed top-level one.
+func TestBindingPlanMalformedPromotedPathIntAnswersOneSummary(t *testing.T) {
+	type topLevel struct {
+		ID int `param:"id"`
+	}
+	call := func(ct string) *bodyDecodeCall {
+		return &bodyDecodeCall{method: http.MethodPost, target: "/items/abc", contentType: ct, pathID: "abc", body: strings.NewReader(`{}`)}
+	}
+	_, _, topRec := serveBodyDecode[topLevel](t, call(echo.MIMEApplicationJSON))
+	want := bodyDecodeErrorDetail(t, topRec)
+	for _, ct := range promotedContentTypes {
+		t.Run(ct.name, func(t *testing.T) {
+			_, _, rec := serveBodyDecode[promotedValueReq](t, call(ct.contentType))
+			assert.Equal(t, want, bodyDecodeErrorDetail(t, rec))
+		})
+	}
+}
+
+// TestRegisterHandlerRefusesUnbindableURLTags pins the registration-time refusals: a URL or
+// header tag inside a named nested struct, and one on a struct-typed field or a tagged embed,
+// panic naming the route and the field.
+func TestRegisterHandlerRefusesUnbindableURLTags(t *testing.T) {
+	tests := []struct {
+		name      string
+		register  func(hr *HandlerRegistry, r RouteRegistrar)
+		wantField string
+	}{
+		{name: "named_nested_struct", wantField: "Inner.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(namedNestedTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "named_nested_pointer_struct", wantField: "Inner.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(namedNestedPointerTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "struct_typed_field", wantField: "Paging", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(structTypedTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "struct_convertible_to_time", wantField: "Since", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(timeLikeTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "shadowed_embedded_field", wantField: "PromotedPath.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(shadowedTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "ambiguous_embedded_field", wantField: "PromotedPath.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(ambiguousTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "tagged_embed", wantField: "PromotedQuery", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(taggedEmbedReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "hidden_at_deeper_depth_first", wantField: "PromotedDeep.PromotedPath.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(hiddenDeepFirstReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "hidden_at_deeper_depth_last", wantField: "PromotedDeep.PromotedPath.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(hiddenDeepLastReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "nested_struct_in_hidden_embed", wantField: "PromotedNestedHolder.Inner.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(hiddenNestedHolderReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "hidden_tag_in_named_nested_struct", wantField: "Inner.PromotedPath.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(nestedHiddenTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "unexported_tagged_field", wantField: "id", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(unexportedTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "nested_slice_element", wantField: "Items[].Page", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(nestedSliceTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "nested_map_element", wantField: "ByID[].Trace", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(nestedMapTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "cycle_embed_first", wantField: "Origin.Tenant", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(cycleEmbedFirstReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "cycle_embed_last", wantField: "Origin.Tenant", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(cycleEmbedLastReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "self_referencing_embed", wantField: "SelfNode.Next.ID", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(selfNodeReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "nested_container_element", wantField: "Grid[].Page", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			POST(hr, r, "/refuse/:id", func(nestedGridTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "struct_field_of_text_unmarshaler_embed", wantField: "textMoney.Inner", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(textEmbedTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "int_slice_query", wantField: "IDs", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(intSliceTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "map_header", wantField: "Labels", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(mapTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "string_slice_param", wantField: "IDs", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(paramSliceTagReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+		{name: "unexported_pointer_embed", wantField: "promotedHidden.Hidden", register: func(hr *HandlerRegistry, r RouteRegistrar) {
+			GET(hr, r, "/refuse/:id", func(promotedUnexportedPointerReq, HandlerContext) (helloResp, IAPIError) { return helloResp{}, nil })
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hr := NewHandlerRegistry(devDebugConfig())
+			assertRegistrationPanics(t, "/refuse/:id", func() { tt.register(hr, fakeRegistrar{}) }, tt.wantField)
+		})
+	}
+}
+
+// TestBindingPlanBindsPromotedTextUnmarshaler pins that a field whose type implements
+// encoding.TextUnmarshaler and whose kind has no plain setter binds through it, embedded or
+// behind a pointer, under every Content-Type, that its error answers 400, and that an int kind
+// keeps its plain setter.
+func TestBindingPlanBindsPromotedTextUnmarshaler(t *testing.T) {
+	for _, ct := range promotedContentTypes {
+		t.Run(ct.name, func(t *testing.T) {
+			call := &bodyDecodeCall{
+				method: http.MethodGet, target: "/items/a%20b?code=abcd&level=0", contentType: ct.contentType, pathID: "a b", body: strings.NewReader(""),
+			}
+			got, _, rec := serveBodyDecode[promotedTextReq](t, withHeader(call, "X-Code", "wxyz"))
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, textCode{'a', 'b', 'c', 'd'}, got.Code)
+			assert.Equal(t, textLevel(0), got.Level, "an int kind keeps its plain setter")
+			assert.Equal(t, textScopes{"a", "b"}, got.Scopes, "a param slice binds through UnmarshalText")
+			require.NotNil(t, got.Ptr)
+			assert.Equal(t, textCode{'w', 'x', 'y', 'z'}, *got.Ptr)
+
+			_, _, rec = serveBodyDecode[promotedTextReq](t, &bodyDecodeCall{
+				method: http.MethodGet, target: "/items?code=abc", contentType: ct.contentType, body: strings.NewReader(""),
+			})
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+		})
+	}
+}
+
+// TestBindingPlanOnJOSERouteKeepsURLValues pins that on a JOSE route, whose decrypted body is
+// decoded as application/json, embedded fields bind from the URL and the body cannot override them.
+func TestBindingPlanOnJOSERouteKeepsURLValues(t *testing.T) {
+	type joseBoundReq struct {
+		PromotedPath
+		Pan string `json:"pan"`
+	}
+	f := newJOSEFixture(t)
+	e := newValidatedEngine(t)
+	var bound joseBoundReq
+	joseCfg := &joseRouteConfig{Inbound: f.inbound, Outbound: f.outbound, Resolver: f.resolver, Obs: newJOSEObservability(nil, nil, nil)}
+	h := wrapHandlerWithJOSE(func(req joseBoundReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+		bound = req
+		return joseTokenResp{Token: "ok"}, nil
+	}, NewRequestBinder(), &config.Config{App: config.AppConfig{Env: "development"}}, nil, false, joseCfg)
+
+	compact := jositest.SealForTest(t, []byte(`{"pan":"p","id":7,"ID":7}`), f.peerOutbound(), f.resolver)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens/5", strings.NewReader(compact))
+	req.Header.Set(echo.HeaderContentType, "application/jose")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPathValues(echo.PathValues{{Name: "id", Value: "5"}})
+	require.NoError(t, h(c))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, joseBoundReq{PromotedPath: PromotedPath{ID: 5}, Pan: "p"}, bound)
 }

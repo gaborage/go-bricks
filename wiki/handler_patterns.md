@@ -288,32 +288,46 @@ func PromoteCardID(c server.HandlerContext, next func() error) error {
 
 When a request struct field carries more than one binding tag — for example a
 field tagged both `json:"id"` and `param:"id"` — the framework binds the **JSON
-body first, then overlays path param, query, and header**. A **present** URL or
-header value therefore wins over a conflicting body value:
+body first, then overlays path param, query, and header**
+([ADR-173](adr_173_promoted_field_binding.md)):
 
-- A **path param** overrides the body whenever the matched segment is non-empty,
-  which is the ordinary case. It is **not** an absolute guarantee: an empty
-  segment still matches, so `POST /cards//status` against `/cards/:cardId/status`
-  binds `cardId` as `""`, the overlay skips it, and the body's value survives.
-- A **query param** overrides the body only when its value is non-empty. Both an
-  absent key and a present-but-empty one (`?limit=`) leave the body value in place.
-- A **header** guards on the header being absent, not on its value being empty —
-  a different shape. An absent header leaves the body value in place, but a
-  **present-but-empty** header still binds: for a `[]string` field it parses no
-  entries and clears the field rather than falling back to the body.
+- **Every non-body binding** (`param`, `query`, `header`) takes only its bound
+  value. The overlay first drops whatever the body decode wrote into each such
+  field, so the body never supplies it.
+- A **path or query** value binds when non-empty. An empty segment still matches
+  (`POST /cards//status` against `/cards/:cardId/status`), and an absent key or
+  `?limit=` is empty too; in each case the field stays zero, so its `validate`
+  tags answer 400 where they require it.
+- A **header** binds when present, even empty: a present-but-empty header binds
+  `""` (no entries for a `[]string` field), and an absent one leaves the field
+  zero.
 - `SetPathParams()` (above) feeds the same overlay, so a path parameter injected
   by middleware also beats the body.
 
 This holds on every method, including POST/PUT/PATCH, because the overlay runs
 after the JSON step.
 
-**For a security-sensitive identifier, do not lean on this ordering — give the
-field only its URL tag.** Dropping the `json` tag makes "the body cannot set
-this" a local, checkable property of the struct, instead of a consequence of
-binder ordering plus the shape of the incoming path. Dual-tagging a tenant or
-resource ID leaves the empty-segment case above open. This precedence is a
-tested contract (`TestRequestBinderPrecedence*` in `server/handler_test.go`).
+The overlay covers every field Go promotes to the request struct
+([ADR-173](adr_173_promoted_field_binding.md)): top-level fields and fields of a
+value embed, a pointer embed (allocated only when a value binds into it) or an
+embed of an unexported type. They bind the same way under every Content-Type,
+and a URL or header value beats the body at any depth. Keys match exactly:
+`param:"ID"` does not read route `:id`. Registration fails, naming the route and
+the field, for a `param`, `query` or `header` tag inside a named (non-embedded)
+nested struct, on a struct-typed field (a tagged embed included), on a type no
+single string fills (a non-string slice, a `param` slice, a map or an array), on
+an embedded field hidden by a same-name field, or behind an embedded pointer to
+an unexported type. A type implementing `encoding.TextUnmarshaler` whose kind has
+no plain setter (`uuid.UUID`) binds through it.
+
+**For a security-sensitive identifier, also give the field `json:"-"`, as defence
+in depth.** The overlay already keeps the body off every non-body binding;
+`json:"-"` makes that a local, checkable property of the struct too. A field
+with no `json` tag is otherwise still decoded by its Go name, in any case,
+before the overlay drops it. This precedence is a
+tested contract (`TestRequestBinderPrecedence*` and `TestBindingPlan*` in
+`server/handler_test.go`).
 
 [ADR-001](adr_001_enhanced_handler_system.md) records the ordering as the original
-design decision; the "only when present" qualifier above refines its wording, which
-says later sources overwrite earlier ones without noting the guard.
+design decision; ADR-173 refines its wording, which says later sources overwrite
+earlier ones without noting the empty-value rules.

@@ -53,6 +53,7 @@ Implement an enhanced handler system with the following characteristics (updated
   - Content-Type detection for JSON is tolerant, including `*/*+json` structured-syntax types and any letter case (e.g., `application/json; charset=utf-8`).
   - Field kinds supported: primitives, pointers (auto-allocated), `time.Time` (RFC3339/DateTime/Date), and `[]string` from repeated query params or comma-separated headers.
   - Precedence: bind JSON body first, then overlay path params, then query params, then headers (later sources overwrite earlier values).
+  - Amended by [ADR-173](adr_173_promoted_field_binding.md) (2026-11-08): the overlay covers every Go-promoted field (top-level and embedded), the JSON step runs no echo side-binding, every non-body binding (param, query, header) never keeps a body value (an empty or absent source leaves it zero), keys match exactly, and a URL or header tag inside a named nested struct or on a struct-typed field fails registration.
 - **Alternative Considered:** Separate binding methods for each source
 - **Trade-offs:** More complex implementation, but much cleaner usage
 

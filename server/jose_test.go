@@ -435,14 +435,16 @@ func registerJOSE[T, R any](resolver jose.KeyResolver, opts ...RouteOption) func
 
 // assertRegistrationPanics runs fn and asserts it panics with a string message
 // containing wantSubstring. Centralizes the deferred-recover boilerplate.
-func assertRegistrationPanics(t *testing.T, wantSubstring string, fn func()) {
+func assertRegistrationPanics(t *testing.T, wantSubstring string, fn func(), alsoWant ...string) {
 	t.Helper()
 	defer func() {
 		r := recover()
 		require.NotNil(t, r, "expected registration to panic, got nil recover")
 		msg, ok := r.(string)
 		require.True(t, ok, "expected panic value to be a string, got %T: %v", r, r)
-		assert.Contains(t, msg, wantSubstring, "panic message did not contain expected substring")
+		for _, want := range append([]string{wantSubstring}, alsoWant...) {
+			assert.Contains(t, msg, want, "panic message did not contain expected substring")
+		}
 	}()
 	fn()
 }

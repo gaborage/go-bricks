@@ -2983,6 +2983,24 @@ wired without a check fails at construction instead of serving.
 
 ---
 
+### [ADR-173: Typed Handlers Bind Every Promoted URL and Header Field From One Plan](adr_173_promoted_field_binding.md)
+
+**Date:** 2026-11-08 | **Status:** Accepted | **Breaking:** embedded `param`/`query`/`header` fields bind under every Content-Type and beat the JSON body; case-variant keys stop binding; a URL or header tag in a named nested struct or on a struct-typed field fails registration
+
+The binding plan read top-level fields only, and the JSON step ran echo's `BindPathValues` and
+`BindQueryParams`, which recurse into embeds and match keys case-insensitively. An embedded field
+therefore bound only under a JSON Content-Type, and on POST, PUT and PATCH the body decode
+overwrote its path value. The plan now walks every Go-promoted field (`reflect.VisibleFields`:
+value, pointer and unexported-type embeds), the JSON step only decodes the body, and the URL and
+header overlay runs after it at every depth with exact key matching. Registration refuses a URL or
+header tag inside a named nested struct, on a struct-typed field, or behind an embedded pointer to
+an unexported type. See [migrations.md](migrations.md) `[C73.41]`.
+
+**Key Benefits:** one binding rule under every Content-Type, and a bound URL or header value is
+never replaced by the body.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3792,7 +3810,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-172) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-173) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

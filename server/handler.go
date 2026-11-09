@@ -3,12 +3,14 @@ package server
 
 import (
 	"context"
+	"encoding"
 	"errors"
 	"fmt"
 	"mime"
 	"net/http"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -466,43 +468,207 @@ const (
 
 // boundField is one precomputed tag-binding instruction for a request struct field.
 // Built once per route (buildBindingPlan); replayed per request without re-parsing
-// struct tags. isSlice is only meaningful for query/header sources.
+// struct tags. index is the field's index path from the request struct (one element for a
+// top-level field, more for one promoted from an embed). isSlice is only meaningful for
+// query/header sources.
 type boundField struct {
-	index   int
+	index   []int
 	source  bindSource
 	name    string
 	isSlice bool
 }
 
 // buildBindingPlan walks a request struct type once at route-registration time and
-// captures, per exported field, which of the param/query/header tags are present and
-// what each needs at bind time. Fields are visited in declaration order and, within a
-// field, instructions are appended param, then query, then header, so on replay the
-// last-applied source wins. Unexported fields are skipped. Anonymous/embedded fields
-// are treated as a single field — no recursion. t must be a struct kind
-// (requestStructType).
-func buildBindingPlan(t reflect.Type) []boundField {
+// captures, per exported field Go promotes to the top level (reflect.VisibleFields: the
+// top-level fields and those promoted from value, pointer and unexported-type embeds), which
+// of the param/query/header tags are present and what each needs at bind time. Fields are
+// visited in VisibleFields order and, within a field, instructions are appended param, then
+// query, then header, so on replay the last-applied source wins. Unexported fields are
+// skipped. t must be a struct kind (requestStructType). It first refuses, through
+// checkBindingTags, every tag the plan cannot honor (ADR-173).
+func buildBindingPlan(t reflect.Type) ([]boundField, error) {
+	if err := checkBindingTags(t, t, nil, nil, false, &tagWalk{onPath: map[walkKey]bool{}, clean: map[reflect.Type]bool{}}); err != nil {
+		return nil, err
+	}
 	var plan []boundField
-	for i := range t.NumField() {
-		field := t.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		if paramName := field.Tag.Get("param"); paramName != "" {
-			plan = append(plan, boundField{index: i, source: bindSourceParam, name: paramName})
-		}
-		if queryName := field.Tag.Get("query"); queryName != "" {
-			plan = append(plan, boundField{
-				index: i, source: bindSourceQuery, name: queryName, isSlice: isStringSliceType(field.Type),
-			})
-		}
-		if headerName := field.Tag.Get("header"); headerName != "" {
-			plan = append(plan, boundField{
-				index: i, source: bindSourceHeader, name: headerName, isSlice: isStringSliceType(field.Type),
-			})
+	for _, field := range reflect.VisibleFields(t) {
+		if field.IsExported() {
+			plan = appendFieldBindings(plan, &field)
 		}
 	}
+	return plan, nil
+}
+
+// walkKey is a type in one walk context: a type met at the embed level and again below a named
+// field is judged under both rules.
+type walkKey struct {
+	t      reflect.Type
+	nested bool
+}
+
+// tagWalk is checkBindingTags' state: onPath holds the types on the current path, each in its
+// context, breaking a cycle without hiding a type the walk meets again on another path; clean memoizes the types a
+// nested walk found no tag in, where the verdict depends on the type alone.
+type tagWalk struct {
+	onPath map[walkKey]bool
+	clean  map[reflect.Type]bool
+}
+
+// checkBindingTags walks every field of cur, reached from the request type root at index path
+// prefix, through embeds, named nested structs and the struct elements of slices, arrays and
+// maps alike, and reports the first param, query or header tag the plan cannot honor
+// (checkTaggedField). names is the Go path to cur, an element hop spelled "[]". nested is set
+// below a named (non-embedded) struct field and below an element hop, where prefix stops
+// being a reflect index path.
+func checkBindingTags(root, cur reflect.Type, prefix []int, names []string, nested bool, w *tagWalk) error {
+	key := walkKey{t: cur, nested: nested}
+	if w.onPath[key] || (nested && w.clean[cur]) {
+		return nil
+	}
+	w.onPath[key] = true
+	defer delete(w.onPath, key)
+	for i := range cur.NumField() {
+		if err := checkBindingFieldAt(root, cur, i, append(slices.Clone(prefix), i), names, nested, w); err != nil {
+			return err
+		}
+	}
+	if nested {
+		w.clean[cur] = true
+	}
+	return nil
+}
+
+// checkBindingFieldAt judges cur's field i, at index under root, and walks the struct it leads to.
+func checkBindingFieldAt(root, cur reflect.Type, i int, index []int, names []string, nested bool, w *tagWalk) error {
+	field := cur.Field(i)
+	path := append(slices.Clone(names), field.Name)
+	if hasBindingTag(&field) {
+		if err := checkTaggedField(root, &field, index, strings.Join(path, "."), nested); err != nil {
+			return err
+		}
+	}
+	inner, viaElement, ok := walkedStruct(field.Type)
+	if !ok {
+		return nil
+	}
+	if viaElement {
+		path[len(path)-1] += "[]"
+	}
+	return checkBindingTags(root, inner, index, path, nested || viaElement || !field.Anonymous, w)
+}
+
+// walkedStruct returns the struct checkBindingTags descends into from a field of type t: t's
+// own struct, through at most one pointer, or else the struct element under any depth of
+// pointers, slices, arrays and maps (viaElement). Unlike bindsAsStruct it takes every struct,
+// time.Time and an encoding.TextUnmarshaler included, because reflect.VisibleFields promotes
+// their fields into the plan too.
+func walkedStruct(t reflect.Type) (inner reflect.Type, viaElement, ok bool) {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() == reflect.Struct {
+		return t, false, true
+	}
+	for k := t.Kind(); k == reflect.Pointer || k == reflect.Slice || k == reflect.Array || k == reflect.Map; k = t.Kind() {
+		t = t.Elem()
+	}
+	return t, true, t.Kind() == reflect.Struct
+}
+
+// checkTaggedField reports why the tagged field at index under root is never bound, or nil.
+// The plan cannot bind a field that:
+//   - sits inside a named nested struct, which Go does not promote;
+//   - is unexported, so reflect cannot set it;
+//   - is struct-typed (a tagged embed included), or of a type no single string value fills
+//     (bindsFromString);
+//   - is promoted through an embedded pointer to an unexported type, which reflect cannot
+//     allocate;
+//   - is hidden by a shallower field of the same name, or made ambiguous by one at its depth,
+//     so reflect does not promote it.
+func checkTaggedField(root reflect.Type, field *reflect.StructField, index []int, goPath string, nested bool) error {
+	if nested {
+		return fmt.Errorf("field %s: param, query and header tags bind only top-level or embedded fields, not fields of a named nested struct", goPath)
+	}
+	if !field.IsExported() {
+		return fmt.Errorf("field %s: a param, query or header tag cannot bind an unexported field", goPath)
+	}
+	if _, isStruct := bindsAsStruct(field.Type); isStruct {
+		return fmt.Errorf("field %s: a param, query or header tag cannot bind a struct-typed field", goPath)
+	}
+	if !bindsFromString(field) {
+		return fmt.Errorf("field %s: type %s cannot bind from a param, query or header value", goPath, field.Type)
+	}
+	if throughUnexportedPointerEmbed(root, index) {
+		return fmt.Errorf("field %s: a param, query or header tag cannot bind through an embedded pointer to an unexported type", goPath)
+	}
+	if promoted, ok := root.FieldByName(field.Name); !ok || !slices.Equal(promoted.Index, index) {
+		return fmt.Errorf("field %s: a param, query or header tag on a field hidden by another field of the same name is never bound", goPath)
+	}
+	return nil
+}
+
+// bindsFromString reports whether the binder can fill field from its values, for every tag it
+// carries: through any number of pointers, a kindSetters kind, time.Time or an
+// encoding.TextUnmarshaler (setSpecialType); a query or header tag also takes a string-kind
+// slice, split by the slice binders.
+func bindsFromString(field *reflect.StructField) bool {
+	if isStringSliceType(field.Type) && field.Tag.Get("param") == "" {
+		return true
+	}
+	t := field.Type
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if _, ok := kindSetters[t.Kind()]; ok {
+		return true
+	}
+	return t == timeType || reflect.PointerTo(t).Implements(textUnmarshalerType)
+}
+
+// appendFieldBindings appends field's plan entries: param, then query, then header.
+func appendFieldBindings(plan []boundField, field *reflect.StructField) []boundField {
+	if paramName := field.Tag.Get("param"); paramName != "" {
+		plan = append(plan, boundField{index: field.Index, source: bindSourceParam, name: paramName})
+	}
+	if queryName := field.Tag.Get("query"); queryName != "" {
+		plan = append(plan, boundField{
+			index: field.Index, source: bindSourceQuery, name: queryName, isSlice: isStringSliceType(field.Type),
+		})
+	}
+	if headerName := field.Tag.Get("header"); headerName != "" {
+		plan = append(plan, boundField{
+			index: field.Index, source: bindSourceHeader, name: headerName, isSlice: isStringSliceType(field.Type),
+		})
+	}
 	return plan
+}
+
+// hasBindingTag reports whether field carries a param, query or header tag.
+func hasBindingTag(field *reflect.StructField) bool {
+	return field.Tag.Get("param") != "" || field.Tag.Get("query") != "" || field.Tag.Get("header") != ""
+}
+
+// bindsAsStruct returns the struct t names, through at most one pointer, when the binder
+// treats it as a struct rather than a value. An encoding.TextUnmarshaler, time.Time included,
+// binds as a value (setSpecialType); unlike requestStructType, a type merely convertible to
+// time.Time is a struct here, because setFieldValue would refuse it on every request.
+func bindsAsStruct(t reflect.Type) (reflect.Type, bool) {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t, t.Kind() == reflect.Struct && !reflect.PointerTo(t).Implements(textUnmarshalerType)
+}
+
+// throughUnexportedPointerEmbed reports whether the path to the field at index passes through
+// an embedded pointer to an unexported type, which reflect cannot allocate.
+func throughUnexportedPointerEmbed(t reflect.Type, index []int) bool {
+	for i := range len(index) - 1 {
+		f := t.FieldByIndex(index[:i+1])
+		if f.Anonymous && !f.IsExported() && f.Type.Kind() == reflect.Pointer {
+			return true
+		}
+	}
+	return false
 }
 
 // requestProcessor orchestrates the complete request processing pipeline:
@@ -547,12 +713,16 @@ func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requ
 	if !ok {
 		panic("server: " + unbindableRequestTypeReason(allocator.elemType))
 	}
+	plan, err := buildBindingPlan(structType)
+	if err != nil {
+		panic("server: request type " + allocator.elemType.String() + ": " + err.Error())
+	}
 
 	return &requestProcessor[T]{
 		allocator:         allocator,
 		binder:            binder,
 		cfg:               cfg,
-		plan:              buildBindingPlan(structType),
+		plan:              plan,
 		fieldPathIsSchema: saferender.FieldPathIsSchema(structType),
 	}
 }
@@ -812,9 +982,11 @@ func wrapHandlerWithJOSE[T any, R any](
 // avoiding per-request struct-tag reflection. When plan is empty — the common case, e.g. a
 // JSON-body-only struct — only bindJSONBody runs.
 //
-// Source precedence is load-bearing and tested (TestRequestBinderPrecedence*): the
-// param/query/header overlay runs after the JSON step, so a non-empty URL value wins over a
-// conflicting body value for a dual-tagged field. Do not reorder or drop the overlay.
+// Source precedence is load-bearing and tested (TestRequestBinderPrecedence*,
+// TestBindingPlanPathWinsOverBodyAtEveryDepth): the param/query/header overlay runs after the
+// JSON step for every promoted field. It first zeroes every param-, query- and header-tagged
+// field, so such a field holds only its bound value (zero when the source is empty or absent)
+// and never the body's. Do not reorder or drop either loop.
 func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []boundField, fieldPathIsSchema bool) error {
 	if err := rb.bindJSONBody(c, target, fieldPathIsSchema); err != nil {
 		return err
@@ -823,19 +995,25 @@ func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []
 		return nil
 	}
 
-	targetValue := reflect.ValueOf(target).Elem()
+	root := reflect.ValueOf(target).Elem()
+	// Every param-, query- or header-tagged field takes only its bound value: whatever the body
+	// decode wrote there is dropped first, so an empty path segment, an absent or empty query
+	// value and an absent header leave it zero.
+	for i := range plan {
+		planFieldRef{root: root, index: plan[i].index}.clear()
+	}
 	for i := range plan {
 		bf := &plan[i]
-		fieldValue := targetValue.Field(bf.index)
+		field := planFieldRef{root: root, index: bf.index}
 
 		var err error
 		switch bf.source {
 		case bindSourceParam:
-			err = rb.bindParamValue(c, bf.name, fieldValue)
+			err = rb.bindParamValue(c, bf.name, field)
 		case bindSourceQuery:
-			err = rb.bindQueryValue(c, bf.name, bf.isSlice, fieldValue)
+			err = rb.bindQueryValue(c, bf.name, bf.isSlice, field)
 		case bindSourceHeader:
-			err = rb.bindHeaderValue(c, bf.name, bf.isSlice, fieldValue)
+			err = rb.bindHeaderValue(c, bf.name, bf.isSlice, field)
 		}
 		if err != nil {
 			return err
@@ -848,9 +1026,9 @@ func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []
 //   - An empty Content-Type returns nil without reading the body.
 //   - One predicate admits a body as JSON: the parsed media type (lowercased, parameters
 //     dropped) is application/json or ends in +json. Any other type returns nil unread.
-//   - An admitted request binds path values, then query params on GET, DELETE, HEAD and
-//     QUERY, then decodes the body through the engine's JSON serializer unless
-//     Content-Length is 0.
+//   - An admitted request only decodes the body through the engine's JSON serializer,
+//     unless Content-Length is 0. Path, query and header values never bind here: the
+//     plan's overlay binds them after, under every Content-Type, so they win (ADR-173).
 //   - Each failure is wrapped once by newJSONBindError, so a body-limit 413 stays
 //     reachable for isRequestTooLarge.
 //   - The Content-Type header is never rewritten.
@@ -869,14 +1047,6 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSc
 		return nil
 	}
 
-	if err := echo.BindPathValues(c, target); err != nil { //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
-		return newJSONBindError(err, fieldPathIsSchema)
-	}
-	if req.Method == http.MethodGet || req.Method == http.MethodDelete || req.Method == http.MethodHead || req.Method == echo.QUERY {
-		if err := echo.BindQueryParams(c, target); err != nil { //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
-			return newJSONBindError(err, fieldPathIsSchema)
-		}
-	}
 	if req.ContentLength == 0 {
 		return nil
 	}
@@ -886,27 +1056,64 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSc
 	return nil
 }
 
-// bindParamValue binds one path parameter into fieldValue for a bindRequestPlanned entry.
-func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, fieldValue reflect.Value) error {
+// planFieldRef addresses one plan entry's field under the request struct. The field is
+// resolved only when a value binds, so a nil pointer embed on its path stays nil otherwise.
+type planFieldRef struct {
+	root  reflect.Value
+	index []int
+}
+
+// resolve returns the field, allocating each nil pointer embed on the way down.
+func (f planFieldRef) resolve() reflect.Value {
+	v := f.root
+	for _, x := range f.index {
+		if v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			v = v.Elem()
+		}
+		v = v.Field(x)
+	}
+	return v
+}
+
+// clear zeroes the field, stopping at a nil pointer embed on the way down, which holds nothing.
+func (f planFieldRef) clear() {
+	v := f.root
+	for _, x := range f.index {
+		if v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				return
+			}
+			v = v.Elem()
+		}
+		v = v.Field(x)
+	}
+	v.SetZero()
+}
+
+// bindParamValue binds one path parameter into field for a bindRequestPlanned entry.
+func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, field planFieldRef) error {
 	value := c.Param(paramName) //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if value != "" {
-		if err := setFieldValue(fieldValue, value); err != nil {
+		if err := setFieldValue(field.resolve(), value); err != nil {
 			return newFieldBindError(bindSourceParam, paramName, err)
 		}
 	}
 	return nil
 }
 
-// bindQueryValue binds one query parameter into fieldValue for a bindRequestPlanned entry.
-func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSlice bool, fieldValue reflect.Value) error {
+// bindQueryValue binds one query parameter into field for a bindRequestPlanned entry.
+func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSlice bool, field planFieldRef) error {
 	// Support []string binding from repeated query parameters
 	if isSlice {
-		return rb.bindQueryStringSlice(c, queryName, fieldValue)
+		return rb.bindQueryStringSlice(c, queryName, field)
 	}
 
 	value := c.QueryParam(queryName) //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if value != "" {
-		if err := setFieldValue(fieldValue, value); err != nil {
+		if err := setFieldValue(field.resolve(), value); err != nil {
 			return newFieldBindError(bindSourceQuery, queryName, err)
 		}
 	}
@@ -914,9 +1121,10 @@ func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSli
 }
 
 // bindQueryStringSlice binds repeated query parameters to a []string field
-func (rb *RequestBinder) bindQueryStringSlice(c *echo.Context, queryName string, fieldValue reflect.Value) error {
+func (rb *RequestBinder) bindQueryStringSlice(c *echo.Context, queryName string, field planFieldRef) error {
 	values := c.QueryParams()[queryName] //nolint:forbidigo // binding door: copies the value into the handler's request struct, never into a sink
 	if len(values) > 0 {
+		fieldValue := field.resolve()
 		slice := reflect.MakeSlice(fieldValue.Type(), len(values), len(values))
 		for i, v := range values {
 			slice.Index(i).SetString(v)
@@ -926,14 +1134,15 @@ func (rb *RequestBinder) bindQueryStringSlice(c *echo.Context, queryName string,
 	return nil
 }
 
-// bindHeaderValue binds one header into fieldValue for a bindRequestPlanned entry.
-func (rb *RequestBinder) bindHeaderValue(c *echo.Context, headerName string, isSlice bool, fieldValue reflect.Value) error {
+// bindHeaderValue binds one header into field for a bindRequestPlanned entry.
+func (rb *RequestBinder) bindHeaderValue(c *echo.Context, headerName string, isSlice bool, field planFieldRef) error {
 	values := c.Request().Header.Values(headerName)
 	if len(values) == 0 {
 		return nil
 	}
 
 	// Support comma-separated list for []string headers
+	fieldValue := field.resolve()
 	if isSlice {
 		return rb.bindHeaderStringSlice(values, fieldValue)
 	}
@@ -975,8 +1184,9 @@ func isStringSliceType(t reflect.Type) bool {
 type valueSetter func(reflect.Value, string) error
 
 var (
-	timeType    = reflect.TypeOf(time.Time{})
-	kindSetters = map[reflect.Kind]valueSetter{
+	timeType            = reflect.TypeOf(time.Time{})
+	textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
+	kindSetters         = map[reflect.Kind]valueSetter{
 		reflect.String:  setStringValue,
 		reflect.Int:     setSignedIntValue,
 		reflect.Int8:    setSignedIntValue,
@@ -1031,7 +1241,9 @@ func setFieldValue(fieldValue reflect.Value, value string) error {
 	return fmt.Errorf("unsupported field type: %s", kind)
 }
 
-// setSpecialType handles special types like time.Time.
+// setSpecialType handles the types that bind as values though their kind may not: time.Time
+// (parseTime's layouts) and an addressable encoding.TextUnmarshaler whose kind has no
+// kindSetters entry, so a string-, int- or bool-kind type keeps its plain setter.
 func setSpecialType(fieldValue reflect.Value, value string) (bool, error) {
 	if fieldValue.Type() == timeType {
 		t, err := parseTime(value)
@@ -1040,6 +1252,11 @@ func setSpecialType(fieldValue reflect.Value, value string) (bool, error) {
 		}
 		fieldValue.Set(reflect.ValueOf(t))
 		return true, nil
+	}
+	if _, hasSetter := kindSetters[fieldValue.Kind()]; !hasSetter && fieldValue.CanAddr() {
+		if u, ok := fieldValue.Addr().Interface().(encoding.TextUnmarshaler); ok {
+			return true, u.UnmarshalText([]byte(value))
+		}
 	}
 	return false, nil
 }
@@ -1514,8 +1731,13 @@ func RegisterHandler[T any, R any](
 	// Determine final path after registrar adjustments (e.g. base path prefixes)
 	fullPath := r.FullPath(path)
 
-	if _, ok := requestStructType(reqType); !ok {
+	structType, ok := requestStructType(reqType)
+	if !ok {
 		panic("server: handler registration failed for " + method + " " + fullPath + ": " + unbindableRequestTypeReason(reqType))
+	}
+	// WrapHandler below builds the plan again; this first build only names the route in the panic.
+	if _, err := buildBindingPlan(structType); err != nil {
+		panic("server: handler registration failed for " + method + " " + fullPath + ": request type " + reqType.String() + ": " + err.Error())
 	}
 
 	// The route's package is its handler function's, so the GET/POST helpers and a direct
