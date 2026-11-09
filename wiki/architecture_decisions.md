@@ -2974,7 +2974,8 @@ resolvers, and a check that fails ADR-171's construction probe panics at constru
 publishes its tenant only when the Server's `Options.TenantChecker` holds it, else its policy's
 `Deny` answers 400, and `TenantOwnedGroup` panics on a Server with no check. In the seat and the
 public door a resolved id that differs from a tenant already in context writes nothing and the
-adapter answers 400. Every door asks only about plain tenant keys. Refusals come from the adapter
+adapter answers 400. Every door validates the tenant-ID grammar, wrapping a hand-built resolver in
+the default pattern, refuses reserved-prefix ids, and asks only about plain tenant keys. Refusals come from the adapter
 so that no response before it differs by tenant existence. See [migrations.md](migrations.md) `[C73.39]`.
 
 **Key Benefits:** every door to the request context applies one rule for a tenant, and a door

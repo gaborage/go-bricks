@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -566,38 +567,98 @@ func TestTenantMiddlewareRefusesUnknownPathTenantBeforeHandler(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			exporter := installTestTracerProvider(t)
-			testLog := &testLogger{}
-			srv := newAccessLogServer(t, testLog, true)
-
-			var middlewareSaw []string
-			moduleMiddleware := func(c HandlerContext, next func() error) error {
-				if id, ok := multitenant.GetTenant(c.RequestContext()); ok {
-					middlewareSaw = append(middlewareSaw, id)
-					return fmt.Errorf("failed to get database config for key %s", id)
-				}
-				return next()
-			}
-			handlerRan := false
-			g := srv.ModuleGroup().Group("/tenants",
-				TenantMiddleware(&multitenant.PathResolver{Segment: 2}, nil, testutil.TenantSet{"t1": {}}), moduleMiddleware)
-			g.Add(http.MethodGet, "/:tenant/x", func(c HandlerContext) error {
-				handlerRan = true
-				return c.String(http.StatusOK, "ok")
-			})
-
-			rec := httptest.NewRecorder()
-			srv.echo.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tenants/"+tt.segment+"/x", http.NoBody))
-
-			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.False(t, handlerRan, "the handler adapter refuses before the handler")
-			assert.Empty(t, middlewareSaw, "module middleware runs with no tenant written")
-			spans := exporter.GetSpans()
-			require.NotEmpty(t, spans)
-			for _, needle := range tt.needles {
-				assertNoSinkCarries(t, needle, rec, testLog, spans)
-			}
+			door := TenantMiddleware(&multitenant.PathResolver{Segment: 2}, nil, testutil.TenantSet{"t1": {}})
+			got := serveModuleDoor(t, door, doorRequest("/tenants/"+tt.segment+"/x"))
+			got.assertRefused(t, tt.needles...)
 		})
+	}
+}
+
+// TestTenantMiddlewareRefusesInvalidHeaderTenant pins, through server.New with observability on,
+// that every door validates the tenant-ID grammar and refuses a reserved-prefix id, whatever the
+// resolver: a bare header resolver's value that fails the grammar or carries the reserved prefix
+// answers 400, module middleware and the handler see no tenant, and the value reaches no sink.
+// A resolver that is already a ValidatingResolver keeps its own grammar, and a reserved-prefix
+// id is refused even when that grammar admits it.
+func TestTenantMiddlewareRefusesInvalidHeaderTenant(t *testing.T) {
+	const headerName = "X-Door-Tenant"
+	reserved := config.NamedDatabasePrefix + "reports"
+	header := &multitenant.HeaderResolver{HeaderName: headerName}
+	permissive := &multitenant.ValidatingResolver{Resolver: header, TenantRegex: regexp.MustCompile(`^[A-Za-z0-9_:-]+$`)}
+	tests := []struct {
+		name     string
+		resolver multitenant.TenantResolver
+		value    string
+		wantSeen string // "" when the request must be refused
+	}{
+		{name: "plain_header_tenant_seated", resolver: header, value: "t1", wantSeen: "t1"},
+		{name: "grammar_failing_header_refused", resolver: header, value: "Bad_Tenant"},
+		{name: "reserved_prefix_header_refused", resolver: header, value: reserved},
+		{name: "own_grammar_kept", resolver: permissive, value: "Bad_Tenant", wantSeen: "Bad_Tenant"},
+		{name: "reserved_prefix_under_own_grammar_refused", resolver: permissive, value: reserved},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := doorRequest("/tenants/x")
+			req.Header.Set(headerName, tt.value)
+			got := serveModuleDoor(t, TenantMiddleware(tt.resolver, nil, nil), req)
+			if tt.wantSeen != "" {
+				assert.Equal(t, http.StatusOK, got.rec.Code)
+				assert.Equal(t, []string{tt.wantSeen}, got.middlewareSaw)
+				return
+			}
+			got.assertRefused(t, tt.value)
+		})
+	}
+}
+
+// moduleDoorResult is what serveModuleDoor observed for one request.
+type moduleDoorResult struct {
+	rec           *httptest.ResponseRecorder
+	testLog       *testLogger
+	spans         tracetest.SpanStubs
+	middlewareSaw []string
+	handlerRan    bool
+}
+
+// serveModuleDoor serves req through server.New with observability on, under a module group
+// /tenants running door and then a module middleware that records the tenant it sees.
+func serveModuleDoor(t *testing.T, door MiddlewareFunc, req *http.Request) moduleDoorResult {
+	t.Helper()
+	exporter := installTestTracerProvider(t)
+	got := moduleDoorResult{testLog: &testLogger{}}
+	srv := newAccessLogServer(t, got.testLog, true)
+
+	moduleMiddleware := func(c HandlerContext, next func() error) error {
+		if id, ok := multitenant.GetTenant(c.RequestContext()); ok {
+			got.middlewareSaw = append(got.middlewareSaw, id)
+		}
+		return next()
+	}
+	g := srv.ModuleGroup().Group("/tenants", door, moduleMiddleware)
+	handler := func(c HandlerContext) error {
+		got.handlerRan = true
+		return c.String(http.StatusOK, "ok")
+	}
+	g.Add(http.MethodGet, "/x", handler)
+	g.Add(http.MethodGet, "/:tenant/x", handler)
+
+	got.rec = httptest.NewRecorder()
+	srv.echo.ServeHTTP(got.rec, req)
+	got.spans = exporter.GetSpans()
+	return got
+}
+
+// assertRefused fails unless the request answered 400 before the handler, module middleware saw
+// no tenant, and no needle reached any sink.
+func (got moduleDoorResult) assertRefused(t *testing.T, needles ...string) {
+	t.Helper()
+	assert.Equal(t, http.StatusBadRequest, got.rec.Code)
+	assert.False(t, got.handlerRan, "the handler never runs")
+	assert.Empty(t, got.middlewareSaw, "module middleware runs with no tenant written")
+	require.NotEmpty(t, got.spans)
+	for _, needle := range needles {
+		assertNoSinkCarries(t, needle, got.rec, got.testLog, got.spans)
 	}
 }
 

@@ -20,7 +20,7 @@ tenant an earlier door had already written. So the doors to one request context 
    framework seat does (ADR-170): it writes the id only when `exists.HasTenant` answers true.
    Otherwise no tenant is written, route-group middleware runs with no tenant, and the typed or
    raw handler adapter answers 400 `BAD_REQUEST` "Invalid tenant" with the `reason="unknown
-   tenant"` WARN (the stdlib-log fallback, since the public door has no framework logger).
+   tenant"` WARN, logged through the adapter's own logger.
    Header- and subdomain-won ids are written as before.
 2. **Nil only where the path cannot be read.** `exists` may be nil only when
    `multitenant.MayReadPath(resolver)` is false: the framework header and subdomain resolvers,
@@ -30,9 +30,13 @@ tenant an earlier door had already written. So the doors to one request context 
    (ADR-171): a check whose `HasTenant("")` panics or answers true, or that is a nil pointer,
    panics at construction. An empty non-nil `*config.TenantStore` is accepted, because a
    consumer may fill it with `AddTenant` after wiring; it holds no tenant until then.
-4. **Only plain tenant keys are asked about.** Every door asks the check only about a plain
-   tenant key: a key carrying `config.NamedDatabasePrefix` is never written, and the check is
-   not called for it.
+4. **Every door validates the grammar and refuses reserved-prefix ids.** The public door wraps
+   a resolver that is not already a `*multitenant.ValidatingResolver` in one with the default
+   tenant-ID pattern, as the framework seat wraps its own, so an id outside the grammar answers
+   400 at the door; a `ValidatingResolver` keeps the pattern it was given. Whatever resolver
+   produced it, an id carrying `config.NamedDatabasePrefix` is never written: the request is
+   marked like an unheld path tenant and the handler adapter answers 400. The check is asked only
+   about plain tenant keys.
 5. **A conflicting resolver refuses.** In the framework seat and the public door, when a tenant is
    already in the request context and the resolved id differs, from any resolver (a header-won
    one included), nothing is written or overwritten. The request is marked as for an unknown
@@ -42,8 +46,9 @@ tenant an earlier door had already written. So the doors to one request context 
 6. **Tenant-owned families verify their tenant.** A `TenantPolicy` `Tenant` step's id is published
    only when the Server's check (`server.Options.TenantChecker`, which the App sets from its
    resource source) holds it. The check runs after the grammar check and is asked only about
-   plain tenant keys. Any other id is a 400 client fault answered by the policy's `Deny`
-   (`DenyBodyless` answers a bodyless 400), and the handler never runs. `TenantPolicy.ResolveForTest`
+   plain tenant keys. A grammar-valid id the check does not hold is a 400 client fault answered
+   by the policy's `Deny` (`DenyBodyless` answers a bodyless 400), and the handler never runs;
+   an id that fails the grammar stays the framework 500 it was, without `Deny`. `TenantPolicy.ResolveForTest`
    runs no existence check.
 7. **`TenantOwnedGroup` needs the check.** It panics at the call when the Server has no tenant
    existence check, after the framework-root refusal and before the prefix claim, with a message
@@ -83,6 +88,10 @@ its own authentication step.
   checker, so it must carry one. A family `Tenant` step's id the check does not hold answers 400.
 - **Breaking.** A request whose doors resolve two different tenants answers 400 from the adapter,
   where the later door overwrote the earlier one.
+- **Breaking.** `TenantMiddleware` wraps a hand-built resolver that is not a
+  `*multitenant.ValidatingResolver` in the default tenant-ID pattern, so an id outside
+  `^[a-z0-9-]{1,64}$` answers 400 at the door where it was written; a reserved-prefix id answers
+  400 from the adapter on every door.
 - **Single-tenant services** using the public door with a path resolver pass their own check:
   `config.NewTenantStore(cfg)` holds no tenant when `multitenant.enabled` is false.
 

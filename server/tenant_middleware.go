@@ -31,6 +31,10 @@ const msgInvalidTenant = "Invalid tenant"
 // the framework's header and subdomain resolvers, alone, validated or composed). For any other
 // resolver a nil exists panics here, at construction, as does a non-nil exists that cannot answer
 // (vetExistence).
+//
+// The door validates every resolved id against the tenant-ID grammar: a resolver that is not
+// already a *multitenant.ValidatingResolver is wrapped in one with the default pattern, as the
+// framework seat wraps its own, and a ValidatingResolver keeps the pattern it was given.
 func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc, exists multitenant.TenantChecker) MiddlewareFunc {
 	if exists == nil && multitenant.MayReadPath(resolver) {
 		panic("server: TenantMiddleware: the resolver may read the request path, so a tenant existence check is required (ADR-172): " +
@@ -40,6 +44,9 @@ func TenantMiddleware(resolver multitenant.TenantResolver, skipper SkipperFunc, 
 		if err := vetExistence(exists); err != nil {
 			panic("server: TenantMiddleware: " + err.Error())
 		}
+	}
+	if _, validated := resolver.(*multitenant.ValidatingResolver); !validated && resolver != nil {
+		resolver = &multitenant.ValidatingResolver{Resolver: resolver, TenantRegex: multitenant.DefaultTenantIDPattern()}
 	}
 	return fromEchoMiddleware(tenantMiddlewareEcho(resolver, skipperFromRequest(skipper), seatInputs{checker: exists}, nil))
 }
@@ -88,7 +95,7 @@ func seatTenant(c *echo.Context, next echo.HandlerFunc, resolver multitenant.Ten
 		logTenantRejection(l, c, tenantRejectionReason(err))
 		return NewBadRequestError(msgInvalidTenant)
 	}
-	if fromPath && !in.holds(tenantID) || conflictsWithSeated(c, tenantID) {
+	if fromPath && !in.holds(tenantID) || reservedTenantKey(tenantID) || conflictsWithSeated(c, tenantID) {
 		c.Set(unknownPathTenantKey, true)
 		return next(c)
 	}
@@ -103,7 +110,8 @@ func seatTenant(c *echo.Context, next echo.HandlerFunc, resolver multitenant.Ten
 const seatSkippedKey = "_tenant_seat_skipped"
 
 // unknownPathTenantKey marks a request whose path-read tenant the seat's TenantChecker does not
-// vouch for (ADR-170), or whose resolved tenant disagrees with one already in context (ADR-172).
+// vouch for (ADR-170), whose resolved tenant carries the reserved prefix (reservedTenantKey), or
+// whose resolved tenant disagrees with one already in context (ADR-172).
 // It carries no id, and the seat writes none: the request runs on with the context it had until
 // the route's handler adapter refuses it (refuseUnknownPathTenant).
 const unknownPathTenantKey = "_tenant_unknown_path"
@@ -124,7 +132,13 @@ func (in seatInputs) holds(tenantID string) bool {
 // without a checker fails closed. Only a plain tenant key is asked about: a key carrying
 // config.NamedDatabasePrefix is no tenant id, whatever the checker would answer.
 func holdsTenant(checker multitenant.TenantChecker, tenantID string) bool {
-	return checker != nil && !strings.HasPrefix(tenantID, config.NamedDatabasePrefix) && checker.HasTenant(tenantID)
+	return checker != nil && !reservedTenantKey(tenantID) && checker.HasTenant(tenantID)
+}
+
+// reservedTenantKey reports whether tenantID carries config.NamedDatabasePrefix, which no door
+// writes as a tenant, whatever resolver produced it.
+func reservedTenantKey(tenantID string) bool {
+	return strings.HasPrefix(tenantID, config.NamedDatabasePrefix)
 }
 
 // refuseUnknownPathTenant is the handler adapters' refusal of a request the seat marked

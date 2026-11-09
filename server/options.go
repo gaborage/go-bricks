@@ -28,7 +28,8 @@ type Options struct {
 	// (multitenant.MayReadPath) a nil checker refuses Start before binding; a server served
 	// anyway vouches for no id, so every path-read tenant is refused. With a checker, Start
 	// writes one [server.tenant] INFO line naming it. A check that is a nil pointer, or whose
-	// HasTenant("") panics or answers true, refuses Start. The App sets it on the server it builds
+	// HasTenant("") panics or answers true, refuses Start under such a resolver; under a header
+	// or subdomain resolver TenantOwnedGroup refuses it instead. The App sets it on the server it builds
 	// from its tenant resource source and refuses a value given here through
 	// app.Options.ServerOptions (ADR-171).
 	TenantChecker multitenant.TenantChecker
