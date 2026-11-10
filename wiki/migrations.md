@@ -15999,13 +15999,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: every statically configured AMQP URL, judged by its resolved VALUE. The greps list
   file names only (`-l`): a matching line can hold the URL and its credentials, so open each
   file yourself rather than capturing matched lines in a log.
-  - YAML: `git grep -lE '(^|[[:space:]{,.])url[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only
+  - YAML: `git grep -lE "(^|[[:space:]{,.'\"])url['\"]?[[:space:]]*:" -- '*.yaml' '*.yml'`, keeping only
     files that set `messaging.broker.url` (nested under a `messaging:` → `broker:` block,
     flat-dotted as `messaging.broker.url:`, or mixed) or `multitenant.tenants.<id>.messaging.url`.
     A `url:` leaf under a database, cache or other section hits the same pattern and does not
-    count. The pattern also matches a flow-style key (`messaging: {broker: {url: ...}}`). `git grep` reads tracked files only, so repeat it over deployment config kept outside
+    count. The pattern also matches a flow-style key (`messaging: {broker: {url: ...}}`) and a quoted
+    one (`"url":`). `git grep` reads tracked files only, so repeat it over deployment config kept outside
     the repository's tracked files:
-    `grep -rlE --include='*.yaml' --include='*.yml' '(^|[[:space:]{,.])url[[:space:]]*:' k8s/ deploy/ config/ 2>/dev/null`.
+    `grep -rlE --include='*.yaml' --include='*.yml' "(^|[[:space:]{,.'\"])url['\"]?[[:space:]]*:" k8s/ deploy/ config/ 2>/dev/null`.
   - Env: `git grep -lE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL'`, plus
     `grep -rlE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL' k8s/ deploy/ .env* 2>/dev/null`
     for env files and deployment manifests outside the repository's tracked files. The class
