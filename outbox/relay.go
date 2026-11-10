@@ -375,8 +375,9 @@ func (r *Relay) preflight(ctx context.Context) (down map[string]struct{}, laneEr
 
 // readyWithin runs one lane's pre-flight under readyTimeout. A zero/negative readyTimeout
 // is "no extra bound" (call with ctx as-is) rather than a zero-deadline ctx that would fail
-// every check instantly: validatePublishTimeout guarantees a positive value in production,
-// so this only matters for a test or a misconfigured build that skipped that check.
+// every check instantly: applyMessagingDefaults supplies a positive value in production
+// (5s when unset, an error when negative), so this only matters for a test or a
+// misconfigured build that skipped that step.
 func (r *Relay) readyWithin(ctx context.Context, sh shipper) error {
 	if r.readyTimeout <= 0 {
 		return sh.Ready(ctx)

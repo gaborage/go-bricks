@@ -380,7 +380,8 @@ func (r *consumerRunner) logOutcome(res *delivery.Result, streamName string, off
 
 // commitOffset is this lane's settlement: record the outcome against the
 // batching tracker, which commits the last successfully handled offset. A failed
-// message contributes nothing: it is skipped, not redelivered (ADR-059).
+// message contributes nothing and is not retried in place: a later success
+// commits past it, and only a restart before that commit replays it (ADR-059).
 func (r *consumerRunner) commitOffset(res *delivery.Result, streamName string, offset int64, store offsetStorer) {
 	r.recordSettled(res.Log, streamName, offset, res.Err, store)
 }

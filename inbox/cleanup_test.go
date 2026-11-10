@@ -57,18 +57,18 @@ func TestInboxCleanupIsolatesPerTenantFailures(t *testing.T) {
 		store:           store,
 		retentionPeriod: time.Hour,
 		getDB:           func(context.Context) (dbtypes.Interface, error) { return dbtesting.NewTestDB(dbtypes.PostgreSQL), nil },
-		tenants:         []string{"good", "bad"},
+		tenants:         []string{"bad", "good"},
 	}
 	err := c.Execute(fakeJobCtx{Context: context.Background()})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `tenant "bad"`)
-	assert.Equal(t, []string{"good", "bad"}, store.tenants, "both tenants are attempted despite one failing")
+	assert.Equal(t, []string{"bad", "good"}, store.tenants, "the tenant after the failing one is still attempted")
 }
 
 // fakeJobCtx is a minimal scheduler.JobContext backed by a test DB.
 type fakeJobCtx struct {
-	context.Context
-	db dbtypes.Interface
+	context.Context // NOSONAR S8242: scheduler.JobContext embeds context.Context, so its fake must carry one
+	db              dbtypes.Interface
 }
 
 func (c fakeJobCtx) JobID() string                   { return "inbox-cleanup" }
@@ -91,6 +91,7 @@ func TestCleanupExecute(t *testing.T) {
 	}
 	ctx := fakeJobCtx{Context: context.Background(), db: db}
 	require.NoError(t, c.Execute(ctx))
+	dbtesting.AssertExecExecuted(t, db, "DELETE FROM gobricks_inbox")
 }
 
 func TestCleanupExecuteErrorsWithoutDB(t *testing.T) {

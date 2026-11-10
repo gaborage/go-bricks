@@ -19,13 +19,24 @@ import (
 //
 // Usage in tests:
 //
-//	// Simple mock implementation: one func per query method, and DatabaseType
-//	// returning a vendor constant
+//	// Simple mock implementation: one func field per query method, and
+//	// DatabaseType returning a vendor constant
 //	type mockQuerier struct {
 //	    queryFunc    func(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 //	    queryRowFunc func(ctx context.Context, query string, args ...any) Row
 //	    execFunc     func(ctx context.Context, query string, args ...any) (sql.Result, error)
 //	}
+//
+//	func (m *mockQuerier) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+//	    return m.queryFunc(ctx, query, args...)
+//	}
+//	func (m *mockQuerier) QueryRow(ctx context.Context, query string, args ...any) Row {
+//	    return m.queryRowFunc(ctx, query, args...)
+//	}
+//	func (m *mockQuerier) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+//	    return m.execFunc(ctx, query, args...)
+//	}
+//	func (m *mockQuerier) DatabaseType() string { return PostgreSQL }
 //
 //	// Accept Querier where only query execution is needed, and hand it the mock
 //	func NewUserStore(q types.Querier) *UserStore { ... }
