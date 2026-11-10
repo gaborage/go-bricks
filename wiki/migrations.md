@@ -15934,8 +15934,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   still fails with `messaging not available: …`; the row that got the drop verdict is still
   failed with its own error; the cycle-start pre-flight; `markOutage`'s leadership probe and
   stop-on-cancel; every configuration key, log field and metric name.
-- gate: match = any detect hit. no-match = otherwise: an AMQP-only ledger behaves as before,
-  since every unattempted row is the dropped lane's.
+- gate: match = any detect hit, or an alert or dashboard on these counts that lives outside the
+  repository (search the monitoring backend for the same three names), or a ledger that can
+  hold rows another build wrote with a lane this build has no shipper for. no-match =
+  otherwise: an AMQP-only ledger behaves as before, since every unattempted row is the dropped
+  lane's.
 - before (v0.73.0): every unattempted row after the drop, of any lane, was marked failed with
   `messaging unavailable`, advancing its `retry_count`, and counted `failed` in its own lane,
   so `failed_stream` and `outbox.relay.records{lane="stream",outcome="failed"}` rose during an
