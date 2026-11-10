@@ -5,7 +5,7 @@ Run a comprehensive security audit of the GoBricks codebase.
 ## Workflow
 
 1. **Static analysis**: Run `golangci-lint run --enable gosec ./...` to find security issues.
-2. **Raw-SQL escape hatch audit**: Run `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'` and flag every call site (a SQL-body construction, for the `Expr` forms) without an annotation matching the prefix `// SECURITY: Manual SQL review completed - ` directly above it or above an enclosing dispatch. Squirrel's own `Expr` inside `database/internal/builder`, and the `Expr`/`MustExpr` doors themselves (`database/types`, the builder, `testing/mocks`), are plumbing — skip those hits. `database.Raw` deserves at least as much scrutiny as `f.Raw`/`jf.Raw`: it replaces the whole statement, bypassing the builder's identifier validation. The rule itself lives in root CLAUDE.md Security Guidelines.
+2. **Raw-SQL escape hatch audit**: Run `git grep -nE 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{|(^|[^A-Za-z0-9_])(Prefix|Suffix|Options)\('` and flag every call site (a SQL-body construction, for the `Expr` forms) without an annotation matching the prefix `// SECURITY: Manual SQL review completed - ` directly above it or above an enclosing dispatch. Squirrel's own `Expr` inside `database/internal/builder`, and the `Expr`/`MustExpr` doors themselves (`database/types`, the builder, `testing/mocks`), are plumbing — skip those hits, and the `Prefix`/`Suffix`/`Options` plumbing hits listed in wiki/database.md ("What is not an identifier door"). `database.Raw` deserves at least as much scrutiny as `f.Raw`/`jf.Raw`: it replaces the whole statement, bypassing the builder's identifier validation. The rule itself lives in root CLAUDE.md Security Guidelines.
 3. **Secrets scan**: Search for patterns that suggest hardcoded secrets (API keys, passwords, tokens, connection strings) in Go files and config files. Exclude `.example` files and test fixtures.
 4. **Input validation**: Check all HTTP handler request structs for `validate` tags. Flag handlers that accept user input without validation.
 5. **Vulnerability check**: Run `govulncheck ./...` to find known vulnerabilities in dependencies.
@@ -32,6 +32,6 @@ Generated: {date}
 ## Severity Classification
 
 - **Critical**: Hardcoded secrets, SQL injection without sanitization, known CVEs with exploits
-- **High**: Missing input validation on public endpoints, raw-SQL escape hatch (`f.Raw` / `jf.Raw` / `database.Raw` / `SetExpr` / string `Having` / `RawExpression` body via `qb.Expr` / `qb.MustExpr`) without `// SECURITY:` annotation
+- **High**: Missing input validation on public endpoints, raw-SQL escape hatch (`f.Raw` / `jf.Raw` / `database.Raw` / `SetExpr` / string `Having` / INSERT `Prefix` / `Suffix` / `Options` / `RawExpression` body via `qb.Expr` / `qb.MustExpr`) without `// SECURITY:` annotation
 - **Medium**: Missing validation tags, outdated dependencies with vulnerabilities
 - **Low**: Informational findings, minor gosec warnings

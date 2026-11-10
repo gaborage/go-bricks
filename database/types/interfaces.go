@@ -237,6 +237,14 @@ type InsertQueryBuilder interface {
 	// the column or one-based position (#1318). See RawExpression.
 	Values(values ...any) InsertQueryBuilder
 	SetMap(clauses map[string]any) InsertQueryBuilder
+
+	// Options, Prefix and Suffix are raw-SQL doors: their text is placed in the
+	// statement verbatim, with none of the identifier checks Columns applies.
+	// Options is the vendor hint slot, rendered between INSERT and INTO (Oracle's
+	// "/*+ APPEND */"); Prefix and Suffix wrap the statement (a WITH clause,
+	// RETURNING). Every call site requires an inline
+	// "// SECURITY: Manual SQL review completed - <rationale>" comment, as for
+	// Having (see SelectQueryBuilder).
 	Options(options ...string) InsertQueryBuilder
 	Prefix(sql string, args ...any) InsertQueryBuilder
 	Suffix(sql string, args ...any) InsertQueryBuilder

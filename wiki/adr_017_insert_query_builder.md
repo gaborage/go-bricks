@@ -3,6 +3,21 @@
 **Status:** Accepted
 **Date:** 2026-05-01
 
+## Amendment (2026-11-09, #2275): `Options` is the vendor hint slot, and the three text doors are raw SQL
+
+The `Options` rationale below names `OR IGNORE`/`OR REPLACE`, which neither
+supported vendor (PostgreSQL, Oracle) accepts. Its real use is a vendor hint
+rendered between `INSERT` and `INTO`, such as Oracle's `INSERT /*+ APPEND */ INTO`,
+and it stays on the interface as that slot.
+
+`Prefix`, `Suffix` and `Options` pass their text to the statement verbatim, with
+no identifier or operand check, so they fall under the raw-SQL escape-hatch rule:
+every consumer call site carries an inline
+`// SECURITY: Manual SQL review completed - <what was verified>` annotation, and
+the documented audit grep matches their call sites (root CLAUDE.md Security
+Guidelines; plumbing skips in [database.md](database.md#what-is-not-an-identifier-door)).
+No signature, behavior or rendered SQL changes.
+
 ## Context
 
 Three of the four mutation entry points on `QueryBuilder` returned a go-bricks-owned interface (`SelectQueryBuilder`, `UpdateQueryBuilder`, `DeleteQueryBuilder`) that exposed `ToSQL()` (uppercase, idiomatic Go per [SonarCloud rule S8179](https://rules.sonarsource.com/go/RSPEC-8179/)). The fourth — `Insert` — leaked the upstream `squirrel.InsertBuilder` directly, whose only render method is the lowercase `ToSql()` defined by `squirrel.Sqlizer`.
