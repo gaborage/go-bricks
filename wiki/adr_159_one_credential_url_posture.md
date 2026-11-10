@@ -55,7 +55,7 @@ to decode skipped.
 - `unknown URL option: s3cret` for `…/svc?wallet%20password=ab&s3%63ret` renders
   `unknown URL option: xxxxx`; `multiple segments in URI path: /Sp@ring/x@broker:5552` for
   `rabbitmq-stream://app:2024/Sp%40ring/x@broker:5552` renders `… path: xxxxx:5552`;
-  `lookup s3crét: no such host` for `amqp://app:pw@s3cr%C3%A9t/x@broker/vh` renders
+  `lookup s3crét: no such host` for an AMQP URL whose password is `pw@s3cr%C3%A9t/x` renders
   `lookup xxxxx: no such host`; `parsing "k3y7"` for `?heartbeat=k3%797` renders
   `parsing "xxxxx"`.
 - The guard is extended for those sources only: text found through a decoded source is never

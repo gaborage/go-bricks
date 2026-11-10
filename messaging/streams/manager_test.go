@@ -1392,25 +1392,11 @@ func rebuiltURIErr(t *testing.T, configuredURI, username, secret string) error {
 
 func startDoors(t *testing.T) []startDoor {
 	t.Helper()
+	consumer := fmt.Sprintf("failed to start consumer %q on", testConsumerName)
 	return []startDoor{
-		{
-			name:   "stream_consumer",
-			decls:  oneConsumerDecls(),
-			failOn: callNewConsumer + ":" + testStream,
-			want:   fmt.Sprintf("failed to start consumer %q on stream %q", testConsumerName, testStream),
-		},
-		{
-			name:   "super_stream_consumer",
-			decls:  superConsumerDecls(),
-			failOn: callNewSuperConsumer + ":" + testSuperStream,
-			want:   fmt.Sprintf("failed to start consumer %q on super stream %q", testConsumerName, testSuperStream),
-		},
-		{
-			name:   "publisher",
-			decls:  onePublisher(t),
-			failOn: callNewProducer + ":" + testStream,
-			want:   fmt.Sprintf("failed to start the publisher on stream %q", testStream),
-		},
+		{name: "stream_consumer", decls: oneConsumerDecls(), failOn: callNewConsumer + ":" + testStream, want: fmt.Sprintf("%s stream %q", consumer, testStream)},
+		{name: "super_stream_consumer", decls: superConsumerDecls(), failOn: callNewSuperConsumer + ":" + testSuperStream, want: fmt.Sprintf("%s super stream %q", consumer, testSuperStream)},
+		{name: "publisher", decls: onePublisher(t), failOn: callNewProducer + ":" + testStream, want: fmt.Sprintf("failed to start the publisher on stream %q", testStream)},
 	}
 }
 

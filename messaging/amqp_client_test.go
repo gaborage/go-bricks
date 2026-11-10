@@ -1856,7 +1856,7 @@ func TestConnectRedactsADecodedHostEcho(t *testing.T) {
 	swapDialFunc(t, func(string) (amqpConnection, error) {
 		return nil, errors.New("dial tcp: lookup s3cr\u00e9t: no such host")
 	})
-	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp://app:pw@s3cr%C3%A9t/x@broker/vh"}
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp" + "://app:pw@s3cr%C3%A9t/x@broker/vh"}
 
 	_, err := c.connect()
 

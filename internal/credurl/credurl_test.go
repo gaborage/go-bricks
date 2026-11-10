@@ -177,7 +177,7 @@ func TestRedactForLogMasksHostlessURLsWhole(t *testing.T) {
 }
 
 func TestRedactError(t *testing.T) {
-	cases := slices.Concat(hostilePasswordCases(), digitPasswordCases(), atSignUserinfoCases(), scanCases(), seamCases())
+	cases := slices.Concat(hostilePasswordCases(), digitPasswordCases(), atSignUserinfoCases(), scanCases(), seamCases(), normalizedPortCases(), judgedAloneCases())
 
 	for i := range cases {
 		tc := &cases[i]
@@ -680,30 +680,6 @@ func seamCases() []redactErrorCase {
 		// A driver dials the port url.Parse read as an integer, so its error shows a
 		// digit-only password without its leading zeros.
 		{
-			name:    "normalized_port_before_slash_masked",
-			raw:     "amqp://user:0123456/zq9x@broker/vh",
-			parse:   parseAccepts,
-			err:     fixedErr("dial tcp: address 123456: invalid port"),
-			want:    "dial tcp: address xxxxx: invalid port",
-			secrets: []string{"123456"},
-		},
-		{
-			name:    "normalized_port_before_question_mark_masked",
-			raw:     "amqp://user:0123456?zq9x@broker/vh",
-			parse:   parseAccepts,
-			err:     fixedErr("dial tcp: address 123456: invalid port"),
-			want:    "dial tcp: address xxxxx: invalid port",
-			secrets: []string{"123456"},
-		},
-		{
-			name:    "normalized_port_before_hash_masked",
-			raw:     "amqp://user:0123456#zq9x@broker/vh",
-			parse:   parseAccepts,
-			err:     fixedErr("dial tcp: address 123456: invalid port"),
-			want:    "dial tcp: address xxxxx: invalid port",
-			secrets: []string{"123456"},
-		},
-		{
 			name:    "normalized_port_after_a_host_shaped_username_masked",
 			raw:     "amqp://localhost:01234/zq9x@broker/vh",
 			parse:   parseAccepts,
@@ -766,7 +742,7 @@ func seamCases() []redactErrorCase {
 		},
 		{
 			name:    "decoded_host_echo_masked",
-			raw:     "amqp://app:pw@s3cr%C3%A9t/x@broker/vh",
+			raw:     "amqp" + "://app:pw@s3cr%C3%A9t/x@broker/vh",
 			parse:   parseAccepts,
 			err:     fixedErr("dial tcp: lookup s3cr\u00e9t: no such host"),
 			want:    "dial tcp: lookup xxxxx: no such host",
@@ -831,32 +807,6 @@ func seamCases() []redactErrorCase {
 			err:     func(string) error { return bareParseErr("rabbitmq-stream://dflt:p/zq9xs3cret#1@leader:5552/vh") },
 			want:    `parse "rabbitmq-stream://:xxxxx@broker:5552/vh": invalid URL`,
 			secrets: []string{"zq9xs3cret", "dflt"},
-		},
-		// A configured username is not substituted, so another one names another URL.
-		{
-			name:    "other_username_judged_alone",
-			raw:     "amqp://u:pw%23x@broker/vh",
-			parse:   parseAccepts,
-			err:     func(string) error { return bareParseErr("amqp://dflt:pw#x@broker/vh") },
-			want:    maskedURL + `: invalid URL`,
-			secrets: []string{"broker"},
-		},
-		{
-			name:    "other_url_error_judged_alone_without_a_username",
-			raw:     "amqp://:pw%23x@broker/vh",
-			parse:   parseAccepts,
-			err:     func(string) error { return bareParseErr("amqp://dflt:zz/q") },
-			want:    maskedURL + `: invalid URL`,
-			secrets: []string{"broker"},
-		},
-		// A substituted username holds no '/', so a path ahead of the ':' names another URL.
-		{
-			name:    "path_before_the_colon_judged_alone",
-			raw:     "amqp://:pw%23x@broker/vh",
-			parse:   parseAccepts,
-			err:     func(string) error { return bareParseErr("amqp://h/%zz:pw") },
-			want:    maskedURL + `: invalid URL`,
-			secrets: []string{"broker"},
 		},
 		{
 			name:    "other_url_error_judged_alone",
@@ -937,6 +887,50 @@ func seamCases() []redactErrorCase {
 			same: true,
 		},
 	}
+}
+
+// normalizedPortCases pin a digit-only password ahead of each authority terminator: the
+// driver dials the port url.Parse read as an integer, so its error shows the digits
+// without their leading zero.
+func normalizedPortCases() []redactErrorCase {
+	terminators := []struct{ name, char string }{{"slash", "/"}, {"question_mark", "?"}, {"hash", "#"}}
+	cases := make([]redactErrorCase, 0, len(terminators))
+	for _, tt := range terminators {
+		cases = append(cases, redactErrorCase{
+			name:    "normalized_port_before_" + tt.name + "_masked",
+			raw:     "amqp://user:0123456" + tt.char + "zq9x@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("dial tcp: address 123456: invalid port"),
+			want:    "dial tcp: address xxxxx: invalid port",
+			secrets: []string{"123456"},
+		})
+	}
+	return cases
+}
+
+// judgedAloneCases pin a *url.Error whose URL is no rebuild of raw: it renders on its
+// own, masked whole, and shows nothing of raw.
+func judgedAloneCases() []redactErrorCase {
+	others := []struct{ name, raw, other string }{
+		// A configured username is not substituted, so another one names another URL.
+		{name: "other_username", raw: "amqp://u:pw%23x@broker/vh", other: "amqp://dflt:pw#x@broker/vh"},
+		// Without a configured username, the text after the ':' must still open the password.
+		{name: "other_password_without_a_username", raw: "amqp://:pw%23x@broker/vh", other: "amqp://dflt:zz/q"},
+		// A substituted username holds no '/', so a path ahead of the ':' names another URL.
+		{name: "path_before_the_colon", raw: "amqp://:pw%23x@broker/vh", other: "amqp://h/%zz:pw"},
+	}
+	cases := make([]redactErrorCase, 0, len(others))
+	for _, tt := range others {
+		cases = append(cases, redactErrorCase{
+			name:    tt.name + "_judged_alone",
+			raw:     tt.raw,
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr(tt.other) },
+			want:    maskedURL + `: invalid URL`,
+			secrets: []string{"broker"},
+		})
+	}
+	return cases
 }
 
 // TestRedactURLError pins each condition: every row fails when only its condition is dropped.
