@@ -39,6 +39,19 @@ renders a URL that url.Parse rejects, or reads with an empty host, as the bare p
 
 See [migrations.md](migrations.md) `[C74.1]`.
 
+## Amendment (2026-11-09, #2262): the CLI control-plane door renders a fixed message
+
+`go-bricks-migrate quiesce` opens the control-plane database through pgx, and a
+`connectionstring` pgx could not parse surfaced as pgx's `cannot parse` text, which quotes the
+connection string with the password masked on a best-effort basis only. That is the PostgreSQL
+connector's case, so this door joins it in the stricter-door list:
+
+- The CLI control-plane door (`go-bricks-migrate quiesce`, `openControlPlaneDB`) renders a fixed
+  message naming the `--tenant` target, `connect control-plane db for tenant "<tenant>": failed to
+  parse PostgreSQL connection string`, and never the DSN. pgx's `*pgconn.ParseConfigError` stays
+  reachable through `errors.As`, and the exit code stays 2. Errors after parsing, such as a refused
+  dial, render as before. See [migrations.md](migrations.md) `[C74.5]`.
+
 ## Context
 
 `internal/credurl.RedactError` masks a connection URL in the error text of four doors: the AMQP

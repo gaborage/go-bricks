@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx stdlib driver for the control-plane *sql.DB
 	"github.com/spf13/cobra"
 
@@ -287,10 +288,28 @@ func openControlPlaneDB(ctx context.Context, flags *CommonFlags) (db *sql.DB, cl
 	}
 	if err := opened.PingContext(ctx); err != nil {
 		_ = opened.Close()
+		var parseErr *pgconn.ParseConfigError
+		if errors.As(err, &parseErr) {
+			return nil, nil, markNothingAttempted(&controlPlaneParseError{tenant: flags.Tenant, err: err})
+		}
 		return nil, nil, markNothingAttempted(fmt.Errorf("connect control-plane db: %w", err))
 	}
 	return opened, func() { _ = opened.Close() }, nil
 }
+
+// controlPlaneParseError reports a connection string pgx cannot parse without
+// rendering it: pgx masks the password in its own text only on a best-effort
+// basis. pgx's error stays reachable through errors.As.
+type controlPlaneParseError struct {
+	tenant string
+	err    error
+}
+
+func (e *controlPlaneParseError) Error() string {
+	return fmt.Sprintf("connect control-plane db for tenant %q: failed to parse PostgreSQL connection string", e.tenant)
+}
+
+func (e *controlPlaneParseError) Unwrap() error { return e.err }
 
 // resolveControlPlaneConfig resolves the tenant's database section and checks it is a
 // usable PostgreSQL control-plane target.
