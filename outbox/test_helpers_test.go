@@ -110,6 +110,7 @@ type fakeStore struct {
 	MarkFailedCalls         int
 	MarkFailedLastID        string
 	MarkFailedLastErr       string
+	MarkFailedLog           []string // "<eventID>: <errMsg>", one per call, in call order
 	MarkDeadLetteredCalls   int
 	MarkDeadLetteredLastID  string
 	MarkDeadLetteredLastErr string
@@ -181,6 +182,7 @@ func (s *fakeStore) MarkFailed(_ context.Context, _ dbtypes.Interface, eventID, 
 	s.MarkFailedCalls++
 	s.MarkFailedLastID = eventID
 	s.MarkFailedLastErr = errMsg
+	s.MarkFailedLog = append(s.MarkFailedLog, eventID+": "+errMsg)
 	return s.MarkFailedErr
 }
 

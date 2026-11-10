@@ -612,7 +612,8 @@ func (c *relayCycle) fail(ctx context.Context, record *Record, lane, key string,
 
 // ship makes one bounded delivery attempt and folds its verdict into the cycle's
 // bookkeeping. It reports true when the cycle must stop: a shutdown-aborted ship, or a
-// lane that dropped mid-batch, whose unattempted remainder takes the outage path.
+// lane that dropped mid-batch, whose own unattempted rows take the outage path while the
+// rest of the remainder is held back.
 func (c *relayCycle) ship(ctx context.Context, laneShipper shipper, lane string, remainder []Record) bool {
 	ship := &c.cur
 	// Rehydrate the originating trace context (persisted by Publish) into the publish
@@ -652,16 +653,20 @@ func (c *relayCycle) ship(ctx context.Context, laneShipper shipper, lane string,
 		// Shutting down mid-ship — stop without counting this record.
 		return true
 	case shipBrokerDown:
-		// The lane dropped mid-batch. Route the UNATTEMPTED remainder through the same
-		// outage path the cycle-start pre-flight applies — advance retry_count without
-		// paying each record's own serial readiness wait — and stop the cycle. The
-		// remainder counts as failed too (markOutage marked it in the DB), so the cycle's
-		// counts still sum to the batch total. The key it holds is moot: the cycle ends
-		// here and the hold-back set does not outlive it.
+		// The lane dropped mid-batch. Its UNATTEMPTED rows take the same outage path the
+		// cycle-start pre-flight applies — advance retry_count without paying each record's
+		// own serial readiness wait — and the cycle stops. Every other row (another lane, or
+		// a lane this build does not know) is held back untouched, split by the pre-flight's
+		// own rule, so the cycle's counts still sum to the batch total. The key this row
+		// holds is moot: the cycle ends here and the hold-back set does not outlive it.
 		c.fail(ctx, record, lane, ship.Key, v.Err)
 		c.res.outageErr = v.Err
 		c.res.stallWait = max(c.res.stallWait, v.Waited)
-		c.relay.markOutage(ctx, c.log, c.db, c.lead, remainder, c.res)
+		heldBack, outaged := splitOnDownLanes(remainder, map[string]struct{}{lane: {}})
+		for i := range heldBack {
+			c.res.markParked(laneOrDefault(heldBack[i].Lane))
+		}
+		c.relay.markOutage(ctx, c.log, c.db, c.lead, outaged, c.res)
 		return true
 	case shipScopeDown:
 		// Evidence that THIS shipment's scope is not carrying messages, not that this row
