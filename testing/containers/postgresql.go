@@ -39,20 +39,6 @@ var errAdminAfterTerminate = errors.New("postgresql container: admin pool used a
 // return site.
 var errContainerNotInitialized = errors.New("container not initialized")
 
-// PostgreSQLContainerConfig holds configuration for PostgreSQL test container
-type PostgreSQLContainerConfig struct {
-	// ImageTag specifies the PostgreSQL version (default: the pin in DefaultPostgreSQLConfig)
-	ImageTag string
-	// Username for PostgreSQL authentication (default: "testuser")
-	Username string
-	// Password for PostgreSQL authentication (default: "testpass")
-	Password string
-	// Database name to create (default: "testdb")
-	Database string
-	// StartupTimeout for container initialization (default: 60 seconds)
-	StartupTimeout time.Duration
-}
-
 // DefaultPostgreSQLConfig returns a PostgreSQLContainerConfig populated with sensible defaults.
 //
 // The returned configuration sets Username to "testuser", Password to "testpass",
@@ -97,12 +83,16 @@ func StartPostgreSQLContainer(ctx context.Context, t *testing.T, cfg *PostgreSQL
 		return nil, nil // Never reached due to Skip, but satisfies return
 	}
 
+	if cfg == nil {
+		cfg = DefaultPostgreSQLConfig()
+	}
+
 	cc, err := startPostgreSQLContainerInternal(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	t.Logf("PostgreSQL container started successfully at %s", maskConnectionString(cc.connStr))
+	t.Log(postgreSQLStartLogText(cfg, cc.host, cc.port))
 
 	return cc, nil
 }
@@ -392,30 +382,4 @@ func randomDatabaseName(t *testing.T) string {
 	}
 
 	return sanitized + suffix
-}
-
-// maskConnectionString removes sensitive information from connection string for safe logging.
-// It attempts to mask passwords in postgres:// URLs. Returns a generic masked placeholder
-// if parsing fails to avoid leaking credentials.
-func maskConnectionString(connStr string) string {
-	// Simple masking for postgres://user:password@host:port/database format
-	// Example: postgres://testuser:****@localhost:54321/testdb?sslmode=disable
-	masked := connStr
-
-	// Find password segment (between : and @)
-	for i := 0; i < len(masked); i++ {
-		if masked[i] == ':' && i+1 < len(masked) {
-			// Find the @ symbol after the colon
-			for j := i + 1; j < len(masked); j++ {
-				if masked[j] == '@' {
-					// Mask the password segment
-					masked = masked[:i+1] + "****" + masked[j:]
-					return masked
-				}
-			}
-		}
-	}
-
-	// If parsing fails, return generic message
-	return "postgres://****:****@<host>:<port>/<database>"
 }
