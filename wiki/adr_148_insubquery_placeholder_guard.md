@@ -58,6 +58,23 @@ embedded SQL, for all four doors.
   at the other three doors and is not addressed here.
 - `errSubqueryPlaceholderFormat` stays unexported; a consumer matches the text.
 
+## Amendment: insert `Select`
+
+*Added 2026-11-09.*
+`InsertQueryBuilder.Select` handed squirrel the sub-SELECT already carrying the
+vendor placeholder format. Squirrel numbered the sub-SELECT on its own, and the
+INSERT's pass then numbered `Prefix`/`Suffix` arguments again from 1: a
+`Suffix("ON CONFLICT (id) DO UPDATE SET name = ?", "n")` rendered
+`WHERE name = $1 … SET name = $1` with two arguments, and Oracle `:1` twice.
+
+The door now hands squirrel the sub-SELECT with `?` placeholders through
+`questionPlaceholderSelect` (`helpers.go`), the same step `renderSubquery` uses,
+so the INSERT numbers the whole statement once in argument order. A statement
+without `Prefix`/`Suffix` arguments renders byte-identically, except that an
+escaped `??` in the sub-SELECT now stays a literal `?` instead of becoming a
+`$N` with no argument, which was never a valid statement. A foreign
+`SelectQueryBuilder` is still refused at this door. gaborage/go-bricks#2358.
+
 ## References
 
 - `database/internal/builder/filter.go` — `InSubquery`, `buildExistsFilter`

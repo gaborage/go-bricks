@@ -1033,7 +1033,7 @@ func renderSubquery(sub dbtypes.SelectQueryBuilder) (sql string, args []any, err
 		return "", nil, invalid
 	}
 	if sqb, ok := sub.(*SelectQueryBuilder); ok {
-		return sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
+		return questionPlaceholderSelect(sqb).ToSql()
 	}
 	sql, args, err = sub.ToSQL()
 	if err != nil {
@@ -1047,6 +1047,12 @@ func renderSubquery(sub dbtypes.SelectQueryBuilder) (sql string, args []any, err
 		return "", nil, errSubqueryPlaceholderFormat
 	}
 	return sql, args, nil
+}
+
+// questionPlaceholderSelect returns sqb's squirrel builder with ? placeholders,
+// for embedding in a statement that numbers them in its own final pass (ADR-148).
+func questionPlaceholderSelect(sqb *SelectQueryBuilder) squirrel.SelectBuilder {
+	return sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question)
 }
 
 // vendorPlaceholder spots a positional placeholder already rendered in a
