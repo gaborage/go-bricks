@@ -141,7 +141,7 @@ func SharedResolversRequired(module string) error {
 
 // RejectSharedWithStaticTenants fails tenancy=shared combined with static
 // multitenant.tenants: the shared "" key resolves the root database:/messaging:
-// blocks, but static tenant mode forbids those root blocks (config/validation.go's
+// blocks, but static tenant mode forbids those root blocks (config/multitenant_section.go's
 // validateNoSingleTenantConflict). Returns nil when there is no conflict. Shared by
 // the outbox and inbox modules so the predicate and message cannot drift.
 func RejectSharedWithStaticTenants(module string, cfg *config.Config) error {

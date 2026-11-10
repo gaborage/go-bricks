@@ -24,7 +24,6 @@ var ErrNotLinked = errors.New(
 type Runtime interface {
 	CollectDeclarations(modules []ModuleNamer, log logger.Logger) (Declarations, error)
 	NewManager(opts *ManagerOptions) Handle
-	CanDrainHold() bool
 }
 
 // ModuleNamer is the subset of app.Module the runtime needs to walk declarers.

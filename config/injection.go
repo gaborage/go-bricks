@@ -275,7 +275,7 @@ func (c *Config) convertToBool(value any, key string) (bool, error) {
 			Category: errCategoryInvalid,
 			Field:    key,
 			Message:  fmt.Sprintf("'%v' is not a valid boolean", value),
-			Action:   "use true/false, 1/0, yes/no",
+			Action:   "use true/false, 1/0",
 		}
 	}
 	return result, nil

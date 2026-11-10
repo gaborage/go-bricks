@@ -334,6 +334,16 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	return b
 }
 
+// requireSlots is the Builder-side half of App.requireSlots: it records the failure on
+// b.err (the Builder's error-accumulation convention) instead of returning it.
+func (b *Builder) requireSlots(step string) bool {
+	if err := b.app.requireSlots(step); err != nil {
+		b.err = err
+		return false
+	}
+	return true
+}
+
 // performPreInitialization attempts to establish connections during app startup.
 // This reduces cold-start latency for single-tenant applications.
 //
@@ -345,16 +355,6 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 // should fail fast), while the cache stays best-effort, because an unreachable cache is a
 // runtime condition — cache *misconfiguration* already aborted earlier, at manager
 // construction (CreateCacheManager).
-// requireSlots is the Builder-side half of App.requireSlots: it records the failure on
-// b.err (the Builder's error-accumulation convention) instead of returning it.
-func (b *Builder) requireSlots(step string) bool {
-	if err := b.app.requireSlots(step); err != nil {
-		b.err = err
-		return false
-	}
-	return true
-}
-
 func (b *Builder) performPreInitialization() {
 	if b.err != nil {
 		return

@@ -85,11 +85,6 @@ func (streamRuntime) NewManager(opts *streamruntime.ManagerOptions) streamruntim
 	})}
 }
 
-func (streamRuntime) CanDrainHold() bool {
-	_, ok := any((*Manager)(nil)).(HoldReplayer)
-	return ok
-}
-
 type managerHandle struct{ *Manager }
 
 func (h *managerHandle) Start(ctx context.Context, decls streamruntime.Declarations) error {

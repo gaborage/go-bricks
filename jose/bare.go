@@ -73,7 +73,7 @@ func openBare(compact string, p *Policy, r KeyResolver) (plaintext []byte, claim
 	})
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {
-		return nil, nil, hdr, mapDecryptError(err, p, &jweHdr)
+		return nil, nil, hdr, mapDecryptError(err, &jweHdr)
 	}
 
 	// Fail closed on a nested token: bare mode never carries an inner JWS, so cty=JWS

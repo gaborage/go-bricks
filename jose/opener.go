@@ -72,7 +72,7 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	})
 	hdr.JWE = cryptoHeaderToOpen(&jweHdr)
 	if err != nil {
-		return nil, nil, hdr, mapDecryptError(err, p, &jweHdr)
+		return nil, nil, hdr, mapDecryptError(err, &jweHdr)
 	}
 
 	innerPayload, jwsHdr, err := cryptoadapter.Verify(string(jwsCompact), verKey, &cryptoadapter.VerifyOptions{
@@ -81,7 +81,7 @@ func Open(compact string, p *Policy, r KeyResolver) (plaintext []byte, claims *C
 	})
 	hdr.JWS = cryptoHeaderToOpen(&jwsHdr)
 	if err != nil {
-		return nil, nil, hdr, mapVerifyError(err, p, &jwsHdr)
+		return nil, nil, hdr, mapVerifyError(err, &jwsHdr)
 	}
 
 	// Inner JWS cty enforcement (defense-in-depth, post-verify).
@@ -148,7 +148,7 @@ func cryptoHeaderToOpen(h *cryptoadapter.Header) Header {
 	return out
 }
 
-func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
+func mapDecryptError(err error, hdr *cryptoadapter.Header) *Error {
 	switch {
 	case errors.Is(err, cryptoadapter.ErrParseEncrypted):
 		return &Error{
@@ -197,7 +197,7 @@ func mapDecryptError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
 	}
 }
 
-func mapVerifyError(err error, _ *Policy, hdr *cryptoadapter.Header) *Error {
+func mapVerifyError(err error, hdr *cryptoadapter.Header) *Error {
 	switch {
 	case errors.Is(err, cryptoadapter.ErrParseSigned):
 		return &Error{

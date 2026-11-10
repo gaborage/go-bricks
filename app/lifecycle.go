@@ -490,9 +490,7 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 		return
 	}
 
-	r := []rune(name)
-	capitalizedName := strings.ToUpper(string(r[0])) + string(r[1:])
-	a.logger.Info().Msgf("%s closed successfully", capitalizedName)
+	a.logger.Info().Msgf("%s closed successfully", capitalizeFirst(name))
 }
 
 // shutdownPhase executes a shutdown phase with timing, logging, and error handling

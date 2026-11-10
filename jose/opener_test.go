@@ -33,7 +33,7 @@ func TestMapDecryptErrorAllArms(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mapDecryptError(tt.in, nil, &hdr)
+			got := mapDecryptError(tt.in, &hdr)
 			assert.Equal(t, tt.wantCode, got.Code)
 			assert.Equal(t, tt.wantStat, got.Status)
 		})
@@ -56,7 +56,7 @@ func TestMapVerifyErrorAllArms(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mapVerifyError(tt.in, nil, &hdr)
+			got := mapVerifyError(tt.in, &hdr)
 			assert.Equal(t, tt.wantCode, got.Code)
 			assert.Equal(t, tt.wantStat, got.Status)
 		})

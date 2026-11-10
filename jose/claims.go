@@ -29,10 +29,6 @@ func parseUnixSecs(v any) time.Time {
 	switch n := v.(type) {
 	case float64:
 		return time.Unix(int64(n), 0).UTC()
-	case int64:
-		return time.Unix(n, 0).UTC()
-	case int:
-		return time.Unix(int64(n), 0).UTC()
 	default:
 		return time.Time{}
 	}

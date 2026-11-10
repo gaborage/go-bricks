@@ -1,4 +1,3 @@
-// Package server provides enhanced HTTP handler functionality with type-safe request/response handling.
 package server
 
 import (

@@ -1,4 +1,3 @@
-// Package server provides enhanced HTTP handler functionality with type-safe request/response handling.
 package server
 
 import (
@@ -358,13 +357,11 @@ type RequestBinder struct{}
 func NewRequestBinder() *RequestBinder { return &RequestBinder{} }
 
 // contextChecker handles context cancellation detection at various stages of request processing.
-type contextChecker struct {
-	cfg *config.Config
-}
+type contextChecker struct{}
 
 // newContextChecker creates a new context checker.
-func newContextChecker(cfg *config.Config) *contextChecker {
-	return &contextChecker{cfg: cfg}
+func newContextChecker() *contextChecker {
+	return &contextChecker{}
 }
 
 // checkCancellation checks if the request context has been canceled or timed out.
@@ -676,7 +673,6 @@ func throughUnexportedPointerEmbed(t reflect.Type, index []int) bool {
 type requestProcessor[T any] struct {
 	allocator *requestAllocator[T]
 	binder    *RequestBinder
-	cfg       *config.Config
 	plan      []boundField
 	// fieldPathIsSchema is the JSON decode-summary gate for T, decided once here
 	// because it depends on T alone. See saferender.FieldPathIsSchema.
@@ -703,7 +699,7 @@ func unbindableRequestTypeReason(t reflect.Type) string {
 // is computed once here (not per request) from T's underlying struct type. It panics
 // when T cannot bind, which covers WrapHandler; RegisterHandler refuses such a T earlier,
 // naming the route.
-func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requestProcessor[T] {
+func newRequestProcessor[T any](binder *RequestBinder) *requestProcessor[T] {
 	allocator := newRequestAllocator[T]()
 
 	// reflect.TypeFor[T]() rather than allocator.elemType: the allocator's field holds T's own
@@ -721,7 +717,6 @@ func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requ
 	return &requestProcessor[T]{
 		allocator:         allocator,
 		binder:            binder,
-		cfg:               cfg,
 		plan:              plan,
 		fieldPathIsSchema: saferender.FieldPathIsSchema(structType),
 	}
@@ -833,9 +828,9 @@ type handlerWrapper[T any, R any] struct {
 // reserved-key collisions; nil is tolerated and silences those warnings.
 func newHandlerWrapper[T, R any](binder *RequestBinder, cfg *config.Config, log logger.Logger, rawResponse bool, joseCfg *joseRouteConfig) *handlerWrapper[T, R] {
 	return &handlerWrapper[T, R]{
-		processor:   newRequestProcessor[T](binder, cfg),
+		processor:   newRequestProcessor[T](binder),
 		responder:   newResponseHandler(cfg, log),
-		checker:     newContextChecker(cfg),
+		checker:     newContextChecker(),
 		rawResponse: rawResponse,
 		jose:        joseCfg,
 	}
@@ -1269,11 +1264,7 @@ func setStringValue(fieldValue reflect.Value, value string) error {
 
 // setSignedIntValue sets a signed integer field value.
 func setSignedIntValue(fieldValue reflect.Value, value string) error {
-	bitSize := fieldValue.Type().Bits()
-	if bitSize == 0 {
-		bitSize = 64
-	}
-	intVal, err := strconv.ParseInt(value, 10, bitSize)
+	intVal, err := strconv.ParseInt(value, 10, fieldValue.Type().Bits())
 	if err != nil {
 		return err
 	}
@@ -1283,11 +1274,7 @@ func setSignedIntValue(fieldValue reflect.Value, value string) error {
 
 // setUnsignedIntValue sets an unsigned integer field value.
 func setUnsignedIntValue(fieldValue reflect.Value, value string) error {
-	bitSize := fieldValue.Type().Bits()
-	if bitSize == 0 {
-		bitSize = 64
-	}
-	uintVal, err := strconv.ParseUint(value, 10, bitSize)
+	uintVal, err := strconv.ParseUint(value, 10, fieldValue.Type().Bits())
 	if err != nil {
 		return err
 	}
@@ -1330,9 +1317,6 @@ func parseTime(s string) (time.Time, error) {
 			return t, nil
 		}
 		lastErr = err
-	}
-	if lastErr == nil {
-		lastErr = errors.New("unable to parse time")
 	}
 	return time.Time{}, lastErr
 }
@@ -1438,8 +1422,8 @@ func mergeEnvelopeMeta(c *echo.Context, userMeta map[string]any, log logger.Logg
 // logMetaKeyCollision writes the meta-key collision WARN through log, correlated
 // (correlateLine) and NOT bound to the request context: a bound WARN would fire the access
 // logger's severity hook and raise a 2xx access line to WARN, so the access line stays
-// status-derived. SAFETY: c.Request() can be nil after Echo's TimeoutHandler invalidates the
-// underlying writer; the WARN then still ships, without the correlation, instead of panicking.
+// status-derived. SAFETY: c.Request() is nil only after SetRequest(nil) or on a hand-built
+// echo.Context; the WARN then still ships, without the correlation, instead of panicking.
 func logMetaKeyCollision(c *echo.Context, log logger.Logger, key string) {
 	ev, ok := openWarn(log)
 	if !ok {
@@ -1535,7 +1519,7 @@ func (rh *responseHandler) handleRawResponse(c *echo.Context, response any, apiE
 	if re, ok := response.(ResultEnvelopeProvider); ok {
 		status, headers, data, meta := re.ResultEnvelope()
 		if len(meta) > 0 && rh.log != nil {
-			// SAFETY: tolerate nil c.Request() under Echo TimeoutHandler teardown.
+			// SAFETY: tolerate a nil c.Request() (SetRequest(nil), a hand-built echo.Context).
 			ctx := context.Background()
 			if req := c.Request(); req != nil {
 				ctx = req.Context()
@@ -1631,8 +1615,8 @@ func getTraceID(c *echo.Context) string {
 		return requestID
 	}
 	// Then try the response header (normally set by RequestIDMiddleware).
-	// SAFETY: After a timeout, c.Response() may be nil due to timeoutHandler invalidating
-	// the underlying ResponseWriter. We check for nil to prevent panic.
+	// SAFETY: c.Response() is nil only after SetResponse(nil) or on a hand-built
+	// echo.Context; check for nil to prevent a panic.
 	if resp := c.Response(); resp != nil {
 		if requestID := validateRequestID(resp.Header().Get(echo.HeaderXRequestID)); requestID != "" {
 			return requestID

@@ -886,7 +886,7 @@ func TestResourceManagerFactoryCreateCacheManagerReportsResolvedPoolSize(t *test
 }
 
 func TestResourceManagerFactoryLogFactoryInfo(t *testing.T) {
-	t.Run("logs custom factories when provided", func(_ *testing.T) {
+	t.Run("logs custom factories when provided", func(t *testing.T) {
 		configBuilder := NewManagerConfigBuilder(false, 50)
 		factoryResolver := NewFactoryResolver(&Options{
 			DatabaseConnector: func(_ *config.DatabaseConfig, _ logger.Logger) (database.Interface, error) {
@@ -898,9 +898,10 @@ func TestResourceManagerFactoryLogFactoryInfo(t *testing.T) {
 
 		// Should not panic
 		factory.LogFactoryInfo()
+		assert.True(t, factoryResolver.HasCustomFactories())
 	})
 
-	t.Run("logs default factories when none provided", func(_ *testing.T) {
+	t.Run("logs default factories when none provided", func(t *testing.T) {
 		configBuilder := NewManagerConfigBuilder(false, 50)
 		factoryResolver := NewFactoryResolver(&Options{})
 		log := logger.New("error", false)
@@ -908,6 +909,7 @@ func TestResourceManagerFactoryLogFactoryInfo(t *testing.T) {
 
 		// Should not panic
 		factory.LogFactoryInfo()
+		assert.False(t, factoryResolver.HasCustomFactories())
 	})
 }
 
