@@ -60,7 +60,7 @@ embedded SQL, for all four doors.
 
 ## Amendment: insert `Select`
 
-*Added 2026-11-09, extending the decision above rather than replacing it.*
+*Added 2026-11-09.*
 `InsertQueryBuilder.Select` handed squirrel the sub-SELECT already carrying the
 vendor placeholder format. Squirrel numbered the sub-SELECT on its own, and the
 INSERT's pass then numbered `Prefix`/`Suffix` arguments again from 1: a
