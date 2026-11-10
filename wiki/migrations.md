@@ -15992,13 +15992,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: every statically configured AMQP URL, judged by its resolved VALUE. The greps list
   file names only (`-l`): a matching line can hold the URL and its credentials, so open each
   file yourself rather than capturing matched lines in a log.
-  - YAML: `git grep -lE '(^[[:space:]]*|\.)url[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only
+  - YAML: `git grep -lE '(^|[[:space:]{,.])url[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only
     files that set `messaging.broker.url` (nested under a `messaging:` → `broker:` block,
     flat-dotted as `messaging.broker.url:`, or mixed) or `multitenant.tenants.<id>.messaging.url`.
     A `url:` leaf under a database, cache or other section hits the same pattern and does not
-    count. `git grep` reads tracked files only, so repeat it over deployment config kept outside
+    count. The pattern also matches a flow-style key (`messaging: {broker: {url: ...}}`). `git grep` reads tracked files only, so repeat it over deployment config kept outside
     the repository's tracked files:
-    `grep -rlE --include='*.yaml' --include='*.yml' '(^[[:space:]]*|\.)url[[:space:]]*:' k8s/ deploy/ config/ 2>/dev/null`.
+    `grep -rlE --include='*.yaml' --include='*.yml' '(^|[[:space:]{,.])url[[:space:]]*:' k8s/ deploy/ config/ 2>/dev/null`.
   - Env: `git grep -lE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL'`, plus
     `grep -rlE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL' k8s/ deploy/ .env* 2>/dev/null`
     for env files and deployment manifests outside the repository's tracked files. The class
@@ -16022,7 +16022,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - scope: `config.Validate` (so `config.Load`, `app.NewWithConfig` and `Builder.WithConfig`) for
   `messaging.broker.url` and every `multitenant.tenants.<id>.messaging.url`, and
   `messaging.Manager` for a URL a `BrokerURLProvider` resolves for a key. **Unchanged**: an empty
-  URL, which stays "not configured" (a whitespace-only one is refused); a well-formed but unreachable URL, which still fails only at
+  STATIC URL, which stays "not configured" (a whitespace-only one, and an empty one a
+  `BrokerURLProvider` returns, are refused); a well-formed but unreachable URL, which still fails only at
   the dial (a publisher-only service still boots with the WARN); `amqp://h:05672/vh`,
   `amqp://u:p@h/a/b` and an empty username, which are accepted; `messaging.streams.uri`, which
   keeps its own validation; credential URL rendering (ADR-159), retry and backoff; and a
