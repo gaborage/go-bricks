@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/migration"
 	"github.com/gaborage/go-bricks/tools/migration/internal/commands"
@@ -75,4 +78,23 @@ func TestRunMapsErrorToExitCode(t *testing.T) {
 			assert.Contains(t, stderr.String(), tc.wantText)
 		})
 	}
+}
+
+func TestRunRendersUnparseableControlPlaneDSNWithoutIt(t *testing.T) {
+	yaml := "multitenant:\n  enabled: true\n  tenants:\n    cpctl:\n      database:\n" +
+		"        type: postgresql\n" +
+		"        connectionstring: \"host=cpdb.example.internal user=u password = FAKEpw123 sslmode=verify-ful\"\n"
+	path := filepath.Join(t.TempDir(), "t.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+
+	root := commands.NewRootCommand()
+	root.AddCommand(commands.NewQuiesceCommand())
+	root.SetArgs([]string{"quiesce", "status", "--tenant", "cpctl", "--source-config", path, "--credentials-from", "config-file"})
+	root.SetOut(&bytes.Buffer{})
+
+	var stderr bytes.Buffer
+	assert.Equal(t, commands.ExitNothingAttempted, run(root, &stderr))
+	assert.Equal(t,
+		"Error: migration: no tenant attempted: connect control-plane db for tenant \"cpctl\": failed to parse PostgreSQL connection string\n",
+		stderr.String())
 }

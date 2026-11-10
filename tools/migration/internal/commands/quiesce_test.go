@@ -10,10 +10,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -435,6 +437,85 @@ func TestResolveControlPlaneConfigRejectsNilConfig(t *testing.T) {
 			for _, frag := range tt.errFrags {
 				assert.ErrorContains(t, err, frag)
 			}
+		})
+	}
+}
+
+// runQuiesceStatusAgainst runs `quiesce status` through the real control-plane
+// opener against a config file whose tenant carries dbYAML as its database section.
+func runQuiesceStatusAgainst(t *testing.T, tenant, dbYAML string) error {
+	t.Helper()
+	path := writeTenantStoreYAMLContent(t,
+		"multitenant:\n  enabled: true\n  tenants:\n    "+tenant+":\n      database:\n"+dbYAML)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	cmd := NewQuiesceCommand()
+	cmd.SetArgs([]string{"status", "--tenant", tenant, "--source-config", path, "--credentials-from", "config-file"})
+	cmd.SetContext(ctx)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	return cmd.Execute()
+}
+
+func TestOpenControlPlaneDBRendersFixedMessageOnParseFailure(t *testing.T) {
+	const tenant = "cpctl"
+	tests := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "spaces_around_equals", dsn: "host=cpdb.example.internal user=u password = FAKEpw123 sslmode=verify-ful"},
+		{name: "tabs_around_equals", dsn: "host=cpdb.example.internal user=u password\t=\tFAKEpw123 sslmode=verify-ful"},
+		{name: "quoted_escaped_quote", dsn: `host=cpdb.example.internal user=u password='FAKE\'pw123 FAKEtail' sslmode=verify-ful`},
+		{name: "backslash_escaped_space", dsn: `host=cpdb.example.internal user=u password=FAKE\ pw123 sslmode=verify-ful`},
+		{name: "sslmode_typo", dsn: "host=cpdb.example.internal user=u password=FAKEpw123 sslmode=verify-ful"},
+		{name: "url_form", dsn: "postgres://u:FAKEpw123@cpdb.example.internal:5432/d?sslmode=verify-ful"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runQuiesceStatusAgainst(t, tenant,
+				"        type: postgresql\n        connectionstring: "+strconv.Quote(tc.dsn)+"\n")
+			require.Error(t, err)
+
+			var parseErr *pgconn.ParseConfigError
+			require.ErrorAs(t, err, &parseErr, "the case must be a real pgx parse failure")
+			require.ErrorIs(t, err, migration.ErrNothingAttempted)
+			assert.Equal(t, ExitNothingAttempted, ExitCode(err))
+
+			msg := err.Error()
+			assert.Contains(t, msg, `"`+tenant+`"`)
+			for _, leak := range []string{"pw123", "FAKEtail", "cpdb.example.internal", "cannot parse"} {
+				assert.NotContains(t, msg, leak)
+			}
+		})
+	}
+}
+
+func TestOpenControlPlaneDBRendersConnectFailureAsBefore(t *testing.T) {
+	tests := []struct {
+		name  string
+		dbCfg string
+	}{
+		{
+			name: "fields_built_dsn",
+			dbCfg: "        type: postgresql\n        host: \"127.0.0.1\"\n        port: 1\n" +
+				"        username: \"u\"\n        password: \"FAKEpw123\"\n        database: \"d\"\n",
+		},
+		{
+			name:  "parseable_connection_string",
+			dbCfg: "        type: postgresql\n        connectionstring: \"host=127.0.0.1 port=1 user=u password=FAKEpw123 dbname=d\"\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runQuiesceStatusAgainst(t, "cpctl", tc.dbCfg)
+			require.Error(t, err)
+
+			var parseErr *pgconn.ParseConfigError
+			assert.NotErrorAs(t, err, &parseErr)
+			require.ErrorIs(t, err, migration.ErrNothingAttempted)
+			assert.Contains(t, err.Error(), "connect control-plane db: failed to connect to")
+			assert.Contains(t, err.Error(), "127.0.0.1")
 		})
 	}
 }
