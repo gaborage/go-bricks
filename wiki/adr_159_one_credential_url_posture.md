@@ -3,6 +3,42 @@
 **Status:** Accepted
 **Date:** 2026-10-28
 
+## Amendment (2026-11-09, #2274): a rejected or hostless URL renders whole as `xxxxx` at every door
+
+The decision kept a whole mask for the log doors only, on the ground that logs fan out to more
+sinks than an error. That split does not hold: the AMQP dial error is the `error` field of the
+`Failed to connect to AMQP broker` ERROR line on every reconnect attempt. So `Redact` itself now
+renders a URL that url.Parse rejects, or reads with an empty host, as the bare placeholder
+`xxxxx`, with no scheme, and every door that renders through it follows: `RedactError`,
+`RedactURLError`, `RedactURLErrorIn` and `StripUserinfo` keep their signatures.
+
+- `amqp://user:zq9x/s3cret` renders `parse "xxxxx": invalid URL`, where it rendered
+  `parse "amqp://user:xxxxx/s3cret": invalid URL`; `amqp://user:s3@cret:zq9x` and
+  `https://user:s3@cret:zq9x` render the same, and a stream start error for such a URI shows no
+  part of it in either rendering.
+- This reverses three statements below. "This class is accepted" (a URL with no host after its
+  password) no longer holds for a URL url.Parse rejects or reads hostless; a URL it accepts with
+  a host, such as `amqp://user:1234/broker`, still renders verbatim. The rule "when url.Parse
+  rejects input with no `@`, the mask runs from the first `:`" is gone, and `maskRejectedAuthority`
+  with it. "A rejected URL with no credentials also loses its port" becomes: it loses everything.
+  `amqp://broker:5672/vh%zz` renders `parse "xxxxx": invalid URL`. That loss of diagnostic text
+  is intended (maintainer decision, 2026-11-09): the scan cannot tell a credential-free rejected
+  URL from one whose password moved into the host, port or path.
+- A rejected URL that has credentials and a host loses its username, host and path too, the
+  stream client's rebuilt leader or replica URI included when url.Parse rejects it uncut. Only
+  the rebuild cut at a `#` inside the password is still judged as the configured URI.
+- A quoting net/url reason is still replaced by the door's fixed reason. Because the rendering
+  now keeps nothing of such a URL, the quoted and unquoted passes mask every piece of it vendor
+  text repeats, the scheme, username, host and port included, and the httpclient and migration
+  doors replace a reason that quotes any part of it (`invalid URL escape "%zz"` for a bad path
+  escape).
+- `RedactForLog` keeps its `#`-before-last-`@` rule and its `xxxxx` for empty input, and otherwise
+  defers to `Redact`, which renders empty input as the empty string.
+- Not changed: refusing a URL at startup, the `#`-before-last-`@` residual at the error doors,
+  and Oracle connect-descriptor dial targets.
+
+See [migrations.md](migrations.md) `[C74.1]`.
+
 ## Context
 
 `internal/credurl.RedactError` masks a connection URL in the error text of four doors: the AMQP
@@ -211,11 +247,11 @@ each either refuse a valid vhost or miss a misparse. Left open.
 ## References
 
 - `internal/credurl/credurl.go`: `Redact`, `RedactForLog`, `RedactError`, `RedactURLError`,
-  `RedactURLErrorIn`, `StripUserinfo`, `maskURLError`, `maskRejectedAuthority`, `maskQuoted`,
-  `maskRawTokens`, `rebuiltFrom`
+  `RedactURLErrorIn`, `StripUserinfo`, `maskURLError`, `maskQuoted`, `maskRawTokens`,
+  `rebuiltFrom`
 - `httpclient/client.go`: `executionError`, `buildRequest`
 - `migration/source/http/source.go`: `New`, `redirectGuard`, `fetchPage`, `redactedURL`
 - `messaging/amqp_client.go`: `connect`
 - `messaging/streams/manager.go`: `safeEnvError`, `safeStartError`
 - `database/oracle/connection.go`: `redactDSNError`
-- See [migrations.md](migrations.md) `[C73.18]`.
+- See [migrations.md](migrations.md) `[C73.18]` and `[C74.1]`.

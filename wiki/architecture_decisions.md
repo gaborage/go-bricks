@@ -2715,6 +2715,10 @@ all after it masked when a `?` precedes it, and a rejected URL with no `@` is ma
 scheme separator renders `xxxxx`. Refusing a misparsed URL before the dial is left open. See
 [migrations.md](migrations.md) `[C73.18]`.
 
+Amended 2026-11-09 (#2274): a URL url.Parse rejects, or reads with no host, renders whole as
+`xxxxx` at every door, the error doors included, so the rejected-without-`@` rule is gone. See
+`[C74.1]`.
+
 **Key Benefits:** a password that url.Parse misreads as host, port or path no longer reaches error
 text, and the query, a lone username and a non-URL DSN are masked with it.
 
