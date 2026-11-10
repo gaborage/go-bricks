@@ -1930,7 +1930,6 @@ func TestConnectAfterCloseDoesNotCountADialFailure(t *testing.T) {
 
 	require.ErrorIs(t, err, errAlreadyClosed)
 	assert.Empty(t, dialFailuresByReason(t, mp.Collect(t)))
-
 }
 
 // TestConnectRedactsBrokerURLPassword drives the default dialer: amqp091 returns
