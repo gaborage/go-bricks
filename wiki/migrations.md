@@ -16065,14 +16065,15 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C74.3] a broker URL or stream URI with an unencoded `@` after its authority is refused before dialing · breaking · when: match
 
-- detect: every AMQP broker URL and stream URI, judged by its resolved VALUE.
+- detect: every AMQP broker URL and stream URI, judged by its resolved VALUE. As in C74.2, the
+  key greps list file names only (`-l`), since a matching line can hold the URL.
   - YAML and env: the C74.2 key greps, plus `messaging.streams.uri`
-    (`git grep -nE '(^[[:space:]]*|\.)uri[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only hits
-    under `messaging:` → `streams:`) and `MESSAGING_STREAMS_URI`
-    (`git grep -n 'MESSAGING_STREAMS_URI'`, plus the same `grep -rn` over `k8s/ deploy/ .env*`).
-  - Go: `git grep -nE 'NewAMQPClient\(|streams\.NewManager\(|ManagerOptions\{' -- '*.go'` lists
-    the hand-built doors, and C74.2's `BrokerURL(ctx context.Context, key string)` grep lists a
-    custom `messaging.BrokerURLProvider`; judge the URLs each can receive.
+    (`git grep -lE '(^[[:space:]]*|\.)uri[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only files
+    that set it under `messaging:` → `streams:`) and `MESSAGING_STREAMS_URI`
+    (`git grep -l 'MESSAGING_STREAMS_URI'`, plus the same `grep -rl` over `k8s/ deploy/ .env*`).
+  - Go: `git grep -nE 'NewAMQPClient\(|streams\.NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
+    lists the hand-built doors and a stream URI set in code, and C74.2's hand-built config and
+    `BrokerURL` method greps list the rest; judge the URLs each can receive.
   - A hit locates the key, not the verdict. Judge each resolved value, in every environment, with
     a throwaway Go program that prints only a boolean, never the URL:
     `u, err := url.Parse(v); err == nil && (strings.Contains(u.EscapedPath(), "@") || strings.Contains(u.RawQuery, "@") || strings.Contains(u.EscapedFragment(), "@"))`.
