@@ -35,6 +35,9 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    cross-check against the diff, and flag any added or modified hit without a
    `// SECURITY: Manual SQL review completed - <rationale>` annotation directly
    above it or above an enclosing dispatch, naming a specific property.
+   A multi-line call counts as modified when any of its argument lines changed,
+   even if the matched line did not, and its annotation is rechecked against
+   the new SQL.
    Squirrel's own `Expr` inside `database/internal/builder`,
    and the `Expr`/`MustExpr` doors themselves (`database/types`, the builder,
    `testing/mocks`), are plumbing — skip those hits, and the INSERT

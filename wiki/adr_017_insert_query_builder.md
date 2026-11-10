@@ -10,7 +10,7 @@ supported vendor (PostgreSQL, Oracle) accepts. Its real use is a vendor hint
 rendered between `INSERT` and `INTO`, such as Oracle's `INSERT /*+ APPEND */ INTO`,
 and it stays on the interface as that slot.
 
-`Prefix`, `Suffix` and `Options` pass their text to the statement verbatim, with
+`Prefix`, `Suffix` and `Options` pass their text to the statement unjudged, with
 no identifier or operand check, so they fall under the raw-SQL escape-hatch rule:
 every consumer call site carries an inline
 `// SECURITY: Manual SQL review completed - <what was verified>` annotation, and

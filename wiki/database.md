@@ -400,7 +400,9 @@ the builder. The grammar will not accept a computed one.
   below). `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
   unlike `Having` they have no `qb.Expr()` alternative. `Options` is the vendor
   hint slot, rendered between `INSERT` and `INTO` (Oracle's `/*+ APPEND */`);
-  neither supported vendor accepts `OR IGNORE`/`OR REPLACE` there.
+  neither supported vendor accepts `OR IGNORE`/`OR REPLACE` there. On PostgreSQL
+  and Oracle the placeholder pass rewrites an unescaped `?` in their text, even
+  inside a SQL literal; write `??` for a literal `?`.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
   produce. The builder judges neither the
