@@ -16,7 +16,9 @@ scope and unchanged. Both were closed before v0.73.0 shipped:
   startup refuses path-tenancy wiring that store cannot vouch for
   ([ADR-171](adr_171_app_refuses_tenant_wiring_store_cannot_vouch_for.md), `[C73.38]`). The public
   `server.TenantMiddleware` uses the check its caller passes, requires one whenever its resolver
-  may read the request path, and validates every resolved id
+  may read the request path, and wraps the resolver to validate every resolved id against the
+  default tenant-ID pattern; a `ValidatingResolver` the caller passes is kept as given and
+  controls its own validation
   ([ADR-172](adr_172_public_tenant_middleware_takes_existence_check.md), `[C73.39]`). Advisory:
   GHSA-5rp9-jp9x-5w69.
 - **The request method token.** A method outside the semantic conventions' known set renders
