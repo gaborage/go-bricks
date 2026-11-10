@@ -10,7 +10,7 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-29-multitenant-messaging-end-state.md](../specs/2026-08-29-multitenant-messaging-end-state.md) — decision 10 (source ordering) and the carve row for B; the "Agent Brief" comment on #1232 (`GH_TOKEN=$(gh auth token -u gaborage) gh issue view 1232`) is the same design as an issue. Where they differ, the spec wins. This plan CONSUMES plan A ([2026-08-29-messaging-shared-tenancy.md](2026-08-29-messaging-shared-tenancy.md)) — the tenant stamp and the relay's rehydrate-and-strip step (plan A Task 12) exist on this plan's base.
 
-**Vocabulary:** [CONTEXT.md](../../CONTEXT.md) `### Tenancy` — *Tenant stamp*, *Partition key*, *Control-plane key*, *Tenancy*. Use those words in comments, docs and commit messages; avoid "tenant header", "routing key" (for the stream lane's key), "shard key", "root key".
+**Vocabulary:** [CONTEXT.md](../../../CONTEXT.md) `### Tenancy` — *Tenant stamp*, *Partition key*, *Control-plane key*, *Tenancy*. Use those words in comments, docs and commit messages; avoid "tenant header", "routing key" (for the stream lane's key), "shard key", "root key".
 
 **Stack position:** three dependent PRs, one `/gh-stack`, merged bottom-up by the maintainer. **B is blocked by A (#1230):** the stack's base is A's top branch `feat/messaging-tenancy-outbox-stamp-docs`, not `main`, until A merges — after which `gh stack sync --prune` rebases it onto `main`. The worktree is `.claude/worktrees/B`.
 

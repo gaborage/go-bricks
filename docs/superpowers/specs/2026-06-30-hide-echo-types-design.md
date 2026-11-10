@@ -5,7 +5,7 @@
 **Breaking:** yes → ADR-034 + `wiki/migrations.md` section + `feat!:` PR title (release-please reads the squash title).
 **Area:** `server`, `app`, `scheduler`
 **Status:** Design — pending maintainer approval (Phase-1 gate)
-**Related precedent:** [ADR-026](../../../wiki/adr_026_zero_overhead_request_path.md) (zero-overhead request path), [ADR-015](../../../wiki/adr_015_echo_v5_migration.md) (echo v5), [ADR-013](../../../wiki/adr_013_*.md) (interface-naming rename precedent), [ADR-001](../../../wiki/adr_001_*.md) (handler system)
+**Related precedent:** [ADR-026](../../../wiki/adr_026_zero_overhead_request_path.md) (zero-overhead request path), [ADR-015](../../../wiki/adr_015_echo_v5_migration.md) (echo v5), [ADR-013](../../../wiki/adr_013_interface_naming_conventions.md) (interface-naming rename precedent), [ADR-001](../../../wiki/adr_001_enhanced_handler_system.md) (handler system)
 
 ---
 

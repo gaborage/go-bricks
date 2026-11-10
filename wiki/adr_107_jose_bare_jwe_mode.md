@@ -317,7 +317,7 @@ reports and the caller decides. A freshness knob here would also be the first th
   change and stays `A256GCM`
 - [ADR-058](adr_058_consumer_scoped_amqp_arguments.md) — the precedent for accepting a
   comparability break rather than hiding a map behind a pointer
-- [ADR-084](adr_084_jose_error_envelope_details_gate.md) — the JOSE error envelope, whose
+- [ADR-084](adr_084_response_error_details_carry_no_request_input.md) — the JOSE error envelope, whose
   pre-trust/post-trust split is unchanged by bare mode
 - [wiki/jose.md](jose.md#bare-jwe-mode-visa-message-level-encryption) — the consumer-facing
   bare-mode documentation

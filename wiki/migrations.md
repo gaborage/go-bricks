@@ -24,7 +24,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
 >
-> v0.52.0–v0.54.0 shipped additive-only changes (shared control-plane ledger tenancy for outbox/inbox — opt-in, `tenancy` defaults to `per-tenant`; clearer duplicate-route startup diagnostics — the echo router already rejected duplicate method+path registrations), so E55 is the next hop after v0.52.0 and applies when crossing from any of v0.52.0–v0.54.0 to v0.55.0.
+> v0.53.0–v0.54.0 shipped additive-only changes (shared control-plane ledger tenancy for outbox/inbox — opt-in, `tenancy` defaults to `per-tenant`; clearer duplicate-route startup diagnostics — the echo router already rejected duplicate method+path registrations), so E55 is the next hop after v0.52.0 and applies when crossing from any of v0.52.0–v0.54.0 to v0.55.0.
 
 | edge | hop | worst risk | atoms | compiler-caught | preflight (run BEFORE the bump) |
 | ------ | ----- | ----------- | ------- | ----------------- | --------------------------------- |
@@ -52,7 +52,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E64 | v0.63.0 → v0.64.0 | breaking (C64.1 — a multi-column Oracle `SetMap` UPDATE orders its SET pairs by the caller's column names instead of by the QUOTED spelling, so a reserved word no longer leads the statement and the bind positions move with the columns; and `jf.NotEq` / `jff.NotEqColumn` render `<>` where they wrote `!=`) + breaking (C64.2 — a JOSE post-trust error envelope renders `error.details` only when `app.debug` is on AND `app.env` is a development alias, the gate the enveloped and raw renderers already applied; a production peer that parsed `error.details` off a decrypted JOSE error body stops receiving the key, while `code`, `message`, `meta` and the status are unchanged) + breaking (C64.3 — a PostgreSQL identifier ARGUMENT containing `#` — a column, table, alias, clause item, insert/SetMap key, upsert column, or a struct `db` tag name at `InsertStruct`/`InsertFields`/`SetStruct` — is refused at `ToSQL()` where it used to reach the server and fail there; Oracle, quoted identifiers and the wildcard are unchanged) + breaking (C64.4 — `keystore/testing.AssertKeyNotFound` aborts the caller's test when the public key is unexpectedly found instead of recording the failure and judging the private key too; the passing path, where the key is genuinely absent, is unchanged) + breaking (C64.5 — every builder door judges the vendor's identifier BYTE CAP per segment before the charset check — PostgreSQL 63, Oracle 128, unknown vendor 63, a quoted segment's interior included — so an over-long name is refused at `ToSQL()` where PostgreSQL used to truncate it silently at 63 bytes; the cap is never on the rendered whole, and separately the inbox store's table-name bound follows the store's vendor, 49 on PostgreSQL and still 114 on Oracle) + breaking (C64.6 — the same `keystore/testing.AssertKeyNotFound` now checks each lookup's returned KEY as well as its error, so a `KeyStore` handing back a cached key ALONGSIDE an error fails the helper where it used to pass; a stray key is reported by dynamic TYPE only, and the passing path, where the store returns `nil`, is unchanged) + breaking (C64.7 — both outbox store constructors judge the table name's SCHEMA segment against the STORE vendor's raw identifier cap, 63 on PostgreSQL and 128 on Oracle, so a PostgreSQL ledger configured with a 64-to-128-byte schema prefix is refused at construction where it used to boot and fail later inside the first `ToSQL()`; the table segment's 49-byte derived-affix budget and every Oracle name are unchanged) + breaking (C64.8 — a PostgreSQL section resolved through the connect seam — a `DBConfigProvider` result, or the migrate CLI — with an empty or whitespace-only `host` and no `connectionstring` is refused with `MissingFieldError` at first use where it used to reach pgx, which now dials libpq's default unix socket with TLS dropped; static sections, `connectionstring` sections and Oracle are unchanged) + breaking (C64.10 — every AMQP 0-9-1 publish becomes persistent, names its application and instant, and names its encoding, type and id wherever the framework knows them, falling back to octet-stream, an empty type and a minted id where it does not: `content_type` stops always reading `application/octet-stream` and now reads `application/json` from the typed handle, `application/jose` when that handle seals the event, or octet-stream on the raw bytes path and for an outbox row whose payload was a caller `[]byte`, while `app_id`, `timestamp` and `type` are set for the first time and `message_id` on an outbox-relayed publish becomes the row id, mirroring `x-outbox-event-id`, which stays the ledger key; a DURABLE queue that used to empty on every broker restart now retains, and all of it is framework-written with no caller knob) + breaking (C64.11 — the UNSEALED `Meta.DedupKey()` reads the AMQP `message_id` property when the delivery carries no `x-outbox-event-id` header at all, validated by the same `^[A-Za-z0-9_-]{1,128}$` grammar, so a delivery from a producer that follows the standard without being go-bricks dedups through `inbox.ProcessOnce` where it used to nack into the DLQ; the stamp still wins whenever it is present and a present-but-malformed stamp still errors rather than falling through, and the sealed branch is untouched) + topology-change (C64.12 — `DeclareQueueWithDLQ` declares BOTH queues it creates, the primary queue and the derived `<queue>.dlq` parking queue, as QUORUM queues by default, where both used to take whatever queue type the broker defaults to for the vhost; an existing classic queue of either kind cannot be redeclared as quorum, so startup fails with `PRECONDITION_FAILED` until you set the new `DeadLetterSpec.QueueType` to `messaging.QueueTypeClassic` or delete/migrate the queue) + breaking (C64.13 — an `app.name` longer than 255 bytes fails `config.Validate` at startup, naming the field, its byte length and the limit, where any length used to boot: the value becomes the `app_id` shortstr of every publish, a longer one cannot be written into the content-header frame, and amqp091 answers a frame-write failure by tearing down the whole Connection every publisher in the process shares — the same 255 applies per-publish to a `messaging.WithAppName` value the config check never saw, returning `messaging.ErrInvalidPublishDestination`) + breaking (C64.14 — outbox enqueue refuses two inputs it used to accept, both before the INSERT: an `EventType` longer than 255 BYTES, via `messaging.ValidatePublishEventType`, because the event type became the AMQP `type` shortstr this round while the ledger column bounds 255 of whatever the vendor counts — PostgreSQL `VARCHAR(255)` counts characters, Oracle `VARCHAR2(255)` counts bytes by default and characters only under CHAR semantics — so on PostgreSQL, and on a CHAR-semantics Oracle,a multibyte type the column accepted could exceed the byte ceiling, insert, and then park that tenant's whole outbox behind it until it exhausted `MaxRetries`; and any caller header claiming the reserved `x-gobricks-` prefix, refused case-insensitively with the new `outbox.ErrReservedHeaderPrefix` naming the key, since that namespace is where enqueue records the payload's encoding for the relay to put on the wire — the STREAM lane is deliberately unbounded, the event type travelling there as a properties value with no shortstr ceiling) + compile-break (C64.15 — `jose.Policy` gains a `map[string]any` protected-header field for the new bare-JWE mode and stops being comparable, so `==`, `!=` and map-key use on it no longer build; every existing policy still seals and opens the same bytes, `SealModeJWEofJWS` being the zero value) | 15 | C64.15 — comparing two `jose.Policy` values or keying a map on one stops compiling, in `_test.go` files as much as in production code, so run `go vet ./...` rather than `go build ./...` for it; none — C64.1's changes are rendering changes, invisible to the compiler and to every vendor that executes the SQL; C64.2 is a wire change on an encrypted body — no Go call site moves, so neither the compiler nor a grep of your own tree finds a peer that reads the field; none for C64.3 either — it is a runtime refusal, and the doors keep their signatures; and C64.4 changes only when your own tests stop; none — runtime refusals for C64.5 as well, a deferred `ToSQL()` error at the doors and one startup check in the inbox store, with no signature moving; none for C64.7 either — a runtime refusal inside `NewPostgresStore`/`NewOracleStore`, whose signatures do not move; none for C64.10 — no exported signature moves, the only new identifier (`messaging.WithAppName`) is additive, and every value that changes is written by the framework onto the WIRE, so the population is on the consumer side and at the broker; and none for C64.11, which is a WIDENING — no signature moves, no existing key changes, and the arm that stops firing is a refusal your own code may depend on none for C64.12 either — `DeadLetterSpec` GAINS a field, so every existing call site, `nil` and `&messaging.DeadLetterSpec{}` included, still compiles and still means what it said; the change is visible only at declaration time; none for C64.8 either — a runtime refusal on the connect seam, no signature moves; C64.9 is a transitive bump; and none for C64.13 — the population is a CONFIG value, refused by `config.Validate` at startup, and `AppConfig` gains no field; and none for C64.14 either — nothing in a consumer's build flags either half, since no signature moves and the population is a runtime call, `outbox.Publish`, that now returns an error | grep your golden-SQL fixtures, query-text matchers and driver-level captures for a rendered Oracle `UPDATE … SET` built from a `SetMap` whose keys include a quoted reserved word, and for the literal `!=` in SQL produced by `jf.NotEq` or `jff.NotEqColumn`: those assertions fail on the bump while the statements they pin keep their exact effect (C64.1); and if any peer, log pipeline or alert rule reads `error.details` off a JOSE route's decrypted error body in production, move it onto `code`/`message` BEFORE the bump — the key goes absent outside debug+development and nothing in your build will say so (C64.2); and grep every identifier ARGUMENT you hand the builder — column, table, alias, ORDER BY/GROUP BY item, insert or SetMap key, upsert column — for a `#`, which PostgreSQL treats as an operator: rename or quote those before the bump, since they now fail at `ToSQL()` rather than at execution (C64.3); and grep your own tests for `AssertKeyNotFound(` — a call site with statements after it that must run even when the public key is unexpectedly found now stops at the helper, so move that work into `t.Cleanup` before the bump (C64.4); and run ``git grep -nE '[`"][A-Za-z_][A-Za-z0-9_$#]{63,}' -- '*.go'`` (raise `{63,}` to `{128,}` on Oracle) for identifier-shaped literals that now exceed the vendor's cap, remembering it reads literals only and cannot see an identifier computed from config or metadata — and measure your `inbox.tablename`, which a PostgreSQL inbox store now bounds at 49 bytes and rejects at STARTUP (C64.5); and if any `app.KeyStore` you implement returns a cached key alongside an error on a refresh failure, that store now fails the same helper — fix the store, or assert the fallback with your own `PublicKey`/`PrivateKey` call rather than around the helper (C64.6); and measure the schema prefix in your `outbox.tablename` — a PostgreSQL outbox store now bounds that segment at 63 bytes and refuses it at construction, which is STARTUP on a static single-tenant or shared-ledger deployment and the first USE — publish or relay poll — where the store is built lazily (C64.7); and inventory the CONSUMERS of the events you publish, plus any non-Go listener, Shovel/Federation policy, alert or dashboard keyed on a delivery property, for a branch on `content_type`: it read one constant value and now reads three, so handle all of them and do NOT read `application/octet-stream` as "not JSON" — a persisted-sealed or hand-marshaled outbox payload ships under it, and a pre-upgrade backlog relays under it while post-upgrade rows ship `application/json`; query the broker with `rabbitmqctl list_queues name durable messages` for a DURABLE queue whose depth used to fall to zero on every restart, size its disk and set a TTL or max-length policy there if it must not retain, since there is no opt-out; and repoint any tool counting distinct `message_id`s as delivery ATTEMPTS: once the relay supplies the id it counts ROWS, while a minted id is generated once per logical publish and reused by its retries — dedupe on `x-outbox-event-id`, never on the property (C64.10); and read every `Meta.DedupKey()` call site for a branch that treats its error as "this delivery is unstamped, drop it" — that arm stops firing for a delivery carrying a `message_id`, so move the check into your own handler before the bump if you meant to reject those — and read the opposite arm too, since a handler that fell through that error to process WITHOUT dedup moves from at-least-once to exactly-once and a redelivery it used to re-run is now a silent skip+ACK; the population is not only foreign producers, because your own `DeclareTypedPublisher` queues carry a framework-minted `message_id` and no stamp, so a typed consumer of one of those now dedups broker redeliveries where `DedupKey` used to error; confirm your foreign producers make `message_id` unique per event, which AMQP does not oblige and the framework does not check, and expect DLQ'd deliveries refused for exactly this reason to process on replay (C64.11) inventory every `DeclareQueueWithDLQ` call site with `git grep -n 'DeclareQueueWithDLQ(' -- '*.go'`, then ask the broker (`rabbitmqctl list_queues name type`) for the type of each of those queues AND of each one's parking queue — `DeadLetterSpec.ParkingQueue` where the call site sets it, `<name>.dlq` only otherwise — a classic one cannot be redeclared as quorum, so decide per route BEFORE the bump whether to set `QueueType: messaging.QueueTypeClassic` (keeps today's topology, no downtime) or to drain, triage and delete both queues so the quorum pair can be declared (C64.12); and grep your DBConfigProvider implementations for a branch returning an empty or whitespace-only Host without a ConnectionString (C64.8); and measure the configured `app.name` in BYTES, not characters — `wc -c` on the value, since a multibyte name reaches 255 bytes well before it reaches 255 characters — in every source that feeds the service (YAML under `app:`, `APP_NAME`, a hand-built `config.AppConfig`, a config server or secret manager no grep reaches) and shorten anything over 255 before the bump, since it now takes the deployment down at boot rather than failing one operation; pass the same shortened value to `messaging.WithAppName` if you call it yourself (C64.13); and measure your event types in BYTES, not characters — a multibyte type reaches 255 bytes well before 255 characters — with the honest detector a query over the ledger you already have rather than a grep of source, since the value is usually data and not a literal: count the rows where `octet_length(event_type) > 255` on PostgreSQL or `LENGTHB(event_type) > 255` on Oracle, per outbox table and per tenant ledger; and grep your own header construction for `x-gobricks`, including wherever a name is assembled at runtime from configuration or request data, reading the framework's encoding stamp off the delivery's `content_type` property instead (C64.14); and `git grep -nE 'jose[.]Policy' -- '*.go'` for a `==`/`!=` between two policies or a map keyed on one — compare the fields you care about, or key on the kids (C64.15) |
 | E65 | v0.64.0 → v0.65.0 | silent-behavior (C65.1 — two `BuildUpsert` precondition messages change wording; the preconditions, and when they fire, do not) + breaking (C65.6 — a PostgreSQL section with no `connectionstring`, an absolute-path `host` entry (`/…`, or a drive path such as `C:\pg`, in any comma-separated position) and a `database.tls` block setting `ca`/`cert`/`key` or a `mode` other than `disable` is refused with a `database.tls` `ConfigError` at startup, at the first `deps.DB(ctx)` for a `DBConfigProvider` result, and in `go-bricks-migrate` at its next pin bump, where it used to connect over the unix socket with TLS silently skipped; and, new beyond C64.8's wholly empty host, a `host` with an empty comma-separated entry (`db.internal,`, `,db.internal`, `db1,,db2`) is refused with `MissingFieldError` on `database.host` on the same doors, TLS or not, where it used to boot; socket hosts without TLS, TCP hosts, raw `connectionstring` sections and Oracle are unchanged) + breaking (C65.2 — a PostgreSQL section's raw `connectionstring` is now judged by the DSN's own resolved host, closing the gap C65.1 left open: a DSN whose host resolves to nothing — none of the URI authority, a `?host=` query parameter, a keyword `host=`, or the `PGHOST` environment variable names one, or a comma-separated resolved entry is empty — is refused with a `database.connectionstring` `ConfigError`, and, on the same axis as C65.1, a DSN whose resolved host is a unix-socket entry while the DSN itself claims TLS is refused too; both run on `config.Validate`, `ApplyDatabasePoolDefaults`/`ApplyDatabasePoolDefaultsForKey`, and `go-bricks-migrate` at its next pin bump — the migrate CLI's `quiesce` command included, since it resolves its control-plane target through the same `tlsValidatingProvider`; `PGSERVICE`/service files and `PGSSL*` environment variables are not consulted, and a DSN the scanner cannot tokenize passes through unjudged) + breaking (C65.3 — `inferDatabaseTypeFromConnectionString` now infers `postgresql` from pgx's keyword/value form, which is what routes such a DSN into C65.2's rules at all: after the `postgres://`/`postgresql://`/`oracle://` prefixes, a string is keyword-form PostgreSQL only when it carries at least one `=`, tokenizes, and EVERY tokenized key matches libpq's keyword shape `[A-Za-z_][A-Za-z0-9_]*` — a positive key-shape test that rejects a single-line Oracle TNS descriptor (`(DESCRIPTION=(ADDRESS=…))`, which tokenizes as one pair keyed `(DESCRIPTION`), a JDBC URL and any foreign vendor URI without this seam knowing a single foreign scheme, while godror easy-connect, which carries no `=`, and an empty string still infer nothing. A section that used to stay untyped forever is now typed: it leaves `config.UntypedDatabaseSections` and no longer trips `app.Builder`'s untyped refusal, it gains the whole PostgreSQL vendor-rule set including ADR-062 R4's `database.tls` co-presence refusal, an explicit `type: oracle` beside such a DSN is now a `database.type` conflict error at startup, and `go-bricks-migrate`'s `quiesce` fail-open on an untyped control-plane DSN closes with it at the CLI's next pin bump) + compile-break (C65.7 — `inbox.ProcessOnce` takes a `messaging.DedupKey` instead of a string, `Metadata.DedupKey()` returns `(messaging.DedupKey, error)`, `messaging.ValidateDedupKey` takes a `DedupKey`, and `messaging.IsSealedDedupKey` is deleted; a key the consumer composes goes through the new `messaging.WireDedupKey`, and only the sealed consume door can produce a sealed key; persisted spellings are unchanged) + compile-break + breaking (C65.8 — under an `httpclient` JOSE `Inbound` policy, a 2xx response the transport did not unwrap is refused as `httpclient.ErrJOSEPlaintextResponse` instead of reaching the caller as plaintext: in nested mode a successful status whose `Content-Type` is not `application/jose`, in envelope mode one whose `Unwrap` declined the body; the body is closed and never handed to the caller or to a response interceptor, the refusal is exempt from the retry loop, the error and one WARN name the status and the peer, and non-2xx pass-through, 204/304/HEAD and every crypto failure are unchanged) + compile-break (C65.5 — `database.Interface` gains `Session(ctx) (Session, error)`, so every implementation outside the framework stops building until it adds the method or embeds a framework connection) + breaking (C65.4 — `migration.PGRoleSpec.Validate` refuses a reserved PostgreSQL name in any identifier field: `public` or a `pg_`-prefixed name in `Schema`, `MigratorRole` and `RuntimeRole`, plus `information_schema` in `Schema` alone, all matched case-insensitively, so a tenant already provisioned into such a schema — or under such a role — stops provisioning where it used to emit DDL; no `IdentifierPolicy` can waive the rule) + additive-optional (C65.9 — `DbManager.Remove` evicts one cached connection so the next borrow re-resolves its config, `database.ErrManagerClosed` is exported, `App.DBManager`/`App.CacheManager` return the framework-built managers, and `DbManager.Stats()`, `cache.ManagerStats` and the `/ready` public stats gain a `removals` count) + no-consumer-action (C65.10 — a consumer re-declares its exchange, queue and binding declarations once per new channel after a reconnect, so a broker that lost topology is repaired without a process restart, and a re-subscribe that keeps failing logs at WARN from its fifth consecutive attempt) + silent-behavior (C65.11 — `messaging.Manager.Stats()` renames `active_consumers` to `consumer_registries`, the tenant-key count it always was, and gains `declared_consumers`, `subscribed_consumers` and `consumer_resubscribes`, so a dashboard scraping `messaging_stats.active_consumers` from `/ready` silently goes flat) + additive-optional (C65.12 — the opt-in `messaging.consumers.critical` fails `/ready` with `503` and the fixed `messaging unavailable` body once a declared consumer is unsubscribed with five consecutive failed re-subscribe attempts, `messaging.Manager.Stats()` gains `consumer_max_fail_streak` on the `/ready` allowlist, and `messaging.ManagerOptions` gains `ConsumerResubscribeDelay`; absent, the messaging probe stays publisher-only and never critical) | 12 | none for the other six — no signature moves; C65.1’s three sentinels are additive and C65.6 is a runtime refusal on the `database.tls` door; C65.10 is a reconnect-time behavior change and C65.11 moves a map key, not a symbol, its new `ConsumerState`/`ConsumerStates` surface being additive; C65.12 (only partially — `messaging.ManagerOptions` GAINS a field, so an UNKEYED positional literal of it stops compiling and the compiler names it; a KEYED literal is unaffected, and the config key itself is a runtime opt-in no compiler sees); C65.9 (only partially — `cache.ManagerStats` gains a field, so an UNKEYED positional literal stops compiling and the compiler names it; run `go vet ./...` rather than `go build ./...`, since such literals usually live in `_test.go`); C65.8 (only partially — `JOSEConfig` GAINS an exported bool field and `JOSETransport` gains that bool plus `PeerName` and `Logger`, so an UNKEYED positional composite literal of either struct stops compiling and the compiler names it; a KEYED literal is unaffected, and the refusal itself is a RUNTIME change on a response path no compiler sees); C65.7 — every `ProcessOnce` call site, every implementer of `app.InboxProcessor` and every `IsSealedDedupKey` use stops compiling; C65.5 — every type you implement `database.Interface` on, in `_test.go` files as much as in production code, so run `go vet ./...` rather than `go build ./...`; none for C65.4 — a runtime refusal inside `Validate`, reached through `ProvisionPGRoles`, `ProvisionPGRolesTx` and `PGRoleProvisioningSQL`, whose signatures do not move; the new `ErrReservedPGIdentifier` sentinel is additive | grep for code matching `BuildUpsert` precondition text and switch it to `errors.Is` on the new `types.ErrUpsert*` sentinels (C65.1) ; and grep static config and read every `DBConfigProvider` implementation for an absolute-path `host` beside a `database.tls` block, then remove the block or move to a TCP host, and for a `host` with an empty entry, then remove the stray comma or name every entry (C65.6); and read every PostgreSQL `connectionstring` — static config, `DBConfigProvider` branches, and the migrate CLI's control-plane target (`--tenant`) — for a DSN naming no host through the URI authority, a `?host=` query parameter, a keyword `host=`, or `PGHOST`, or naming a unix-socket host beside a TLS claim inside the DSN text, then add a host through one of those four sources or drop the TLS claim (C65.2); and grep the same three populations for a keyword-form `connectionstring` (`git grep -nE "connectionstring:[[:space:]]*[\"']?[^:/[:space:]]+=" -- '*.yaml' '*.yml'`), then either accept the inferred `postgresql` type and the vendor rules that come with it, or set `type:` explicitly — and change any `type: oracle` spelled beside a keyword-form DSN, which is now a conflict error (C65.3); and none for the typed dedup key — no ledger row, DLQ spelling or metric label moves; if a sealed consumer handed `ProcessOnce` a string it read from `MessageID()`, `Headers()`, `outbox.EventIDFromHeaders` or its body, decide before the bump which key it should use, since that string can no longer become a sealed key (C65.7); and add the new value, or convert the literal to keyed fields, wherever you build a `JOSETransport` or `JOSEConfig` positionally — `git grep -n 'JOSETransport{' -- '*.go'` and `git grep -n 'JOSEConfig{' -- '*.go'` shortlist them; then inventory the peers you reach through JOSE with `git grep -n 'WithJOSE(' -- '*.go'` and again with `git grep -n 'JOSETransport{' -- '*.go'` (two runs, because an alternation cannot live in a table cell) and, for each, establish from the partner spec or from a capture whether EVERY 2xx route returns a protected body — a health check, a redirect-shaped 2xx, a 202 acknowledgement or a legacy route half-migrated to MLE is the population that breaks; set `AllowPlaintextSuccess: true` on exactly those integrations BEFORE the bump and clear it once the peer protects every route (C65.8) ; and grep your dashboards, alert rules and scrape configs for `messaging_stats.active_consumers` and rename it to `consumer_registries`, or to `declared_consumers`/`subscribed_consumers` where the panel meant a consumer count (C65.11) ; and decide, per service, whether a detached consumer should take the pod out of rotation before setting `messaging.consumers.critical: true` — leave the key unset to keep today's publisher-only verdict, and gate `livenessProbe` on `/health`, never on `/ready`, before setting it (C65.12) ; and inventory the types you implement `database.Interface` on — `git grep -nE 'MigrationTable\(\) string' -- '*.go'` finds each one by the method only an `Interface` implementation has — and decide per type BEFORE the bump whether it opens a real pinned session or returns an error, since a hand-written double is the whole affected population (C65.5); and ask the SERVER, not your source, what you actually provisioned — run the queries in the C65.4 atom: one over `pg_namespace` for the schema names, one over `pg_default_acl` plus `pg_db_role_setting` for the residue a `Schema` spelled `public` leaves (the built-in schema's ownership never moves, so it is no fingerprint at all), one over the three catalogs a grant to the PUBLIC pseudo-role lands in for the `RuntimeRole` half, one over `pg_roles` for the case variants the server accepted as real roles, and one that reads every real role's grants on `public` itself and on its objects straight from their ACLs — grants to a NAMED role, which `grantee = 0` never matches and no `REVOKE … FROM PUBLIC` undoes, the atom's one live exposure rather than a detection trace (a reserved role name spelled exactly never became a role; the grant to PUBLIC is its fingerprint, and only on the `PGRoleProvisioningSQL` script path — the Go helper aborts at the failed `CREATE ROLE` before any grant, leaving nothing at all for a `MigratorRole` and a stranded, locked-down migrator role for a `RuntimeRole`, so the source read is the only route for either) — because both names are usually derived from a tenant id at runtime and no grep of Go source will find them; then follow the numbered procedure under the atom's **apply**, which is the atom's only statement of what runs in which order, of which of the three cases gets which steps, and of which detect arm each step overwrites — all of it BEFORE the bump, since after it the provisioning call fails instead of converging (C65.4) |
 | E66 | v0.65.0 → v0.66.0 | breaking (C66.1 — a PostgreSQL `connectionstring` whose resolved host is a unix-socket entry is now also refused when the TLS claim arrives through `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION` rather than the DSN text, matching pgx's env-under-DSN precedence; a present DSN key, empty included, still shadows env; same doors as C65.2, and `go-bricks-migrate` inherits through the exported seam) + breaking (C66.2 — a sealed DedupKey is admitted at the ledger only when it equals the key the sealed consume door stored on that delivery's context, so a retained key whose `<SignFamily>:<jti>` differs is refused with `ErrInvalidEventID` before the ledger where C65.7 admitted it; no signature moves) + breaking (C66.3 — a PostgreSQL `connectionstring` that resolves through a libpq service — any `service` key in the DSN, empty included, or a non-empty `PGSERVICE` when the DSN carries no `service` key — is refused ahead of C65.2's rules whatever `PGHOST` or a DSN host says, because pgx lets the service file's host shadow `PGHOST` and fill port, user and `sslmode`, and this seam never reads the file; same doors as C65.2, and `go-bricks-migrate` inherits through the exported seam) + breaking (C66.4 — `Declarations.Validate()` refuses an exchange whose `Type` is neither `direct`/`topic`/`fanout`/`headers` nor an `x-` plugin type, empty and wrong-case included, at startup where the broker refused it on declaration replay; API additions only) + breaking (C66.5 — a `migration.MigrateAll` result gains `NeverDispatched` plus `Listed()` and a `Verdict()` that reads an empty listing, or a run stopped before its first dispatch, as `ErrNothingAttempted` and never as clean, while `Results`, `Failed()` and the `(result, error)` shape do not move; and a parallel run under an already-done context now dispatches no tenant where it used to dispatch a random prefix) + breaking (C66.6 — every resolved cache key now travels as `<prefix>:<key>`, and a tenant cache's as `<prefix>:<tenantID>:<key>`, where the old layout wrote the caller's key verbatim and isolated tenants by a separate Redis database, which a cluster endpoint does not have; `cache.redis.keyprefix` is a tri-state `*string` with no koanf default, so an ABSENT key takes `app.name` and every existing deployment re-keys once on upgrade — one cold-cache cycle, and a `ttl == 0` entry was stored without expiration so it stays until an operator sweeps the old un-prefixed keys — while an explicit value is honored as written and an explicit `""` opts out at the root yet still yields `<tenantID>` under a tenant, because cross-tenant isolation is not optional; a prefix carrying whitespace, `*?[]`, `\`, `{}` or a `:` fails startup, as does an `app.name` that cannot be one segment wherever the default applies) + breaking (C66.7 — `RegisterExchange` gains the existence check `RegisterQueue` got in C56.7: a repeat declaration of one exchange name merges only when `Type` and the four flags agree and every shared `Args` key carries the same value, and an incompatible repeat keeps the FIRST declaration and fails `Validate()` at startup where the later one used to overwrite the earlier one silently — the reachable collision being `DeclareQueueWithDLQ`'s fanout DLX against a `DeclareTopicExchange`/`DeclareDirectExchange` of that name) | 7 | none for C66.1/C66.2/C66.3 — a runtime refusal on the connect seam for C66.1 and C66.3, no signature moves; C66.2 is a runtime equality check on `ValidateDedupKey`, and `IsSealedDelivery` keeps its exported signature; C66.4 is a startup refusal and adds API only; C66.5: only an unkeyed `MigrateAllResult` literal, and `Verdict()` is a new method nothing calls until you adopt it; C66.6 moves no signature and nothing in your build flags it — the key layout changes under you; C66.7 is a startup refusal and no signature moves | check every environment that process loads for `PGSSLMODE`/`PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY`/`PGSSLNEGOTIATION` beside a socket-host DSN the matching DSN key does not shadow, then unset EVERY variable the refusal names, since a non-empty `sslcert`/`sslkey`/`sslrootcert` claims like an `sslmode` and each claim refuses alone — or, where the environment is not yours to change, add a non-claiming value for each of those keys to the DSN, which shadows them — or move to a TCP host, the one exit that clears them all; do NOT drop a DSN key, since a match requires that key to be absent and dropping a present one exposes the variable (C66.1); and if a sealed handler retained a SEALED DedupKey from one delivery and passed it to `ProcessOnce` while handling another, that call is now refused unless the two spell the same `<SignFamily>:<jti>` — pass the current delivery's `meta.DedupKey()`; a key built with `WireDedupKey` is unaffected (C66.2); and grep static config for `service=` inside a PostgreSQL `connectionstring` and check every environment that process loads for `PGSERVICE`, then copy every key the service section sets from its `pg_service.conf` into the DSN, drop `service=` (an empty one too, which pgx resolves from a `[]` section) and unset `PGSERVICE` — dropping `service=` alone exposes a `PGSERVICE` it was shadowing (C66.3); and read the `Type` of every hand-built `ExchangeDeclaration` (`git grep -n 'ExchangeDeclaration' -- '*.go'`, plus a `Type` assigned after construction): an empty, wrong-case or misspelled type now fails startup, so set a `messaging.ExchangeType*` constant or use `DeclareTopicExchange`/`DeclareDirectExchange` (C66.4); and if a caller of `migration.MigrateAll` reads a nil error with an empty `Failed()` as a clean fleet, decide what a zero-tenant listing should do, then gate on `Verdict()` (C66.5); and decide the cache key layout BEFORE the bump: an absent `cache.redis.keyprefix` now takes `app.name`, so every existing deployment re-keys once and reads cold — set an explicit prefix, or `""` to keep the old un-prefixed root layout; where two services deliberately share a keyspace set the SAME explicit prefix on both, realign any Redis ACL or RBAC rule written against the old key shapes, and plan a sweep of the old keys, because a `ttl == 0` entry was stored without expiration and will not age out (C66.6); and grep for one exchange **name** declared from two places, remembering that `DeclareQueueWithDLQ` silently registers `DeadLetterSpec.Exchange` or `<queue>.dlx` as a FANOUT, so a `DeclareTopicExchange`/`DeclareDirectExchange` of that same name now aborts startup instead of letting registration order pick the broker's type — align the two call sites, or give the dead-letter exchange its own name, and note that a topic or direct DLX was silently dropping every dead-lettered message that carried a routing key (C66.7) |
-| E67 | v0.66.0 → v0.67.0 | breaking (C67.1 — `go-bricks-migrate` maps the run verdict onto three exit codes: 0 clean, 1 split fleet, 2 no tenant dispatched, where every failure used to exit 1 and an empty listing exited 0, and every misuse now exits 2 where it exited 1; the `--json` summary record keeps `total` and adds `listed`, `attempted`, `failed`, `not_attempted` and `verdict`, and is emitted on the exit-2 paths too) + silent-behavior (C67.2 — the ADR-113 redeclare pass gains a second driver: every publisher client the manager pools for a key, not only the registry's own, so a publisher-only service that never re-declared at all now repairs its topology on every reconnect, and a newly pooled publisher costs one pass on creation and on each re-creation after an eviction, though only clients that are or embed what `NewAMQPClient` returns can be sources at all; the added work is T registries × M pooled publishers of idempotent declares, off the publish path) | 1 | none — the CLI is a binary, so nothing a Go build catches; a pipeline that branches on the exit code or parses the summary record is the whole population; and nothing for C67.2, which moves no signature and changes only how often the framework re-declares | read every pipeline step that runs `go-bricks-migrate` and decide what a zero-tenant environment should do BEFORE the bump: it exits 2 where it exited 0; and for C67.2 size the declare traffic if your fleet is large, since a broker restart now costs one pass per registry AND per pooled publisher |
+| E67 | v0.66.0 → v0.67.0 | breaking (C67.1 — `go-bricks-migrate` maps the run verdict onto three exit codes: 0 clean, 1 split fleet, 2 no tenant dispatched, where every failure used to exit 1 and an empty listing exited 0, and every misuse now exits 2 where it exited 1; the `--json` summary record keeps `total` and adds `listed`, `attempted`, `failed`, `not_attempted` and `verdict`, and is emitted on the exit-2 paths too) + silent-behavior (C67.2 — the ADR-113 redeclare pass gains a second driver: every publisher client the manager pools for a key, not only the registry's own, so a publisher-only service that never re-declared at all now repairs its topology on every reconnect, and a newly pooled publisher costs one pass on creation and on each re-creation after an eviction, though only clients that are or embed what `NewAMQPClient` returns can be sources at all; the added work is T registries × M pooled publishers of idempotent declares, off the publish path) | 2 | none — the CLI is a binary, so nothing a Go build catches; a pipeline that branches on the exit code or parses the summary record is the whole population; and nothing for C67.2, which moves no signature and changes only how often the framework re-declares | read every pipeline step that runs `go-bricks-migrate` and decide what a zero-tenant environment should do BEFORE the bump: it exits 2 where it exited 0; and for C67.2 size the declare traffic if your fleet is large, since a broker restart now costs one pass per registry AND per pooled publisher |
 | E68 | v0.67.0 → v0.68.0 | silent-behavior (C68.1 — the health/ready probe exemption is keyed on the route the ROUTER matched plus a GET/HEAD method check, where it compared the decoded `r.URL.Path` and ignored the method, so a non-GET/HEAD request on a probe path and a percent-encoded spelling of one are no longer exempt from tenant resolution, the forwarded-client-cert identity, OTel and module global middleware; `server.CreateProbeSkipper` moves to `server/probe_skip.go` and answers from `r.Pattern` with the raw path as fallback, its exported signature unmoved) | 1 | none — no signature moves; the exemption narrows under you, and it narrows fail-closed (middleware runs where it used to be skipped) | decide whether any probe or monitor of yours calls a probe path with a method other than GET or HEAD, since that request now runs the identity chain — under `multitenant` it answers 400 without a tenant header, under `forwardedclientcert.require` 401 without a client certificate — and if a custom `server.SkipperFunc` of yours exempts anything, key it on `r.Pattern` rather than `r.URL.Path` |
 | E69 | v0.68.0 → v0.69.0 | breaking (C69.3 — a service built on `server.New` without `app` that registers one method+path twice through `ModuleGroup`/`RootGroup` used to boot with the LATER handler serving; now the first handler keeps the route and `Server.Start` returns a `*server.DuplicateRouteError` matching `server.ErrDuplicateRoute` before either listener binds; the probes register first, so a module route at GET/HEAD `<base>/health` or `<base>/ready` that used to take the path over now never runs, and a `server.path.health` equal to `server.path.ready` that used to let readiness replace health now refuses `Start` with `dispatchReady` as the duplicate; templates differing only in a parameter or wildcard name (`/users/:id`, `/users/:uid`) now conflict, under `app` too, where an identical duplicate and both probe cases already failed startup) + breaking (C69.5 — a `Mandatory: true` publish the broker returns as unroutable now fails with `ErrPublishRetriesExhausted` wrapping the new `ErrPublishUnroutable` after `reconnect.maxpublishattempts`, where the client discarded the `basic.return` and reported the `basic.ack` that followed it as a success; non-mandatory publishes and the outbox relay are unchanged) + silent-behavior (C69.6 — a stream or super stream the broker lost while the service ran is reported once at ERROR per consumer or publisher on it and keeps the non-critical `streams` component unhealthy until a restart, and a lost consumer's shutdown offset flush is skipped, so the restart replays what it handled since its last commit) + breaking (C69.1 — `/ready` answers `{"status":"ready"}` on 200 and `{"status":"not ready"}` on 503 and nothing else, on the probe listener and the application listener alike: `time`, `app` (name/environment/version), every per-kind status key (`database`, `messaging`, `cache`, `streams`), every `<kind>_stats` object and ADR-048's `"<kind> unavailable"` error text all leave both bodies, where an orchestrator reading only the status code is unaffected and anything parsing the body loses every key but `status`) + compile-break (C69.2 — the exported field `HealthStatus.PublicErr` is deleted along with `publicProbeError`, so code that sets it stops compiling) + breaking (C69.4 — a typed handler whose request type, after one pointer level, is not a struct, or is `time.Time` or a type convertible to it, panics at registration naming the method, the full path and the type, where it used to boot and then fail every request to that route: most kinds panicked inside the tag binder into a 500 (a 400 when echo's JSON binder rejected the body first), and `time.Time` answered 400; `server.WrapHandler` panics the same way when the wrapper is built) + additive-optional (C69.7 — `Builder.WithBearerTokenFile` sends `Authorization: Bearer` read from a file that rotates on disk, re-read on an interval; a client that does not call it is unchanged) | 7 | C69.3 only partially — `RouteConflict` gains a `FirstPath` field, so an unkeyed `server.RouteConflict{...}` literal stops compiling; the refusal itself surfaces at `Start`; none for C69.5 — no signature moves, and a call that returned nil now returns an error; none for C69.6 — no signature moves and no configuration key changes; and C69.2 — `go build ./... && go vet ./...` names every assignment, `_test.go` files included; nothing for C69.1, whose population is body readers OUTSIDE the Go build — a `map[string]any` read of a deleted key compiles and returns `nil`, and a dashboard panel or alert rule keyed on a vanished JSON path goes quiet instead of failing; none — the request type is inferred from the handler signature, so the build passes and the panic surfaces at startup; nothing for C69.7, which only adds API | on the current version, call `srv.RouteConflicts()` after every registration: non-empty means `Start` will refuse after the bump — remove or rename the duplicate it names; where the first registrant is a probe, serve custom readiness through `Server.RegisterReadyHandler`, move the probe with `server.path.health`/`server.path.ready` (two distinct values), or move the module route; also compare each method's templates with parameter and wildcard names erased; for C69.5, grep your publisher declarations for a `Mandatory` set to anything but a literal `false`, assigned after construction included, and before the bump confirm that every binding those publishes rely on exists in every environment, since a publish that was silently dropped now fails the caller; nothing for C69.6; and for C69.1, inventory every reader of the `/ready` BODY, as opposed to its status code — smoke tests, `jq` scrapes, synthetic monitors, dashboard panels, alert rules — and repoint it at `app.readiness.status`, the `messaging.consumer.*` / `messaging.streams.*` gauges, `cache.manager.*` or `/_sys/health-debug` BEFORE the bump — `db.client.connection.*` is the DRIVER's pool and NOT a replacement for `database_stats`, whose `DbManager` resourcepool counters no instrument covers and which therefore stay on the debug view; the gauges ship in this same release, so the replacement signal exists the moment the body does not; and boot every service once before rolling the bump out: a refused route aborts startup with `server: handler registration failed for <METHOD> <path>: request type <T> must be a struct…`, and the fix is to wrap the value in a struct field; and for C69.7, nothing unless you adopt it in place of a hand-written token-file interceptor — then delete that interceptor, since interceptors run after the option and would overwrite the header |
 | E70 | v0.69.0 → v0.70.0 | breaking (C70.1 — construction fails when `source.type` is `dynamic` without an `app.Options.ResourceSource` whose `IsDynamic()` is true, or is `static` beside one whose `IsDynamic()` is true, where all three booted; a single-tenant `source.type` outside `static`/`dynamic` fails `config.Validate`, where it booted reading as static) + breaking (C70.2 — a resource source whose `IsDynamic()` is false is asked for `""` once per kind at build under `app.startup.<kind>`, and a lookup error other than not-configured fails construction) + breaking (C70.3 — beside such a store, its answer for `""`, not the root blocks, decides the absence WARN, the `DatabaseRequirer` abort, the #366 declarations gate, the fatal pre-init and `ModuleDeps.*Configured`) + breaking (C70.4 — multi-tenant `messaging.tenancy: shared` pre-initializes the control-plane broker at build, and without one reads `MessagingConfigured` false, refuses its declarations and reports `not_configured` where it reported `per_tenant`) + silent-behavior (C70.5 — a single-tenant dynamic store's messaging declarations no longer abort on an empty root broker) + silent-behavior (C70.6 — the single-tenant cache pre-warms, and a `""` known absent is no longer pre-warmed) + breaking (C70.7 — a per-tenant-ledger outbox refuses `Init` exactly when `ModuleDeps.MessagingConfigured` is false: multi-tenant `messaging.tenancy: shared` without a control-plane broker, stream-only outboxes included, and a caller static store not serving `""` beside a root broker now abort, and a hand-built `ModuleDeps` must set the flag) + silent-behavior (C70.8 — a single-tenant dynamic store with no root broker, and a caller store serving `""` beside an empty root messaging block, now pass outbox `Init`) + breaking (C70.9 — a shared-ledger outbox refuses `Init` exactly when `ModuleDeps.ControlPlaneMessagingAbsent` is true, so a caller static store not serving `""` beside a root broker now aborts it) + silent-behavior (C70.10 — a shared-ledger outbox beside a caller store serving `""` and an empty root messaging block now passes `Init`, a dynamic store is exempt by the plan instead of `source.type`, and a hand-built `ModuleDeps` no longer aborts it on root config) + breaking (C70.11 — multi-tenant `messaging.tenancy: per-tenant` on the built-in store with at least one static tenant and none setting `messaging.url` reads `MessagingConfigured` false, so a per-tenant-ledger outbox refuses `Init` and messaging declarations refuse startup, where both booted and every tenant resolve failed) + silent-behavior (C70.12 — a 2xx the JOSE transport rejects — over `MaxResponseBytes`, malformed or tampered JOSE — is no longer retried, and the over-cap error reads `ValidationError` where it read `NetworkError`) + silent-behavior (C70.13 — a followed `https`→`http` redirect that carried `Authorization`, `Cookie` or `Proxy-Authorization` now fails with `ErrRedirectDowngrade`, and the redirect-cap error reads `httpclient: stopped after 10 redirects`) + breaking (C70.14 — `StopConsumers` takes a `context.Context` on `messaging.Manager`, `messaging.Registry`, `messaging.RegistryInterface` and `mocks.MockRegistry`, and now blocks until the consumer supervisors exit or the window — `ctx`'s deadline capped at 5s — closes) + compile-break (C70.15 — `Publisher[T].Seal`, `jose/sealed.Seal`/`SealDocument` and `messaging.Sealer.Seal` return `(data []byte, jti string, err error)`, so every two-value assignment stops compiling) + silent-behavior (C70.16 — behind a proxy on a public or `100.64.0.0/10` address not listed in `server.trustedproxies`, `X-Forwarded-Proto` is ignored, so the HSTS header stops and the `url.scheme` metric label reads `http`) + breaking (C70.17 — the HTTP server instrumentation scope becomes `github.com/labstack/echo-otel/v5`, HTTP server metrics lose `server.address`/`server.port`/`http.request.method_original`, spans lose the body-size attributes, HTTP/2 and HTTP/3 `network.protocol.version` reads `2`/`3`, and span `error.type` is no longer set on a returned 4xx error and reads the status code for a 5xx error that carries one (it read the Go type)) | 17 | C70.14, C70.15 — `go build ./... && go vet ./...` names every call site | if any environment sets `source.type` or your code passes `app.Options.ResourceSource`, make them agree before the bump: `dynamic` exactly when the resource source's `IsDynamic()` returns true (C70.1); if the store reports `false`, make it answer `""` with a configuration or a not-configured error, within `app.startup.<kind>` (C70.2), and read what that answer now decides (C70.3); and under multi-tenant `messaging.tenancy: shared`, confirm the control-plane broker is set and reachable at startup, or that no module declares messaging (C70.4); and with an enabled per-tenant-ledger outbox, confirm that same broker, and set `MessagingConfigured: true` on any hand-built `ModuleDeps` (C70.7); and with an enabled shared-ledger outbox, confirm the store serving `""` answers it with a broker (C70.9); and under multi-tenant `messaging.tenancy: per-tenant` with no `app.Options.ResourceSource` and at least one static tenant, confirm at least one of them sets `messaging.url`, or that no module declares messaging and no per-tenant-ledger outbox is enabled (C70.11); and behind a proxy on a public or `100.64.0.0/10` address, list its CIDRs in `server.trustedproxies` (C70.16); and repoint any query, dashboard or alert that filters on the scope `github.com/labstack/echo-opentelemetry` or reads `server.address`/`http.request.method_original` from HTTP server metrics, body sizes from spans, or `network.protocol.version` `2.0`/`3.0`, or matches span `error.type` on a Go type name (C70.17) |
@@ -4650,6 +4650,895 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   files.
 - ref: [ADR-073](adr_073_test_key_constants_removed.md) · `config/testkeys.go` (deleted) · #1028
 
+### [C60.17] the HTTP trace headers and the AMQP delivery identity are validated before every FRAMEWORK sink · silent-behavior · when: always
+
+- detect: your Go code cannot tell you this either — every offending value comes from a
+  caller or a foreign publisher. Search your LOG BACKEND for a `traceparent` field that is
+  not spec-exact — the full rule is [C60.8]'s, unchanged: dash-delimited LOWERCASE hex in
+  the version-00 positions (two version digits, a 32-digit trace-id, a 16-digit parent-id,
+  two flag digits), with an all-zero trace-id or parent-id rejected, version `ff` rejected,
+  version `00` exactly 55 characters, and a later version's extra fields printable
+  non-space ASCII within 255 bytes total. A query matching only the delimiters and lengths
+  will miss the uppercase-hex, all-zero and `ff` classes, which are discarded too, and for `amqp_correlation_id`, `message_id`,
+  `routing_key` or `exchange` values outside what the shapes below allow — each of those was being
+  emitted and is now omitted. A non-spec-exact `traceparent` you find may also be
+  FIRST-PARTY and unaffected by this hop — see "What this atom does NOT cover" below before
+  chasing the emitter. The cheapest detect, once upgraded, is the new field: query
+  your consume lines for `identity_rejected: true` — it fires on exactly the deliveries this
+  atom changed, and `delivery_tag` on the failure line identifies each one. Then re-read anything that consumes the RESPONSE
+  `traceparent` header of your own services, since a client that echoed its own value back
+  to itself now gets a framework-minted one instead. On the metric side, check dashboards
+  filtering `messaging.rabbitmq.routing_key` (spans carry
+  `messaging.rabbitmq.destination.routing_key`) or `messaging.rabbitmq.exchange`,
+  or grouping by `messaging.destination.name`, on the AMQP consume instruments. A delivery
+  whose exchange or routing key fails the shape loses that ATTRIBUTE entirely, and the
+  destination name — which is built as `exchange:routing_key:queue` and is always emitted —
+  keeps its shape with that segment EMPTY. A dashboard grouping by destination name
+  therefore gains a new series such as `:user.created:my-queue` rather than losing one.
+- scope: [C60.8] closed `trace.ExtractFromHeaders`. It did not reach three seams, and all
+  three are closed now on the same terms (ADR-070, amended).
+  **HTTP ingress.** `enrichTraceContext` read `req.Header` directly, so the HTTP door was
+  the one ingress storing a caller's `traceparent` verbatim and re-emitting it on every
+  outbound hop. It is validated with the same spec-exact rule now; the accompanying
+  `tracestate` gets the 512-byte cap, a printable-ASCII charset AND the carrier scoping — a `tracestate` arriving with
+  no valid `traceparent` to annotate is dropped rather than attached to a freshly minted
+  one, and one already in the request context is dropped when this request brings a parent
+  of its own. An invalid `traceparent` is treated as ABSENT, never as a reason to reject: the
+  request is served and continues on a minted id, byte-identical to the path every request
+  without the header already takes.
+  **Response reflection.** `ensureTraceParentHeader` echoed the raw request header onto the
+  response from six call sites, and the access-log metadata reader read it raw into a log
+  field. Both validate their own read now — they read the request header directly, so the
+  context-level guard above does not cover them.
+  **`tracestate` charset.** The cap is no longer the whole rule at ANY door, this one
+  included: a `tracestate` containing a control byte — CR, LF, NUL, ESC — is discarded where
+  it used to be stored and re-emitted. Go's header reader already refused those on an
+  inbound HTTP request, so this bites the AMQP and outbox doors, where a longstr carries any
+  byte. Grammar is still deliberately unvalidated; the charset is a strict superset of the
+  W3C list syntax, so no conforming value is affected.
+  **AMQP properties and envelope metadata.** `CorrelationId` and `MessageId` are content-header
+  PROPERTIES; `Exchange` and `RoutingKey` are `basic.deliver` ENVELOPE metadata. The
+  distinction does not change the rule — no header extractor reaches either, since
+  `ExtractFromHeaders` reads the `headers` table alone — but it is why no amount of header
+  validation was ever going to cover them. The classic consume
+  lane read all four raw into log fields, span attributes and metric attributes. They are resolved once per
+  delivery now and the one verdict is threaded to every framework sink. `Exchange` answers the
+  same rule as the routing key. `CorrelationId` and
+  `MessageId` answer to `^[A-Za-z0-9_-]{1,128}$`, the request-id charset — note that a
+  dotted or `urn:uuid:`-shaped value from a foreign publisher fails it. `RoutingKey`
+  answers to a separate rule: printable ASCII — space allowed, control bytes and non-ASCII
+  not — up to the 255-byte shortstr ceiling, because the request-id charset would discard
+  the dotted routing key of essentially every real deployment. Only the charset half can
+  fire on this door; a consumed routing key is already within 255 bytes by the wire format.
+  A value that fails is OMITTED from the sink — no substitute, no truncation — which also
+  means a field the delivery never carried is now ABSENT from the log line where it used to
+  be present and empty: `message_id` on the DEBUG, success, failure and panic lines,
+  `routing_key` and `exchange` on the DEBUG, failure and panic lines,
+  `amqp_correlation_id` on the failure and panic lines.
+  **Two fields are ADDED, so the omission is searchable.** Every consume line that dropped
+  something stamps `identity_rejected: true` — a bounded boolean, never the rejected value —
+  and the failure and panic lines stamp `delivery_tag`, the one identifier no publisher
+  supplies, so a delivery whose every vouched field was dropped is still attributable to one
+  message. A saved query can therefore find affected traffic without knowing what the
+  rejected value was. The `messaging/streams` lane is unchanged: it surfaces none of these
+  four today, though an AMQP 1.0 message does carry a message id and a correlation id.
+  **Two rules, deliberately.** The identifier rule and the routing-key rule are separate and
+  neither is a relaxation of the other: `CorrelationId`/`MessageId` are correlation
+  identifiers, so they answer to the identifier charset every other door applies, and a
+  dotted or colon-separated one fails it. A routing key is an AMQP address, not an
+  identifier — every key this framework publishes is dot-delimited and a topic binding
+  legally carries `*` and `#` — so applying the identifier charset there would discard the
+  routing key of essentially every real deployment. The routing-key rule refuses what
+  ADR-070 refuses everywhere (CR/LF, NUL, ANSI escapes) and bounds the value at the AMQP
+  shortstr ceiling, and nothing more.
+  **What this atom does NOT cover.** The EMIT side is unchanged: `computeTraceParent` still
+  prefers a `traceparent` already present in the outgoing header map and takes it verbatim,
+  and `extractTraceIDFromParent` still checks the trace-id's length rather than its charset.
+  Ingress validation closes that transitively for values the framework itself put there, so
+  what remains is first-party code hand-setting `PublishOptions.Headers["traceparent"]` (or
+  calling `trace.InjectIntoHeaders` on a pre-populated accessor) and outbox rows persisted
+  BEFORE this hop — the relay sanitizes the publish CONTEXT but republishes the stored
+  header map as-is, so a pre-upgrade row re-emits its malformed traceparent until the
+  backlog drains. Neither is remote-triggerable. Tracked in
+  [#1121](https://github.com/gaborage/go-bricks/issues/1121); do not read this atom as
+  closing them.
+  **The guarantee covers FRAMEWORK sinks only** — the log lines, span attributes and metric
+  attributes this framework emits. It is not a guarantee that a raw value is unreachable.
+  Your own code still sees the unvalidated bytes in two places by design: a handler receives
+  the raw `*amqp.Delivery` (that is deliberate, so a legitimate foreign shape the charset
+  refuses is still available to you), and an outgoing header map you pre-populate is taken
+  verbatim on the emit side ([#1121](https://github.com/gaborage/go-bricks/issues/1121)). If
+  you copy either into your OWN log, span, metric or outbound header, validate it there —
+  `trace.ValidateRequestID` and `trace.ValidateTraceParent` are exported for exactly that.
+- gate: always — every service serving HTTP, and every service consuming classic AMQP,
+  emits at least one of these fields.
+- apply: nothing to change in your code — no request is rejected, no delivery is rejected,
+  and nothing fails at startup. Note the two failure modes are DIFFERENT and neither is a
+  repair. At the HTTP door the caller's `traceparent` is dropped and the framework mints its
+  own, exactly as it does for a request that sent none. At the AMQP sinks nothing is minted:
+  the field is simply absent from that log line, span or metric. In particular an invalid
+  `amqp_correlation_id` is NOT replaced by the framework trace id — `correlation_id` on the
+  same line already carries that, and stamping it twice under two names would forge a
+  correlation the publisher never asserted.
+  Then decide what to do about each upstream the detect
+  finds. A gateway emitting a non-spec-exact `traceparent` loses trace linkage through your
+  service, as it already did at the messaging doors after [C60.8]. A foreign publisher whose
+  `CorrelationId` or `MessageId` is dotted, colon-separated or over 128 characters loses that
+  field from your framework log lines and its span attribute — the handler still sees the raw
+  `*amqp.Delivery`, so read the property yourself if you need the foreign shape. Repair any
+  saved query or alert that treats one of these fields as always present; a query asserting
+  `message_id != ""` is the shape most likely to have depended on the empty stamp.
+- verify: four probes against a running service; the fourth is broker-dependent.
+
+  1. **HTTP ingress and response.** Run this DIFFERENTIALLY, because validating a
+     `traceparent` does not decide a status code — an arbitrary handler legitimately answers
+     201, 204, 4xx or 5xx, so a bare "expect 200" would fail on a healthy service. Send the
+     same request to the same endpoint twice: once WITHOUT the header, to establish that
+     endpoint's baseline status, and once with
+     `traceparent: 00-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-00f067aa0ba902b7-01` (32 non-hex bytes
+     where the trace-id belongs — the shape the old length-only check accepted). Expect the
+     status to be UNCHANGED between the two, which is the claim that matters: an unusable
+     traceparent is treated as absent and never changes how the request is answered. Then
+     expect the RESPONSE `traceparent` on the second call to be spec-exact and NOT the value
+     you sent. That much is runnable by every HTTP service, with or without a broker.
+
+     If the service also publishes, point the request at a handler that performs one
+     downstream publish and additionally expect a published message whose `traceparent` is
+     likewise minted, an `X-Request-ID` equal to that minted traceparent's 32-hex trace-id,
+     and a POPULATED `CorrelationId` — before this change the aligned id was 32 exclamation
+     marks, which the publish-side guard refused, so `CorrelationId` shipped empty.
+
+     Repeat both with a valid `traceparent` and confirm it propagates end to end unchanged.
+  2. **AMQP delivery identity.** Publish to a consumed queue with `correlation_id` set to
+     `urn:uuid:0b8a...` (or any value carrying `:` or `.`), `message_id` set to the same
+     shape, and a routing key containing a newline, and make the handler fail so the failure
+     line is emitted. Expect the failure line to carry no `amqp_correlation_id`, no
+     `message_id` and no `routing_key`, to carry `identity_rejected: true` and a
+     `delivery_tag`, and the receive span to carry none of
+     `messaging.message.conversation_id`, `messaging.message.id` or
+     `messaging.rabbitmq.destination.routing_key`. Repeat with `correlation_id: probe-2`,
+     `message_id: probe-2-msg` and routing key `user.created` and confirm all three are
+     present, unchanged, and that `identity_rejected` is ABSENT — a marker that fired on
+     clean traffic would be no signal.
+
+     Then run BOTH of those again with a handler that SUCCEEDS, because the guarantee is not
+     failure-scoped: `message_id` reaches the success line too, so expect it present on a
+     clean delivery and absent — with `identity_rejected: true` beside it — on the poisoned
+     one. If your handlers can panic, force one as well: the panic line is built by the same
+     helper as the failure line and carries the same fields, `delivery_tag` included.
+  3. **`tracestate` control bytes.** This one needs a NON-HTTP carrier, because Go's own
+     header reader already rejects control bytes on an inbound HTTP request — the door this
+     probe exercises is the AMQP one, where a longstr carries any byte. Publish to a consumed
+     queue with a valid `traceparent` header and a `tracestate` header containing CR, LF, NUL
+     or ESC, and have the handler perform one downstream publish. Expect the outbound message
+     to carry the inbound `traceparent` and NO `tracestate` at all — dropped, not truncated
+     and not emptied. Repeat with a clean `tracestate` such as `vendor=probe` and confirm it
+     propagates unchanged, and once more with a clean `tracestate` but NO `traceparent`,
+     where it must again be absent outbound: a tracestate with no parent to annotate is an
+     orphan, and the carrier scoping drops it rather than attaching it to a minted parent.
+  4. **Exchange.** Broker-dependent, and either outcome is a pass. Try to
+     `exchange.declare` a name carrying a byte outside printable ASCII and bind your
+     consumed queue to it. If your broker REFUSES the declare, that is the answer: the field
+     cannot reach the sink from that broker, and nothing changes for you. If it accepts,
+     publish through it and expect the failure line to carry no `exchange`, the receive span
+     no `messaging.rabbitmq.exchange`, and the consume metrics' `messaging.destination.name`
+     to be built with that half empty. Skip the probe entirely if you control every exchange
+     name in the deployment — the field cannot fail the shape then, which is why it was the
+     last one added rather than the first.
+- ref: [ADR-070](adr_070_inbound_trace_identifier_validation.md) (amended 2026-08-20) ·
+  [C60.7] · [C60.8] · [C60.10] ·
+  [#1121](https://github.com/gaborage/go-bricks/issues/1121) (the emit-side residual this
+  atom does not cover) · `server/trace_context.go` (`enrichTraceContext`) ·
+  `server/handler.go` (`ensureTraceParentHeader`) · `server/logger.go`
+  (`extractRequestMetadata`) · `server/request_utils.go` (`validateTraceParent`) ·
+  `messaging/delivery_identity.go` · `messaging/registry.go` (`processMessage`) ·
+  `trace/validate.go` (`ValidateTraceState`, new — the tracestate cap is shared as a
+  function so a second clause cannot reach one door and miss the other)
+
+### [C60.23] a recovered panic value is reported by type, never by value · breaking · when: match
+
+- detect: every row of the `scope` table breaks a matcher SILENTLY — the query stops
+  matching and the alert simply never fires, which reads as "no panics" rather than as a
+  broken alert. **The span rows no log grep reaches at all.** Grep your log-based alerts,
+  saved queries, dashboards and log-parsing tests against that table, row by row.
+  **Start with the HTTP rows (6-8)**, because they are the only ones that need
+  no messaging, no scheduler and no `AuditRecorder` to reach you: one panicking request emits
+  all of them. In production posture only rows 6 and 7 CHANGE — row 8 is emitted unchanged
+  there and moves only under `app.debug: true`, so check it in that posture or not at all. Then the audit sink-failure line (`audit sink panicked; event dropped`), the
+  scheduler job-panic line (`Job panicked - recovered and marked as failed`), the settle
+  line (`Panic recovered while settling a delivery; not retried`), and — the widest of
+  the messaging ones — **the shared delivery outcome line on BOTH messaging lanes**, whose classic
+  spelling is `Panic recovered in message handler - discarding without requeue` and whose
+  streams spelling is its own constant (`messaging/streams/runner.go`). It fires for any
+  consumer whose MESSAGE HANDLER panics, which needs no `AuditRecorder`
+  and no scheduled jobs:
+  `git grep -nE '(^|[^_a-zA-Z])panic([^_a-zA-Z]|$)|panic_type|error_type|exception\.type|exception\.stacktrace|"exception"|audit sink panicked|Job panicked|Panic recovered|PANIC RECOVER' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
+  Two of those arms cover consumers no message-text or `panic`-field pattern can reach.
+  **`error_type`** is rows 7 and 8: row 7's production value flips from the panicking value's own
+  error type to the CONSTANT `*server.panicTypeError`, so anything GROUPING, faceting or filtering
+  on that value silently collapses to one bucket or stops matching. **`exception`** is the SDK
+  event itself: `WithoutPanicRecording()` means an unwinding panic emits no exception event at
+  all, so a rule keyed on the event NAME, on `exception.type` or on `exception.stacktrace` drops
+  to zero hits and never fires again. Neither is a rename you can grep for by its new spelling —
+  one is a changed VALUE and the other is an ABSENCE.
+  **Do not use `Panic recovered` to tell the lanes apart.** At least four lines share that
+  prefix — the delivery settle line, the classic outcome line, the streams outcome line
+  (`Panic recovered in stream handler - offset not committed`) and the HTTP error handler's
+  own line, whose message is exactly `Panic recovered`. A hit on it in an HTTP-only service
+  is that service's own affected line, not a messaging concern to dismiss. `PANIC RECOVER`
+  — upper-case — is the one spelling unique to the HTTP side; the bare-word `panic` arm,
+  being lower-case, does not match it.
+
+  **Then run a SECOND, DIFFERENT command over your Go and Markdown** — the gate mentions
+  log-parsing tests and runbooks, and neither lives in the config globs above:
+  `git grep -nE 'panic_type|error_type|exception\.type|exception\.stacktrace|"exception"|audit sink panicked|Job panicked|Panic recovered|panic in message handler|PANIC RECOVER|"panic"|panic !=|\[panic' -- '*_test.go' '*.md' ':!wiki/migrations.md' ':!wiki/adr_*.md'`.
+  **The `panic_type` arm stays, and the two pathspec exclusions are why.** `panic_type` is NOT a
+  post-bump-only spelling — `[C60.21]` put it on the audit line's `(value unrenderable)` fallback
+  in this same hop's predecessor, so a consumer's repo can legitimately hold it BEFORE the bump
+  and dropping the arm would miss them. What it must not match is THIS runbook and these ADRs,
+  which discuss the field on every page: run inside a go-bricks checkout without the exclusions
+  and the arm selects `when: match` off nothing but our own prose.
+
+  **These are two commands with two patterns on purpose; do not merge them.** Adding
+  `'*.go'` to the config sweep above turns it from 4 hits into several hundred across the
+  tree, because its bare-word `panic` arm matches every ordinary `panic(`
+  call in Go source — and a detect step returning several hundred lines is one an
+  operator abandons, which is the same failure as returning too few. The source sweep
+  therefore drops the bare-word arm and keeps only the field and message spellings: the
+  quoted JSON field, the `panic != ""` query form, the `fields: [panic` list form, and
+  the five message texts.
+
+  Two things to expect from it. **A log-LEVEL enumeration is the common false positive**
+  — `[]string{"debug", "info", "warn", "error", "fatal", "panic"}` matches `"panic"` and
+  has nothing to do with this atom — so skim for the field in a log or query context
+  rather than the bare word. And if you run it inside a go-bricks CHECKOUT rather than
+  your own service, it also matches the framework's own tests and docs; that flood is
+  expected and is not your exposure.
+  The word-boundary alternation is load-bearing: a pattern matching only the QUOTED
+  `"panic"` misses `panic != ""` and a bare field list `fields: [panic, stack]`, which is how
+  most query languages name a field. Verified against a fixture holding all four spellings
+  over your alerting config, plus the same terms in your log backend's saved searches, which
+  no repo grep reaches. Also search for the retired message
+  `audit sink panicked; event dropped (value unrenderable)` — it has no successor.
+
+  **Then run the span-side detect, which the log grep above cannot substitute for.** In your
+  tracing backend, search span exception messages and status descriptions for
+  `panic in message handler`, for `cleanup: tenant` and for `[PANIC RECOVER]` — that last is
+  the HTTP SERVER span's status description, which changes on every panicking request in
+  any service that serves HTTP at all — and grep alert and SLO definitions
+  for `exception.message`:
+  `git grep -nE 'exception\.message|exception\.type|exception\.stacktrace|"exception"|otel\.status_description|panic in message handler' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
+  The three `exception` arms beyond `.message` are the EVENT-existence consumers: an alert that
+  counts exception events, or matches their name or stacktrace, sees a silent drop to zero rather
+  than changed text, which no message-shape pattern detects.
+  This one deliberately omits `PANIC RECOVER`: it shares the config sweep's globs, so that arm
+  would only re-return hits you already triaged. Read the `PANIC RECOVER` hits from the first
+  sweep TWICE — once as the HTTP action line (row 6), once as the server span (row 11).
+  A shop that alerts on traces rather than logs matches NOTHING in the log grep and is still
+  fully affected.
+- scope: **the rule is the contract, not the count: after this hop no framework sink carries
+  a recovered panic's VALUE — on any sink, not only the log.** Work the table below as a
+  checklist rather than trusting a total. That total grew three times while this atom was
+  being written, so read the table as the surfaces known TODAY and judge anything it does not
+  list against the rule, not against the row count.
+
+  | # | surface | field that changes | before | after | stack |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | audit sink-failure line (`migration`) | `panic` → `panic_type` | the value | the Go type | `stack` |
+  | 2 | scheduler job-panic line (`scheduler`) | `panic` → `panic_type` | the value | the Go type | `stackTrace` — different name |
+  | 3 | delivery settle line (`messaging/internal/delivery`) | `panic` → `panic_type` | the value | the Go type | none — `panic_type` only |
+  | 4 | delivery outcome line, classic lane (`messaging`) | `panic` → `panic_type` | the value | the Go type | `stack` |
+  | 5 | delivery outcome line, streams lane (`messaging/streams`) | `panic` → `panic_type` | the value | the Go type | `stack` |
+  | 6 | HTTP action line (`server`) | `error` | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | inside the rendered `error`, not a field |
+  | 7 | HTTP error handler's `Panic recovered` line (`server`) | `error_type` in production posture; `error` under `app.debug` | the panicking value's own error type — `*errors.errorString` where Echo rendered a non-error, the concrete type where it panicked with one | `*server.panicTypeError` (a CONSTANT); `panic (type: T)` in debug | `stack` — name unchanged, CONTENT shrinks to the panicking goroutine |
+  | 8 | HTTP `unhandled error` line (`server`) | `error` — **`app.debug: true` ONLY** | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | inside `error`. In production posture this line is UNCHANGED: its `error_type` is the wrapper `*middleware.PanicStackError` either way |
+  | 9 | messaging consume span, BOTH lanes | `exception.message` + status description | `panic in message handler: <value>` | `panic in message handler (type: T)` | n/a |
+  | 10 | scheduler job span (incl. `multitenant` cleanup) | `exception.message` ONLY | carries the value | `panic (type: T)` | n/a — its status description is the literal `"panic"` (`scheduler/module.go`) before AND after, so do not repoint that |
+  | 11 | HTTP server span | status description | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | n/a |
+
+  Rows 6-8 are on the HTTP lane and need no messaging, scheduler or `AuditRecorder` usage —
+  one panicking request emits rows 6, 7, 8 and 11 together. In production posture rows 6, 7
+  and 11 are the ones that CHANGE; row 8 moves only under `app.debug: true`. Rows 7 and 8 are emitted by
+  `server/server.go`, which no diff in this hop touches; its inputs moved instead.
+  Six packages report a recovered panic value, and after this hop none of them
+  carries the value itself. **The one that reaches every
+  service is the HTTP lane**: Echo's `Recover` rendered a handler panic with its own `%v`,
+  and both the OTel middleware and the request logger sit OUTSIDE it, so the value went to
+  the server span's status description AND the action line's `error` field on every
+  panicking request — in production posture, ungated by `app.debug`. Two kinds of site are
+  covered, and the second is the one a log-focused reading misses: four sites report the
+  value directly to a log field, and three RENDER it into an ERROR that later reaches a
+  span and, for the scheduler, a log line too. **`messaging/internal/delivery.AppendOutcome` is the delivery
+  SPINE**, shared by the classic AMQP lane and the streams lane, so the rename reaches every
+  consumer whose message handler panics — the widest-reaching field rename in this hop, and
+  the one a reader scanning for "audit" or "scheduler" will miss. The audit emitter's `deliverToSink` and the scheduler's FR-021
+  recovery both replace the log field `panic` (the value, passed through the sensitive-data
+  filter) with `panic_type` (the value's Go type, via `%T`). The scheduler's
+  `span.RecordError` and summary `Err()` already reported the type after [C60.21] and are
+  unchanged. **Relying on the filter here was never protection**: it matches FIELD names, and
+  the field is `panic`, which is no needle — so a bare `panic("secret")` was emitted in
+  clear, as was a map carrying a key the needle list does not name (`licenseKey`), while a
+  key it does name (`password`) was masked. Protection varied with the shape of a value
+  chosen by consumer code. The stack trace is retained wherever it was emitted before, but the
+  field NAME is not uniform and one line has none — read the `stack` column of the table above
+  before keying a repoint on it. `audit_type` / `target` / `jobID` still make each report
+  attributable. The audit emitter's second message,
+  `(value unrenderable)`, is GONE: it existed only for a value whose rendering panicked, and
+  nothing renders the value now.
+- gate: match on ANY of — (a) an alert, saved query, dashboard or log-parsing test reads the
+  `panic` field, or matches on a panic VALUE, on ANY of the five NON-HTTP lines, rows 1-5 of
+  the `scope` table (every HTTP surface is clause (e) instead — none of them carries a
+  `panic` field to read) — including a
+  lane-shape test of your own that pins the delivery spine's key set, which
+  `messaging/internal/lanecontract` treats as a contract and this hop changes;
+  (d) an alert, saved query, dashboard, SLO or trace-based test reads `exception.message` or
+  the span status description on a messaging consume span or a scheduler job span — that
+  text changes independently of the log fields, so satisfying (a) does NOT cover it;
+  (e) anything reads any of rows 6-8 or row 11 of the `scope` table for a panicking request —
+  **this is the broadest clause in the atom and
+  needs no messaging, scheduler or audit usage to apply**: it fires for any service whose
+  handler can panic, and one request touches all four rows; (b) you match the literal
+  message `audit sink panicked; event dropped (value unrenderable)`; (c) a runbook or triage
+  procedure instructs an operator to read the panic value out of these lines. no-match =
+  ALL of the following hold:
+
+  - nothing you own reads any log row of the `scope` table — its changed field or its message
+    text — including the HTTP rows 6, 7 and 8;
+  - you have no lane-shape test pinning the delivery spine's key set;
+  - nothing reads `exception.message` or the span status description on rows 9, 10 or 11
+    (row 10's status description is unchanged — its `exception.message` is the part that moves);
+  - nothing GROUPS, facets or filters on the `error_type` VALUE of rows 7 or 8 — that value
+    becomes a constant, so a rule keyed on the old one stops matching without erroring;
+  - nothing counts SDK `exception` EVENTS, or matches `exception.type` / `exception.stacktrace`,
+    on a panicking span — `WithoutPanicRecording()` means those events stop being emitted at all,
+    which reads as "no panics" rather than as a broken rule;
+  - no runbook depends on the panic value being present.
+
+  **An HTTP-only service does NOT reach no-match.** Running no scheduled jobs, registering no
+  `AuditRecorder` and consuming no messages clears rows 1-5 and 9-10 and changes nothing:
+  rows 6, 7, 8 and 11 fire on every panicking request. Clear each of those rows
+  separately — satisfying yourself about the action line says nothing about the other three.
+- apply: for (a), repoint at `panic_type`, which all of rows 1-5 carry. Do NOT key the repoint
+  on `stack` — read the table's `stack` column first: the name differs per row and row 3 has
+  none, so a `stack`-keyed rule stops matching the scheduler line silently and never matches
+  the settle line.
+  For (b), delete the matcher; that message has no successor.
+  For (c), rewrite the runbook step around the type and the stack.
+
+  **There is no way to recover the VALUE from any framework sink — that is the point of the
+  change, not an oversight.** A procedure that needs it must get it from a debugger, a core
+  dump, or the consumer code that panics. Do not send an operator hunting the log for a
+  value that is no longer anywhere: it is not in the log field, not in `exception.message`,
+  not in the span status description, and not in the returned error.
+
+  **The `exception.message` half of that is true only because of a provider option, and it
+  costs you an event.** The OTel SDK records an exception event itself, carrying the value,
+  on any span that unwinds with a live panic — so before this hop the value reached your
+  tracing backend from six framework sites regardless of what the code around them spelled.
+  `sdktrace.WithoutPanicRecording()` closes it. **The consequence to plan for: an unwinding
+  panic no longer produces an exception event on that span at all.** If you alert on
+  `exception` events, or count them, a panic that used to surface as one now surfaces only
+  as the span's error status and the framework's own log line with `panic_type` and the
+  stack. That is a silent reduction in event volume, not an error — check any monitor whose
+  threshold was tuned against the old rate.
+
+  **For (d), the SPAN side, which is a separate repoint from the log side.** On both
+  messaging lanes `exception.message` and the span status description change from
+  `panic in message handler: <value>` to `panic in message handler (type: T)`. The
+  scheduler's cleanup-job error changes the same way — `multitenant`'s per-tenant cleanup
+  used to convert a panicking `RetentionDelete` callback into an ordinary error carrying the
+  value, one frame below the scheduler, so it reached `span.RecordError`, the span status
+  AND the job summary line. Repoint span-based alerts on their own; **an alerting rule keyed
+  on `exception.message` sees a break that no amount of log-field repointing describes.**
+
+  **For (e), the HTTP lane — the broadest repoint here.** The action line's `error` field and
+  the server span's status description change from `[PANIC RECOVER] <value> <stack>` to
+  `[PANIC RECOVER] panic (type: T) <stack>`. Repoint anything matching the value; the type and
+  the stack remain, and the stack still names the function that panicked. The stack also
+  SHRINKS — it now covers the panicking goroutine only, where it used to dump every goroutine
+  up to 4 KB — so a query keying on an unrelated goroutine's frames stops matching.
+  **This lane emits no `panic_type` field**, unlike the other five: the type lives INSIDE the
+  rendered `error` string (`server/middleware.go`'s `panicTypeError` renders
+  `panic (type: T)`, and Echo's `PanicStackError` wraps it as
+  `[PANIC RECOVER] <that> <stack>`), and so does the stack. Repoint this lane with a
+  substring match on `panic (type:`, never by adding a `panic_type` field selector — no HTTP
+  row carries that field, and a field-based rule matches nothing there.
+
+  **Rows 7 and 8 repoint differently from row 6, and which field moves is gated on
+  `app.debug`** — read those rows' `field that changes` column. Two consequences worth
+  planning for: row 7's new production value is a CONSTANT, so a dashboard that used to
+  spread panics across concrete error types now shows one bucket; and row 8 changes under
+  `app.debug: true` ONLY, so a production-posture shop can skip it entirely.
+
+  **Read this if you handle a disclosure question. Audit TWO backends, and only one of the
+  three exposures was gated on `app.debug`.**
+
+  1. **Your TRACING backend — the worst half, and ungated.** Before this hop a handler that
+     panicked with anything sensitive put that value off-platform on every panicking HTTP
+     request and on every panicking delivery on both lanes, in every deployment posture.
+  2. **Your LOG backend, via the HTTP action line (row 6) — also UNGATED.** That line's
+     `error` field carried Echo's rendering of the raw panic value in every posture,
+     production included: `server/logger.go`'s `Err()` has no `app.debug` condition, and
+     `LogEvent.Err` applies no filtering at all, so the sensitive-data filter never saw it.
+     Do not skip your log backend because you run production posture.
+  3. **Your LOG backend, via rows 7 and 8 — `app.debug: true` ONLY.** In production posture
+     those two lines carried a TYPE (`error_type`), never the value, so a deployment that
+     never set `app.debug: true` has no exposure from them. Check whether any environment
+     you run — staging and ad-hoc debugging sessions included — ever did.
+
+  All three are now closed, and all three were open in every prior release. If your handlers
+  can panic with credentials or PII, treat the historical span data AND the historical log
+  data as exposed and audit both separately; upgrading stops the bleeding and does not clean
+  up what already shipped.
+- verify: for (a), in staging make an `AuditRecorder.Record` panic with a synthetic secret
+  (`panic("not-a-real-secret-0000")`) and make a scheduler job panic the same way. **Use a
+  synthetic value on a disposable sink** — the whole point is that you do not yet know
+  whether it is disclosed, and a log you cannot delete is a rotation, not a test. On both
+  lines the secret must be ABSENT and `panic_type` present (`string` for that example), the
+  migration must COMPLETE, and the job must be recorded as FAILED with `failureCount`
+  incremented — the accounting runs after the reporting, so a report that failed must not
+  cost the outcome record. Then confirm your repointed alert fires on that run.
+  For (b), grep your alerting config and saved searches for the retired message once more
+  after repointing and expect ZERO hits; a matcher left behind does not error, it just never
+  fires again. For (c), walk the runbook step against that same staged panic with only the
+  log in front of you: an operator must be able to complete it from `panic_type` and the
+  stack trace alone. If the step cannot be completed, the value was load-bearing for that
+  procedure and the procedure needs rewriting now rather than during an incident.
+  For (d), use the SAME staged panic but look at the trace, not the log: make a message
+  handler panic with a synthetic secret and read the consume span. `exception.message` and
+  the span status description must read `panic in message handler (type: string)` with the
+  secret ABSENT. Do the scheduler half by making a `RetentionDelete` callback panic and
+  reading the job span. For (e), make an HTTP handler panic with a synthetic secret against a
+  staging service running `app.debug: false`, then read BOTH the action log line and the
+  server span: the secret must be absent from the log's `error` field and from the span status
+  description, and both must read `panic (type: string)`. That one request also emits rows 7
+  and 8 — read them from the same capture and confirm row 7's `error_type` is
+  `*server.panicTypeError`. **Only if some environment you run sets `app.debug: true`**,
+  repeat the run in that posture and confirm rows 7 and 8 read `panic (type: string)` rather
+  than the secret; a shop that runs production posture everywhere can skip that second run,
+  since row 8 changes in debug only. **Check every row even if the first passed** — they
+  changed for different reasons and a probe of one cannot tell you about the others.
+- ref: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) ·
+  [ADR-079](adr_079_log_filter_walks_slices_without_comparing.md) (its primary-path claim is
+  corrected in place) · [ADR-019](adr_019_migration_audit_delivery.md) ·
+  `migration/audit_emitter.go` · `scheduler/module.go` · `server/middleware.go` ·
+  `server/server.go`
+
+### [C60.27] every Filter and JoinFilter column is a validated identifier · breaking · when: match
+
+- detect: `git grep -nE '\.(Eq|NotEq|Lt|Lte|Gt|Gte|In|NotIn|Like|Regex|RegexI|NotRegex|NotRegexI|JSONContains|Null|NotNull|Between|InSubquery|EqColumn|NotEqColumn|LtColumn|LteColumn|GtColumn|GteColumn)\(' -- '*.go'`
+  lists every call site. Keep the pattern POSIX ERE — `git grep -E` silently ignores the PCRE escapes.
+  Nothing is compiler-caught; the failure is an error returned from `ToSQL()`. Read only the sites
+  whose COLUMN argument (the first, and for the `*Column` forms both) is not a literal or a
+  `cols.Col(...)` lookup.
+- scope: `database/internal/builder/` only. `quoteColumnForQuery` — the single point every column
+  argument passes through before becoming SQL — now validates against the ADR-031 identifier grammar
+  and returns an error, so all 18 `FilterFactory` and 18 `JoinFilterFactory` column doors, the six
+  comparison helpers, `BuildRegex`, `BuildJSONContains`, `BuildCaseInsensitiveLike` and the UPDATE SET
+  targets refuse a column that is not a bare or qualified identifier. A violation surfaces from
+  `ToSQL()` through the existing deferred-error Sqlizer, including from inside `And`/`Or`/`Not` and
+  from a subquery.
+  This is the stage that matters most on PostgreSQL. `quoteColumnForQuery`'s default branch rendered
+  the column VERBATIM, so before this hop a Filter column was interpolated exactly as written and
+  `f.Eq("id = 1 OR 1=1 -- ", v)` emitted `WHERE id = 1 OR 1=1 -- = $1`. Oracle quoted the column, so
+  the same input was inert there.
+- gate: match = any Filter or JoinFilter column argument is not a literal or `cols.Col(...)` output.
+  no-match = every column is developer-written. A census of this repository found 1027 such call sites
+  and none outside the grammar, so most codebases will not match.
+- apply: pass a name, not an expression. A computed comparison belongs in `f.Raw(...)`/`jf.Raw(...)`,
+  which carry the `// SECURITY: Manual SQL review completed - <rationale>` annotation requirement; a
+  request-derived column needs an allowlist your own code owns, mapping the caller's value to one of a
+  fixed set before it reaches the builder.
+- verify: both directions. Assert the filters you intend to ship still build, then feed one known-bad
+  column (`id = 1 OR 1=1 -- `) to the same door and assert `err != nil` reading `invalid column
+  identifier`. Checking only that good columns still build passes whether or not the validation runs.
+- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issue #1143
+
+---
+
+### [C60.26] SELECT and INSERT column lists are validated identifiers · breaking · when: match
+
+- detect: `git grep -nE 'Select\(|InsertWithColumns\(|\.Columns\(|\.SetMap\(' -- '*.go'` lists every
+  call site. Keep the pattern POSIX ERE — `git grep -E` silently ignores `\b`, `\s`, `\d` and `\w`.
+  Nothing is compiler-caught; the failure is an error returned from `ToSQL()`. The grep alone does not
+  answer the question, because a multi-argument `Select` hides its expression strings from any pattern
+  that only sees the first argument — `Select("department", "COUNT(*)")` reads as a plain column list.
+  Run the build after the bump and let the errors enumerate them, or hand-read every `Select` taking
+  more than one string.
+- scope: `database/internal/builder/` only. `QueryBuilder.Select` validates each string column against
+  a new `select` identifier context — the ADR-031 grammar plus the wildcard, so `*` and `t.*` are
+  accepted. `QueryBuilder.InsertWithColumns`, `InsertQueryBuilder.Columns` and
+  `InsertQueryBuilder.SetMap` validate their columns against the plain identifier grammar;
+  `InsertQueryBuilder.SetMap` is the notable one, since `UpdateQueryBuilder.SetMap` — the same shape on
+  the sibling builder — has validated its keys since ADR-031 and the two disagreed until now.
+  A `dbtypes.RawExpression` from `qb.Expr()`/`MustExpr()` passes through untouched; only strings are
+  judged. Filter and JoinFilter column arguments are NOT in this hop — they follow in #1143.
+- gate: match = any `Select` argument is a string that is not a bare/qualified identifier or a
+  wildcard, OR any INSERT column list carries a non-identifier. no-match = every column is a plain
+  name, a `cols.Col(...)` lookup, or already a `qb.Expr(...)`.
+- apply: move the expression into `qb.Expr(...)`. Three shapes break, and only the first is obvious:
+  the `EXISTS` idiom `qb.Select("1")` becomes `qb.Select(qb.MustExpr("1"))`; a bare function string
+  `qb.Select("COUNT(*)")` becomes `qb.Select(qb.MustExpr("COUNT(*)"))`; and a function carrying an
+  alias splits, so `qb.Select(colID, "COUNT(o.id) AS order_count")` becomes
+  `qb.Select(colID, qb.MustExpr("COUNT(o.id)", "order_count"))` — the alias is the second argument to
+  `Expr`, not part of the SQL. `qb.Select("*")` is unaffected.
+- verify: both directions. Assert the columns you intend to ship still build (`err == nil` from
+  `ToSQL()`), then feed one known-bad column (`id; DROP TABLE users--`) to the same door and assert
+  `err != nil`. The message names the door, and the three spellings differ — `invalid select
+  identifier` from `Select`, `invalid insert column identifier` from `InsertWithColumns` and
+  `.Columns`, and `invalid SetMap column identifier` from `InsertQueryBuilder.SetMap` — note
+  `UpdateQueryBuilder.SetMap` reports `invalid column identifier` instead, because it validates
+  through the shared column funnel that `[C60.27]` introduces — so match on
+  `invalid ` and the identifier itself rather than on one fixed phrase. Checking only that good
+  columns still build passes whether or not the validation runs.
+- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issue #1143
+
+---
+
+### [C60.24] every INSERT and upsert door validates its table argument · breaking · when: match
+
+- detect: `git grep -nE 'Insert\(|InsertWithColumns\(|InsertStruct\(|InsertFields\(|BuildUpsert\(' -- '*.go'`
+  lists every call site. Keep the pattern POSIX ERE — `git grep -E` silently ignores `\b`, `\s`,
+  `\d` and `\w`. Nothing is compiler-caught; the failure is an error returned from `ToSQL()`
+  (or from `BuildUpsert` directly). The grep finds the calls but not the risk: a literal table
+  name always passes, so read only the sites whose table comes from a parameter, a config value,
+  a struct field or a concatenation.
+- scope: `database/internal/builder/` only. `Insert`, `InsertWithColumns`, `InsertStruct`,
+  `InsertFields` and `BuildUpsert` now validate their `table` against the same grammar
+  `From`, `Update` and `Delete` have applied since ADR-031 — a simple or qualified identifier
+  (`users`, `app.users`, `schema.app.users`) plus at most one inline alias (`users u`). Anything
+  else — whitespace beyond the alias, a semicolon, a `--` or `/* */` comment, parentheses, a
+  function call, extra tokens — is refused. A table sits FIRST in every one of these statements,
+  so a trailing comment used to take the rest of the statement with it, which no column
+  precondition could catch. The five doors were the last interpolating a table unchecked.
+- gate: match = any of those five is called with a table argument that is not a literal, OR with
+  a literal carrying anything beyond a name and an optional alias. no-match = every call passes a
+  bare or qualified literal.
+- apply: pass a name, not an expression. A dynamic table needs an allowlist of names your own
+  code owns — map the caller's value to one of a fixed set before it reaches the builder — since
+  the builder will not accept a computed one. A table plus alias stays legal (`"users u"`), and
+  `Table("users").As("u")` is unchanged.
+- verify: two directions, because one of them is what the atom is for. Call each affected site
+  with the name you intend to ship and assert it still builds — `err == nil` from `ToSQL()`, or a
+  nil third return value from `BuildUpsert`. Then feed one KNOWN-BAD name (`users; DROP TABLE x--`)
+  to the same site and assert the opposite: `err != nil`, reading `invalid table identifier "…":
+  must be a simple or qualified identifier with an optional alias`. A suite that only checks the
+  first direction passes unchanged whether or not the validation runs at all.
+- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issues #1104, #1143
+
+---
+
+### [C60.25] both identifier renderers double an interior quote · silent-behavior · when: match
+
+- detect: `git grep -nE 'EscapeIdentifier\(' -- '*.go'` for the exported helper, then search your
+  schema for a column or table whose NAME contains a double quote — `information_schema.columns`
+  on PostgreSQL, `ALL_TAB_COLUMNS` on Oracle, `WHERE column_name LIKE '%"%'`. A clean catalog is
+  NOT the whole answer: an ALIAS exists only in the statement that names it and appears in no
+  catalog, so also `git grep -nE '\.As\(|" [A-Za-z_]"' -- '*.go'` over your own builder calls for
+  an alias carrying a quote. Both clean means this atom cannot affect you.
+- scope: `oracleQuoteIdentifier` and `QueryBuilder.EscapeIdentifier` wrapped a name in quotes
+  without doubling the quotes inside it, so a name carrying one ended the identifier early and
+  the remainder was parsed as SQL rather than as part of the name. Both now double it, which is
+  how Oracle and PostgreSQL each spell a quote inside a quoted identifier. The pass collapses
+  before it doubles, so a name already written in escaped form (`a""b`, denoting `a"b`) is
+  unchanged rather than renamed. PostgreSQL identifiers that were emitted bare are still emitted
+  bare — nothing gains quoting, so no case-folding changes.
+- gate: match = a column, table or alias name in your schema contains a double quote.
+  no-match = none does, which is the ordinary case.
+- apply: nothing to change. SQL that used to fail at parse for such a name now builds correctly;
+  SQL that used to execute as something other than what the name said now names the column. If
+  you had worked around the old rendering by pre-doubling a quote yourself, that still works —
+  the pass is idempotent.
+- verify: hand `qb.EscapeIdentifier` a name whose only quote is a lone one. It comes back with
+  that quote doubled and the whole name wrapped, where it used to come back wrapped with the
+  quote untouched — one identifier now, two SQL tokens before.
+- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issue #1104
+
+---
+
+### [C60.22] the client IP is derived from observed hops only, and a trusted-proxy list covering an address family fails startup · breaking · when: match
+
+- detect: `git grep -nE 'trustedproxies' -- '*.yaml' '*.yml' '*.json' '*.toml'` and the same
+  sweep over your deployment surfaces (Helm values, Kustomize overlays, `.env` files,
+  rendered manifests) for `DEBUG_TRUSTEDPROXIES`, `SCHEDULER_SECURITY_TRUSTEDPROXIES` and
+  `SERVER_TRUSTEDPROXIES` — all THREE, because the widening below reaches the third key too.
+  **A `0.0.0.0/0` or `::/0` entry in the first two now fails startup**, and so does a list whose
+  entries TOGETHER cover a family (`["0.0.0.0/1","128.0.0.0/1"]`) or the v4-mapped default
+  route `::ffff:0.0.0.0/96` — read the values, not just the key. Do not stop at the two
+  lenient keys: only the literal default route was already refused on
+  `server.trustedproxies`, so a split-coverage or v4-mapped list fails on ALL THREE keys
+  now and setting them consistently does not make you unaffected. The exposure came from
+  the two lenient keys accepting what the third refused; the widening reaches all three.
+  Then check `debug.allowedips` on BOTH rules. An entry that is neither an IP address nor a
+  CIDR range is refused — a typo there used to deny everything silently at runtime and now
+  names itself at startup — and so is one that parses cleanly as a CIDR but has HOST BITS
+  SET (`192.168.1.55/16`), which used to silently widen the allowed range to
+  `192.168.0.0/16`. An entry that clears the first rule can still fail the second, so read
+  both; the remedy is the canonical network address or the single host without a prefix.
+  On the behavior side your code cannot tell you anything: the derived address depends on
+  what a caller sends. Search your ACCESS LOGS for debug-endpoint or `/_sys/job` requests
+  that were ALLOWED and whose recorded client IP does not match the peer you expect —
+  particularly any allowed request carrying `X-Real-IP`, which is no longer consulted.
+- class note: this atom is `breaking`, not `silent-behavior`, because half of it fails
+  startup outright — a list trusting an entire address family aborts the process on ANY of
+  the three keys, which no operator can discover from a log search. The derivation change IS silent, and the hop row
+  lists this atom under both categories for that reason; the header takes the louder of the
+  two so a reader triaging by class does not skip a startup failure.
+- scope: `server.ClientIP` derives the address for the framework's two IP-based
+  access-control checks — the debug-endpoint allowlist and the scheduler CIDR middleware
+  guarding `/_sys/job`. Both fail closed on an unparseable address but fail OPEN on one
+  that parses and is wrong, and five defects could produce exactly that.
+  It now follows one rule: **the answer is either an identified untrusted hop, or the peer
+  address actually observed — never a value the caller wrote.** Concretely: every
+  `X-Forwarded-For` field LINE is read and joined (`Header.Get` read only the first, so a
+  proxy that adds a second line left the real chain invisible); `[`/`]` are stripped per
+  entry (a bracketed IPv6 client used to be denied); an entry that carries no readable address STOPS the
+  walk and yields the peer rather than continuing left into a caller-authored entry — that
+  means an RFC 7239 `for=_hidden` or `unknown`, NOT a port suffix or IPv6 brackets, both of
+  which are normalized away first (`192.0.2.1:443` and `[2001:db8::1]:443` both resolve); a chain whose hops are all trusted
+  yields the peer rather than the left-most entry; a hop that is loopback, unspecified or
+  link-local yields the peer too, because no proxy observes a real client at those
+  addresses and they are exactly what the shipped allowlists contain; and `X-Real-IP` is
+  not consulted at all,
+  which is what ADR-057 decided and this function alone never implemented.
+  All three trusted-proxy keys now reject a trust list whose MERGED coverage spans an
+  entire address family — not merely one whose entry is a literal default route. A single
+  offending entry keeps the message `'%s' trusts every address, which restores
+  X-Forwarded-For spoofing`; a set that does it together names the set. This catches
+  `["0.0.0.0/1","128.0.0.0/1"]` and `["0.0.0.0/1","128.0.0.0/2","192.0.0.0/2"]`, which no
+  per-entry rule reaches, and `::ffff:0.0.0.0/96` — a v4-mapped default route that measures
+  96 of 128 mask bits while matching every IPv4 address. `server.trustedproxies` answers to
+  the same rule at startup AND at `server.New`, so a service constructed without
+  `config.Validate` cannot trust everyone either. `server.ParseCIDRs` enforces the
+  same rule at the runtime door, treating a total-coverage list as no trust list at all,
+  because it is exported and a caller outside app construction never passes through
+  `config.Validate`. The lenient
+  partial-invalid tolerance on the debug and scheduler keys is UNCHANGED — a single typo
+  still does not disable the whole list. What is newly refused on those two keys is any
+  list trusting an ENTIRE ADDRESS FAMILY: a literal default route, a set covering one
+  between its entries, or the v4-mapped `::ffff:0.0.0.0/96`. `server.trustedproxies`
+  already refused the literal form and newly refuses the other two, so the widening
+  reaches all three keys, not just the lenient pair.
+  `debug.allowedips` gains CIDR-syntax validation that accepts BARE ADDRESSES, because the
+  shipped default `["127.0.0.1","::1"]` is not CIDR notation. It also accepts an entry
+  wrapped in single or double quotes, because the RUNTIME parser has always stripped those
+  — a shell-quoting slip such as `DEBUG_ALLOWEDIPS='"127.0.0.1"'` works today and keeps
+  working, rather than becoming a startup failure the runtime would have served fine.
+  **Allowlists are deliberately exempt from the default-route rule.** `["0.0.0.0/0"]` on
+  `debug.allowedips` or `scheduler.security.cidrallowlist` stays valid — ADR-049 recommends
+  it. An allowlist that admits everything is a posture; a trust list that trusts everything
+  restores header spoofing.
+- preflight: **capture one real `X-Forwarded-For` from production before you bump and look
+  at what your proxies actually append.** An entry the walk cannot READ now stops the walk
+  and yields the peer — a trusted proxy your allowlist almost certainly does not contain —
+  so such a request is DENIED where it previously resolved to something.
+  Only one shape is affected, and it is rare: an RFC 7239 obfuscated identifier
+  (`for=_hidden`) or `unknown`, emitted where a proxy is deliberately concealing the
+  client. Those carry no address at all, so no parser can recover one; if you find one,
+  fix the proxy before upgrading or accept that those requests are denied at both doors.
+  **Port-suffixed and bracketed entries need NO action** — `192.0.2.1:443`, which AWS ALB's
+  `routing.http.xff_client_port.enabled` appends on every request, and `[2001:db8::1]:443`
+  are both read correctly now. So is a bracketed IPv6 entry without a port, which used to
+  be denied and now works. Refusing to read a shape a documented load-balancer toggle
+  emits would have been this framework exporting a parser limitation to operators as an
+  incident, which is why it is parsed rather than warned about.
+- gate: match — you are affected if you set ANY of the three trusted-proxy keys,
+  `server.trustedproxies` included: its per-entry rule was already strict, but the
+  set-coverage and v4-mapped rules are new to it too, so a list it accepted yesterday can
+  abort startup today. You are also affected if either access-control path runs behind a
+  proxy — and **setting none of the three keys does NOT make you unaffected**. Echo trusts
+  loopback, link-local and RFC1918 ranges by DEFAULT (`server/server.go`), so an in-VPC
+  service behind a load balancer consults `X-Forwarded-For` with no configuration at all, and
+  the derivation change reaches it. Only a deployment whose immediate peer is outside those
+  default ranges AND which sets none of the three keys is unaffected, because no hop it
+  observes is trusted and the headers are never consulted for it.
+- apply: three NEW startup failures, all of them naming the key and the remedy. A trust
+  list covering an entire address family (see scope) now aborts, as does a
+  `debug.allowedips` entry that is neither an IP nor a CIDR, or one with host bits set
+  (`192.168.1.55/16` silently admitted 65,536 hosts where one address was written — the
+  same widening the proxy keys already refuse, now in the same words). Note
+  `debug.allowedips` is validated **even when `debug.enabled: false`**: a block you wrote
+  must be valid whether or not it is registered, so a typo surfaces at deploy time rather
+  than during the incident in which someone flips it on.
+  Then remove the total-coverage list from whichever of the THREE trusted-proxy keys holds
+  one — a literal default route, a set covering a family between its entries, or the
+  v4-mapped form — and list the specific proxy ranges instead — that is the startup error's own instruction, and it is the fix for
+  the exposure, not a formality. If you relied on `X-Real-IP` reaching either access-control
+  check, switch the proxy to append to `X-Forwarded-For`; there is no configuration that
+  restores the old behavior, deliberately. If a legitimate client was being denied because
+  your proxy brackets IPv6 XFF entries, that now works.
+  Only `config.Validate` ABORTS. The two runtime doors refuse the same lists without an
+  error: `server.New` installs no trust options and logs, and `server.ParseCIDRs` returns
+  nil nets with every trimmed entry reported invalid. A service built without
+  `config.Validate` therefore BOOTS trusting nobody rather than failing — same security
+  outcome, no crash to alert on, so check the log line rather than waiting for a restart.
+- verify: three probes against a running service.
+
+  1. **Startup.** Set `debug.trustedproxies: ["0.0.0.0/0"]` and start. Expect a startup
+     failure naming `debug.trustedproxies` and saying it "trusts every address". Repeat for
+     `scheduler.security.trustedproxies` AND `server.trustedproxies`. Then repeat all three
+     with `["0.0.0.0/1","128.0.0.0/1"]` and with `["::ffff:0.0.0.0/96"]` — those are the
+     shapes no per-entry rule catches, so a probe using only `0.0.0.0/0` passes without
+     testing the rule this atom is about. Probe the `debug.allowedips` host-bits rule on its
+     own too — set `debug.allowedips: ["192.168.1.55/16"]` and expect a startup failure naming
+     the key; an entry that is merely unparseable exercises the other rule, not this one, which
+     parses cleanly and widens. Then set `debug.allowedips: ["0.0.0.0/0"]` and
+     confirm it still starts — the allowlist exemption is deliberate, and a failure there
+     would be a regression.
+  2. **The bypass, at the debug door.** With a legitimate `debug.trustedproxies` (a real
+     proxy range that does NOT contain your test client) and the default
+     `debug.allowedips`, send a request directly to a debug endpoint carrying
+     `X-Real-IP: 127.0.0.1`, then again carrying `X-Forwarded-For: 127.0.0.1`. Expect 403
+     for both. Before this change, a default route in that key made both succeed.
+  3. **`/_sys/job`.** Same two requests against the scheduler endpoint with the shipped
+     empty allowlist (localhost-only). Expect 403 for both. Then confirm a genuine
+     request from an allowlisted address still succeeds. At RUNTIME this change denies
+     only where it previously granted wrongly, and it newly GRANTS normalized forms a
+     proxy really emits (bracketed IPv6, port-suffixed entries) that used to be denied —
+     so a legitimate caller still being denied means your trusted-proxy list no longer
+     describes your topology. A total-coverage list never reaches this test: it fails
+     startup.
+- ref: [ADR-080](adr_080_client_ip_answers_only_from_observed_hops.md) ·
+  [ADR-057](adr_057_trusted_proxy_ip_extraction.md) (completed by it; its comparison table
+  is retired in an amendment) · [ADR-049](adr_049_debug_endpoints_fail_closed.md) (never
+  examined IP derivation, which is why this survived it) · `server/clientip.go` ·
+  `config/validation.go` (`rejectTotalCoverage`, `CoversAddressFamily`,
+  `validateIPOrCIDRList`)
+- residual: an earlier draft of this atom recorded `["0.0.0.0/1","128.0.0.0/1"]` as
+  passing unchanged, with a union-coverage check named as a follow-up. That is obsolete:
+  the check SHIPPED here, and the three doors answer it in two different ways.
+  `config.Validate` FAILS STARTUP on such a list at any of the three keys. The two runtime
+  doors do not fail, they DROP: `server.New` installs no trust options and logs an error,
+  and `server.ParseCIDRs` returns no error at all — it hands back no trust nets plus every
+  trimmed entry as invalid, so the caller's own WARN names them. Either way the list ends
+  up trusting nobody rather than everybody. What remains is posture, not parsing — a trust
+  list that
+  correctly describes its topology still believes whatever those proxies append, which is
+  identification and not authorization ([ADR-043](adr_043_forwarded_client_cert.md)).
+
+---
+
+### [C60.30] the 5xx response body's error detail requires `app.debug` AND a development env · silent-behavior · when: match
+
+- detect: grep every deployment surface — YAML, `.env` files, Helm values, Kustomize overlays,
+  rendered manifests — for `app.env`/`APP_ENV` set to a development alias (`development`, `dev`,
+  `local`; the comparison lowercases and trims, so `Dev ` counts) held together with
+  `app.debug`/`APP_DEBUG` set to `false` or left unset. That pairing is the only one whose
+  emitted body changes. A deployment whose `app.env` is not a development alias was already
+  clean, and one that runs `app.debug: true` in a development environment is unchanged.
+- scope: `classifyError` attached `details.error` — the raw `err.Error()` of an unhandled 5xx,
+  or Echo's `[PANIC RECOVER] …` string with the captured stack for a recovered panic — to the
+  response body under `cfg.App.IsDevelopment()` alone, while both LOG sinks withheld the same
+  text under `cfg.App.Debug`. The two sinks could therefore disagree, and they disagreed in the
+  wrong direction: an operator who turned `app.debug` off while `app.env` stayed a development
+  alias silenced the copy they could read and kept shipping the copy the CALLER reads. The body
+  now shares the log gate and adds the environment requirement on top — `cfg.App.Debug &&
+  cfg.App.IsDevelopment()` — so the stricter of the two keys wins and the sinks cannot diverge.
+  Nothing about the LOG paths changes, and the debug rendering still carries what ADR-081
+  leaves it: the panic's TYPE, never its value, since `sanitizePanicValue` has already replaced
+  the value one frame lower. The `details` map itself is not otherwise touched — a development
+  build still renders a handler-supplied `details` entry and the captured stack frames under
+  the environment gate alone.
+- gate: match = `app.env` is a development alias AND `app.debug` is false or unset.
+  no-match = any other pairing, including every production posture.
+- apply: nothing to change if the loss of that detail is what you wanted. If you were reading
+  `details.error` off a development service's 500 responses — a smoke test, a local debugging
+  script, a contract fixture pinning the key's presence — set `app.debug: true` in that
+  environment to get it back, or read the framework log's `error` field instead, which the same
+  key has always gated.
+- verify: against a service running `app.env: development` with `app.debug: false`, make a
+  handler panic and make another return a plain error. Both responses must decode to an
+  `error.details` map with NO `error` key, where the panic response previously carried
+  `[PANIC RECOVER] panic (type: string)` plus the stack. Then flip `app.debug: true` and repeat:
+  the key is back on both. Check BOTH routes — the panic path and the unhandled-error path reach
+  the same sink but through different middleware, and a probe of one does not answer for the other.
+- ref: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (addendum: the response-body
+  sink shares the debug gate) · `server/server.go` (`classifyError`) · issue #1140
+
+---
+
+### [C60.29] a `RawExpression` struct literal is validated where it is consumed · breaking · when: match
+
+> **Superseded in part on the E61 hop by `[C61.9]`.** The alias check described below is a
+> six-substring denylist, and a denylist accepts everything it does not enumerate — `[C61.9]`
+> replaces it with the identifier grammar and deletes `ErrDangerousAlias`. Read this atom for the
+> funnel (which is unchanged and still correct); take the alias rules from `[C61.9]`.
+
+- detect: `git grep -nE 'RawExpression\{' -- '*.go'` lists every struct literal — the only
+  construction path this hop changes. Keep the pattern POSIX ERE; `git grep -E` silently ignores the
+  PCRE escapes. Nothing is compiler-caught: `RawExpression` stays a plain exported struct with
+  exported fields, and the failure is an error returned from `ToSQL()` (or, on a JoinFilter, from the
+  filter's own `ToSQL()`). Values from `qb.Expr(...)`/`qb.MustExpr(...)` are unaffected — they already
+  passed the same checks at construction.
+- scope: `database/types/` and `database/internal/builder/`. `RawExpression` gains an exported
+  `Validate() error` — the single funnel `Expr()` now calls at construction and every door that
+  interpolates an expression calls again at consumption: `QueryBuilder.Select` (including the
+  `[]RawExpression` and `[]any` forms), `SelectQueryBuilder.GroupBy`, `SelectQueryBuilder.OrderBy`,
+  and the `JoinFilterFactory` value doors `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte` and both bounds of
+  `Between`. It rejects two things and nothing else: SQL that is empty or whitespace
+  (`ErrEmptyExpressionSQL`) and an alias containing `;`, `'`, `"`, `--`, `/*` or `*/`
+  (`ErrDangerousAlias`). The SQL body itself is still NOT validated — that is what the escape hatch is
+  for, and the caller still owns it.
+  The alias is the injection vector `[C60.26]` left open. `Select` renders it as `<sql> AS <alias>`
+  verbatim, so `RawExpression{SQL: "1", Alias: "x FROM users; DROP TABLE t--"}` emitted
+  `SELECT 1 AS x FROM users; DROP TABLE t-- FROM users` on both vendors, while the same alias through
+  `qb.MustExpr` had always panicked. The guard existed; it was optional, because the type it guards is
+  constructible without it.
+- gate: match = a `RawExpression` is built as a struct literal anywhere. Constant fields are NOT an
+  exemption — a hardcoded `Alias: "total--"` is refused exactly like a computed one, so every literal
+  has to be read. no-match = every expression comes from `qb.Expr(...)` / `qb.MustExpr(...)`, which
+  already ran the same check at construction. A census of this repository found no struct literals
+  outside tests and `Expr()` itself.
+- apply: build expressions through `qb.Expr(sql, alias)` — it returns the same error, at construction,
+  where the stack still names your code. A request-derived alias needs an allowlist your own code
+  owns, mapping the caller's value to one of a fixed set before it reaches the builder; passing it
+  through the builder does not make it safe, because the check is a denylist and an alias avoiding the
+  six sequences is accepted (see `residual:` below). `MustExpr` keeps panicking, so reserve it for
+  static initialization.
+- verify: both directions. Assert the expressions you intend to ship still build (`err == nil` from
+  `ToSQL()`, and the SQL is byte-identical to what the same expression rendered before), then feed one
+  known-bad literal (`RawExpression{SQL: "1", Alias: "x--"}`) to the same door and assert
+  `errors.Is(err, dbtypes.ErrDangerousAlias)` — on v0.61.0 that sentinel is gone and the assertion
+  is `errors.Is(err, dbtypes.ErrInvalidAlias)` (`[C61.9]`). Checking only that good expressions
+  still build passes whether or not the validation runs.
+- residual: **CLOSED on the E61 hop by `[C61.9]`, which replaces the denylist with the identifier
+  grammar.** As shipped here the alias check is a denylist, not a grammar: an alias carrying none of
+  the six sequences still renders verbatim — `Alias: "a, (SELECT password FROM users) b"` is accepted
+  by `qb.Expr()` and therefore by every door. This hop makes the two construction paths agree; it does not narrow what
+  they accept. Treat an alias as developer-controlled input, the same contract the expression SQL
+  carries.
+- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) (2026-08-23 addendum) ·
+  issue #1153 · `database/types/expression.go` (`RawExpression.Validate`)
+
+---
+
+### [C60.28] the table alias handed to `As` is a validated identifier · breaking · when: match
+
+- detect: `git grep -nE 'Columns\(&?[A-Za-z_]' -- '*.go'` finds the metadata handles, then
+  `git grep -nE '\.As\(' -- '*.go'` every alias call on one. Keep the pattern POSIX ERE —
+  `git grep -E` silently ignores `\b`, `\s`, `\d` and `\w`. The second grep also matches
+  `TableRef.As` and every other `As` in your tree, which is NOT this door — read the receiver.
+  Nothing is compiler-caught and nothing surfaces from `ToSQL()`: the failure is a PANIC at
+  the `As` call. A literal alias passes only if it matches the grammar below — an ordinary one
+  (`"u"`) does, `"users u"` or `"u.x"` does not — so read the literals against the grammar, and
+  read EVERY site whose alias comes from a parameter, a config value, a struct field or a
+  concatenation.
+- scope: `database/internal/columns` and `database/types`. `Columns.As` validated only that
+  the alias was non-empty, then every `Col`/`Cols`/`All`/`FieldMap`/`AllFields` rendering
+  emitted `alias + "." + column` verbatim. It now validates against the ADR-031 grammar for
+  the alias half of `"users u"` — ONE bare identifier (`u`, `_u1`, `u$1#a`) or the framework's
+  own quoted reserved-word form (`"level"`). A qualified name (`u.x`), two tokens (`u x`), a
+  semicolon, a comment marker, an interior or unbalanced quote, and leading or trailing
+  whitespace are all refused; the argument is deliberately NOT trimmed, so `" u "` is refused
+  rather than accepted and rendered with its spaces. The grammar itself moved to
+  `database/internal/sqllex` so every identifier judge inside `database/` — the builder's doors
+  and the columns package's own `db`-tag check included — reads one copy.
+  What changes for you is WHERE the refusal happens. `[C60.26]` and `[C60.27]` already refuse
+  the rendered string at `Select`, at the Filter columns and in the INSERT column lists, so an
+  alias carrying SQL was reaching those doors and failing there; it now fails at `As`. The
+  doors that never validate are where this is not merely earlier: `Having` is a raw-SQL door
+  and interpolates `u.Col("ID")` as written, as does anything you render into your own SQL.
+- gate: match = any `Columns.As` call takes an alias that is not a literal, OR a literal that
+  is not a single bare or framework-quoted identifier. no-match = every alias is a bare
+  literal, which is the ordinary case. A test asserting the OLD empty-alias panic value
+  matches too — see apply.
+- apply: pass an identifier, not an expression. A dynamic alias needs an allowlist your own
+  code owns — map the caller's value to one of a fixed set before it reaches `As` — since the
+  door will not accept a computed one. And repoint any test that asserted the empty-alias
+  panic: the value was the string `"alias cannot be empty"` and is now a
+  `*dbtypes.InvalidAliasError`, so `assert.PanicsWithValue` on the old string fails while
+  `assert.Panics` still passes. Match the new value with `errors.As` against
+  `*dbtypes.InvalidAliasError`, whose `Alias` field carries the refused value.
+- verify: both directions, because one of them is what the atom is for. Assert the alias you
+  intend to ship still qualifies its columns — `cols.As("u").Col("ID")` returns `u.id` and the
+  statement builds. Then hand the same door one KNOWN-BAD alias (`id FROM secrets--`) and
+  assert it PANICS and that no SQL is produced. A suite that only checks the first direction
+  passes unchanged whether or not the validation runs at all. Note the failure is a panic, not
+  a `ToSQL()` error, so a table test that only inspects returned errors sees nothing.
+- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) (its 2026-08-23
+  addendum) · [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (why the panic
+  value is a typed error) · issue #1150
+
 ---
 
 ## E61 · v0.60.0 → v0.61.0 — the server's own 400 details stop echoing request input, span sinks record errors by type, the query builder validates and normalizes every identifier door and `Having` gains a sanctioned expression path, `jf.Eq` renders nil and lists like `f.Eq`, and the framework owns the Flyway URL
@@ -7695,895 +8584,6 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   [ADR-040](adr_040_declaration_args_passthrough.md) (the `Args["x-queue-type"]` passthrough
   this field fronts, and the declare-equivalence check that makes the flip a topology change) ·
   `messaging/helpers.go`
-
-### [C60.17] the HTTP trace headers and the AMQP delivery identity are validated before every FRAMEWORK sink · silent-behavior · when: always
-
-- detect: your Go code cannot tell you this either — every offending value comes from a
-  caller or a foreign publisher. Search your LOG BACKEND for a `traceparent` field that is
-  not spec-exact — the full rule is [C60.8]'s, unchanged: dash-delimited LOWERCASE hex in
-  the version-00 positions (two version digits, a 32-digit trace-id, a 16-digit parent-id,
-  two flag digits), with an all-zero trace-id or parent-id rejected, version `ff` rejected,
-  version `00` exactly 55 characters, and a later version's extra fields printable
-  non-space ASCII within 255 bytes total. A query matching only the delimiters and lengths
-  will miss the uppercase-hex, all-zero and `ff` classes, which are discarded too, and for `amqp_correlation_id`, `message_id`,
-  `routing_key` or `exchange` values outside what the shapes below allow — each of those was being
-  emitted and is now omitted. A non-spec-exact `traceparent` you find may also be
-  FIRST-PARTY and unaffected by this hop — see "What this atom does NOT cover" below before
-  chasing the emitter. The cheapest detect, once upgraded, is the new field: query
-  your consume lines for `identity_rejected: true` — it fires on exactly the deliveries this
-  atom changed, and `delivery_tag` on the failure line identifies each one. Then re-read anything that consumes the RESPONSE
-  `traceparent` header of your own services, since a client that echoed its own value back
-  to itself now gets a framework-minted one instead. On the metric side, check dashboards
-  filtering `messaging.rabbitmq.routing_key` (spans carry
-  `messaging.rabbitmq.destination.routing_key`) or `messaging.rabbitmq.exchange`,
-  or grouping by `messaging.destination.name`, on the AMQP consume instruments. A delivery
-  whose exchange or routing key fails the shape loses that ATTRIBUTE entirely, and the
-  destination name — which is built as `exchange:routing_key:queue` and is always emitted —
-  keeps its shape with that segment EMPTY. A dashboard grouping by destination name
-  therefore gains a new series such as `:user.created:my-queue` rather than losing one.
-- scope: [C60.8] closed `trace.ExtractFromHeaders`. It did not reach three seams, and all
-  three are closed now on the same terms (ADR-070, amended).
-  **HTTP ingress.** `enrichTraceContext` read `req.Header` directly, so the HTTP door was
-  the one ingress storing a caller's `traceparent` verbatim and re-emitting it on every
-  outbound hop. It is validated with the same spec-exact rule now; the accompanying
-  `tracestate` gets the 512-byte cap, a printable-ASCII charset AND the carrier scoping — a `tracestate` arriving with
-  no valid `traceparent` to annotate is dropped rather than attached to a freshly minted
-  one, and one already in the request context is dropped when this request brings a parent
-  of its own. An invalid `traceparent` is treated as ABSENT, never as a reason to reject: the
-  request is served and continues on a minted id, byte-identical to the path every request
-  without the header already takes.
-  **Response reflection.** `ensureTraceParentHeader` echoed the raw request header onto the
-  response from six call sites, and the access-log metadata reader read it raw into a log
-  field. Both validate their own read now — they read the request header directly, so the
-  context-level guard above does not cover them.
-  **`tracestate` charset.** The cap is no longer the whole rule at ANY door, this one
-  included: a `tracestate` containing a control byte — CR, LF, NUL, ESC — is discarded where
-  it used to be stored and re-emitted. Go's header reader already refused those on an
-  inbound HTTP request, so this bites the AMQP and outbox doors, where a longstr carries any
-  byte. Grammar is still deliberately unvalidated; the charset is a strict superset of the
-  W3C list syntax, so no conforming value is affected.
-  **AMQP properties and envelope metadata.** `CorrelationId` and `MessageId` are content-header
-  PROPERTIES; `Exchange` and `RoutingKey` are `basic.deliver` ENVELOPE metadata. The
-  distinction does not change the rule — no header extractor reaches either, since
-  `ExtractFromHeaders` reads the `headers` table alone — but it is why no amount of header
-  validation was ever going to cover them. The classic consume
-  lane read all four raw into log fields, span attributes and metric attributes. They are resolved once per
-  delivery now and the one verdict is threaded to every framework sink. `Exchange` answers the
-  same rule as the routing key. `CorrelationId` and
-  `MessageId` answer to `^[A-Za-z0-9_-]{1,128}$`, the request-id charset — note that a
-  dotted or `urn:uuid:`-shaped value from a foreign publisher fails it. `RoutingKey`
-  answers to a separate rule: printable ASCII — space allowed, control bytes and non-ASCII
-  not — up to the 255-byte shortstr ceiling, because the request-id charset would discard
-  the dotted routing key of essentially every real deployment. Only the charset half can
-  fire on this door; a consumed routing key is already within 255 bytes by the wire format.
-  A value that fails is OMITTED from the sink — no substitute, no truncation — which also
-  means a field the delivery never carried is now ABSENT from the log line where it used to
-  be present and empty: `message_id` on the DEBUG, success, failure and panic lines,
-  `routing_key` and `exchange` on the DEBUG, failure and panic lines,
-  `amqp_correlation_id` on the failure and panic lines.
-  **Two fields are ADDED, so the omission is searchable.** Every consume line that dropped
-  something stamps `identity_rejected: true` — a bounded boolean, never the rejected value —
-  and the failure and panic lines stamp `delivery_tag`, the one identifier no publisher
-  supplies, so a delivery whose every vouched field was dropped is still attributable to one
-  message. A saved query can therefore find affected traffic without knowing what the
-  rejected value was. The `messaging/streams` lane is unchanged: it surfaces none of these
-  four today, though an AMQP 1.0 message does carry a message id and a correlation id.
-  **Two rules, deliberately.** The identifier rule and the routing-key rule are separate and
-  neither is a relaxation of the other: `CorrelationId`/`MessageId` are correlation
-  identifiers, so they answer to the identifier charset every other door applies, and a
-  dotted or colon-separated one fails it. A routing key is an AMQP address, not an
-  identifier — every key this framework publishes is dot-delimited and a topic binding
-  legally carries `*` and `#` — so applying the identifier charset there would discard the
-  routing key of essentially every real deployment. The routing-key rule refuses what
-  ADR-070 refuses everywhere (CR/LF, NUL, ANSI escapes) and bounds the value at the AMQP
-  shortstr ceiling, and nothing more.
-  **What this atom does NOT cover.** The EMIT side is unchanged: `computeTraceParent` still
-  prefers a `traceparent` already present in the outgoing header map and takes it verbatim,
-  and `extractTraceIDFromParent` still checks the trace-id's length rather than its charset.
-  Ingress validation closes that transitively for values the framework itself put there, so
-  what remains is first-party code hand-setting `PublishOptions.Headers["traceparent"]` (or
-  calling `trace.InjectIntoHeaders` on a pre-populated accessor) and outbox rows persisted
-  BEFORE this hop — the relay sanitizes the publish CONTEXT but republishes the stored
-  header map as-is, so a pre-upgrade row re-emits its malformed traceparent until the
-  backlog drains. Neither is remote-triggerable. Tracked in
-  [#1121](https://github.com/gaborage/go-bricks/issues/1121); do not read this atom as
-  closing them.
-  **The guarantee covers FRAMEWORK sinks only** — the log lines, span attributes and metric
-  attributes this framework emits. It is not a guarantee that a raw value is unreachable.
-  Your own code still sees the unvalidated bytes in two places by design: a handler receives
-  the raw `*amqp.Delivery` (that is deliberate, so a legitimate foreign shape the charset
-  refuses is still available to you), and an outgoing header map you pre-populate is taken
-  verbatim on the emit side ([#1121](https://github.com/gaborage/go-bricks/issues/1121)). If
-  you copy either into your OWN log, span, metric or outbound header, validate it there —
-  `trace.ValidateRequestID` and `trace.ValidateTraceParent` are exported for exactly that.
-- gate: always — every service serving HTTP, and every service consuming classic AMQP,
-  emits at least one of these fields.
-- apply: nothing to change in your code — no request is rejected, no delivery is rejected,
-  and nothing fails at startup. Note the two failure modes are DIFFERENT and neither is a
-  repair. At the HTTP door the caller's `traceparent` is dropped and the framework mints its
-  own, exactly as it does for a request that sent none. At the AMQP sinks nothing is minted:
-  the field is simply absent from that log line, span or metric. In particular an invalid
-  `amqp_correlation_id` is NOT replaced by the framework trace id — `correlation_id` on the
-  same line already carries that, and stamping it twice under two names would forge a
-  correlation the publisher never asserted.
-  Then decide what to do about each upstream the detect
-  finds. A gateway emitting a non-spec-exact `traceparent` loses trace linkage through your
-  service, as it already did at the messaging doors after [C60.8]. A foreign publisher whose
-  `CorrelationId` or `MessageId` is dotted, colon-separated or over 128 characters loses that
-  field from your framework log lines and its span attribute — the handler still sees the raw
-  `*amqp.Delivery`, so read the property yourself if you need the foreign shape. Repair any
-  saved query or alert that treats one of these fields as always present; a query asserting
-  `message_id != ""` is the shape most likely to have depended on the empty stamp.
-- verify: four probes against a running service; the fourth is broker-dependent.
-
-  1. **HTTP ingress and response.** Run this DIFFERENTIALLY, because validating a
-     `traceparent` does not decide a status code — an arbitrary handler legitimately answers
-     201, 204, 4xx or 5xx, so a bare "expect 200" would fail on a healthy service. Send the
-     same request to the same endpoint twice: once WITHOUT the header, to establish that
-     endpoint's baseline status, and once with
-     `traceparent: 00-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-00f067aa0ba902b7-01` (32 non-hex bytes
-     where the trace-id belongs — the shape the old length-only check accepted). Expect the
-     status to be UNCHANGED between the two, which is the claim that matters: an unusable
-     traceparent is treated as absent and never changes how the request is answered. Then
-     expect the RESPONSE `traceparent` on the second call to be spec-exact and NOT the value
-     you sent. That much is runnable by every HTTP service, with or without a broker.
-
-     If the service also publishes, point the request at a handler that performs one
-     downstream publish and additionally expect a published message whose `traceparent` is
-     likewise minted, an `X-Request-ID` equal to that minted traceparent's 32-hex trace-id,
-     and a POPULATED `CorrelationId` — before this change the aligned id was 32 exclamation
-     marks, which the publish-side guard refused, so `CorrelationId` shipped empty.
-
-     Repeat both with a valid `traceparent` and confirm it propagates end to end unchanged.
-  2. **AMQP delivery identity.** Publish to a consumed queue with `correlation_id` set to
-     `urn:uuid:0b8a...` (or any value carrying `:` or `.`), `message_id` set to the same
-     shape, and a routing key containing a newline, and make the handler fail so the failure
-     line is emitted. Expect the failure line to carry no `amqp_correlation_id`, no
-     `message_id` and no `routing_key`, to carry `identity_rejected: true` and a
-     `delivery_tag`, and the receive span to carry none of
-     `messaging.message.conversation_id`, `messaging.message.id` or
-     `messaging.rabbitmq.destination.routing_key`. Repeat with `correlation_id: probe-2`,
-     `message_id: probe-2-msg` and routing key `user.created` and confirm all three are
-     present, unchanged, and that `identity_rejected` is ABSENT — a marker that fired on
-     clean traffic would be no signal.
-
-     Then run BOTH of those again with a handler that SUCCEEDS, because the guarantee is not
-     failure-scoped: `message_id` reaches the success line too, so expect it present on a
-     clean delivery and absent — with `identity_rejected: true` beside it — on the poisoned
-     one. If your handlers can panic, force one as well: the panic line is built by the same
-     helper as the failure line and carries the same fields, `delivery_tag` included.
-  3. **`tracestate` control bytes.** This one needs a NON-HTTP carrier, because Go's own
-     header reader already rejects control bytes on an inbound HTTP request — the door this
-     probe exercises is the AMQP one, where a longstr carries any byte. Publish to a consumed
-     queue with a valid `traceparent` header and a `tracestate` header containing CR, LF, NUL
-     or ESC, and have the handler perform one downstream publish. Expect the outbound message
-     to carry the inbound `traceparent` and NO `tracestate` at all — dropped, not truncated
-     and not emptied. Repeat with a clean `tracestate` such as `vendor=probe` and confirm it
-     propagates unchanged, and once more with a clean `tracestate` but NO `traceparent`,
-     where it must again be absent outbound: a tracestate with no parent to annotate is an
-     orphan, and the carrier scoping drops it rather than attaching it to a minted parent.
-  4. **Exchange.** Broker-dependent, and either outcome is a pass. Try to
-     `exchange.declare` a name carrying a byte outside printable ASCII and bind your
-     consumed queue to it. If your broker REFUSES the declare, that is the answer: the field
-     cannot reach the sink from that broker, and nothing changes for you. If it accepts,
-     publish through it and expect the failure line to carry no `exchange`, the receive span
-     no `messaging.rabbitmq.exchange`, and the consume metrics' `messaging.destination.name`
-     to be built with that half empty. Skip the probe entirely if you control every exchange
-     name in the deployment — the field cannot fail the shape then, which is why it was the
-     last one added rather than the first.
-- ref: [ADR-070](adr_070_inbound_trace_identifier_validation.md) (amended 2026-08-20) ·
-  [C60.7] · [C60.8] · [C60.10] ·
-  [#1121](https://github.com/gaborage/go-bricks/issues/1121) (the emit-side residual this
-  atom does not cover) · `server/trace_context.go` (`enrichTraceContext`) ·
-  `server/handler.go` (`ensureTraceParentHeader`) · `server/logger.go`
-  (`extractRequestMetadata`) · `server/request_utils.go` (`validateTraceParent`) ·
-  `messaging/delivery_identity.go` · `messaging/registry.go` (`processMessage`) ·
-  `trace/validate.go` (`ValidateTraceState`, new — the tracestate cap is shared as a
-  function so a second clause cannot reach one door and miss the other)
-
-### [C60.23] a recovered panic value is reported by type, never by value · breaking · when: match
-
-- detect: every row of the `scope` table breaks a matcher SILENTLY — the query stops
-  matching and the alert simply never fires, which reads as "no panics" rather than as a
-  broken alert. **The span rows no log grep reaches at all.** Grep your log-based alerts,
-  saved queries, dashboards and log-parsing tests against that table, row by row.
-  **Start with the HTTP rows (6-8)**, because they are the only ones that need
-  no messaging, no scheduler and no `AuditRecorder` to reach you: one panicking request emits
-  all of them. In production posture only rows 6 and 7 CHANGE — row 8 is emitted unchanged
-  there and moves only under `app.debug: true`, so check it in that posture or not at all. Then the audit sink-failure line (`audit sink panicked; event dropped`), the
-  scheduler job-panic line (`Job panicked - recovered and marked as failed`), the settle
-  line (`Panic recovered while settling a delivery; not retried`), and — the widest of
-  the messaging ones — **the shared delivery outcome line on BOTH messaging lanes**, whose classic
-  spelling is `Panic recovered in message handler - discarding without requeue` and whose
-  streams spelling is its own constant (`messaging/streams/runner.go`). It fires for any
-  consumer whose MESSAGE HANDLER panics, which needs no `AuditRecorder`
-  and no scheduled jobs:
-  `git grep -nE '(^|[^_a-zA-Z])panic([^_a-zA-Z]|$)|panic_type|error_type|exception\.type|exception\.stacktrace|"exception"|audit sink panicked|Job panicked|Panic recovered|PANIC RECOVER' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
-  Two of those arms cover consumers no message-text or `panic`-field pattern can reach.
-  **`error_type`** is rows 7 and 8: row 7's production value flips from the panicking value's own
-  error type to the CONSTANT `*server.panicTypeError`, so anything GROUPING, faceting or filtering
-  on that value silently collapses to one bucket or stops matching. **`exception`** is the SDK
-  event itself: `WithoutPanicRecording()` means an unwinding panic emits no exception event at
-  all, so a rule keyed on the event NAME, on `exception.type` or on `exception.stacktrace` drops
-  to zero hits and never fires again. Neither is a rename you can grep for by its new spelling —
-  one is a changed VALUE and the other is an ABSENCE.
-  **Do not use `Panic recovered` to tell the lanes apart.** At least four lines share that
-  prefix — the delivery settle line, the classic outcome line, the streams outcome line
-  (`Panic recovered in stream handler - offset not committed`) and the HTTP error handler's
-  own line, whose message is exactly `Panic recovered`. A hit on it in an HTTP-only service
-  is that service's own affected line, not a messaging concern to dismiss. `PANIC RECOVER`
-  — upper-case — is the one spelling unique to the HTTP side; the bare-word `panic` arm,
-  being lower-case, does not match it.
-
-  **Then run a SECOND, DIFFERENT command over your Go and Markdown** — the gate mentions
-  log-parsing tests and runbooks, and neither lives in the config globs above:
-  `git grep -nE 'panic_type|error_type|exception\.type|exception\.stacktrace|"exception"|audit sink panicked|Job panicked|Panic recovered|panic in message handler|PANIC RECOVER|"panic"|panic !=|\[panic' -- '*_test.go' '*.md' ':!wiki/migrations.md' ':!wiki/adr_*.md'`.
-  **The `panic_type` arm stays, and the two pathspec exclusions are why.** `panic_type` is NOT a
-  post-bump-only spelling — `[C60.21]` put it on the audit line's `(value unrenderable)` fallback
-  in this same hop's predecessor, so a consumer's repo can legitimately hold it BEFORE the bump
-  and dropping the arm would miss them. What it must not match is THIS runbook and these ADRs,
-  which discuss the field on every page: run inside a go-bricks checkout without the exclusions
-  and the arm selects `when: match` off nothing but our own prose.
-
-  **These are two commands with two patterns on purpose; do not merge them.** Adding
-  `'*.go'` to the config sweep above turns it from 4 hits into several hundred across the
-  tree, because its bare-word `panic` arm matches every ordinary `panic(`
-  call in Go source — and a detect step returning several hundred lines is one an
-  operator abandons, which is the same failure as returning too few. The source sweep
-  therefore drops the bare-word arm and keeps only the field and message spellings: the
-  quoted JSON field, the `panic != ""` query form, the `fields: [panic` list form, and
-  the five message texts.
-
-  Two things to expect from it. **A log-LEVEL enumeration is the common false positive**
-  — `[]string{"debug", "info", "warn", "error", "fatal", "panic"}` matches `"panic"` and
-  has nothing to do with this atom — so skim for the field in a log or query context
-  rather than the bare word. And if you run it inside a go-bricks CHECKOUT rather than
-  your own service, it also matches the framework's own tests and docs; that flood is
-  expected and is not your exposure.
-  The word-boundary alternation is load-bearing: a pattern matching only the QUOTED
-  `"panic"` misses `panic != ""` and a bare field list `fields: [panic, stack]`, which is how
-  most query languages name a field. Verified against a fixture holding all four spellings
-  over your alerting config, plus the same terms in your log backend's saved searches, which
-  no repo grep reaches. Also search for the retired message
-  `audit sink panicked; event dropped (value unrenderable)` — it has no successor.
-
-  **Then run the span-side detect, which the log grep above cannot substitute for.** In your
-  tracing backend, search span exception messages and status descriptions for
-  `panic in message handler`, for `cleanup: tenant` and for `[PANIC RECOVER]` — that last is
-  the HTTP SERVER span's status description, which changes on every panicking request in
-  any service that serves HTTP at all — and grep alert and SLO definitions
-  for `exception.message`:
-  `git grep -nE 'exception\.message|exception\.type|exception\.stacktrace|"exception"|otel\.status_description|panic in message handler' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
-  The three `exception` arms beyond `.message` are the EVENT-existence consumers: an alert that
-  counts exception events, or matches their name or stacktrace, sees a silent drop to zero rather
-  than changed text, which no message-shape pattern detects.
-  This one deliberately omits `PANIC RECOVER`: it shares the config sweep's globs, so that arm
-  would only re-return hits you already triaged. Read the `PANIC RECOVER` hits from the first
-  sweep TWICE — once as the HTTP action line (row 6), once as the server span (row 11).
-  A shop that alerts on traces rather than logs matches NOTHING in the log grep and is still
-  fully affected.
-- scope: **the rule is the contract, not the count: after this hop no framework sink carries
-  a recovered panic's VALUE — on any sink, not only the log.** Work the table below as a
-  checklist rather than trusting a total. That total grew three times while this atom was
-  being written, so read the table as the surfaces known TODAY and judge anything it does not
-  list against the rule, not against the row count.
-
-  | # | surface | field that changes | before | after | stack |
-  | --- | --- | --- | --- | --- | --- |
-  | 1 | audit sink-failure line (`migration`) | `panic` → `panic_type` | the value | the Go type | `stack` |
-  | 2 | scheduler job-panic line (`scheduler`) | `panic` → `panic_type` | the value | the Go type | `stackTrace` — different name |
-  | 3 | delivery settle line (`messaging/internal/delivery`) | `panic` → `panic_type` | the value | the Go type | none — `panic_type` only |
-  | 4 | delivery outcome line, classic lane (`messaging`) | `panic` → `panic_type` | the value | the Go type | `stack` |
-  | 5 | delivery outcome line, streams lane (`messaging/streams`) | `panic` → `panic_type` | the value | the Go type | `stack` |
-  | 6 | HTTP action line (`server`) | `error` | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | inside the rendered `error`, not a field |
-  | 7 | HTTP error handler's `Panic recovered` line (`server`) | `error_type` in production posture; `error` under `app.debug` | the panicking value's own error type — `*errors.errorString` where Echo rendered a non-error, the concrete type where it panicked with one | `*server.panicTypeError` (a CONSTANT); `panic (type: T)` in debug | `stack` — name unchanged, CONTENT shrinks to the panicking goroutine |
-  | 8 | HTTP `unhandled error` line (`server`) | `error` — **`app.debug: true` ONLY** | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | inside `error`. In production posture this line is UNCHANGED: its `error_type` is the wrapper `*middleware.PanicStackError` either way |
-  | 9 | messaging consume span, BOTH lanes | `exception.message` + status description | `panic in message handler: <value>` | `panic in message handler (type: T)` | n/a |
-  | 10 | scheduler job span (incl. `multitenant` cleanup) | `exception.message` ONLY | carries the value | `panic (type: T)` | n/a — its status description is the literal `"panic"` (`scheduler/module.go`) before AND after, so do not repoint that |
-  | 11 | HTTP server span | status description | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | n/a |
-
-  Rows 6-8 are on the HTTP lane and need no messaging, scheduler or `AuditRecorder` usage —
-  one panicking request emits rows 6, 7, 8 and 11 together. In production posture rows 6, 7
-  and 11 are the ones that CHANGE; row 8 moves only under `app.debug: true`. Rows 7 and 8 are emitted by
-  `server/server.go`, which no diff in this hop touches; its inputs moved instead.
-  Six packages report a recovered panic value, and after this hop none of them
-  carries the value itself. **The one that reaches every
-  service is the HTTP lane**: Echo's `Recover` rendered a handler panic with its own `%v`,
-  and both the OTel middleware and the request logger sit OUTSIDE it, so the value went to
-  the server span's status description AND the action line's `error` field on every
-  panicking request — in production posture, ungated by `app.debug`. Two kinds of site are
-  covered, and the second is the one a log-focused reading misses: four sites report the
-  value directly to a log field, and three RENDER it into an ERROR that later reaches a
-  span and, for the scheduler, a log line too. **`messaging/internal/delivery.AppendOutcome` is the delivery
-  SPINE**, shared by the classic AMQP lane and the streams lane, so the rename reaches every
-  consumer whose message handler panics — the widest-reaching field rename in this hop, and
-  the one a reader scanning for "audit" or "scheduler" will miss. The audit emitter's `deliverToSink` and the scheduler's FR-021
-  recovery both replace the log field `panic` (the value, passed through the sensitive-data
-  filter) with `panic_type` (the value's Go type, via `%T`). The scheduler's
-  `span.RecordError` and summary `Err()` already reported the type after [C60.21] and are
-  unchanged. **Relying on the filter here was never protection**: it matches FIELD names, and
-  the field is `panic`, which is no needle — so a bare `panic("secret")` was emitted in
-  clear, as was a map carrying a key the needle list does not name (`licenseKey`), while a
-  key it does name (`password`) was masked. Protection varied with the shape of a value
-  chosen by consumer code. The stack trace is retained wherever it was emitted before, but the
-  field NAME is not uniform and one line has none — read the `stack` column of the table above
-  before keying a repoint on it. `audit_type` / `target` / `jobID` still make each report
-  attributable. The audit emitter's second message,
-  `(value unrenderable)`, is GONE: it existed only for a value whose rendering panicked, and
-  nothing renders the value now.
-- gate: match on ANY of — (a) an alert, saved query, dashboard or log-parsing test reads the
-  `panic` field, or matches on a panic VALUE, on ANY of the five NON-HTTP lines, rows 1-5 of
-  the `scope` table (every HTTP surface is clause (e) instead — none of them carries a
-  `panic` field to read) — including a
-  lane-shape test of your own that pins the delivery spine's key set, which
-  `messaging/internal/lanecontract` treats as a contract and this hop changes;
-  (d) an alert, saved query, dashboard, SLO or trace-based test reads `exception.message` or
-  the span status description on a messaging consume span or a scheduler job span — that
-  text changes independently of the log fields, so satisfying (a) does NOT cover it;
-  (e) anything reads any of rows 6-8 or row 11 of the `scope` table for a panicking request —
-  **this is the broadest clause in the atom and
-  needs no messaging, scheduler or audit usage to apply**: it fires for any service whose
-  handler can panic, and one request touches all four rows; (b) you match the literal
-  message `audit sink panicked; event dropped (value unrenderable)`; (c) a runbook or triage
-  procedure instructs an operator to read the panic value out of these lines. no-match =
-  ALL of the following hold:
-
-  - nothing you own reads any log row of the `scope` table — its changed field or its message
-    text — including the HTTP rows 6, 7 and 8;
-  - you have no lane-shape test pinning the delivery spine's key set;
-  - nothing reads `exception.message` or the span status description on rows 9, 10 or 11
-    (row 10's status description is unchanged — its `exception.message` is the part that moves);
-  - nothing GROUPS, facets or filters on the `error_type` VALUE of rows 7 or 8 — that value
-    becomes a constant, so a rule keyed on the old one stops matching without erroring;
-  - nothing counts SDK `exception` EVENTS, or matches `exception.type` / `exception.stacktrace`,
-    on a panicking span — `WithoutPanicRecording()` means those events stop being emitted at all,
-    which reads as "no panics" rather than as a broken rule;
-  - no runbook depends on the panic value being present.
-
-  **An HTTP-only service does NOT reach no-match.** Running no scheduled jobs, registering no
-  `AuditRecorder` and consuming no messages clears rows 1-5 and 9-10 and changes nothing:
-  rows 6, 7, 8 and 11 fire on every panicking request. Clear each of those rows
-  separately — satisfying yourself about the action line says nothing about the other three.
-- apply: for (a), repoint at `panic_type`, which all of rows 1-5 carry. Do NOT key the repoint
-  on `stack` — read the table's `stack` column first: the name differs per row and row 3 has
-  none, so a `stack`-keyed rule stops matching the scheduler line silently and never matches
-  the settle line.
-  For (b), delete the matcher; that message has no successor.
-  For (c), rewrite the runbook step around the type and the stack.
-
-  **There is no way to recover the VALUE from any framework sink — that is the point of the
-  change, not an oversight.** A procedure that needs it must get it from a debugger, a core
-  dump, or the consumer code that panics. Do not send an operator hunting the log for a
-  value that is no longer anywhere: it is not in the log field, not in `exception.message`,
-  not in the span status description, and not in the returned error.
-
-  **The `exception.message` half of that is true only because of a provider option, and it
-  costs you an event.** The OTel SDK records an exception event itself, carrying the value,
-  on any span that unwinds with a live panic — so before this hop the value reached your
-  tracing backend from six framework sites regardless of what the code around them spelled.
-  `sdktrace.WithoutPanicRecording()` closes it. **The consequence to plan for: an unwinding
-  panic no longer produces an exception event on that span at all.** If you alert on
-  `exception` events, or count them, a panic that used to surface as one now surfaces only
-  as the span's error status and the framework's own log line with `panic_type` and the
-  stack. That is a silent reduction in event volume, not an error — check any monitor whose
-  threshold was tuned against the old rate.
-
-  **For (d), the SPAN side, which is a separate repoint from the log side.** On both
-  messaging lanes `exception.message` and the span status description change from
-  `panic in message handler: <value>` to `panic in message handler (type: T)`. The
-  scheduler's cleanup-job error changes the same way — `multitenant`'s per-tenant cleanup
-  used to convert a panicking `RetentionDelete` callback into an ordinary error carrying the
-  value, one frame below the scheduler, so it reached `span.RecordError`, the span status
-  AND the job summary line. Repoint span-based alerts on their own; **an alerting rule keyed
-  on `exception.message` sees a break that no amount of log-field repointing describes.**
-
-  **For (e), the HTTP lane — the broadest repoint here.** The action line's `error` field and
-  the server span's status description change from `[PANIC RECOVER] <value> <stack>` to
-  `[PANIC RECOVER] panic (type: T) <stack>`. Repoint anything matching the value; the type and
-  the stack remain, and the stack still names the function that panicked. The stack also
-  SHRINKS — it now covers the panicking goroutine only, where it used to dump every goroutine
-  up to 4 KB — so a query keying on an unrelated goroutine's frames stops matching.
-  **This lane emits no `panic_type` field**, unlike the other five: the type lives INSIDE the
-  rendered `error` string (`server/middleware.go`'s `panicTypeError` renders
-  `panic (type: T)`, and Echo's `PanicStackError` wraps it as
-  `[PANIC RECOVER] <that> <stack>`), and so does the stack. Repoint this lane with a
-  substring match on `panic (type:`, never by adding a `panic_type` field selector — no HTTP
-  row carries that field, and a field-based rule matches nothing there.
-
-  **Rows 7 and 8 repoint differently from row 6, and which field moves is gated on
-  `app.debug`** — read those rows' `field that changes` column. Two consequences worth
-  planning for: row 7's new production value is a CONSTANT, so a dashboard that used to
-  spread panics across concrete error types now shows one bucket; and row 8 changes under
-  `app.debug: true` ONLY, so a production-posture shop can skip it entirely.
-
-  **Read this if you handle a disclosure question. Audit TWO backends, and only one of the
-  three exposures was gated on `app.debug`.**
-
-  1. **Your TRACING backend — the worst half, and ungated.** Before this hop a handler that
-     panicked with anything sensitive put that value off-platform on every panicking HTTP
-     request and on every panicking delivery on both lanes, in every deployment posture.
-  2. **Your LOG backend, via the HTTP action line (row 6) — also UNGATED.** That line's
-     `error` field carried Echo's rendering of the raw panic value in every posture,
-     production included: `server/logger.go`'s `Err()` has no `app.debug` condition, and
-     `LogEvent.Err` applies no filtering at all, so the sensitive-data filter never saw it.
-     Do not skip your log backend because you run production posture.
-  3. **Your LOG backend, via rows 7 and 8 — `app.debug: true` ONLY.** In production posture
-     those two lines carried a TYPE (`error_type`), never the value, so a deployment that
-     never set `app.debug: true` has no exposure from them. Check whether any environment
-     you run — staging and ad-hoc debugging sessions included — ever did.
-
-  All three are now closed, and all three were open in every prior release. If your handlers
-  can panic with credentials or PII, treat the historical span data AND the historical log
-  data as exposed and audit both separately; upgrading stops the bleeding and does not clean
-  up what already shipped.
-- verify: for (a), in staging make an `AuditRecorder.Record` panic with a synthetic secret
-  (`panic("not-a-real-secret-0000")`) and make a scheduler job panic the same way. **Use a
-  synthetic value on a disposable sink** — the whole point is that you do not yet know
-  whether it is disclosed, and a log you cannot delete is a rotation, not a test. On both
-  lines the secret must be ABSENT and `panic_type` present (`string` for that example), the
-  migration must COMPLETE, and the job must be recorded as FAILED with `failureCount`
-  incremented — the accounting runs after the reporting, so a report that failed must not
-  cost the outcome record. Then confirm your repointed alert fires on that run.
-  For (b), grep your alerting config and saved searches for the retired message once more
-  after repointing and expect ZERO hits; a matcher left behind does not error, it just never
-  fires again. For (c), walk the runbook step against that same staged panic with only the
-  log in front of you: an operator must be able to complete it from `panic_type` and the
-  stack trace alone. If the step cannot be completed, the value was load-bearing for that
-  procedure and the procedure needs rewriting now rather than during an incident.
-  For (d), use the SAME staged panic but look at the trace, not the log: make a message
-  handler panic with a synthetic secret and read the consume span. `exception.message` and
-  the span status description must read `panic in message handler (type: string)` with the
-  secret ABSENT. Do the scheduler half by making a `RetentionDelete` callback panic and
-  reading the job span. For (e), make an HTTP handler panic with a synthetic secret against a
-  staging service running `app.debug: false`, then read BOTH the action log line and the
-  server span: the secret must be absent from the log's `error` field and from the span status
-  description, and both must read `panic (type: string)`. That one request also emits rows 7
-  and 8 — read them from the same capture and confirm row 7's `error_type` is
-  `*server.panicTypeError`. **Only if some environment you run sets `app.debug: true`**,
-  repeat the run in that posture and confirm rows 7 and 8 read `panic (type: string)` rather
-  than the secret; a shop that runs production posture everywhere can skip that second run,
-  since row 8 changes in debug only. **Check every row even if the first passed** — they
-  changed for different reasons and a probe of one cannot tell you about the others.
-- ref: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) ·
-  [ADR-079](adr_079_log_filter_walks_slices_without_comparing.md) (its primary-path claim is
-  corrected in place) · [ADR-019](adr_019_migration_audit_delivery.md) ·
-  `migration/audit_emitter.go` · `scheduler/module.go` · `server/middleware.go` ·
-  `server/server.go`
-
-### [C60.27] every Filter and JoinFilter column is a validated identifier · breaking · when: match
-
-- detect: `git grep -nE '\.(Eq|NotEq|Lt|Lte|Gt|Gte|In|NotIn|Like|Regex|RegexI|NotRegex|NotRegexI|JSONContains|Null|NotNull|Between|InSubquery|EqColumn|NotEqColumn|LtColumn|LteColumn|GtColumn|GteColumn)\(' -- '*.go'`
-  lists every call site. Keep the pattern POSIX ERE — `git grep -E` silently ignores the PCRE escapes.
-  Nothing is compiler-caught; the failure is an error returned from `ToSQL()`. Read only the sites
-  whose COLUMN argument (the first, and for the `*Column` forms both) is not a literal or a
-  `cols.Col(...)` lookup.
-- scope: `database/internal/builder/` only. `quoteColumnForQuery` — the single point every column
-  argument passes through before becoming SQL — now validates against the ADR-031 identifier grammar
-  and returns an error, so all 18 `FilterFactory` and 18 `JoinFilterFactory` column doors, the six
-  comparison helpers, `BuildRegex`, `BuildJSONContains`, `BuildCaseInsensitiveLike` and the UPDATE SET
-  targets refuse a column that is not a bare or qualified identifier. A violation surfaces from
-  `ToSQL()` through the existing deferred-error Sqlizer, including from inside `And`/`Or`/`Not` and
-  from a subquery.
-  This is the stage that matters most on PostgreSQL. `quoteColumnForQuery`'s default branch rendered
-  the column VERBATIM, so before this hop a Filter column was interpolated exactly as written and
-  `f.Eq("id = 1 OR 1=1 -- ", v)` emitted `WHERE id = 1 OR 1=1 -- = $1`. Oracle quoted the column, so
-  the same input was inert there.
-- gate: match = any Filter or JoinFilter column argument is not a literal or `cols.Col(...)` output.
-  no-match = every column is developer-written. A census of this repository found 1027 such call sites
-  and none outside the grammar, so most codebases will not match.
-- apply: pass a name, not an expression. A computed comparison belongs in `f.Raw(...)`/`jf.Raw(...)`,
-  which carry the `// SECURITY: Manual SQL review completed - <rationale>` annotation requirement; a
-  request-derived column needs an allowlist your own code owns, mapping the caller's value to one of a
-  fixed set before it reaches the builder.
-- verify: both directions. Assert the filters you intend to ship still build, then feed one known-bad
-  column (`id = 1 OR 1=1 -- `) to the same door and assert `err != nil` reading `invalid column
-  identifier`. Checking only that good columns still build passes whether or not the validation runs.
-- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issue #1143
-
----
-
-### [C60.26] SELECT and INSERT column lists are validated identifiers · breaking · when: match
-
-- detect: `git grep -nE 'Select\(|InsertWithColumns\(|\.Columns\(|\.SetMap\(' -- '*.go'` lists every
-  call site. Keep the pattern POSIX ERE — `git grep -E` silently ignores `\b`, `\s`, `\d` and `\w`.
-  Nothing is compiler-caught; the failure is an error returned from `ToSQL()`. The grep alone does not
-  answer the question, because a multi-argument `Select` hides its expression strings from any pattern
-  that only sees the first argument — `Select("department", "COUNT(*)")` reads as a plain column list.
-  Run the build after the bump and let the errors enumerate them, or hand-read every `Select` taking
-  more than one string.
-- scope: `database/internal/builder/` only. `QueryBuilder.Select` validates each string column against
-  a new `select` identifier context — the ADR-031 grammar plus the wildcard, so `*` and `t.*` are
-  accepted. `QueryBuilder.InsertWithColumns`, `InsertQueryBuilder.Columns` and
-  `InsertQueryBuilder.SetMap` validate their columns against the plain identifier grammar;
-  `InsertQueryBuilder.SetMap` is the notable one, since `UpdateQueryBuilder.SetMap` — the same shape on
-  the sibling builder — has validated its keys since ADR-031 and the two disagreed until now.
-  A `dbtypes.RawExpression` from `qb.Expr()`/`MustExpr()` passes through untouched; only strings are
-  judged. Filter and JoinFilter column arguments are NOT in this hop — they follow in #1143.
-- gate: match = any `Select` argument is a string that is not a bare/qualified identifier or a
-  wildcard, OR any INSERT column list carries a non-identifier. no-match = every column is a plain
-  name, a `cols.Col(...)` lookup, or already a `qb.Expr(...)`.
-- apply: move the expression into `qb.Expr(...)`. Three shapes break, and only the first is obvious:
-  the `EXISTS` idiom `qb.Select("1")` becomes `qb.Select(qb.MustExpr("1"))`; a bare function string
-  `qb.Select("COUNT(*)")` becomes `qb.Select(qb.MustExpr("COUNT(*)"))`; and a function carrying an
-  alias splits, so `qb.Select(colID, "COUNT(o.id) AS order_count")` becomes
-  `qb.Select(colID, qb.MustExpr("COUNT(o.id)", "order_count"))` — the alias is the second argument to
-  `Expr`, not part of the SQL. `qb.Select("*")` is unaffected.
-- verify: both directions. Assert the columns you intend to ship still build (`err == nil` from
-  `ToSQL()`), then feed one known-bad column (`id; DROP TABLE users--`) to the same door and assert
-  `err != nil`. The message names the door, and the three spellings differ — `invalid select
-  identifier` from `Select`, `invalid insert column identifier` from `InsertWithColumns` and
-  `.Columns`, and `invalid SetMap column identifier` from `InsertQueryBuilder.SetMap` — note
-  `UpdateQueryBuilder.SetMap` reports `invalid column identifier` instead, because it validates
-  through the shared column funnel that `[C60.27]` introduces — so match on
-  `invalid ` and the identifier itself rather than on one fixed phrase. Checking only that good
-  columns still build passes whether or not the validation runs.
-- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issue #1143
-
----
-
-### [C60.24] every INSERT and upsert door validates its table argument · breaking · when: match
-
-- detect: `git grep -nE 'Insert\(|InsertWithColumns\(|InsertStruct\(|InsertFields\(|BuildUpsert\(' -- '*.go'`
-  lists every call site. Keep the pattern POSIX ERE — `git grep -E` silently ignores `\b`, `\s`,
-  `\d` and `\w`. Nothing is compiler-caught; the failure is an error returned from `ToSQL()`
-  (or from `BuildUpsert` directly). The grep finds the calls but not the risk: a literal table
-  name always passes, so read only the sites whose table comes from a parameter, a config value,
-  a struct field or a concatenation.
-- scope: `database/internal/builder/` only. `Insert`, `InsertWithColumns`, `InsertStruct`,
-  `InsertFields` and `BuildUpsert` now validate their `table` against the same grammar
-  `From`, `Update` and `Delete` have applied since ADR-031 — a simple or qualified identifier
-  (`users`, `app.users`, `schema.app.users`) plus at most one inline alias (`users u`). Anything
-  else — whitespace beyond the alias, a semicolon, a `--` or `/* */` comment, parentheses, a
-  function call, extra tokens — is refused. A table sits FIRST in every one of these statements,
-  so a trailing comment used to take the rest of the statement with it, which no column
-  precondition could catch. The five doors were the last interpolating a table unchecked.
-- gate: match = any of those five is called with a table argument that is not a literal, OR with
-  a literal carrying anything beyond a name and an optional alias. no-match = every call passes a
-  bare or qualified literal.
-- apply: pass a name, not an expression. A dynamic table needs an allowlist of names your own
-  code owns — map the caller's value to one of a fixed set before it reaches the builder — since
-  the builder will not accept a computed one. A table plus alias stays legal (`"users u"`), and
-  `Table("users").As("u")` is unchanged.
-- verify: two directions, because one of them is what the atom is for. Call each affected site
-  with the name you intend to ship and assert it still builds — `err == nil` from `ToSQL()`, or a
-  nil third return value from `BuildUpsert`. Then feed one KNOWN-BAD name (`users; DROP TABLE x--`)
-  to the same site and assert the opposite: `err != nil`, reading `invalid table identifier "…":
-  must be a simple or qualified identifier with an optional alias`. A suite that only checks the
-  first direction passes unchanged whether or not the validation runs at all.
-- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issues #1104, #1143
-
----
-
-### [C60.25] both identifier renderers double an interior quote · silent-behavior · when: match
-
-- detect: `git grep -nE 'EscapeIdentifier\(' -- '*.go'` for the exported helper, then search your
-  schema for a column or table whose NAME contains a double quote — `information_schema.columns`
-  on PostgreSQL, `ALL_TAB_COLUMNS` on Oracle, `WHERE column_name LIKE '%"%'`. A clean catalog is
-  NOT the whole answer: an ALIAS exists only in the statement that names it and appears in no
-  catalog, so also `git grep -nE '\.As\(|" [A-Za-z_]"' -- '*.go'` over your own builder calls for
-  an alias carrying a quote. Both clean means this atom cannot affect you.
-- scope: `oracleQuoteIdentifier` and `QueryBuilder.EscapeIdentifier` wrapped a name in quotes
-  without doubling the quotes inside it, so a name carrying one ended the identifier early and
-  the remainder was parsed as SQL rather than as part of the name. Both now double it, which is
-  how Oracle and PostgreSQL each spell a quote inside a quoted identifier. The pass collapses
-  before it doubles, so a name already written in escaped form (`a""b`, denoting `a"b`) is
-  unchanged rather than renamed. PostgreSQL identifiers that were emitted bare are still emitted
-  bare — nothing gains quoting, so no case-folding changes.
-- gate: match = a column, table or alias name in your schema contains a double quote.
-  no-match = none does, which is the ordinary case.
-- apply: nothing to change. SQL that used to fail at parse for such a name now builds correctly;
-  SQL that used to execute as something other than what the name said now names the column. If
-  you had worked around the old rendering by pre-doubling a quote yourself, that still works —
-  the pass is idempotent.
-- verify: hand `qb.EscapeIdentifier` a name whose only quote is a lone one. It comes back with
-  that quote doubled and the whole name wrapped, where it used to come back wrapped with the
-  quote untouched — one identifier now, two SQL tokens before.
-- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issue #1104
-
----
-
-### [C60.22] the client IP is derived from observed hops only, and a trusted-proxy list covering an address family fails startup · breaking · when: match
-
-- detect: `git grep -nE 'trustedproxies' -- '*.yaml' '*.yml' '*.json' '*.toml'` and the same
-  sweep over your deployment surfaces (Helm values, Kustomize overlays, `.env` files,
-  rendered manifests) for `DEBUG_TRUSTEDPROXIES`, `SCHEDULER_SECURITY_TRUSTEDPROXIES` and
-  `SERVER_TRUSTEDPROXIES` — all THREE, because the widening below reaches the third key too.
-  **A `0.0.0.0/0` or `::/0` entry in the first two now fails startup**, and so does a list whose
-  entries TOGETHER cover a family (`["0.0.0.0/1","128.0.0.0/1"]`) or the v4-mapped default
-  route `::ffff:0.0.0.0/96` — read the values, not just the key. Do not stop at the two
-  lenient keys: only the literal default route was already refused on
-  `server.trustedproxies`, so a split-coverage or v4-mapped list fails on ALL THREE keys
-  now and setting them consistently does not make you unaffected. The exposure came from
-  the two lenient keys accepting what the third refused; the widening reaches all three.
-  Then check `debug.allowedips` on BOTH rules. An entry that is neither an IP address nor a
-  CIDR range is refused — a typo there used to deny everything silently at runtime and now
-  names itself at startup — and so is one that parses cleanly as a CIDR but has HOST BITS
-  SET (`192.168.1.55/16`), which used to silently widen the allowed range to
-  `192.168.0.0/16`. An entry that clears the first rule can still fail the second, so read
-  both; the remedy is the canonical network address or the single host without a prefix.
-  On the behavior side your code cannot tell you anything: the derived address depends on
-  what a caller sends. Search your ACCESS LOGS for debug-endpoint or `/_sys/job` requests
-  that were ALLOWED and whose recorded client IP does not match the peer you expect —
-  particularly any allowed request carrying `X-Real-IP`, which is no longer consulted.
-- class note: this atom is `breaking`, not `silent-behavior`, because half of it fails
-  startup outright — a list trusting an entire address family aborts the process on ANY of
-  the three keys, which no operator can discover from a log search. The derivation change IS silent, and the hop row
-  lists this atom under both categories for that reason; the header takes the louder of the
-  two so a reader triaging by class does not skip a startup failure.
-- scope: `server.ClientIP` derives the address for the framework's two IP-based
-  access-control checks — the debug-endpoint allowlist and the scheduler CIDR middleware
-  guarding `/_sys/job`. Both fail closed on an unparseable address but fail OPEN on one
-  that parses and is wrong, and five defects could produce exactly that.
-  It now follows one rule: **the answer is either an identified untrusted hop, or the peer
-  address actually observed — never a value the caller wrote.** Concretely: every
-  `X-Forwarded-For` field LINE is read and joined (`Header.Get` read only the first, so a
-  proxy that adds a second line left the real chain invisible); `[`/`]` are stripped per
-  entry (a bracketed IPv6 client used to be denied); an entry that carries no readable address STOPS the
-  walk and yields the peer rather than continuing left into a caller-authored entry — that
-  means an RFC 7239 `for=_hidden` or `unknown`, NOT a port suffix or IPv6 brackets, both of
-  which are normalized away first (`192.0.2.1:443` and `[2001:db8::1]:443` both resolve); a chain whose hops are all trusted
-  yields the peer rather than the left-most entry; a hop that is loopback, unspecified or
-  link-local yields the peer too, because no proxy observes a real client at those
-  addresses and they are exactly what the shipped allowlists contain; and `X-Real-IP` is
-  not consulted at all,
-  which is what ADR-057 decided and this function alone never implemented.
-  All three trusted-proxy keys now reject a trust list whose MERGED coverage spans an
-  entire address family — not merely one whose entry is a literal default route. A single
-  offending entry keeps the message `'%s' trusts every address, which restores
-  X-Forwarded-For spoofing`; a set that does it together names the set. This catches
-  `["0.0.0.0/1","128.0.0.0/1"]` and `["0.0.0.0/1","128.0.0.0/2","192.0.0.0/2"]`, which no
-  per-entry rule reaches, and `::ffff:0.0.0.0/96` — a v4-mapped default route that measures
-  96 of 128 mask bits while matching every IPv4 address. `server.trustedproxies` answers to
-  the same rule at startup AND at `server.New`, so a service constructed without
-  `config.Validate` cannot trust everyone either. `server.ParseCIDRs` enforces the
-  same rule at the runtime door, treating a total-coverage list as no trust list at all,
-  because it is exported and a caller outside app construction never passes through
-  `config.Validate`. The lenient
-  partial-invalid tolerance on the debug and scheduler keys is UNCHANGED — a single typo
-  still does not disable the whole list. What is newly refused on those two keys is any
-  list trusting an ENTIRE ADDRESS FAMILY: a literal default route, a set covering one
-  between its entries, or the v4-mapped `::ffff:0.0.0.0/96`. `server.trustedproxies`
-  already refused the literal form and newly refuses the other two, so the widening
-  reaches all three keys, not just the lenient pair.
-  `debug.allowedips` gains CIDR-syntax validation that accepts BARE ADDRESSES, because the
-  shipped default `["127.0.0.1","::1"]` is not CIDR notation. It also accepts an entry
-  wrapped in single or double quotes, because the RUNTIME parser has always stripped those
-  — a shell-quoting slip such as `DEBUG_ALLOWEDIPS='"127.0.0.1"'` works today and keeps
-  working, rather than becoming a startup failure the runtime would have served fine.
-  **Allowlists are deliberately exempt from the default-route rule.** `["0.0.0.0/0"]` on
-  `debug.allowedips` or `scheduler.security.cidrallowlist` stays valid — ADR-049 recommends
-  it. An allowlist that admits everything is a posture; a trust list that trusts everything
-  restores header spoofing.
-- preflight: **capture one real `X-Forwarded-For` from production before you bump and look
-  at what your proxies actually append.** An entry the walk cannot READ now stops the walk
-  and yields the peer — a trusted proxy your allowlist almost certainly does not contain —
-  so such a request is DENIED where it previously resolved to something.
-  Only one shape is affected, and it is rare: an RFC 7239 obfuscated identifier
-  (`for=_hidden`) or `unknown`, emitted where a proxy is deliberately concealing the
-  client. Those carry no address at all, so no parser can recover one; if you find one,
-  fix the proxy before upgrading or accept that those requests are denied at both doors.
-  **Port-suffixed and bracketed entries need NO action** — `192.0.2.1:443`, which AWS ALB's
-  `routing.http.xff_client_port.enabled` appends on every request, and `[2001:db8::1]:443`
-  are both read correctly now. So is a bracketed IPv6 entry without a port, which used to
-  be denied and now works. Refusing to read a shape a documented load-balancer toggle
-  emits would have been this framework exporting a parser limitation to operators as an
-  incident, which is why it is parsed rather than warned about.
-- gate: match — you are affected if you set ANY of the three trusted-proxy keys,
-  `server.trustedproxies` included: its per-entry rule was already strict, but the
-  set-coverage and v4-mapped rules are new to it too, so a list it accepted yesterday can
-  abort startup today. You are also affected if either access-control path runs behind a
-  proxy — and **setting none of the three keys does NOT make you unaffected**. Echo trusts
-  loopback, link-local and RFC1918 ranges by DEFAULT (`server/server.go`), so an in-VPC
-  service behind a load balancer consults `X-Forwarded-For` with no configuration at all, and
-  the derivation change reaches it. Only a deployment whose immediate peer is outside those
-  default ranges AND which sets none of the three keys is unaffected, because no hop it
-  observes is trusted and the headers are never consulted for it.
-- apply: three NEW startup failures, all of them naming the key and the remedy. A trust
-  list covering an entire address family (see scope) now aborts, as does a
-  `debug.allowedips` entry that is neither an IP nor a CIDR, or one with host bits set
-  (`192.168.1.55/16` silently admitted 65,536 hosts where one address was written — the
-  same widening the proxy keys already refuse, now in the same words). Note
-  `debug.allowedips` is validated **even when `debug.enabled: false`**: a block you wrote
-  must be valid whether or not it is registered, so a typo surfaces at deploy time rather
-  than during the incident in which someone flips it on.
-  Then remove the total-coverage list from whichever of the THREE trusted-proxy keys holds
-  one — a literal default route, a set covering a family between its entries, or the
-  v4-mapped form — and list the specific proxy ranges instead — that is the startup error's own instruction, and it is the fix for
-  the exposure, not a formality. If you relied on `X-Real-IP` reaching either access-control
-  check, switch the proxy to append to `X-Forwarded-For`; there is no configuration that
-  restores the old behavior, deliberately. If a legitimate client was being denied because
-  your proxy brackets IPv6 XFF entries, that now works.
-  Only `config.Validate` ABORTS. The two runtime doors refuse the same lists without an
-  error: `server.New` installs no trust options and logs, and `server.ParseCIDRs` returns
-  nil nets with every trimmed entry reported invalid. A service built without
-  `config.Validate` therefore BOOTS trusting nobody rather than failing — same security
-  outcome, no crash to alert on, so check the log line rather than waiting for a restart.
-- verify: three probes against a running service.
-
-  1. **Startup.** Set `debug.trustedproxies: ["0.0.0.0/0"]` and start. Expect a startup
-     failure naming `debug.trustedproxies` and saying it "trusts every address". Repeat for
-     `scheduler.security.trustedproxies` AND `server.trustedproxies`. Then repeat all three
-     with `["0.0.0.0/1","128.0.0.0/1"]` and with `["::ffff:0.0.0.0/96"]` — those are the
-     shapes no per-entry rule catches, so a probe using only `0.0.0.0/0` passes without
-     testing the rule this atom is about. Probe the `debug.allowedips` host-bits rule on its
-     own too — set `debug.allowedips: ["192.168.1.55/16"]` and expect a startup failure naming
-     the key; an entry that is merely unparseable exercises the other rule, not this one, which
-     parses cleanly and widens. Then set `debug.allowedips: ["0.0.0.0/0"]` and
-     confirm it still starts — the allowlist exemption is deliberate, and a failure there
-     would be a regression.
-  2. **The bypass, at the debug door.** With a legitimate `debug.trustedproxies` (a real
-     proxy range that does NOT contain your test client) and the default
-     `debug.allowedips`, send a request directly to a debug endpoint carrying
-     `X-Real-IP: 127.0.0.1`, then again carrying `X-Forwarded-For: 127.0.0.1`. Expect 403
-     for both. Before this change, a default route in that key made both succeed.
-  3. **`/_sys/job`.** Same two requests against the scheduler endpoint with the shipped
-     empty allowlist (localhost-only). Expect 403 for both. Then confirm a genuine
-     request from an allowlisted address still succeeds. At RUNTIME this change denies
-     only where it previously granted wrongly, and it newly GRANTS normalized forms a
-     proxy really emits (bracketed IPv6, port-suffixed entries) that used to be denied —
-     so a legitimate caller still being denied means your trusted-proxy list no longer
-     describes your topology. A total-coverage list never reaches this test: it fails
-     startup.
-- ref: [ADR-080](adr_080_client_ip_answers_only_from_observed_hops.md) ·
-  [ADR-057](adr_057_trusted_proxy_ip_extraction.md) (completed by it; its comparison table
-  is retired in an amendment) · [ADR-049](adr_049_debug_endpoints_fail_closed.md) (never
-  examined IP derivation, which is why this survived it) · `server/clientip.go` ·
-  `config/validation.go` (`rejectTotalCoverage`, `CoversAddressFamily`,
-  `validateIPOrCIDRList`)
-- residual: an earlier draft of this atom recorded `["0.0.0.0/1","128.0.0.0/1"]` as
-  passing unchanged, with a union-coverage check named as a follow-up. That is obsolete:
-  the check SHIPPED here, and the three doors answer it in two different ways.
-  `config.Validate` FAILS STARTUP on such a list at any of the three keys. The two runtime
-  doors do not fail, they DROP: `server.New` installs no trust options and logs an error,
-  and `server.ParseCIDRs` returns no error at all — it hands back no trust nets plus every
-  trimmed entry as invalid, so the caller's own WARN names them. Either way the list ends
-  up trusting nobody rather than everybody. What remains is posture, not parsing — a trust
-  list that
-  correctly describes its topology still believes whatever those proxies append, which is
-  identification and not authorization ([ADR-043](adr_043_forwarded_client_cert.md)).
-
----
-
-### [C60.30] the 5xx response body's error detail requires `app.debug` AND a development env · silent-behavior · when: match
-
-- detect: grep every deployment surface — YAML, `.env` files, Helm values, Kustomize overlays,
-  rendered manifests — for `app.env`/`APP_ENV` set to a development alias (`development`, `dev`,
-  `local`; the comparison lowercases and trims, so `Dev ` counts) held together with
-  `app.debug`/`APP_DEBUG` set to `false` or left unset. That pairing is the only one whose
-  emitted body changes. A deployment whose `app.env` is not a development alias was already
-  clean, and one that runs `app.debug: true` in a development environment is unchanged.
-- scope: `classifyError` attached `details.error` — the raw `err.Error()` of an unhandled 5xx,
-  or Echo's `[PANIC RECOVER] …` string with the captured stack for a recovered panic — to the
-  response body under `cfg.App.IsDevelopment()` alone, while both LOG sinks withheld the same
-  text under `cfg.App.Debug`. The two sinks could therefore disagree, and they disagreed in the
-  wrong direction: an operator who turned `app.debug` off while `app.env` stayed a development
-  alias silenced the copy they could read and kept shipping the copy the CALLER reads. The body
-  now shares the log gate and adds the environment requirement on top — `cfg.App.Debug &&
-  cfg.App.IsDevelopment()` — so the stricter of the two keys wins and the sinks cannot diverge.
-  Nothing about the LOG paths changes, and the debug rendering still carries what ADR-081
-  leaves it: the panic's TYPE, never its value, since `sanitizePanicValue` has already replaced
-  the value one frame lower. The `details` map itself is not otherwise touched — a development
-  build still renders a handler-supplied `details` entry and the captured stack frames under
-  the environment gate alone.
-- gate: match = `app.env` is a development alias AND `app.debug` is false or unset.
-  no-match = any other pairing, including every production posture.
-- apply: nothing to change if the loss of that detail is what you wanted. If you were reading
-  `details.error` off a development service's 500 responses — a smoke test, a local debugging
-  script, a contract fixture pinning the key's presence — set `app.debug: true` in that
-  environment to get it back, or read the framework log's `error` field instead, which the same
-  key has always gated.
-- verify: against a service running `app.env: development` with `app.debug: false`, make a
-  handler panic and make another return a plain error. Both responses must decode to an
-  `error.details` map with NO `error` key, where the panic response previously carried
-  `[PANIC RECOVER] panic (type: string)` plus the stack. Then flip `app.debug: true` and repeat:
-  the key is back on both. Check BOTH routes — the panic path and the unhandled-error path reach
-  the same sink but through different middleware, and a probe of one does not answer for the other.
-- ref: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (addendum: the response-body
-  sink shares the debug gate) · `server/server.go` (`classifyError`) · issue #1140
-
----
-
-### [C60.29] a `RawExpression` struct literal is validated where it is consumed · breaking · when: match
-
-> **Superseded in part on the E61 hop by `[C61.9]`.** The alias check described below is a
-> six-substring denylist, and a denylist accepts everything it does not enumerate — `[C61.9]`
-> replaces it with the identifier grammar and deletes `ErrDangerousAlias`. Read this atom for the
-> funnel (which is unchanged and still correct); take the alias rules from `[C61.9]`.
-
-- detect: `git grep -nE 'RawExpression\{' -- '*.go'` lists every struct literal — the only
-  construction path this hop changes. Keep the pattern POSIX ERE; `git grep -E` silently ignores the
-  PCRE escapes. Nothing is compiler-caught: `RawExpression` stays a plain exported struct with
-  exported fields, and the failure is an error returned from `ToSQL()` (or, on a JoinFilter, from the
-  filter's own `ToSQL()`). Values from `qb.Expr(...)`/`qb.MustExpr(...)` are unaffected — they already
-  passed the same checks at construction.
-- scope: `database/types/` and `database/internal/builder/`. `RawExpression` gains an exported
-  `Validate() error` — the single funnel `Expr()` now calls at construction and every door that
-  interpolates an expression calls again at consumption: `QueryBuilder.Select` (including the
-  `[]RawExpression` and `[]any` forms), `SelectQueryBuilder.GroupBy`, `SelectQueryBuilder.OrderBy`,
-  and the `JoinFilterFactory` value doors `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte` and both bounds of
-  `Between`. It rejects two things and nothing else: SQL that is empty or whitespace
-  (`ErrEmptyExpressionSQL`) and an alias containing `;`, `'`, `"`, `--`, `/*` or `*/`
-  (`ErrDangerousAlias`). The SQL body itself is still NOT validated — that is what the escape hatch is
-  for, and the caller still owns it.
-  The alias is the injection vector `[C60.26]` left open. `Select` renders it as `<sql> AS <alias>`
-  verbatim, so `RawExpression{SQL: "1", Alias: "x FROM users; DROP TABLE t--"}` emitted
-  `SELECT 1 AS x FROM users; DROP TABLE t-- FROM users` on both vendors, while the same alias through
-  `qb.MustExpr` had always panicked. The guard existed; it was optional, because the type it guards is
-  constructible without it.
-- gate: match = a `RawExpression` is built as a struct literal anywhere. Constant fields are NOT an
-  exemption — a hardcoded `Alias: "total--"` is refused exactly like a computed one, so every literal
-  has to be read. no-match = every expression comes from `qb.Expr(...)` / `qb.MustExpr(...)`, which
-  already ran the same check at construction. A census of this repository found no struct literals
-  outside tests and `Expr()` itself.
-- apply: build expressions through `qb.Expr(sql, alias)` — it returns the same error, at construction,
-  where the stack still names your code. A request-derived alias needs an allowlist your own code
-  owns, mapping the caller's value to one of a fixed set before it reaches the builder; passing it
-  through the builder does not make it safe, because the check is a denylist and an alias avoiding the
-  six sequences is accepted (see `residual:` below). `MustExpr` keeps panicking, so reserve it for
-  static initialization.
-- verify: both directions. Assert the expressions you intend to ship still build (`err == nil` from
-  `ToSQL()`, and the SQL is byte-identical to what the same expression rendered before), then feed one
-  known-bad literal (`RawExpression{SQL: "1", Alias: "x--"}`) to the same door and assert
-  `errors.Is(err, dbtypes.ErrDangerousAlias)` — on v0.61.0 that sentinel is gone and the assertion
-  is `errors.Is(err, dbtypes.ErrInvalidAlias)` (`[C61.9]`). Checking only that good expressions
-  still build passes whether or not the validation runs.
-- residual: **CLOSED on the E61 hop by `[C61.9]`, which replaces the denylist with the identifier
-  grammar.** As shipped here the alias check is a denylist, not a grammar: an alias carrying none of
-  the six sequences still renders verbatim — `Alias: "a, (SELECT password FROM users) b"` is accepted
-  by `qb.Expr()` and therefore by every door. This hop makes the two construction paths agree; it does not narrow what
-  they accept. Treat an alias as developer-controlled input, the same contract the expression SQL
-  carries.
-- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) (2026-08-23 addendum) ·
-  issue #1153 · `database/types/expression.go` (`RawExpression.Validate`)
-
----
-
-### [C60.28] the table alias handed to `As` is a validated identifier · breaking · when: match
-
-- detect: `git grep -nE 'Columns\(&?[A-Za-z_]' -- '*.go'` finds the metadata handles, then
-  `git grep -nE '\.As\(' -- '*.go'` every alias call on one. Keep the pattern POSIX ERE —
-  `git grep -E` silently ignores `\b`, `\s`, `\d` and `\w`. The second grep also matches
-  `TableRef.As` and every other `As` in your tree, which is NOT this door — read the receiver.
-  Nothing is compiler-caught and nothing surfaces from `ToSQL()`: the failure is a PANIC at
-  the `As` call. A literal alias passes only if it matches the grammar below — an ordinary one
-  (`"u"`) does, `"users u"` or `"u.x"` does not — so read the literals against the grammar, and
-  read EVERY site whose alias comes from a parameter, a config value, a struct field or a
-  concatenation.
-- scope: `database/internal/columns` and `database/types`. `Columns.As` validated only that
-  the alias was non-empty, then every `Col`/`Cols`/`All`/`FieldMap`/`AllFields` rendering
-  emitted `alias + "." + column` verbatim. It now validates against the ADR-031 grammar for
-  the alias half of `"users u"` — ONE bare identifier (`u`, `_u1`, `u$1#a`) or the framework's
-  own quoted reserved-word form (`"level"`). A qualified name (`u.x`), two tokens (`u x`), a
-  semicolon, a comment marker, an interior or unbalanced quote, and leading or trailing
-  whitespace are all refused; the argument is deliberately NOT trimmed, so `" u "` is refused
-  rather than accepted and rendered with its spaces. The grammar itself moved to
-  `database/internal/sqllex` so every identifier judge inside `database/` — the builder's doors
-  and the columns package's own `db`-tag check included — reads one copy.
-  What changes for you is WHERE the refusal happens. `[C60.26]` and `[C60.27]` already refuse
-  the rendered string at `Select`, at the Filter columns and in the INSERT column lists, so an
-  alias carrying SQL was reaching those doors and failing there; it now fails at `As`. The
-  doors that never validate are where this is not merely earlier: `Having` is a raw-SQL door
-  and interpolates `u.Col("ID")` as written, as does anything you render into your own SQL.
-- gate: match = any `Columns.As` call takes an alias that is not a literal, OR a literal that
-  is not a single bare or framework-quoted identifier. no-match = every alias is a bare
-  literal, which is the ordinary case. A test asserting the OLD empty-alias panic value
-  matches too — see apply.
-- apply: pass an identifier, not an expression. A dynamic alias needs an allowlist your own
-  code owns — map the caller's value to one of a fixed set before it reaches `As` — since the
-  door will not accept a computed one. And repoint any test that asserted the empty-alias
-  panic: the value was the string `"alias cannot be empty"` and is now a
-  `*dbtypes.InvalidAliasError`, so `assert.PanicsWithValue` on the old string fails while
-  `assert.Panics` still passes. Match the new value with `errors.As` against
-  `*dbtypes.InvalidAliasError`, whose `Alias` field carries the refused value.
-- verify: both directions, because one of them is what the atom is for. Assert the alias you
-  intend to ship still qualifies its columns — `cols.As("u").Col("ID")` returns `u.id` and the
-  statement builds. Then hand the same door one KNOWN-BAD alias (`id FROM secrets--`) and
-  assert it PANICS and that no SQL is produced. A suite that only checks the first direction
-  passes unchanged whether or not the validation runs at all. Note the failure is a panic, not
-  a `ToSQL()` error, so a table test that only inspects returned errors sees nothing.
-- ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) (its 2026-08-23
-  addendum) · [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (why the panic
-  value is a typed error) · issue #1150
 
 ---
 
@@ -13952,7 +13952,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `GET /v1/orders/42:cancel` reaches the verb handler with `c.Param("id")` = `42`.
 - ref: echo/v5 v5.4.1 · gaborage/go-bricks#2195 ·
   [ADR-124](adr_124_server_level_duplicate_route_refusal.md) · `server/route_conflicts.go`
-  (`routeNodeKey`, `paramNameEnd`, `isInlineVerb`) ·
+  (`routeNodeKey`) · `server/route_template.go` (`paramNameEnd`, `isInlineVerb`) ·
   [startup_defaults.md](startup_defaults.md#duplicate-route-detection)
 
 ### [C73.11] each stream reattach wait is 3–8s, a lost super-stream consumer stays detached, and `rabbitmq-stream+tls://` connects · silent-behavior · when: match

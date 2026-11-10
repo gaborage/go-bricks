@@ -3852,7 +3852,7 @@ When creating a new ADR:
 
 - **[CLAUDE.md](../CLAUDE.md)**: Development guide and quick reference
 - **[llms.txt](../llms.txt)**: Code examples for LLM code generation
-- **[CLAUDE.md → Developer Manifesto](../CLAUDE.md#developer-manifesto-mandatory)**: Project governance — principles, security guidelines, engineering practices
+- **[CLAUDE.md → Developer Manifesto](../CLAUDE.md#developer-manifesto)**: Project governance — principles, security guidelines, engineering practices
 - **[Demo Project](https://github.com/gaborage/go-bricks-demo-project)**: Working examples
 
 ---
