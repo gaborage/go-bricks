@@ -798,7 +798,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			// zeroing it here is what a DB-less deployment actually looks like. Note
 			// the stub connector is never reached — the verdict is now made one layer
 			// earlier, at config resolution.
-			name: "database not configured",
+			name: "database_not_configured",
 			prepare: func(f *testAppFixture) {
 				f.app.cfg.Database = config.DatabaseConfig{}
 				f.replan()
@@ -813,14 +813,14 @@ func TestReadyCheckScenarios(t *testing.T) {
 		{
 			// #879: a driver error names the user, database and resolved address, and /ready
 			// is unauthenticated — so the outage shows as a bare 503 and in the log alone.
-			name: "database unhealthy",
+			name: "database_unhealthy",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(errors.New(errorDBDown))
 			},
 			expectedStatus: http.StatusServiceUnavailable,
 		},
 		{
-			name: "messaging disabled",
+			name: "messaging_disabled",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				// Set messaging manager to nil to simulate disabled messaging

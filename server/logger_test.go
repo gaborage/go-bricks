@@ -296,13 +296,13 @@ func TestRequestLoggerEmitsActionLogFor4xxResponsesWithoutExplicitLogs(t *testin
 		expectedType   string
 	}{
 		{
-			name:           "404 response emits action log",
+			name:           "404_response_emits_action_log",
 			path:           "/notfound",
 			expectedStatus: http.StatusNotFound,
 			expectedType:   "action",
 		},
 		{
-			name:           "500 response emits action log",
+			name:           "500_response_emits_action_log",
 			path:           "/error",
 			expectedStatus: http.StatusInternalServerError,
 			expectedType:   "action",
@@ -644,21 +644,21 @@ func TestDetermineSeveritySlowRequestDisabled(t *testing.T) {
 		wantCode  string
 	}{
 		{
-			name:      "zero threshold with fast request",
+			name:      "zero_threshold_with_fast_request",
 			threshold: 0,
 			latency:   10 * time.Millisecond,
 			wantLevel: "info",
 			wantCode:  "INFO",
 		},
 		{
-			name:      "zero threshold with slow request",
+			name:      "zero_threshold_with_slow_request",
 			threshold: 0,
 			latency:   5 * time.Second, // Very slow, but threshold is disabled
 			wantLevel: "info",
 			wantCode:  "INFO", // Should NOT be WARN
 		},
 		{
-			name:      "negative threshold with slow request",
+			name:      "negative_threshold_with_slow_request",
 			threshold: -1 * time.Second,
 			latency:   10 * time.Second,
 			wantLevel: "info",
@@ -687,25 +687,25 @@ func TestDetermineSeveritySlowRequestEnabled(t *testing.T) {
 		wantCode  string
 	}{
 		{
-			name:      "fast request below threshold",
+			name:      "fast_request_below_threshold",
 			latency:   50 * time.Millisecond,
 			wantLevel: "info",
 			wantCode:  "INFO",
 		},
 		{
-			name:      "request exactly at threshold",
+			name:      "request_exactly_at_threshold",
 			latency:   100 * time.Millisecond,
 			wantLevel: "info",
 			wantCode:  "INFO", // Equal is not greater
 		},
 		{
-			name:      "slow request above threshold",
+			name:      "slow_request_above_threshold",
 			latency:   150 * time.Millisecond,
 			wantLevel: "info", // Log level stays INFO
 			wantCode:  "WARN", // But result_code is WARN
 		},
 		{
-			name:      "very slow request",
+			name:      "very_slow_request",
 			latency:   1 * time.Second,
 			wantLevel: "info",
 			wantCode:  "WARN",
@@ -734,13 +734,13 @@ func TestDetermineSeverityPrecedence(t *testing.T) {
 		wantCode  string
 	}{
 		{
-			name:      "500 error overrides slow request",
+			name:      "500_error_overrides_slow_request",
 			status:    500,
 			wantLevel: "error",
 			wantCode:  "ERROR",
 		},
 		{
-			name:      "400 warning overrides slow request",
+			name:      "400_warning_overrides_slow_request",
 			status:    400,
 			wantLevel: "warn",
 			wantCode:  "WARN",
@@ -800,80 +800,80 @@ func TestFormatStatusForMessage(t *testing.T) {
 	}{
 		// Edge case: status = 0 (no response)
 		{
-			name:   "zero status code",
+			name:   "zero_status_code",
 			status: 0,
 			want:   "0",
 		},
 		// Edge case: status < 100 (invalid)
 		{
-			name:   "status code 99",
+			name:   "status_code_99",
 			status: 99,
 			want:   "99",
 		},
 		// Standard HTTP status codes (100-599)
 		{
-			name:   "informational 1xx",
+			name:   "informational_1xx",
 			status: 100,
 			want:   "1xx",
 		},
 		{
-			name:   "informational 101",
+			name:   "informational_101",
 			status: 101,
 			want:   "1xx",
 		},
 		{
-			name:   "success 200",
+			name:   "success_200",
 			status: 200,
 			want:   "2xx",
 		},
 		{
-			name:   "success 201",
+			name:   "success_201",
 			status: 201,
 			want:   "2xx",
 		},
 		{
-			name:   "redirect 301",
+			name:   "redirect_301",
 			status: 301,
 			want:   "3xx",
 		},
 		{
-			name:   "client error 400",
+			name:   "client_error_400",
 			status: 400,
 			want:   "4xx",
 		},
 		{
-			name:   "client error 404",
+			name:   "client_error_404",
 			status: 404,
 			want:   "4xx",
 		},
 		{
-			name:   "server error 500",
+			name:   "server_error_500",
 			status: 500,
 			want:   "5xx",
 		},
 		{
-			name:   "server error 503",
+			name:   "server_error_503",
 			status: 503,
 			want:   "5xx",
 		},
 		{
-			name:   "boundary 599",
+			name:   "boundary_599",
 			status: 599,
 			want:   "5xx",
 		},
 		// Edge case: status >= 600 (non-standard)
 		{
-			name:   "non-standard 600",
+			name:   "non_standard_600",
 			status: 600,
 			want:   "600",
 		},
 		{
-			name:   "non-standard 999",
+			name:   "non_standard_999",
 			status: 999,
 			want:   "999",
 		},
 		{
-			name:   "very large status code",
+			name:   "very_large_status_code",
 			status: 1234,
 			want:   "1234",
 		},
@@ -899,7 +899,7 @@ func TestCreateActionMessage(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "standard success request",
+			name:    "standard_success_request",
 			method:  "GET",
 			path:    testAPIUsersPath,
 			latency: 123 * time.Millisecond,
@@ -907,7 +907,7 @@ func TestCreateActionMessage(t *testing.T) {
 			want:    "GET " + testAPIUsersPath + " completed in 123ms with status 2xx",
 		},
 		{
-			name:    "post request with 201",
+			name:    "post_request_with_201",
 			method:  "POST",
 			path:    testAPIUsersPath,
 			latency: 456 * time.Millisecond,
@@ -915,7 +915,7 @@ func TestCreateActionMessage(t *testing.T) {
 			want:    "POST " + testAPIUsersPath + " completed in 456ms with status 2xx",
 		},
 		{
-			name:    "client error 404",
+			name:    "client_error_404",
 			method:  "GET",
 			path:    "/api/not-found",
 			latency: 50 * time.Millisecond,
@@ -923,7 +923,7 @@ func TestCreateActionMessage(t *testing.T) {
 			want:    "GET /api/not-found completed in 50ms with status 4xx",
 		},
 		{
-			name:    "server error 500",
+			name:    "server_error_500",
 			method:  "POST",
 			path:    "/api/error",
 			latency: 100 * time.Millisecond,
@@ -931,7 +931,7 @@ func TestCreateActionMessage(t *testing.T) {
 			want:    "POST /api/error completed in 100ms with status 5xx",
 		},
 		{
-			name:    "edge case: zero status",
+			name:    "edge_case_zero_status",
 			method:  "GET",
 			path:    "/api/timeout",
 			latency: 5 * time.Second,
@@ -939,7 +939,7 @@ func TestCreateActionMessage(t *testing.T) {
 			want:    "GET /api/timeout completed in 5s with status 0",
 		},
 		{
-			name:    "edge case: status 99",
+			name:    "edge_case_status_99",
 			method:  "GET",
 			path:    "/api/invalid",
 			latency: 10 * time.Millisecond,
@@ -947,7 +947,7 @@ func TestCreateActionMessage(t *testing.T) {
 			want:    "GET /api/invalid completed in 10ms with status 99",
 		},
 		{
-			name:    "edge case: status 600",
+			name:    "edge_case_status_600",
 			method:  "GET",
 			path:    "/api/custom",
 			latency: 200 * time.Millisecond,
@@ -955,7 +955,7 @@ func TestCreateActionMessage(t *testing.T) {
 			want:    "GET /api/custom completed in 200ms with status 600",
 		},
 		{
-			name:    "edge case: very large status",
+			name:    "edge_case_very_large_status",
 			method:  "DELETE",
 			path:    "/api/weird",
 			latency: 1 * time.Millisecond,
@@ -1333,17 +1333,17 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "health endpoint",
+			name:     "health_endpoint",
 			path:     testHealthPath,
 			expected: true,
 		},
 		{
-			name:     "ready endpoint",
+			name:     "ready_endpoint",
 			path:     testReadyPath,
 			expected: true,
 		},
 		{
-			name:     "normal endpoint",
+			name:     "normal_endpoint",
 			path:     "/api/users",
 			expected: false,
 		},
@@ -1351,13 +1351,13 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 			// No route matched, so the request is not a probe however its URL reads.
 			// Keeping a URL fallback here dropped percent-encoded probing of the base
 			// path from the access log.
-			name:     "unmatched route with probe-looking url is logged",
+			name:     "unmatched_route_with_probe_looking_url_is_logged",
 			path:     "",
 			urlPath:  testHealthPath,
 			expected: false,
 		},
 		{
-			name:     "unmatched route with normal url is logged",
+			name:     "unmatched_route_with_normal_url_is_logged",
 			path:     "",
 			urlPath:  "/api/data",
 			expected: false,
@@ -1365,7 +1365,7 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 		{
 			// The template is what the router matched; a module param route never
 			// carries the probe path even when the raw request decodes to it.
-			name:     "module param route matched by encoded probe spelling is logged",
+			name:     "module_param_route_matched_by_encoded_probe_spelling_is_logged",
 			path:     "/api/:id",
 			urlPath:  "/api/%68ealth",
 			expected: false,
@@ -1373,13 +1373,13 @@ func TestRequestLoggerShouldSkipPath(t *testing.T) {
 		{
 			// Echo leaves the best-match template set on a top-level 405, so only the
 			// method check keeps this request in the access log.
-			name:     "non-probe method on the probe route is logged",
+			name:     "non_probe_method_on_the_probe_route_is_logged",
 			method:   http.MethodPost,
 			path:     testHealthPath,
 			expected: false,
 		},
 		{
-			name:     "head probe is skipped like get",
+			name:     "head_probe_is_skipped_like_get",
 			method:   http.MethodHead,
 			path:     testReadyPath,
 			expected: true,

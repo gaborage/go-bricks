@@ -27,21 +27,21 @@ func TestTimeoutHandling(t *testing.T) {
 		expectedStatus int
 	}{
 		{
-			name:           "no timeout - quick response",
+			name:           "no_timeout_quick_response",
 			contextTimeout: 100 * time.Millisecond,
 			delayBefore:    0,
 			expectTimeout:  false,
 			expectedStatus: http.StatusOK,
 		},
 		{
-			name:           "timeout before handler execution",
+			name:           "timeout_before_handler_execution",
 			contextTimeout: 10 * time.Millisecond,
 			delayBefore:    20 * time.Millisecond,
 			expectTimeout:  true,
 			expectedStatus: http.StatusServiceUnavailable,
 		},
 		{
-			name:           "timeout at edge case",
+			name:           "timeout_at_edge_case",
 			contextTimeout: 100 * time.Millisecond,
 			delayBefore:    50 * time.Millisecond,
 			expectTimeout:  false, // Should complete with reasonable buffer

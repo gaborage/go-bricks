@@ -26,7 +26,7 @@ func TestConfigErrorError(t *testing.T) {
 		expected string
 	}{
 		{
-			name: "complete error with all fields",
+			name: "complete_error_with_all_fields",
 			err: &ConfigError{
 				Category: "missing",
 				Field:    databaseHost,
@@ -37,7 +37,7 @@ func TestConfigErrorError(t *testing.T) {
 			expected: "config_missing: database.host required set DATABASE_HOST env var or add database.host to config.yaml detail1; detail2",
 		},
 		{
-			name: "error without category",
+			name: "error_without_category",
 			err: &ConfigError{
 				Field:   appNameField,
 				Message: "required",
@@ -46,7 +46,7 @@ func TestConfigErrorError(t *testing.T) {
 			expected: "app.name required set APP_NAME env var",
 		},
 		{
-			name: "error without field",
+			name: "error_without_field",
 			err: &ConfigError{
 				Category: "invalid",
 				Message:  "configuration error",
@@ -55,7 +55,7 @@ func TestConfigErrorError(t *testing.T) {
 			expected: "config_invalid: configuration error check your config",
 		},
 		{
-			name: "error without message",
+			name: "error_without_message",
 			err: &ConfigError{
 				Category: "connection",
 				Field:    "database",
@@ -64,7 +64,7 @@ func TestConfigErrorError(t *testing.T) {
 			expected: "config_connection: database check connection",
 		},
 		{
-			name: "error without action",
+			name: "error_without_action",
 			err: &ConfigError{
 				Category: "invalid",
 				Field:    "port",
@@ -73,21 +73,21 @@ func TestConfigErrorError(t *testing.T) {
 			expected: "config_invalid: port out of range",
 		},
 		{
-			name: "error with only details",
+			name: "error_with_only_details",
 			err: &ConfigError{
 				Details: []string{"detail1", "detail2", "detail3"},
 			},
 			expected: "detail1; detail2; detail3",
 		},
 		{
-			name: "minimal error with only message",
+			name: "minimal_error_with_only_message",
 			err: &ConfigError{
 				Message: "something went wrong",
 			},
 			expected: "something went wrong",
 		},
 		{
-			name:     "empty error",
+			name:     "empty_error",
 			err:      &ConfigError{},
 			expected: "",
 		},
@@ -135,7 +135,7 @@ func TestNewMissingFieldError(t *testing.T) {
 		wantMessage  string
 	}{
 		{
-			name:         "database host missing",
+			name:         "database_host_missing",
 			field:        databaseHost,
 			envVar:       "DATABASE_HOST",
 			yamlPath:     databaseHost,
@@ -144,7 +144,7 @@ func TestNewMissingFieldError(t *testing.T) {
 			wantMessage:  "required",
 		},
 		{
-			name:         "app name missing",
+			name:         "app_name_missing",
 			field:        appNameField,
 			envVar:       "APP_NAME",
 			yamlPath:     appNameField,
@@ -176,21 +176,21 @@ func TestNewInvalidFieldError(t *testing.T) {
 		wantAction   bool
 	}{
 		{
-			name:         "invalid with options",
+			name:         "invalid_with_options",
 			field:        "log.level",
 			message:      "'invalid' is not supported",
 			validOptions: []string{"debug", "info", "warn", "error"},
 			wantAction:   true,
 		},
 		{
-			name:         "invalid without options",
+			name:         "invalid_without_options",
 			field:        "app.rate.limit",
 			message:      "must be non-negative",
 			validOptions: nil,
 			wantAction:   false,
 		},
 		{
-			name:         "invalid with empty options",
+			name:         "invalid_with_empty_options",
 			field:        "server.port",
 			message:      outOfRangeErrMsg,
 			validOptions: []string{},
@@ -226,13 +226,13 @@ func TestNewNotConfiguredError(t *testing.T) {
 		yamlPath string
 	}{
 		{
-			name:     "messaging not configured",
+			name:     "messaging_not_configured",
 			feature:  messagingBrokerURL,
 			envVar:   "MESSAGING_BROKER_URL",
 			yamlPath: messagingBrokerURL,
 		},
 		{
-			name:     "database not configured",
+			name:     "database_not_configured",
 			feature:  "database",
 			envVar:   "DATABASE_HOST",
 			yamlPath: databaseHost,
@@ -262,7 +262,7 @@ func TestNewConnectionError(t *testing.T) {
 		wantDetailsCount int
 	}{
 		{
-			name:     "database connection error with troubleshooting",
+			name:     "database_connection_error_with_troubleshooting",
 			resource: "database",
 			message:  testutil.TestConnectionRefused,
 			troubleshooting: []string{
@@ -273,14 +273,14 @@ func TestNewConnectionError(t *testing.T) {
 			wantDetailsCount: 3,
 		},
 		{
-			name:             "messaging connection error without troubleshooting",
+			name:             "messaging_connection_error_without_troubleshooting",
 			resource:         "messaging",
 			message:          "connection timeout",
 			troubleshooting:  nil,
 			wantDetailsCount: 0,
 		},
 		{
-			name:             "connection error with empty troubleshooting",
+			name:             "connection_error_with_empty_troubleshooting",
 			resource:         "redis",
 			message:          "auth failed",
 			troubleshooting:  []string{},
@@ -316,7 +316,7 @@ func TestNewMultiTenantError(t *testing.T) {
 		wantField string
 	}{
 		{
-			name:      "tenant database config missing",
+			name:      "tenant_database_config_missing",
 			tenantID:  "tenant-a",
 			field:     databaseHost,
 			message:   "not configured",
@@ -324,7 +324,7 @@ func TestNewMultiTenantError(t *testing.T) {
 			wantField: "multitenant.tenants.tenant-a.database.host",
 		},
 		{
-			name:      "tenant messaging config missing",
+			name:      "tenant_messaging_config_missing",
 			tenantID:  "tenant-b",
 			field:     "messaging.url",
 			message:   "required",
@@ -352,17 +352,17 @@ func TestNewValidationError(t *testing.T) {
 		message string
 	}{
 		{
-			name:    "rate limit validation",
+			name:    "rate_limit_validation",
 			field:   "app.rate.limit",
 			message: "must be non-negative",
 		},
 		{
-			name:    "port validation",
+			name:    "port_validation",
 			field:   "server.port",
 			message: "must be between 1 and 65535",
 		},
 		{
-			name:    "timeout validation",
+			name:    "timeout_validation",
 			field:   "server.timeout.read",
 			message: "must be positive",
 		},
@@ -437,22 +437,22 @@ func TestIsNotConfigured(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "nil error returns false",
+			name:     "nil_error_returns_false",
 			err:      nil,
 			expected: false,
 		},
 		{
-			name:     "ErrNotConfigured sentinel returns true",
+			name:     "err_not_configured_sentinel_returns_true",
 			err:      ErrNotConfigured,
 			expected: true,
 		},
 		{
-			name:     "wrapped ErrNotConfigured returns true",
+			name:     "wrapped_err_not_configured_returns_true",
 			err:      errors.New("database: " + ErrNotConfigured.Error()),
 			expected: false, // errors.New creates new error, not wrapping
 		},
 		{
-			name: "ConfigError with not_configured category returns true",
+			name: "config_error_with_not_configured_category_returns_true",
 			err: &ConfigError{
 				Category: "not_configured",
 				Field:    "messaging",
@@ -461,7 +461,7 @@ func TestIsNotConfigured(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "ConfigError with missing category returns false",
+			name: "config_error_with_missing_category_returns_false",
 			err: &ConfigError{
 				Category: "missing",
 				Field:    databaseHost,
@@ -470,7 +470,7 @@ func TestIsNotConfigured(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "ConfigError with invalid category returns false",
+			name: "config_error_with_invalid_category_returns_false",
 			err: &ConfigError{
 				Category: "invalid",
 				Field:    "log.level",
@@ -479,7 +479,7 @@ func TestIsNotConfigured(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "ConfigError with connection category returns false",
+			name: "config_error_with_connection_category_returns_false",
 			err: &ConfigError{
 				Category: "connection",
 				Field:    "database",
@@ -488,12 +488,12 @@ func TestIsNotConfigured(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "generic error returns false",
+			name:     "generic_error_returns_false",
 			err:      errors.New("some generic error"),
 			expected: false,
 		},
 		{
-			name:     "NewNotConfiguredError returns true",
+			name:     "new_not_configured_error_returns_true",
 			err:      NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", messagingBrokerURL),
 			expected: true,
 		},

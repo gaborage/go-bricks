@@ -18,7 +18,7 @@ import (
 
 const (
 	tenantIDHeader = "X-Tenant-ID"
-	emptyResolver  = "nil resolver"
+	emptyResolver  = "nil_resolver"
 	testDomain     = "example.com"
 	validTenantID  = "valid-tenant"
 	tenantIDRegex  = `^[a-zA-Z0-9\-]+$`
@@ -47,37 +47,37 @@ func TestHeaderResolverResolveTenant(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:     "success with default header",
+			name:     "success_with_default_header",
 			resolver: &HeaderResolver{},
 			headers:  map[string]string{tenantIDHeader: "tenant123"},
 			expected: "tenant123",
 		},
 		{
-			name:     "success with custom header",
+			name:     "success_with_custom_header",
 			resolver: &HeaderResolver{HeaderName: "Custom-Tenant"},
 			headers:  map[string]string{"Custom-Tenant": "custom-tenant"},
 			expected: "custom-tenant",
 		},
 		{
-			name:     "success with whitespace trimming",
+			name:     "success_with_whitespace_trimming",
 			resolver: &HeaderResolver{},
 			headers:  map[string]string{tenantIDHeader: "  spaced-tenant  "},
 			expected: "spaced-tenant",
 		},
 		{
-			name:        "missing header",
+			name:        "missing_header",
 			resolver:    &HeaderResolver{},
 			headers:     map[string]string{},
 			expectError: true,
 		},
 		{
-			name:        "empty header value",
+			name:        "empty_header_value",
 			resolver:    &HeaderResolver{},
 			headers:     map[string]string{tenantIDHeader: ""},
 			expectError: true,
 		},
 		{
-			name:        "whitespace only header value",
+			name:        "whitespace_only_header_value",
 			resolver:    &HeaderResolver{},
 			headers:     map[string]string{tenantIDHeader: "   "},
 			expectError: true,
@@ -134,7 +134,7 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name: "success with first resolver",
+			name: "success_with_first_resolver",
 			resolver: &CompositeResolver{
 				Resolvers: []TenantResolver{
 					&HeaderResolver{HeaderName: tenantIDHeader},
@@ -146,7 +146,7 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 			expected: "header-tenant",
 		},
 		{
-			name: "success with second resolver (first fails)",
+			name: "success_with_second_resolver_first_fails",
 			resolver: &CompositeResolver{
 				Resolvers: []TenantResolver{
 					&HeaderResolver{HeaderName: tenantIDHeader}, // will fail - no header
@@ -158,7 +158,7 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 			expected: "subdomain-tenant",
 		},
 		{
-			name: "success with regex validation",
+			name: "success_with_regex_validation",
 			resolver: &CompositeResolver{
 				Resolvers: []TenantResolver{
 					&HeaderResolver{HeaderName: tenantIDHeader},
@@ -170,7 +170,7 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 			expected: "tenant-123",
 		},
 		{
-			name: "all resolvers fail",
+			name: "all_resolvers_fail",
 			resolver: &CompositeResolver{
 				Resolvers: []TenantResolver{
 					&HeaderResolver{HeaderName: tenantIDHeader}, // no header
@@ -182,7 +182,7 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "nil resolver in list",
+			name: "nil_resolver_in_list",
 			resolver: &CompositeResolver{
 				Resolvers: []TenantResolver{
 					nil, // skipped
@@ -194,13 +194,13 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 			expected: validTenantID,
 		},
 		{
-			name:        "nil composite resolver",
+			name:        "nil_composite_resolver",
 			resolver:    nil,
 			host:        testDomain,
 			expectError: true,
 		},
 		{
-			name: "empty resolvers list",
+			name: "empty_resolvers_list",
 			resolver: &CompositeResolver{
 				Resolvers: []TenantResolver{},
 			},
@@ -213,7 +213,7 @@ func TestCompositeResolverResolveTenant(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := setupTestRequest(tt.host, tt.headers)
 
-			if tt.name == "nil composite resolver" {
+			if tt.name == "nil_composite_resolver" {
 				req = nil
 			}
 
@@ -243,7 +243,7 @@ func TestValidatingResolverResolveTenant(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name: "success with valid tenant ID",
+			name: "success_with_valid_tenant_id",
 			resolver: &ValidatingResolver{
 				Resolver:    &HeaderResolver{HeaderName: tenantIDHeader},
 				TenantRegex: regexp.MustCompile(tenantIDRegex),
@@ -252,7 +252,7 @@ func TestValidatingResolverResolveTenant(t *testing.T) {
 			expected: "valid-tenant-123",
 		},
 		{
-			name: "success without regex validation",
+			name: "success_without_regex_validation",
 			resolver: &ValidatingResolver{
 				Resolver: &HeaderResolver{HeaderName: tenantIDHeader},
 				// No TenantRegex - validation skipped
@@ -261,7 +261,7 @@ func TestValidatingResolverResolveTenant(t *testing.T) {
 			expected: "any-format-Works",
 		},
 		{
-			name: "validation fails - invalid format",
+			name: "validation_fails_invalid_format",
 			resolver: &ValidatingResolver{
 				Resolver:    &HeaderResolver{HeaderName: tenantIDHeader},
 				TenantRegex: regexp.MustCompile(tenantIDRegex),
@@ -270,7 +270,7 @@ func TestValidatingResolverResolveTenant(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "underlying resolver fails",
+			name: "underlying_resolver_fails",
 			resolver: &ValidatingResolver{
 				Resolver:    &HeaderResolver{HeaderName: tenantIDHeader},
 				TenantRegex: regexp.MustCompile(tenantIDRegex),
@@ -279,13 +279,13 @@ func TestValidatingResolverResolveTenant(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "nil validating resolver",
+			name:        "nil_validating_resolver",
 			resolver:    nil,
 			headers:     map[string]string{tenantIDHeader: validTenantID},
 			expectError: true,
 		},
 		{
-			name: "nil underlying resolver",
+			name: "nil_underlying_resolver",
 			resolver: &ValidatingResolver{
 				Resolver:    nil,
 				TenantRegex: regexp.MustCompile(tenantIDRegex),
@@ -299,7 +299,7 @@ func TestValidatingResolverResolveTenant(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := setupTestRequest(testDomain, tt.headers)
 
-			if tt.name == "nil validating resolver" {
+			if tt.name == "nil_validating_resolver" {
 				req = nil
 			}
 
@@ -343,31 +343,31 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name:     "success with subdomain",
+			name:     "success_with_subdomain",
 			resolver: &SubdomainResolver{RootDomain: testDomain},
 			host:     "tenant1.example.com",
 			expected: "tenant1",
 		},
 		{
-			name:     "success with nested subdomain",
+			name:     "success_with_nested_subdomain",
 			resolver: &SubdomainResolver{RootDomain: "api.example.com"},
 			host:     "tenant2.api.example.com",
 			expected: "tenant2",
 		},
 		{
-			name:     "success with port stripping",
+			name:     "success_with_port_stripping",
 			resolver: &SubdomainResolver{RootDomain: testDomain},
 			host:     "tenant3.example.com:8080",
 			expected: "tenant3",
 		},
 		{
-			name:        "success with IPv6 localhost (port preserved)",
+			name:        "success_with_ipv6_localhost_port_preserved",
 			resolver:    &SubdomainResolver{RootDomain: "::1"},
 			host:        "[::1]:8080",
 			expectError: true, // IPv6 won't match subdomain pattern
 		},
 		{
-			name:       "success with X-Forwarded-Host",
+			name:       "success_with_x_forwarded_host",
 			resolver:   &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
 			host:       testHost,
 			remoteAddr: "10.0.0.1:443",
@@ -375,7 +375,7 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 			expected:   "tenant4",
 		},
 		{
-			name:       "success with comma-separated X-Forwarded-Host",
+			name:       "success_with_comma_separated_x_forwarded_host",
 			resolver:   &SubdomainResolver{RootDomain: testDomain, TrustProxies: true},
 			host:       testHost,
 			remoteAddr: "10.0.0.1:443",
@@ -383,25 +383,25 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 			expected:   "tenant6",
 		},
 		{
-			name:        "root domain same as host",
+			name:        "root_domain_same_as_host",
 			resolver:    &SubdomainResolver{RootDomain: testDomain},
 			host:        testDomain,
 			expectError: true,
 		},
 		{
-			name:        "host doesn't match root domain",
+			name:        "host_doesnt_match_root_domain",
 			resolver:    &SubdomainResolver{RootDomain: testDomain},
 			host:        "tenant.different.com",
 			expectError: true,
 		},
 		{
-			name:        "suffix trickery prevented",
+			name:        "suffix_trickery_prevented",
 			resolver:    &SubdomainResolver{RootDomain: testDomain},
 			host:        "maliciousexample.com",
 			expectError: true,
 		},
 		{
-			name:        "empty root domain",
+			name:        "empty_root_domain",
 			resolver:    &SubdomainResolver{},
 			host:        "tenant.example.com",
 			expectError: true,
@@ -413,7 +413,7 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "proxies disabled but X-Forwarded-Host present",
+			name:        "proxies_disabled_but_x_forwarded_host_present",
 			resolver:    &SubdomainResolver{RootDomain: testDomain, TrustProxies: false},
 			host:        testHost,
 			remoteAddr:  "198.51.100.7:443",

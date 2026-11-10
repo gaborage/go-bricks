@@ -194,11 +194,11 @@ func TestAmqpHeaderAccessorGet(t *testing.T) {
 		key      string
 		expected any
 	}{
-		{name: "nil headers", headers: nil, key: testKeyName, expected: nil},
-		{name: "empty headers", headers: amqp.Table{}, key: testKeyName, expected: nil},
-		{name: "existing key", headers: amqp.Table{testKeyName: testValueContent}, key: testKeyName, expected: testValueContent},
-		{name: "non-existing key", headers: amqp.Table{"other-key": "other-value"}, key: testKeyName, expected: nil},
-		{name: "multiple headers", headers: amqp.Table{"key1": "value1", "key2": 42, "key3": true}, key: "key2", expected: 42},
+		{name: "nil_headers", headers: nil, key: testKeyName, expected: nil},
+		{name: "empty_headers", headers: amqp.Table{}, key: testKeyName, expected: nil},
+		{name: "existing_key", headers: amqp.Table{testKeyName: testValueContent}, key: testKeyName, expected: testValueContent},
+		{name: "non_existing_key", headers: amqp.Table{"other-key": "other-value"}, key: testKeyName, expected: nil},
+		{name: "multiple_headers", headers: amqp.Table{"key1": "value1", "key2": 42, "key3": true}, key: "key2", expected: 42},
 	}
 
 	for _, tt := range tests {
@@ -271,19 +271,19 @@ func TestAMQPForceAlignmentConsistency(t *testing.T) {
 		expectedTraceID string
 	}{
 		{
-			name:            "String headers with UUID trace ID",
+			name:            "string_headers_with_uuid_trace_id",
 			initialTraceID:  "550e8400-e29b-41d4-a716-446655440000",
 			traceparent:     "00-fedcbafedcbafedcbafedcbafedcbaaa-1111222233334444-01",
 			expectedTraceID: "fedcbafedcbafedcbafedcbafedcbaaa",
 		},
 		{
-			name:            "Byte slice headers",
+			name:            "byte_slice_headers",
 			initialTraceID:  []byte("byte-trace-id"),
 			traceparent:     []byte("00-1a2b3c4d5e6f7a8b1a2b3c4d5e6f7a8b-9876543210abcdef-01"),
 			expectedTraceID: "1a2b3c4d5e6f7a8b1a2b3c4d5e6f7a8b",
 		},
 		{
-			name:            "Mixed types force alignment",
+			name:            "mixed_types_force_alignment",
 			initialTraceID:  "ffffffffffffffffffffffffffffffff", // 32-char hex
 			traceparent:     []byte("00-1234567890abcdef1234567890abcdef-0123456789abcdef-01"),
 			expectedTraceID: "1234567890abcdef1234567890abcdef", // Force mode always aligns

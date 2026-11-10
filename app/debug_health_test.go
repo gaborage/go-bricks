@@ -31,7 +31,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 		checkResponse  func(t *testing.T, body string)
 	}{
 		{
-			name: "health debug with probes",
+			name: "health_debug_with_probes",
 			setupApp: func() *App {
 				cfg := &config.Config{
 					App: config.AppConfig{
@@ -55,7 +55,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 			},
 		},
 		{
-			name: "health debug with failing probe",
+			name: "health_debug_with_failing_probe",
 			setupApp: func() *App {
 				cfg := &config.Config{
 					App: config.AppConfig{
@@ -79,7 +79,7 @@ func TestDebugHealthHandlers(t *testing.T) {
 			},
 		},
 		{
-			name: "health debug with nil config",
+			name: "health_debug_with_nil_config",
 			setupApp: func() *App {
 				app := &App{cfg: nil, logger: logger.New("info", false)}
 				installSealedSlots(app)
@@ -126,7 +126,7 @@ func TestGetAppInfo(t *testing.T) {
 		check    func(t *testing.T, info Info)
 	}{
 		{
-			name: "with valid config",
+			name: "with_valid_config",
 			setupApp: func() *App {
 				cfg := &config.Config{
 					App: config.AppConfig{
@@ -151,7 +151,7 @@ func TestGetAppInfo(t *testing.T) {
 			},
 		},
 		{
-			name: "with nil config",
+			name: "with_nil_config",
 			setupApp: func() *App {
 				return &App{
 					cfg:    nil,
