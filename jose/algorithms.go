@@ -94,7 +94,7 @@ func AllowedContentEncsFor(mode SealMode) []jose.ContentEncryption {
 }
 
 // inboundAllowlists returns the key-management and content-encryption allowlists Open
-// hands the parser for p, in both seal modes. A policy that declares an algorithm pins
+// hands the parser for p, in every seal mode. A policy that declares an algorithm pins
 // the allowlist to exactly that one: the declared value is what the deployment agreed
 // with the peer, so a token using any other member of the mode's list is not the token
 // this policy was written for. Pinning only ever narrows, unconditionally: a declared

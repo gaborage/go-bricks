@@ -135,7 +135,7 @@ func (a *App) buildMessagingDeclarations() error {
 
 	a.messagingDeclarations = decls
 
-	if setter, ok := a.resourceProvider.(declarationSetter); ok && a.resourceProvider != nil {
+	if setter, ok := a.resourceProvider.(declarationSetter); ok {
 		setter.SetDeclarations(decls)
 	}
 

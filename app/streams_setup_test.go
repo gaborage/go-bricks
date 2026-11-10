@@ -312,7 +312,6 @@ func (r *stampRecordingRuntime) CollectDeclarations([]streamruntime.ModuleNamer,
 func (r *stampRecordingRuntime) NewManager(*streamruntime.ManagerOptions) streamruntime.Handle {
 	return stampRecordingHandle{runtime: r}
 }
-func (r *stampRecordingRuntime) CanDrainHold() bool { return false }
 
 type stampRecordingHandle struct{ runtime *stampRecordingRuntime }
 

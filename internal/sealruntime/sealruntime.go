@@ -104,7 +104,7 @@ type Sealer interface {
 
 // TenantRule is the tid expectation for one delivery, derived by the consumer door from
 // Tenancy and the carrier: Required makes an absent signed tid poison; a non-empty Expected
-// must equal a present tid. Implemented (derived) by messaging/sealed in #1359.
+// must equal a present tid. Implemented (derived) by messaging/sealed.
 type TenantRule struct {
 	Required bool
 	Expected string
@@ -112,7 +112,7 @@ type TenantRule struct {
 
 // Envelope is the verified signed envelope of one opened message — field-for-field the
 // shape messaging exposes on Metadata, so the mapping is a struct conversion. Produced by
-// messaging/sealed in #1359.
+// messaging/sealed.
 type Envelope struct {
 	JTI        string
 	IssuedAt   time.Time
@@ -126,7 +126,7 @@ type Envelope struct {
 // OpenRefusedError is a sealed delivery the opener refused: Code is the rule that fired,
 // Details carries presence/length facts only (never a wire value), Recoverable marks the
 // provisioning-recoverable unknown-generation case, and Cause keeps the codec's own error
-// for errors.As downstream. Returned by messaging/sealed in #1359.
+// for errors.As downstream. Returned by messaging/sealed.
 type OpenRefusedError struct {
 	Code        string
 	Details     map[string]string
@@ -172,7 +172,7 @@ func (e *OpenRefusedError) Unwrap() error {
 }
 
 // Opener turns one sealed delivery body back into the event (into out) and its verified
-// Envelope, judging tid by want. Implemented by messaging/sealed in #1359.
+// Envelope, judging tid by want. Implemented by messaging/sealed.
 type Opener interface {
 	Open(ctx context.Context, body []byte, want TenantRule, out any) (Envelope, error)
 }
@@ -180,7 +180,7 @@ type Opener interface {
 // OpenerProvider is the OPTIONAL consume side of a registered Codec: the consumer door
 // type-asserts Registered() to it. NewOpener is the consumer's startup fail-fast (families
 // provisioned in the inherited roles) bound to the declaration's EventType. Implemented by
-// messaging/sealed in #1359.
+// messaging/sealed.
 type OpenerProvider interface {
 	NewOpener(spec Spec, eventType string, rt *Runtime) (Opener, error)
 }

@@ -84,9 +84,7 @@ func EmptyStringToScalarGuardHookFunc() mapstructure.DecodeHookFunc {
 		if strings.TrimSpace(reflect.ValueOf(data).String()) != "" {
 			return data, nil
 		}
-		// The message stays inline rather than in a package var: the mirror-drift test
-		// compares function bodies, so a message hoisted out would drift unchecked. Only
-		// the remedy differs by kind — the part an operator acts on.
+		// Only the remedy differs by kind — the part an operator acts on.
 		kind, remedy := "numeric", "an explicit value"
 		if t.Kind() == reflect.Bool {
 			kind, remedy = "boolean", "an explicit true/false"

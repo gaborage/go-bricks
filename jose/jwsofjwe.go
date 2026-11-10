@@ -87,7 +87,7 @@ func openJWSofJWE(compact string, p *Policy, r KeyResolver) (plaintext []byte, c
 		return nil, nil, hdr, errOuterNotJWS(err)
 	}
 	if err != nil {
-		return nil, nil, hdr, mapVerifyError(err, p, &jwsHdr)
+		return nil, nil, hdr, mapVerifyError(err, &jwsHdr)
 	}
 	if !outerCtyAccepted(p.Mode, &jwsHdr) {
 		return nil, nil, hdr, &Error{

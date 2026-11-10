@@ -258,7 +258,7 @@ func loadRSAEntry(name string, cfg *config.KeyPairConfig) (*keyEntry, error) {
 // loadKeyBytes resolves a KeySourceConfig to raw bytes — DER for RSA keys,
 // raw key material for secrets, the bundle for PKCS#12. Returns nil if
 // neither file nor value is set. Delegates the file/value resolution
-// mechanism to internal/keymaterial (also consumed by cmd/seal-payload) and
+// mechanism to internal/keymaterial (also consumed by internal/sealcli) and
 // adds the keystore error-namespace prefix. Secrets and PKCS#12 bundles route
 // through LoadSecretBytes, whose errors never echo the configured source: raw
 // symmetric material has no detectable shape, and a bundle's stanza sits next

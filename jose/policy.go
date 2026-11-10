@@ -36,11 +36,13 @@ func (d Direction) String() string {
 type Policy struct {
 	Direction Direction
 
-	// Inbound (DirectionInbound) — both required.
+	// Inbound (DirectionInbound) — both required, except SealModeBareJWE, which takes
+	// only DecryptKid.
 	DecryptKid string // our private key kid (jose: decrypt=...)
 	VerifyKid  string // peer public key kid (jose: verify=...)
 
-	// Outbound (DirectionOutbound) — both required.
+	// Outbound (DirectionOutbound) — both required, except SealModeBareJWE, which takes
+	// only EncryptKid.
 	SignKid    string // our private key kid (jose: sign=...)
 	EncryptKid string // peer public key kid (jose: encrypt=...)
 

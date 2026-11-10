@@ -1,6 +1,7 @@
 // Formats go-playground/validator errors into the framework's structured
 // field-error shape. The validator instance itself, with the framework's custom
 // rules already registered, is constructed in internal/validation.
+
 package server
 
 import (

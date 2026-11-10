@@ -89,16 +89,13 @@ func TestResolvePolicyNil(t *testing.T) {
 }
 
 func TestParseUnixSecsAllArms(t *testing.T) {
-	// JSON decoded numbers are float64, but parseUnixSecs accepts int64/int too for
-	// callers that pre-parse the claim map. Cover all type-switch arms.
+	// JSON decoded numbers are float64; every other type yields the zero time.
 	tests := []struct {
 		name string
 		in   any
 		zero bool
 	}{
 		{name: "float64", in: float64(1700000000), zero: false},
-		{name: "int64", in: int64(1700000000), zero: false},
-		{name: "int", in: int(1700000000), zero: false},
 		{name: "string_value", in: "not-a-number", zero: true},
 		{name: "nil_value", in: nil, zero: true},
 	}
