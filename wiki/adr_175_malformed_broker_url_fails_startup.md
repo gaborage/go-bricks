@@ -66,17 +66,18 @@ config, so the error belongs at startup, before anything is dialed.
   per-tenant deployment that booted before. A dynamic source's malformed URL fails that key's
   `EnsureConsumers` or `Publisher` call instead of retrying the dial.
 - **Unchanged**: a well-formed but unreachable URL behaves as before (publisher-only still boots
-  with the WARN); `amqp://h:05672/vh` and `amqp://u:p@h/a/b` are accepted; an empty username is not
+  with the WARN); a leading-zero port (`amqps://h:05671/vh`) and a two-segment path (`amqps://u:p@h/a/b`) are accepted; an empty username is not
   refused; `messaging.streams.uri` keeps its own validation; credential URL rendering (ADR-159),
   retry and backoff do not move. A hand-built `messaging.NewAMQPClient` is not checked and still
   finds a `ParseURI` failure at the dial, rendered masked as before.
 - A URL that parses but is read differently than intended is out of scope here.
 - **Known and deliberately unhandled**: opaque and hostless shapes that `ParseURI` accepts
-  (`amqp:user:pw@host/vh`, `amqp:`, `amqp://`, `amqp:///vh`) stay accepted. `ParseURI` reads them
-  with its defaults (`localhost:5672`, its default credentials, vhost `/` unless a path is
-  written), so a missing `//` dials localhost instead of failing. The rule here is `ParseURI`'s
-  verdict; refusing a hostless URL would also refuse the documented `amqp:///vh` local form, and
-  is left to a separate decision.
+  (the scheme followed by `user:pw@host/vh` with no `//`, the bare scheme, the scheme and `//`
+  alone, or `amqps:///vh`) stay accepted. `ParseURI` reads them with its defaults (`localhost` on
+  the scheme's default port, its default credentials, vhost `/` unless a path is written), so a
+  missing `//` dials localhost instead of failing. The rule here is `ParseURI`'s verdict;
+  refusing a hostless URL would also refuse the documented `amqps:///vh` local form, and is left
+  to a separate decision.
 
 ## References
 
