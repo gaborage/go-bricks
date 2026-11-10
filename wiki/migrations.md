@@ -15996,16 +15996,18 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     files that set `messaging.broker.url` (nested under a `messaging:` → `broker:` block,
     flat-dotted as `messaging.broker.url:`, or mixed) or `multitenant.tenants.<id>.messaging.url`.
     A `url:` leaf under a database, cache or other section hits the same pattern and does not
-    count.
+    count. `git grep` reads tracked files only, so repeat it over deployment config kept outside
+    the repository's tracked files:
+    `grep -rlE --include='*.yaml' --include='*.yml' '(^[[:space:]]*|\.)url[[:space:]]*:' k8s/ deploy/ config/ 2>/dev/null`.
   - Env: `git grep -lE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL'`, plus
     `grep -rlE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL' k8s/ deploy/ .env* 2>/dev/null`
     for env files and deployment manifests outside the repository's tracked files. The class
     includes `-` because a tenant ID may.
-  - Go, hand-built config: `git grep -nE 'Broker\.URL|Messaging\.URL|TenantMessagingConfig\{|BrokerConfig\{' -- '*.go'`
+  - Go, hand-built config: `git grep -lE 'Broker\.URL|Messaging\.URL|TenantMessagingConfig\{|BrokerConfig\{' -- '*.go'`
     lists code that sets the root or a tenant broker URL on a `config.Config` it hands to
     `app.NewWithConfig` or `Builder.WithConfig`; `config.Validate` judges those values too.
-  - Go, dynamic source: `git grep -nE 'func \([^)]*\) BrokerURL\(' -- '*.go'` lists every
-    `BrokerURL` method, whatever its parameters are named; one that satisfies
+  - Go, dynamic source: `git grep -lE 'func \([^)]*\) BrokerURL\(' -- '*.go'` lists the files
+    declaring a `BrokerURL` method, whatever its parameters are named; one that satisfies
     `messaging.BrokerURLProvider` is a dynamic source, and the URLs it can return are judged by
     `messaging.Manager`.
   - A hit locates the key, not the verdict. The value often lives in a secret manager, so judge
