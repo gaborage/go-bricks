@@ -1,13 +1,13 @@
-.PHONY: all help build test test-integration integration-leg test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec install-gosec verify-mod mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration integration-leg test-all test-alloc test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check check-tags lint-race docker-check vuln sec install-gosec verify-mod mutate mutate-baseline release release-cli
 # verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
 # -j check` that would race lint/test reading the same module files. Force
 # check's prerequisites to run serially regardless of -j.
 .NOTPARALLEL: check
 
-# Package selection for testing (excludes tools directories). Recursive `=`, so
+# Package selection for testing. Recursive `=`, so
 # go list runs only in recipes that use them, not while parsing for every target.
-PKGS = $(shell go list ./... | grep -vE '/(tools)(/|$$)')
-INTEGRATION_PKGS = $(shell go list -tags=integration ./... | grep -vE '/(tools)(/|$$)')
+PKGS = $(shell go list ./...)
+INTEGRATION_PKGS = $(shell go list -tags=integration ./...)
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=golang.org/x/vuln
 GOVULNCHECK_VERSION := v1.9.0

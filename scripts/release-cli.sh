@@ -32,7 +32,7 @@ PINNED="$(grep -oE 'gaborage/go-bricks v[0-9]+\.[0-9]+\.[0-9]+' tools/migration/
 # 4. gh authenticated AND can read this repo (keyring flips work/personal)
 gh auth status >/dev/null 2>&1 || die "gh not authenticated; run: gh auth login"
 gh repo view gaborage/go-bricks --json name >/dev/null 2>&1 \
-  || die "active gh account cannot read gaborage/go-bricks; run: gh auth switch -u gaborage"
+  || die "active gh account cannot read gaborage/go-bricks; re-run as: GH_TOKEN=\$(gh auth token -u gaborage) make release-cli VERSION=$VERSION"
 
 # 5. in sync with origin/main (fetch FIRST so the compare isn't stale)
 git fetch --quiet --prune --tags origin

@@ -269,9 +269,6 @@ linters:
         path: (^|/)server/
         text: 'a HandlerContext path/query door is for consumer handlers'
       - linters:
-          - lll
-        source: '^//go:generate '
-      - linters:
           - staticcheck
         text: 'SA9003:'
       # zerologlint cannot follow the LogEventAdapter wrapper which dispatches via its own Send/Msg
