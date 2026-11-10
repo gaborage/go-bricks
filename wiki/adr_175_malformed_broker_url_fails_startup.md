@@ -71,6 +71,12 @@ config, so the error belongs at startup, before anything is dialed.
   retry and backoff do not move. A hand-built `messaging.NewAMQPClient` is not checked and still
   finds a `ParseURI` failure at the dial, rendered masked as before.
 - A URL that parses but is read differently than intended is out of scope here.
+- **Known and deliberately unhandled**: opaque and hostless shapes that `ParseURI` accepts
+  (`amqp:user:pw@host/vh`, `amqp:`, `amqp://`, `amqp:///vh`) stay accepted. `ParseURI` reads them
+  with its defaults (`localhost:5672`, its default credentials, vhost `/` unless a path is
+  written), so a missing `//` dials localhost instead of failing. The rule here is `ParseURI`'s
+  verdict; refusing a hostless URL would also refuse the documented `amqp:///vh` local form, and
+  is left to a separate decision.
 
 ## References
 
