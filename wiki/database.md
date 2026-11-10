@@ -398,7 +398,11 @@ the builder. The grammar will not accept a computed one.
   can judge it and its argument is interpolated as written: both a STRING
   predicate and the preferred `Having(qb.MustExpr(...))` are raw-SQL doors (list
   below). `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
-  unlike `Having` they have no `qb.Expr()` alternative.
+  unlike `Having` they have no `qb.Expr()` alternative. `Options` is the vendor
+  hint slot, rendered between `INSERT` and `INTO` (Oracle's `/*+ APPEND */`);
+  neither supported vendor accepts `OR IGNORE`/`OR REPLACE` there. On PostgreSQL
+  and Oracle the placeholder pass rewrites an unescaped `?` in their text, even
+  inside a SQL literal; write `??` for a literal `?`.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
   produce. The builder judges neither the
@@ -424,9 +428,11 @@ the builder. The grammar will not accept a computed one.
   render an expression's body without its alias, by design, so one aliased
   expression can serve `Select`, `GroupBy` and `OrderBy`.
 - **`f.Raw()`, `jf.Raw()`, `database.Raw()`, an UPDATE `SetExpr()`, a STRING
-  predicate passed to `Having()`, and every `RawExpression` SQL body** do. Each
+  predicate passed to `Having()`, an INSERT's `Prefix()`, `Suffix()` and
+  `Options()`, and every `RawExpression` SQL body** do. Each
   admits arbitrary SQL — the first two a WHERE/JOIN fragment, `database.Raw` the
-  whole statement, `SetExpr` a SET-clause value, `Having` the group predicate, an
+  whole statement, `SetExpr` a SET-clause value, `Having` the group predicate,
+  `Prefix`/`Suffix`/`Options` text around or inside the INSERT, an
   expression whatever door consumes it — and each requires an inline
   `// SECURITY: Manual SQL review completed - <rationale>`
   comment at every call site, a `qb.Expr()`, `qb.MustExpr()` or struct-literal
@@ -434,9 +440,24 @@ the builder. The grammar will not accept a computed one.
   non-empty and the alias is clean, never the body. An alias on a `Having`
   expression is an error, since a predicate projects nothing. One grep finds every
   door (canonical list: root CLAUDE.md Security Guidelines), `git grep -nE
-  'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{'`
+  'f\.Raw\(|jf\.Raw\(|database\.Raw\(|SetExpr\(|Having\(|MustExpr\(|[.]Expr\(|RawExpression\{|(^|[^A-Za-z0-9_])(Prefix|Suffix|Options)\('`
   — squirrel's own `Expr` inside `database/internal/builder`, and the `Expr`/`MustExpr`
   doors themselves (`database/types`, the builder, `testing/mocks`), are plumbing; skip those hits.
+  The last alternative is unanchored by `.` so a chained call on its own line
+  still matches, and the leading non-identifier character keeps out
+  `HasPrefix(`, `TrimSuffix(`, `CutPrefix(` and `NewWithOptions(`. Its
+  plumbing hits, also skipped:
+  - the three door declarations and bodies: `database/types/interfaces.go`
+    (`InsertQueryBuilder`), `database/internal/builder/query_builder.go`
+    (`(*InsertQueryBuilder).Options/Prefix/Suffix`) and
+    `testing/mocks/query_builder_test.go` (`MockInsertQueryBuilder`);
+  - the builder's own squirrel `Suffix` calls: the upsert's `ON CONFLICT` in
+    `database/internal/builder/postgres.go`, Oracle pagination
+    (`applyPagination`) in `query_builder.go`, and the row lock in
+    `database/internal/builder/row_lock.go`;
+  - `(*TestTx).Options()` in `database/testing` (the recorded `sql.TxOptions`,
+    not an INSERT door), and its mentions in `wiki/testing.md`;
+  - documentation: the ADR-017 interface listing and these rule copies.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column the vendor's
   upsert syntax can name"). Since `[C61.15]` that question has **one answer on
