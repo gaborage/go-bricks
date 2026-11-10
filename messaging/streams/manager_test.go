@@ -1227,16 +1227,28 @@ func TestSafeEnvError(t *testing.T) {
 	assert.Same(t, other, safeEnvError(other, "rabbitmq-stream://svc:fixture-pw@broker:5552/"), "a non-URL error with nothing to mask passes through untouched")
 }
 
-// TestManagerStartMasksAnUnquotedVendorEcho: the client's pre-dial URI check echoes password
-// text, and url.Parse misreads the endpoint the error names ahead of it.
+// TestManagerStartMasksAnUnquotedVendorEcho: the client's pre-dial URI check echoes the
+// path as it decoded it, which is password text url.Parse misread.
 func TestManagerStartMasksAnUnquotedVendorEcho(t *testing.T) {
-	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://app:2024/Sp/ring@broker:5552", Logger: logger.New("error", false)})
+	tests := []struct {
+		name, uri string
+		secrets   []string
+	}{
+		{name: "as_written", uri: "rabbitmq-stream://app:2024/Sp/ring@broker:5552", secrets: []string{"2024", "Sp", "ring"}},
+		{name: "percent_decoded", uri: "rabbitmq-stream://app:2024/Sp%40ring/x@broker:5552", secrets: []string{"2024", "Sp", "ring"}},
+	}
 
-	err := m.Start(t.Context(), oneConsumerDecls())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewManager(ManagerOptions{URI: tt.uri, Logger: logger.New("error", false)})
 
-	require.EqualError(t, err, "failed to connect to stream endpoint rabbitmq-stream://app:xxxxx@broker:5552: multiple segments in URI path: xxxxx:5552")
-	for _, secret := range []string{"2024", "Sp", "ring"} {
-		assert.NotContains(t, err.Error(), secret)
+			err := m.Start(t.Context(), oneConsumerDecls())
+
+			require.EqualError(t, err, "failed to connect to stream endpoint rabbitmq-stream://app:xxxxx@broker:5552: multiple segments in URI path: xxxxx:5552")
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, err.Error(), secret)
+			}
+		})
 	}
 }
 
@@ -1320,48 +1332,11 @@ func TestSafeEnvErrorRendersReasonOnlyForAMisreadURI(t *testing.T) {
 // constructor, and the *url.Error renders the decoded password.
 func TestManagerStartMasksARebuiltBrokerURI(t *testing.T) {
 	const configuredURI = "rabbitmq-stream://user:Se%2FcretPW@broker:5552/vh"
-	// Rebuilt at run time, as the client does: a constant invalid URL trips
-	// staticcheck's SA1007.
-	configured, err := url.Parse(configuredURI)
-	require.NoError(t, err)
-	password, _ := configured.User.Password()
-	_, vendorErr := url.Parse(fmt.Sprintf("%s://%s:%s@leader:5552/vh", configured.Scheme, configured.User.Username(), password))
-	require.ErrorContains(t, vendorErr, "Se/cretPW", "the premise: the vendor's error carries the decoded password")
+	vendorErr := rebuiltURIErr(t, configuredURI, "user", "Se/cretPW")
 
-	tests := []struct {
-		name   string
-		decls  *Declarations
-		failOn string
-		want   string
-	}{
-		{
-			name:   "stream_consumer",
-			decls:  oneConsumerDecls(),
-			failOn: callNewConsumer + ":" + testStream,
-			want:   fmt.Sprintf("failed to start consumer %q on stream %q", testConsumerName, testStream),
-		},
-		{
-			name:   "super_stream_consumer",
-			decls:  superConsumerDecls(),
-			failOn: callNewSuperConsumer + ":" + testSuperStream,
-			want:   fmt.Sprintf("failed to start consumer %q on super stream %q", testConsumerName, testSuperStream),
-		},
-		{
-			name:   "publisher",
-			decls:  onePublisher(t),
-			failOn: callNewProducer + ":" + testStream,
-			want:   fmt.Sprintf("failed to start the publisher on stream %q", testStream),
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range startDoors(t) {
 		t.Run(tt.name, func(t *testing.T) {
-			m := NewManager(ManagerOptions{URI: configuredURI, Logger: logger.New("error", false)})
-			fake := newFakeEnvironment()
-			fake.failOn(tt.failOn, vendorErr)
-			dialFake(m, fake)
-
-			err := m.Start(context.Background(), tt.decls)
+			err := tt.startErr(configuredURI, vendorErr)
 
 			require.Error(t, err)
 			for _, secret := range []string{"Se/", "cretPW", `":Se"`} {
@@ -1383,6 +1358,89 @@ func TestManagerStartMasksARebuiltBrokerURI(t *testing.T) {
 	startErr := m.Start(context.Background(), onePublisher(t))
 	require.Error(t, startErr)
 	assert.NotContains(t, startErr.Error(), "cretPW", "the configured URI's password leaked")
+}
+
+// startDoor is one consumer or producer start the manager wraps in safeStartError.
+type startDoor struct {
+	name   string
+	decls  *Declarations
+	failOn string
+	want   string
+}
+
+// startErr starts a manager on uri whose door fails with vendorErr.
+func (d startDoor) startErr(uri string, vendorErr error) error {
+	m := NewManager(ManagerOptions{URI: uri, Logger: logger.New("error", false)})
+	fake := newFakeEnvironment()
+	fake.failOn(d.failOn, vendorErr)
+	dialFake(m, fake)
+	return m.Start(context.Background(), d.decls)
+}
+
+// rebuiltURIErr is the error the client's constructor returns for the leader URI it
+// rebuilds from configuredURI's decoded password under username. Built at run time: a
+// constant invalid URL trips staticcheck's SA1007.
+func rebuiltURIErr(t *testing.T, configuredURI, username, secret string) error {
+	t.Helper()
+	configured, err := url.Parse(configuredURI)
+	require.NoError(t, err)
+	password, _ := configured.User.Password()
+	_, vendorErr := url.Parse(fmt.Sprintf("%s://%s:%s@leader:5552%s", configured.Scheme, username, password, configured.Path))
+	require.ErrorContains(t, vendorErr, secret, "the premise: the vendor's error carries decoded password text")
+	return vendorErr
+}
+
+func startDoors(t *testing.T) []startDoor {
+	t.Helper()
+	return []startDoor{
+		{
+			name:   "stream_consumer",
+			decls:  oneConsumerDecls(),
+			failOn: callNewConsumer + ":" + testStream,
+			want:   fmt.Sprintf("failed to start consumer %q on stream %q", testConsumerName, testStream),
+		},
+		{
+			name:   "super_stream_consumer",
+			decls:  superConsumerDecls(),
+			failOn: callNewSuperConsumer + ":" + testSuperStream,
+			want:   fmt.Sprintf("failed to start consumer %q on super stream %q", testConsumerName, testSuperStream),
+		},
+		{
+			name:   "publisher",
+			decls:  onePublisher(t),
+			failOn: callNewProducer + ":" + testStream,
+			want:   fmt.Sprintf("failed to start the publisher on stream %q", testStream),
+		},
+	}
+}
+
+// TestManagerStartMasksARebuildUnderTheDefaultUsername covers a configured URI with an
+// empty username: the client substitutes its default one in each leader or replica URI
+// it rebuilds, and url.Parse reports that rebuild cut at a '#' in the decoded password.
+// The start error renders the configured URI instead.
+func TestManagerStartMasksARebuildUnderTheDefaultUsername(t *testing.T) {
+	uris := []struct {
+		name, configured, shown string
+		secrets                 []string
+	}{
+		{name: "with_vhost", configured: "rabbitmq-stream://:p%2Fzq9xs3cret%231@broker:5552/vh", shown: "rabbitmq-stream://:xxxxx@broker:5552/vh", secrets: []string{"zq9xs3cret"}},
+		{name: "without_vhost", configured: "rabbitmq-stream://:s3cr%2Fzq9x%238@broker:5552", shown: "rabbitmq-stream://:xxxxx@broker:5552", secrets: []string{"zq9x", "s3cr"}},
+	}
+
+	for _, uri := range uris {
+		vendorErr := rebuiltURIErr(t, uri.configured, "guest", uri.secrets[0])
+
+		for _, door := range startDoors(t) {
+			t.Run(uri.name+"_"+door.name, func(t *testing.T) {
+				err := door.startErr(uri.configured, vendorErr)
+
+				require.EqualError(t, err, fmt.Sprintf("%s: parse %q: %s", door.want, uri.shown, invalidStreamURIReason))
+				for _, secret := range uri.secrets {
+					assert.NotContains(t, err.Error(), secret)
+				}
+			})
+		}
+	}
 }
 
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the

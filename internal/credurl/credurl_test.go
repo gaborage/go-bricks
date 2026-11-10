@@ -677,6 +677,127 @@ func seamCases() []redactErrorCase {
 			want:    "login refused for user:xxxxx (xxxxx)",
 			secrets: []string{"pa#ss", "pa%23ss", "pa", "ss", "zq9x"},
 		},
+		// A driver dials the port url.Parse read as an integer, so its error shows a
+		// digit-only password without its leading zeros.
+		{
+			name:    "normalized_port_before_slash_masked",
+			raw:     "amqp://user:0123456/zq9x@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("dial tcp: address 123456: invalid port"),
+			want:    "dial tcp: address xxxxx: invalid port",
+			secrets: []string{"123456"},
+		},
+		{
+			name:    "normalized_port_before_question_mark_masked",
+			raw:     "amqp://user:0123456?zq9x@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("dial tcp: address 123456: invalid port"),
+			want:    "dial tcp: address xxxxx: invalid port",
+			secrets: []string{"123456"},
+		},
+		{
+			name:    "normalized_port_before_hash_masked",
+			raw:     "amqp://user:0123456#zq9x@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("dial tcp: address 123456: invalid port"),
+			want:    "dial tcp: address xxxxx: invalid port",
+			secrets: []string{"123456"},
+		},
+		{
+			name:    "normalized_port_after_a_host_shaped_username_masked",
+			raw:     "amqp://localhost:01234/zq9x@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("dial tcp [::1]:1234: connect: connection refused"),
+			want:    "dial tcp [::1]:xxxxx: connect: connection refused",
+			secrets: []string{"1234"},
+		},
+		// The rendering shows the port as written, so its integer form stays readable.
+		{name: "normalized_kept_port_survives", raw: "amqp://h:05672/vh", parse: parseAccepts, err: fixedErr("dial tcp h:5672: connect: connection refused"), same: true},
+		// A port too large for an integer has no integer form; the digits as written are still masked.
+		{
+			name:    "port_too_large_for_an_integer",
+			raw:     "amqp://user:099999999999999999999/zq9x@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr(`parsing "099999999999999999999": value out of range, not 99999999999999999999`),
+			want:    `parsing "xxxxx": value out of range, not 99999999999999999999`,
+			secrets: []string{"099999999999999999999"},
+		},
+		// A driver echoes text it percent-decoded itself: a query key or value, a path, a host.
+		{
+			name:    "decoded_query_key_echo_masked",
+			raw:     "oracle://app:zq9x@db:1521/svc?wallet%20password=ab&s3%63ret",
+			parse:   parseAccepts,
+			err:     fixedErr("unknown URL option: s3cret"),
+			want:    "unknown URL option: xxxxx",
+			secrets: []string{"s3cret"},
+		},
+		{
+			name:    "decoded_query_value_quote_masked",
+			raw:     "amqp://app:zq9x@broker:5672/vh?heartbeat=k3%797",
+			parse:   parseAccepts,
+			err:     fixedErr(`heartbeat is not an uint16: strconv.ParseUint: parsing "k3y7": invalid syntax`),
+			want:    `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`,
+			secrets: []string{"k3y7"},
+		},
+		{
+			name:    "plus_decoded_query_value_quote_masked",
+			raw:     "amqp://app:zq9x@broker:5672/vh?connection_name=k3y7+zq9x",
+			parse:   parseAccepts,
+			err:     fixedErr(`refused client "k3y7 zq9x"`),
+			want:    `refused client "xxxxx"`,
+			secrets: []string{"k3y7"},
+		},
+		// A value is everything after the first '=', and a pair that fails to decode costs only itself.
+		{
+			name:    "decoded_query_value_holding_equals_quote_masked",
+			raw:     "amqp://app:zq9x@broker:5672/vh?bad=%zz&token=k3%79=7",
+			parse:   parseAccepts,
+			err:     fixedErr(`rejected "k3y=7"`),
+			want:    `rejected "xxxxx"`,
+			secrets: []string{"k3y"},
+		},
+		{
+			name:    "decoded_path_echo_masked",
+			raw:     "rabbitmq-stream://app:2024/Sp%40ring/x@broker:5552",
+			parse:   parseAccepts,
+			err:     fixedErr("multiple segments in URI path: /Sp@ring/x@broker:5552"),
+			want:    "multiple segments in URI path: xxxxx:5552",
+			secrets: []string{"Sp@ring"},
+		},
+		{
+			name:    "decoded_host_echo_masked",
+			raw:     "amqp://app:pw@s3cr%C3%A9t/x@broker/vh",
+			parse:   parseAccepts,
+			err:     fixedErr("dial tcp: lookup s3cr\u00e9t: no such host"),
+			want:    "dial tcp: lookup xxxxx: no such host",
+			secrets: []string{"s3cr"},
+		},
+		// Text the rendering shows once percent-decoded is kept text, quoted or not.
+		{name: "decoded_kept_path_quote_survives", raw: "amqp://u:p@h/my%20vhost", parse: parseAccepts, err: fixedErr(`vhost "my vhost" not found`), same: true},
+		{name: "decoded_kept_path_word_survives", raw: "amqp://u:p@h/my%2Dvhost", parse: parseAccepts, err: fixedErr("no access to /my-vhost"), same: true},
+		// A password that repeats text the rendering shows only once decoded is still masked.
+		{
+			name:  "password_repeating_decoded_kept_text_masked",
+			raw:   "amqp://user:et@db/s3cr%65t",
+			parse: parseAccepts,
+			err:   fixedErr("ACCESS_REFUSED - login refused: et"),
+			want:  "ACCESS_REFUSED - login refused: xxxxx",
+		},
+		{
+			name:  "password_equal_to_an_escaped_username_masked",
+			raw:   "amqp://al%40corp:al@corp@db/vh",
+			parse: parseAccepts,
+			err:   fixedErr("bad credentials al@corp"),
+			want:  "bad credentials xxxxx",
+		},
+		{
+			name:  "non_ascii_password_repeating_decoded_kept_text_masked",
+			raw:   "amqp://user:Sp%C3%A9@db/%2F%C3%A9t%C3%A9Sp%C3%A9",
+			parse: parseAccepts,
+			err:   fixedErr("password \"Sp\u00e9\" rejected"),
+			want:  `password "xxxxx" rejected`,
+		},
+		{name: "one_byte_decoded_quote_survives", raw: "amqp://u:p@h/vh?k=%41", parse: parseAccepts, err: fixedErr(`unexpected "A" near A`), same: true},
 		// A client rebuilds the URL around the decoded password; url.Parse cuts it at the '#'.
 		{
 			name:    "rebuilt_uri_cut_in_host",
@@ -701,6 +822,41 @@ func seamCases() []redactErrorCase {
 			err:     func(string) error { return bareParseErr("amqp://u v:#pw@broker/vh") },
 			want:    `parse "amqp://u%20v:xxxxx@broker/vh": invalid URL`,
 			secrets: []string{"pw"},
+		},
+		// With no configured username, the client rebuilds under a username of its own.
+		{
+			name:    "rebuilt_uri_under_a_substituted_username",
+			raw:     "rabbitmq-stream://:p%2Fzq9xs3cret%231@broker:5552/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("rabbitmq-stream://dflt:p/zq9xs3cret#1@leader:5552/vh") },
+			want:    `parse "rabbitmq-stream://:xxxxx@broker:5552/vh": invalid URL`,
+			secrets: []string{"zq9xs3cret", "dflt"},
+		},
+		// A configured username is not substituted, so another one names another URL.
+		{
+			name:    "other_username_judged_alone",
+			raw:     "amqp://u:pw%23x@broker/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("amqp://dflt:pw#x@broker/vh") },
+			want:    maskedURL + `: invalid URL`,
+			secrets: []string{"broker"},
+		},
+		{
+			name:    "other_url_error_judged_alone_without_a_username",
+			raw:     "amqp://:pw%23x@broker/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("amqp://dflt:zz/q") },
+			want:    maskedURL + `: invalid URL`,
+			secrets: []string{"broker"},
+		},
+		// A substituted username holds no '/', so a path ahead of the ':' names another URL.
+		{
+			name:    "path_before_the_colon_judged_alone",
+			raw:     "amqp://:pw%23x@broker/vh",
+			parse:   parseAccepts,
+			err:     func(string) error { return bareParseErr("amqp://h/%zz:pw") },
+			want:    maskedURL + `: invalid URL`,
+			secrets: []string{"broker"},
 		},
 		{
 			name:    "other_url_error_judged_alone",
