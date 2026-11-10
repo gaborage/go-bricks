@@ -445,9 +445,8 @@ func TestResolveControlPlaneConfigRejectsNilConfig(t *testing.T) {
 // opener against a config file whose tenant carries dbYAML as its database section.
 func runQuiesceStatusAgainst(t *testing.T, tenant, dbYAML string) error {
 	t.Helper()
-	yaml := "multitenant:\n  enabled: true\n  tenants:\n    " + tenant + ":\n      database:\n" + dbYAML
-	path := filepath.Join(t.TempDir(), "t.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+	path := writeTenantStoreYAMLContent(t,
+		"multitenant:\n  enabled: true\n  tenants:\n    "+tenant+":\n      database:\n"+dbYAML)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
@@ -485,7 +484,7 @@ func TestOpenControlPlaneDBRendersFixedMessageOnParseFailure(t *testing.T) {
 
 			msg := err.Error()
 			assert.Contains(t, msg, `"`+tenant+`"`)
-			for _, leak := range []string{"FAKEpw123", "FAKEtail", "pw123", "cpdb.example.internal", "cannot parse"} {
+			for _, leak := range []string{"pw123", "FAKEtail", "cpdb.example.internal", "cannot parse"} {
 				assert.NotContains(t, msg, leak)
 			}
 		})
