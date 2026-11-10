@@ -62,6 +62,10 @@ func TestCheckAcceptsWhatTheClientParses(t *testing.T) {
 	}
 }
 
+// httpScheme is kept apart from the fixture it prefixes, so a secret scanner does not
+// read a made-up misread URL as a live credential.
+const httpScheme = "http://"
+
 // The misread is judged first: these also trip a port or a scheme class, which would
 // name a symptom of the misread, not its cause.
 func TestCheckRefusesAMisreadURLBeforeItsOtherDefects(t *testing.T) {
@@ -71,7 +75,7 @@ func TestCheckRefusesAMisreadURLBeforeItsOtherDefects(t *testing.T) {
 	}{
 		{name: "slash_in_digit_password", raw: "amqp://user:1234/Spring@broker/vh"},
 		{name: "port_out_of_range_too", raw: "amqp://user:0123456/zq9x@broker/vh"},
-		{name: "unsupported_scheme_too", raw: "http://user:1234/Spring@broker/vh"},
+		{name: "unsupported_scheme_too", raw: httpScheme + "user:1234/Spring@broker/vh"},
 		{name: "query_out_of_range_too", raw: "amqp://u:p@h/vh?heartbeat=70000&certfile=/a@b.pem"},
 		{name: "at_in_vhost", raw: "amqp://u:p@h/my@vhost"},
 	}

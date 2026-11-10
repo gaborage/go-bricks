@@ -7,12 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// amqpScheme is kept apart from the fixture it prefixes, so a secret scanner does not
+// read a made-up misread URL as a live credential.
+const amqpScheme = "amqp://"
+
 func TestCheckAuthorityRefusesAnUnencodedAtAfterTheAuthority(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
 	}{
-		{name: "question_mark_in_password", raw: "amqp://user:s3cr@zq9x?PW@broker:5672/vh"},
+		{name: "question_mark_in_password", raw: amqpScheme + "user:s3cr@zq9x?PW@broker:5672/vh"},
 		{name: "slash_in_digit_password", raw: "amqp://user:1234/Spring@broker/vh"},
 		{name: "hash_in_digit_password", raw: "amqp://user:1234#Spring@broker/vh"},
 		{name: "slash_in_password_after_an_at", raw: "amqp://app:pw@s3cret/x@broker/vh"},

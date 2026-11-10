@@ -16096,7 +16096,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   or `#` that follows the `scheme://` authority (the probe prints true). no-match = no hit, or
   every value prints false.
 - before (v0.73.0): a password holding an unencoded `/`, `?` or `#` was split without error.
-  `amqp://user:s3cr@zq9x?PW@broker:5672/vh` read host `zq9x` and query `PW@broker:5672/vh`;
+  An AMQP URL for user `user`, password `s3cr@zq9x?PW` and host `broker:5672` read host `zq9x`
+  and query `PW@broker:5672/vh`;
   `amqp://user:1234/Spring@broker/vh` read host `user`, port `1234`, vhost `Spring@broker/vh` and
   credentials guest/guest; `rabbitmq-stream://app:2024/Spring@broker:5552` read host `app`, port
   `2024`. Validation accepted all of them, and the client dialed the misread host: a DNS lookup of

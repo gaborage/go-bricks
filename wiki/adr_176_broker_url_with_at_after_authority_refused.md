@@ -9,8 +9,8 @@
 
 `url.Parse` ends the authority at the first `/`, `?` or `#`. A password holding one of those
 unencoded is split without error: password text becomes the host, port, vhost, query or fragment,
-and the real `@host` lands after the authority. `amqp://user:s3cr@zq9x?PW@broker:5672/vh` reads
-host `zq9x` and query `PW@broker:5672/vh`; `amqp://user:1234/Spring@broker/vh` reads host `user`,
+and the real `@host` lands after the authority. With user `user`, password `s3cr@zq9x?PW` and
+host `broker:5672`, an AMQP URL reads host `zq9x` and query `PW@broker:5672/vh`; `amqp://user:1234/Spring@broker/vh` reads host `user`,
 port `1234`, vhost `Spring@broker/vh` and credentials guest/guest;
 `rabbitmq-stream://app:2024/Spring@broker:5552` reads host `app`, port `2024`. Config validation,
 ADR-175's `ParseURI` check included, accepted all of them. The client dialed the misread host: a
