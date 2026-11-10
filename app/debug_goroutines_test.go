@@ -80,42 +80,42 @@ func TestNormalizeGoroutineState(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "simple running state",
+			name:     "simple_running_state",
 			input:    "running",
 			expected: "running",
 		},
 		{
-			name:     "composite state with annotations",
+			name:     "composite_state_with_annotations",
 			input:    "select [chan receive, locked to thread]",
 			expected: "select",
 		},
 		{
-			name:     "chan receive with annotations",
+			name:     "chan_receive_with_annotations",
 			input:    "chan receive [locked to thread]",
 			expected: chanReceive,
 		},
 		{
-			name:     "IO wait state",
+			name:     "io_wait_state",
 			input:    ioWait,
 			expected: ioWait,
 		},
 		{
-			name:     "empty state becomes unknown",
+			name:     "empty_state_becomes_unknown",
 			input:    "",
 			expected: unknownStatus,
 		},
 		{
-			name:     "whitespace only becomes unknown",
+			name:     "whitespace_only_becomes_unknown",
 			input:    "   ",
 			expected: unknownStatus,
 		},
 		{
-			name:     "complex composite state",
+			name:     "complex_composite_state",
 			input:    "select [chan receive, chan send, locked to thread]",
 			expected: "select",
 		},
 		{
-			name:     "state with brackets but primary after",
+			name:     "state_with_brackets_but_primary_after",
 			input:    "[annotations] primary",
 			expected: "primary",
 		},
@@ -140,7 +140,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 		expected int // number of leaks detected
 	}{
 		{
-			name: "no leaks",
+			name: "no_leaks",
 			stacks: []goroutineStack{
 				{ID: 1, State: "running", Function: mainFunctionRef},
 				{ID: 2, State: "running", Function: "runtime.main"},
@@ -148,7 +148,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 			expected: 0,
 		},
 		{
-			name: "high function count leak",
+			name: "high_function_count_leak",
 			stacks: func() []goroutineStack {
 				var stacks []goroutineStack
 				// Create 12 goroutines with same function (>10 threshold)
@@ -164,7 +164,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 			expected: 12, // All goroutines with same function are flagged
 		},
 		{
-			name: "channel operation leaks",
+			name: "channel_operation_leaks",
 			stacks: []goroutineStack{
 				{ID: 1, State: chanReceive, Function: "worker.receive"},
 				{ID: 2, State: chanSendRef, Function: "worker.send"},
@@ -173,7 +173,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 			expected: 2, // Two channel operations
 		},
 		{
-			name: "select statement leak",
+			name: "select_statement_leak",
 			stacks: []goroutineStack{
 				{ID: 1, State: "select", Function: "worker.select"},
 				{ID: 2, State: "running", Function: mainFunctionRef},
@@ -181,7 +181,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 			expected: 1, // One select statement
 		},
 		{
-			name: "network IO leak",
+			name: "network_io_leak",
 			stacks: []goroutineStack{
 				{
 					ID:       1,
@@ -242,7 +242,7 @@ func TestCheckForLeak(t *testing.T) {
 		expected bool // whether leak is detected
 	}{
 		{
-			name: "high function count",
+			name: "high_function_count",
 			stack: goroutineStack{
 				ID:       1,
 				Function: workerLoopRef,
@@ -251,7 +251,7 @@ func TestCheckForLeak(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "channel receive",
+			name: "channel_receive",
 			stack: goroutineStack{
 				ID:       2,
 				Function: "worker.receive",
@@ -260,7 +260,7 @@ func TestCheckForLeak(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "select statement",
+			name: "select_statement",
 			stack: goroutineStack{
 				ID:       3,
 				Function: "worker.select",
@@ -269,7 +269,7 @@ func TestCheckForLeak(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "network IO",
+			name: "network_io",
 			stack: goroutineStack{
 				ID:       4,
 				Function: netListenRef,
@@ -279,7 +279,7 @@ func TestCheckForLeak(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "normal running goroutine",
+			name: "normal_running_goroutine",
 			stack: goroutineStack{
 				ID:       5,
 				Function: mainFunctionRef,
@@ -315,7 +315,7 @@ func TestCheckHighFunctionCount(t *testing.T) {
 		expectedLeak   bool
 	}{
 		{
-			name: "above threshold",
+			name: "above_threshold",
 			stack: goroutineStack{
 				ID:       1,
 				Function: workerLoopRef,
@@ -324,7 +324,7 @@ func TestCheckHighFunctionCount(t *testing.T) {
 			expectedLeak:   true,
 		},
 		{
-			name: "at threshold",
+			name: "at_threshold",
 			stack: goroutineStack{
 				ID:       2,
 				Function: workerLoopRef,
@@ -333,7 +333,7 @@ func TestCheckHighFunctionCount(t *testing.T) {
 			expectedLeak:   false,
 		},
 		{
-			name: "below threshold",
+			name: "below_threshold",
 			stack: goroutineStack{
 				ID:       3,
 				Function: mainFunctionRef,
@@ -417,17 +417,17 @@ func TestCheckSelectStatement(t *testing.T) {
 		expectedLeak bool
 	}{
 		{
-			name:         "select state",
+			name:         "select_state",
 			state:        "select",
 			expectedLeak: true,
 		},
 		{
-			name:         "running state",
+			name:         "running_state",
 			state:        "running",
 			expectedLeak: false,
 		},
 		{
-			name:         "chan receive state",
+			name:         "chan_receive_state",
 			state:        chanReceive,
 			expectedLeak: false,
 		},
@@ -463,25 +463,25 @@ func TestCheckNetworkIO(t *testing.T) {
 		expectedLeak bool
 	}{
 		{
-			name:         "network IO wait",
+			name:         "network_io_wait",
 			state:        ioWait,
 			stack:        []string{netTCPListenerRef, "main.server"},
 			expectedLeak: true,
 		},
 		{
-			name:         "IO wait without network",
+			name:         "io_wait_without_network",
 			state:        ioWait,
 			stack:        []string{"os.(*File).Read", "main.readFile"},
 			expectedLeak: false,
 		},
 		{
-			name:         "not IO wait",
+			name:         "not_io_wait",
 			state:        "running",
 			stack:        []string{netTCPListenerRef},
 			expectedLeak: false,
 		},
 		{
-			name:         "IO wait empty stack",
+			name:         "io_wait_empty_stack",
 			state:        ioWait,
 			stack:        []string{},
 			expectedLeak: false,

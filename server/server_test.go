@@ -1087,7 +1087,7 @@ func TestServerConfiguration(t *testing.T) {
 			finalReadyPath:     testReadyRoute,
 		},
 		{
-			name:               "base path normalization",
+			name:               "base_path_normalization",
 			basePath:           "api/v1/",
 			healthRoute:        "",
 			readyRoute:         "",
@@ -1098,7 +1098,7 @@ func TestServerConfiguration(t *testing.T) {
 			finalReadyPath:     "/api/v1/ready",
 		},
 		{
-			name:               "custom routes without base path",
+			name:               "custom_routes_without_base_path",
 			basePath:           "",
 			healthRoute:        "status",
 			readyRoute:         "ping",
@@ -1109,7 +1109,7 @@ func TestServerConfiguration(t *testing.T) {
 			finalReadyPath:     "/ping",
 		},
 		{
-			name:               "custom routes with base path",
+			name:               "custom_routes_with_base_path",
 			basePath:           testAPIV1Path,
 			healthRoute:        statusRoute,
 			readyRoute:         "/ping",

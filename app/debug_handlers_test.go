@@ -173,27 +173,27 @@ func TestAuthMiddleware(t *testing.T) {
 		expectedStatusCode int
 	}{
 		{
-			name:               "valid bearer token",
+			name:               "valid_bearer_token",
 			authHeader:         "Bearer test-secret-token",
 			expectedStatusCode: http.StatusOK,
 		},
 		{
-			name:               "invalid bearer token",
+			name:               "invalid_bearer_token",
 			authHeader:         "Bearer wrong-token",
 			expectedStatusCode: http.StatusUnauthorized,
 		},
 		{
-			name:               "missing bearer prefix",
+			name:               "missing_bearer_prefix",
 			authHeader:         "test-secret-token",
 			expectedStatusCode: http.StatusUnauthorized,
 		},
 		{
-			name:               "empty authorization header",
+			name:               "empty_authorization_header",
 			authHeader:         "",
 			expectedStatusCode: http.StatusUnauthorized,
 		},
 		{
-			name:               "bearer with no token",
+			name:               "bearer_with_no_token",
 			authHeader:         "Bearer ",
 			expectedStatusCode: http.StatusUnauthorized,
 		},

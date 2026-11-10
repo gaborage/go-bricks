@@ -2127,7 +2127,7 @@ func TestValidateOracleFields(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "valid Oracle config with service name",
+			name: "valid_oracle_config_with_service_name",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2142,7 +2142,7 @@ func TestValidateOracleFields(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "valid Oracle config with SID",
+			name: "valid_oracle_config_with_sid",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2157,7 +2157,7 @@ func TestValidateOracleFields(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "valid Oracle config with database name",
+			name: "valid_oracle_config_with_database_name",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2168,7 +2168,7 @@ func TestValidateOracleFields(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "Oracle config with no connection identifier",
+			name: "oracle_config_with_no_connection_identifier",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2180,7 +2180,7 @@ func TestValidateOracleFields(t *testing.T) {
 			errorContains: oracleConnectionIdentifier + " exactly one required",
 		},
 		{
-			name: "Oracle config with service name and SID",
+			name: "oracle_config_with_service_name_and_sid",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2197,7 +2197,7 @@ func TestValidateOracleFields(t *testing.T) {
 			errorContains: oracleConnectionIdentifier,
 		},
 		{
-			name: "Oracle config with service name and database name",
+			name: "oracle_config_with_service_name_and_database_name",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2214,7 +2214,7 @@ func TestValidateOracleFields(t *testing.T) {
 			errorContains: oracleConnectionIdentifier,
 		},
 		{
-			name: "Oracle config with SID and database name",
+			name: "oracle_config_with_sid_and_database_name",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2231,7 +2231,7 @@ func TestValidateOracleFields(t *testing.T) {
 			errorContains: oracleConnectionIdentifier,
 		},
 		{
-			name: "Oracle config with all three connection identifiers",
+			name: "oracle_config_with_all_three_connection_identifiers",
 			config: DatabaseConfig{
 				Type:     Oracle,
 				Host:     testOracleHost,
@@ -2249,7 +2249,7 @@ func TestValidateOracleFields(t *testing.T) {
 			errorContains: oracleConnectionIdentifier,
 		},
 		{
-			name: "non-Oracle type should not validate Oracle fields",
+			name: "non_oracle_type_should_not_validate_oracle_fields",
 			config: DatabaseConfig{
 				Type:     PostgreSQL,
 				Host:     "localhost",
@@ -2287,7 +2287,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 		errorContains string
 	}{
 		{
-			name: "valid Oracle with connection string and valid service name",
+			name: "valid_oracle_with_connection_string_and_valid_service_name",
 			config: DatabaseConfig{
 				Type:             Oracle,
 				ConnectionString: testOracleConnectionString,
@@ -2300,7 +2300,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "Oracle with connection string but multiple identifiers",
+			name: "oracle_with_connection_string_but_multiple_identifiers",
 			config: DatabaseConfig{
 				Type:             Oracle,
 				ConnectionString: testOracleConnectionString,
@@ -2315,7 +2315,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 			errorContains: oracleConnectionIdentifier,
 		},
 		{
-			name: "Oracle with connection string and no identifiers",
+			name: "oracle_with_connection_string_and_no_identifiers",
 			config: DatabaseConfig{
 				Type:             Oracle,
 				ConnectionString: testOracleConnectionString,
