@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/amqpurl"
 	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
@@ -56,7 +57,32 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 	if err := checkMessagingSeal(&cfg.Seal); err != nil {
 		return err
 	}
+	if err := checkBrokerURL(fieldMessagingBrokerURL, cfg.Broker.URL); err != nil {
+		return err
+	}
 	return checkMessagingStreams(cfg, multitenant)
+}
+
+// checkBrokerURL rejects an AMQP broker URL the client could never dial: one
+// amqp.ParseURI refuses, or one with a port outside 1-65535. An empty URL is
+// "not configured", which is not this check's question.
+//
+// SECURITY: a broker URL carries credentials and the vendor's parse errors quote
+// it, so the refusal is fixed text: the config key, a reason class and the
+// percent-encoding hint. No part of the URL reaches the message.
+func checkBrokerURL(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if err := amqpurl.Check(raw); err != nil {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    field,
+			Message:  err.Error(),
+			Action:   amqpurl.Hint,
+		}
+	}
+	return nil
 }
 
 // checkMessagingDeclareExternalWait judges messaging.declare.externalwait
