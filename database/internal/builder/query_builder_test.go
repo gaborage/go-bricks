@@ -351,6 +351,160 @@ func TestInsertSelectNilSubqueryDefersError(t *testing.T) {
 	assert.Nil(t, args)
 }
 
+func TestInsertSelectNumbersPlaceholdersOnce(t *testing.T) {
+	type build func(qb *QueryBuilder) dbtypes.InsertQueryBuilder
+
+	suffixOne := func(qb *QueryBuilder) dbtypes.InsertQueryBuilder {
+		f := qb.Filter()
+		sel := qb.Select("id", colName).From("src").Where(f.Eq(colName, "x"))
+		return qb.InsertWithColumns(tableUsers, "id", colName).Select(sel).
+			Suffix("ON CONFLICT (id) DO UPDATE SET name = ?", "n")
+	}
+	prefixOne := func(qb *QueryBuilder) dbtypes.InsertQueryBuilder {
+		f := qb.Filter()
+		sel := qb.Select("id", colName).From("src").Where(f.Eq(colName, "x"))
+		return qb.InsertWithColumns(tableUsers, "id", colName).Select(sel).
+			Prefix("WITH c AS (SELECT ? AS v)", "p")
+	}
+	bothTwo := func(qb *QueryBuilder) dbtypes.InsertQueryBuilder {
+		f := qb.Filter()
+		sel := qb.Select("id", colName).From("src").
+			Where(f.And(f.Eq(colName, "x"), f.Eq("id", 7)))
+		return qb.InsertWithColumns(tableUsers, "id", colName).Select(sel).
+			Prefix("WITH c AS (SELECT ? AS a, ? AS b)", "p1", "p2").
+			Suffix("ON CONFLICT (id) DO UPDATE SET name = ?, id = ?", "n", 9)
+	}
+	nested := func(qb *QueryBuilder) dbtypes.InsertQueryBuilder {
+		f := qb.Filter()
+		inner := qb.Select("id").From("blocked").Where(f.Eq("kind", "k"))
+		sel := qb.Select("id", colName).From("src").
+			Where(f.And(f.Eq(colName, "x"), f.InSubquery("id", inner)))
+		return qb.InsertWithColumns(tableUsers, "id", colName).Select(sel).
+			Suffix("ON CONFLICT (id) DO UPDATE SET name = ?", "n")
+	}
+
+	tests := []struct {
+		name     string
+		vendor   string
+		build    build
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:     "postgresql_suffix_one_arg",
+			vendor:   dbtypes.PostgreSQL,
+			build:    suffixOne,
+			wantSQL:  "INSERT INTO users (id,name) SELECT id, name FROM src WHERE name = $1 ON CONFLICT (id) DO UPDATE SET name = $2",
+			wantArgs: []any{"x", "n"},
+		},
+		{
+			name:     "oracle_suffix_one_arg",
+			vendor:   dbtypes.Oracle,
+			build:    suffixOne,
+			wantSQL:  "INSERT INTO users (id,name) SELECT id, name FROM src WHERE name = :1 ON CONFLICT (id) DO UPDATE SET name = :2",
+			wantArgs: []any{"x", "n"},
+		},
+		{
+			name:     "postgresql_prefix_one_arg",
+			vendor:   dbtypes.PostgreSQL,
+			build:    prefixOne,
+			wantSQL:  "WITH c AS (SELECT $1 AS v) INSERT INTO users (id,name) SELECT id, name FROM src WHERE name = $2",
+			wantArgs: []any{"p", "x"},
+		},
+		{
+			name:     "oracle_prefix_one_arg",
+			vendor:   dbtypes.Oracle,
+			build:    prefixOne,
+			wantSQL:  "WITH c AS (SELECT :1 AS v) INSERT INTO users (id,name) SELECT id, name FROM src WHERE name = :2",
+			wantArgs: []any{"p", "x"},
+		},
+		{
+			name:     "postgresql_prefix_and_suffix_two_args_each",
+			vendor:   dbtypes.PostgreSQL,
+			build:    bothTwo,
+			wantSQL:  "WITH c AS (SELECT $1 AS a, $2 AS b) INSERT INTO users (id,name) SELECT id, name FROM src WHERE (name = $3 AND id = $4) ON CONFLICT (id) DO UPDATE SET name = $5, id = $6",
+			wantArgs: []any{"p1", "p2", "x", 7, "n", 9},
+		},
+		{
+			name:     "oracle_prefix_and_suffix_two_args_each",
+			vendor:   dbtypes.Oracle,
+			build:    bothTwo,
+			wantSQL:  "WITH c AS (SELECT :1 AS a, :2 AS b) INSERT INTO users (id,name) SELECT id, name FROM src WHERE (name = :3 AND id = :4) ON CONFLICT (id) DO UPDATE SET name = :5, id = :6",
+			wantArgs: []any{"p1", "p2", "x", 7, "n", 9},
+		},
+		{
+			name:     "postgresql_nested_subquery_with_suffix_arg",
+			vendor:   dbtypes.PostgreSQL,
+			build:    nested,
+			wantSQL:  "INSERT INTO users (id,name) SELECT id, name FROM src WHERE (name = $1 AND id IN (SELECT id FROM blocked WHERE kind = $2)) ON CONFLICT (id) DO UPDATE SET name = $3",
+			wantArgs: []any{"x", "k", "n"},
+		},
+		{
+			name:     "oracle_nested_subquery_with_suffix_arg",
+			vendor:   dbtypes.Oracle,
+			build:    nested,
+			wantSQL:  "INSERT INTO users (id,name) SELECT id, name FROM src WHERE (name = :1 AND id IN (SELECT id FROM blocked WHERE kind = :2)) ON CONFLICT (id) DO UPDATE SET name = :3",
+			wantArgs: []any{"x", "k", "n"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.build(NewQueryBuilder(tt.vendor)).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, tt.wantArgs, args)
+		})
+	}
+}
+
+func TestInsertSelectWithoutOuterArgsRendersUnchanged(t *testing.T) {
+	tests := []struct {
+		name    string
+		vendor  string
+		wantSQL string
+	}{
+		{
+			name:    "postgresql",
+			vendor:  dbtypes.PostgreSQL,
+			wantSQL: "INSERT INTO users (id,name) SELECT id, name FROM src WHERE name = $1",
+		},
+		{
+			name:    "oracle",
+			vendor:  dbtypes.Oracle,
+			wantSQL: "INSERT INTO users (id,name) SELECT id, name FROM src WHERE name = :1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
+			sel := qb.Select("id", colName).From("src").Where(f.Eq(colName, "x"))
+
+			sql, args, err := qb.InsertWithColumns(tableUsers, "id", colName).Select(sel).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{"x"}, args)
+		})
+	}
+}
+
+func TestInsertSelectKeepsEscapedQuestionMark(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+	// SECURITY: Manual SQL review completed - constant JSONB key-exists operator, no user input
+	sel := qb.Select("id", colName).From("src").Where(f.Raw("data ?? 'k'"))
+
+	sql, args, err := qb.InsertWithColumns(tableUsers, "id", colName).Select(sel).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "INSERT INTO users (id,name) SELECT id, name FROM src WHERE data ? 'k'", sql)
+	assert.Empty(t, args)
+}
+
 func TestUpdate(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	f := qb.Filter()

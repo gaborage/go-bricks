@@ -1019,8 +1019,9 @@ func judgeCell(value any) (operand, error) {
 
 // renderSubquery is the one place a filter or projection subquery becomes
 // embedded SQL (ADR-148). It validates sub and renders it with question-mark
-// placeholders, so the OUTER statement's single final placeholder pass numbers
-// the subquery's and its own parameters consistently. Passing the SelectBuilder
+// placeholders (questionPlaceholderSelect), so the OUTER statement's single
+// final placeholder pass numbers the subquery's and its own parameters
+// consistently. Passing the SelectBuilder
 // through directly would let squirrel apply the vendor format ($1/:1) early and
 // collide with the outer renumbering (duplicate $1 on PostgreSQL, duplicate :1
 // on Oracle). Another implementation (a mock) falls back to its own ToSQL, and
@@ -1033,7 +1034,7 @@ func renderSubquery(sub dbtypes.SelectQueryBuilder) (sql string, args []any, err
 		return "", nil, invalid
 	}
 	if sqb, ok := sub.(*SelectQueryBuilder); ok {
-		return sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
+		return questionPlaceholderSelect(sqb).ToSql()
 	}
 	sql, args, err = sub.ToSQL()
 	if err != nil {
@@ -1047,6 +1048,14 @@ func renderSubquery(sub dbtypes.SelectQueryBuilder) (sql string, args []any, err
 		return "", nil, errSubqueryPlaceholderFormat
 	}
 	return sql, args, nil
+}
+
+// questionPlaceholderSelect returns sqb's squirrel builder with question-mark
+// placeholders, so a statement embedding it numbers every placeholder in its
+// own single final pass (ADR-148). Shared by renderSubquery and
+// InsertQueryBuilder.Select.
+func questionPlaceholderSelect(sqb *SelectQueryBuilder) squirrel.SelectBuilder {
+	return sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question)
 }
 
 // vendorPlaceholder spots a positional placeholder already rendered in a

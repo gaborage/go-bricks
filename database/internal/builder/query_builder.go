@@ -1569,7 +1569,9 @@ func (iqb *InsertQueryBuilder) Suffix(sql string, args ...any) dbtypes.InsertQue
 
 // Select uses sb as the source rows for INSERT...SELECT. Squirrel's InsertBuilder.Select
 // requires the concrete *SelectQueryBuilder so pagination state (limit/offset) and captured
-// filter errors are preserved via buildSelectBuilder()/ValidateForSubquery(). Foreign
+// filter errors are preserved via buildSelectBuilder()/ValidateForSubquery(). The sub-SELECT
+// keeps question-mark placeholders (questionPlaceholderSelect, ADR-148), so the INSERT's single
+// placeholder pass numbers it together with Prefix/Suffix arguments. Foreign
 // SelectQueryBuilder implementations cannot be plumbed into squirrel's Select clause — for
 // those, the error is deferred to ToSQL() rather than panicking.
 func (iqb *InsertQueryBuilder) Select(sb dbtypes.SelectQueryBuilder) dbtypes.InsertQueryBuilder {
@@ -1582,7 +1584,7 @@ func (iqb *InsertQueryBuilder) Select(sb dbtypes.SelectQueryBuilder) dbtypes.Ins
 		iqb.Fail(fmt.Errorf("InsertQueryBuilder.Select: unsupported subquery type %T", sb))
 		return iqb
 	}
-	iqb.insertBuilder = iqb.insertBuilder.Select(concrete.buildSelectBuilder())
+	iqb.insertBuilder = iqb.insertBuilder.Select(questionPlaceholderSelect(concrete))
 	return iqb
 }
 
