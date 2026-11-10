@@ -2698,7 +2698,7 @@ exported builder loses six names that duplicated the Filter doors under weaker r
 
 ### [ADR-159: One Credential-URL Posture](adr_159_one_credential_url_posture.md)
 
-**Date:** 2026-10-28 | **Status:** Accepted
+**Date:** 2026-10-28 (amended 2026-11-09, #2262) | **Status:** Accepted
 
 `internal/credurl` is the one credential-URL renderer, and `Redact` gives its posture: scheme,
 host, port and path kept, the password `xxxxx`, the username kept only beside a non-empty password
