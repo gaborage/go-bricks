@@ -15996,22 +15996,34 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
 ### [C74.2] a broker URL the AMQP client cannot parse fails startup instead of failing at the dial · breaking · when: match
 
-- detect: every statically configured AMQP URL, judged by its resolved VALUE.
-  - YAML: `git grep -nE '(^[[:space:]]*|\.)url[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only
-    hits whose key path is `messaging.broker.url` (nested under a `messaging:` → `broker:` block,
+- detect: every statically configured AMQP URL, judged by its resolved VALUE. The greps list
+  file names only (`-l`): a matching line can hold the URL and its credentials, so open each
+  file yourself rather than capturing matched lines in a log.
+  - YAML: `git grep -lE '(^[[:space:]]*|\.)url[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only
+    files that set `messaging.broker.url` (nested under a `messaging:` → `broker:` block,
     flat-dotted as `messaging.broker.url:`, or mixed) or `multitenant.tenants.<id>.messaging.url`.
     A `url:` leaf under a database, cache or other section hits the same pattern and does not
     count.
-  - Env: `git grep -nE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_]+_MESSAGING_URL'`, plus
-    `grep -rnE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_]+_MESSAGING_URL' k8s/ deploy/ .env* 2>/dev/null`
-    for env files and deployment manifests outside the repository's tracked files.
+  - Env: `git grep -lE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL'`, plus
+    `grep -rlE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL' k8s/ deploy/ .env* 2>/dev/null`
+    for env files and deployment manifests outside the repository's tracked files. The class
+    includes `-` because a tenant ID may.
+  - Go, hand-built config: `git grep -nE 'Broker\.URL|Messaging\.URL|TenantMessagingConfig\{|BrokerConfig\{' -- '*.go'`
+    lists code that sets the root or a tenant broker URL on a `config.Config` it hands to
+    `app.NewWithConfig` or `Builder.WithConfig`; `config.Validate` judges those values too.
+  - Go, dynamic source: `git grep -nE 'func \([^)]*\) BrokerURL\(' -- '*.go'` lists every
+    `BrokerURL` method, whatever its parameters are named; one that satisfies
+    `messaging.BrokerURLProvider` is a dynamic source, and the URLs it can return are judged by
+    `messaging.Manager`.
   - A hit locates the key, not the verdict. The value often lives in a secret manager, so judge
     the resolved value of each hit in every environment: pass it to `amqp.ParseURI` in a
     throwaway Go program that prints only whether it returned an error, never the URL or the
     error text (it quotes the URL and its credentials), and check that a written port is within
     1-65535, which `ParseURI` does not.
-  - Go: `git grep -nE 'BrokerURL\(ctx context.Context, key string\)' -- '*.go'` lists a custom
-    `messaging.BrokerURLProvider`; judge the URLs it can return the same way.
+  - Two paths treat an empty value differently. An exactly empty STATIC value is "not
+    configured": config skips it, so do not probe it. An empty URL a `BrokerURLProvider`
+    returns reaches the manager's check and is refused (`uses an unsupported scheme`). A
+    whitespace-only value is refused on both paths.
 - scope: `config.Validate` (so `config.Load`, `app.NewWithConfig` and `Builder.WithConfig`) for
   `messaging.broker.url` and every `multitenant.tenants.<id>.messaging.url`, and
   `messaging.Manager` for a URL a `BrokerURLProvider` resolves for a key. **Unchanged**: an empty
