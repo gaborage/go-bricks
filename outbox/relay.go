@@ -653,12 +653,10 @@ func (c *relayCycle) ship(ctx context.Context, laneShipper shipper, lane string,
 		// Shutting down mid-ship — stop without counting this record.
 		return true
 	case shipBrokerDown:
-		// The lane dropped mid-batch. Its UNATTEMPTED rows take the same outage path the
-		// cycle-start pre-flight applies — advance retry_count without paying each record's
-		// own serial readiness wait — and the cycle stops. Every other row (another lane, or
-		// a lane this build does not know) is held back untouched, split by the pre-flight's
-		// own rule, so the cycle's counts still sum to the batch total. The key this row
-		// holds is moot: the cycle ends here and the hold-back set does not outlive it.
+		// The lane dropped mid-batch: its UNATTEMPTED rows take the pre-flight's outage path
+		// instead of each paying a serial readiness wait, every other row is held back
+		// untouched, and the cycle stops. The key this row holds is moot: the hold-back set
+		// does not outlive the cycle.
 		c.fail(ctx, record, lane, ship.Key, v.Err)
 		c.res.outageErr = v.Err
 		c.res.stallWait = max(c.res.stallWait, v.Waited)
