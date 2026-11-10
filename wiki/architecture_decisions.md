@@ -2871,7 +2871,7 @@ framework chain, so it is outside the framework's guarantees.
 
 ### [ADR-167: Inbound Paths Render From the Matched Route Template](adr_167_inbound_paths_render_from_route_template.md)
 
-**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path
+**Date:** 2026-11-03 (amended 2026-11-10) | **Status:** Accepted | **Breaking:** `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path
 
 A request path is caller-written, so a card number in a segment reached the access log's
 `url.path` and message, the span's `url.path` and six framework WARN and ERROR lines as sent; the

@@ -4,6 +4,26 @@
 **Date:** 2026-11-03
 **Related:** [ADR-026](adr_026_zero_overhead_request_path.md) (zero-overhead request path) · [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (a recovered panic is reported by type) · [ADR-161](adr_161_unknown_tenant_is_a_client_fault.md) (the unknown-tenant WARN; amended here) · [ADR-164](adr_164_tenant_owned_route_family.md) (the family refusal ERROR) · GHSA-h4jw-4c64-48mh · #2212
 
+## Amendment (2026-11-10): the two framework residuals were closed in v0.73.0
+
+The last Consequences bullet lists the request method token and path-read tenant IDs as out of
+scope and unchanged. Both were closed before v0.73.0 shipped:
+
+- **Path-read tenant IDs.** A tenant read from the request path is written to the context, and
+  so to the access line's `tenant` field, only when the tenant store holds it
+  ([ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md), [migrations.md](migrations.md)
+  `[C73.36]`). Startup refuses path-tenancy wiring the store cannot vouch for
+  ([ADR-171](adr_171_app_refuses_tenant_wiring_store_cannot_vouch_for.md), `[C73.38]`). The public
+  `server.TenantMiddleware` requires an existence check and validates every resolved id
+  ([ADR-172](adr_172_public_tenant_middleware_takes_existence_check.md), `[C73.39]`). Advisory:
+  GHSA-5rp9-jp9x-5w69.
+- **The request method token.** A method outside the semantic conventions' known set renders
+  `_OTHER` on every framework sink, and the span no longer carries the original (`[C73.40]`,
+  #2341).
+
+Still out of scope, and unchanged: consumer reads of `Request().URL` or `HandlerContext.Param`,
+and consumer error text.
+
 ## Context
 
 A request path is caller-written. A card number, an account number or a token in a path segment
