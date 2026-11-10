@@ -44,6 +44,7 @@
 !.out-of-scope/*.md
 
 !.github/workflows/*.yml
+!.github/workflows/*.yaml
 !.github/ISSUE_TEMPLATE/*.yml
 !.github/actions/*/action.yml
 
