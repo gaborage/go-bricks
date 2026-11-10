@@ -10,7 +10,7 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-16-messaging-environment-port-and-delivery-pipeline-design.md](../specs/2026-08-16-messaging-environment-port-and-delivery-pipeline-design.md) — section "Delivery pipeline (card 6)", **decisions 1–5 and 7 only**. Decision 6 (streams lane on the pipeline) is **PR3 and out of scope**: do not touch `messaging/streams/runner.go` beyond the one-line recorder swap in Task 1, do not extract trace context in `runner.deliver`, do not install a lease scope there, do not change the streams panic wording.
 
-**Vocabulary:** [CONTEXT.md](../../CONTEXT.md) — *Delivery pipeline*, *Carrier*, *Settlement*. Use those words in comments and commit messages; avoid "consume loop", "message processing", "headers", "ack"/"commit" as the name of the general step.
+**Vocabulary:** [CONTEXT.md](../../../CONTEXT.md) — *Delivery pipeline*, *Carrier*, *Settlement*. Use those words in comments and commit messages; avoid "consume loop", "message processing", "headers", "ack"/"commit" as the name of the general step.
 
 **Stack position:** Stack B PR2, on top of PR1 (`feature/streams-environment-port`, the *Environment port*, already implemented). This plan is **three dependent PRs**, in order:
 

@@ -826,7 +826,7 @@ type CreateTokenResponse struct {
 
 **Minimal JWS-of-JWE mode (kid-less inbound peers).** `Mode: jose.SealModeJWSofJWEMinimal` opens the same shape for an inbound peer that signs `RS512` with no `kid` on either token and no outer `cty`. It is open-only, and `AcceptMissingKid` makes the `kid` optional on both tokens. A detached signature (`header..signature`) is reattached with `jose.AttachDetachedJWS` before `Open`. See [wiki/jose.md](wiki/jose.md#minimal-jws-of-jwe-mode-kid-less-inbound-peers) (ADR-150).
 
-Wire it by registering `keystore.NewModule()` **before** any module that declares JOSE-tagged routes — `app/module_registry.go` then auto-injects `KeyStore`, logger, tracer, and meter into the middleware. See [CLAUDE.md](CLAUDE.md#jose-middleware) for the complete failure-mode → `IAPIError` table and [llms.txt](llms.txt) for end-to-end examples.
+Wire it by registering `keystore.NewModule()` **before** any module that declares JOSE-tagged routes — `app/module_registry.go` then auto-injects `KeyStore`, logger, tracer, and meter into the middleware. See [wiki/jose.md](wiki/jose.md#jose-middleware) for the complete failure-mode → `IAPIError` table and [llms.txt](llms.txt) for end-to-end examples.
 
 ---
 

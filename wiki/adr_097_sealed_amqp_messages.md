@@ -6,7 +6,7 @@
   engages from), [ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md) (the tenant
   stamp mirrored into the signed `tid`), [ADR-091](adr_091_streams_opt_in_registration.md)
   (the import-gate pattern `messaging/sealed` follows), [ADR-090](adr_090_env_reachable_section_names.md)
-  (the env-door posture the activation selector inherits), [ADR-081](adr_081_panic_type_only.md)
+  (the env-door posture the activation selector inherits), [ADR-081](adr_081_recovered_panic_values_reported_by_type.md)
   / ADR-070 (why `etyp`/`jti`/`tid` values are never logged), the HTTP JOSE ADRs
   (algorithm allowlist parity)
 - **Issue**: #1301 (map); decisions #1304 (envelope), #1305 (tags, package, publish

@@ -10,7 +10,7 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-29-multitenant-messaging-end-state.md](../specs/2026-08-29-multitenant-messaging-end-state.md) — Decision 9 and the C row of "The carve"; the same design is the "Agent Brief" comment on #1231 (`GH_TOKEN=$(gh auth token -u gaborage) gh issue view 1231`). Where they differ, the spec wins.
 
-**Vocabulary:** [CONTEXT.md](../../CONTEXT.md) `### Tenancy` — *Hold*, *Tenant stamp*, *Partition key*, *Control-plane key*; `### Messaging` — *Delivery pipeline*, *Settlement*, *Carrier*. Use those words in comments, docs and commit messages; avoid "DLQ", "quarantine", "retry queue", "parking lot", "tenant header".
+**Vocabulary:** [CONTEXT.md](../../../CONTEXT.md) `### Tenancy` — *Hold*, *Tenant stamp*, *Partition key*, *Control-plane key*; `### Messaging` — *Delivery pipeline*, *Settlement*, *Carrier*. Use those words in comments, docs and commit messages; avoid "DLQ", "quarantine", "retry queue", "parking lot", "tenant header".
 
 **Stack position:** three dependent PRs, one `/gh-stack`, merged bottom-up by the maintainer. **C is blocked by A (#1230):** its base is A's top branch `feat/messaging-tenancy-outbox-stamp-docs` until A merges, after which `gh stack sync` retargets it onto `main`. C consumes A's names verbatim: the stamp read in the streams runner (`tenantstamp.Read`, `TenantOptional`, `TenantStamps`), `multitenant.TenantID`/`ErrNoTenant`, `multitenant.SetTenant`. C is independent of B (#1232).
 

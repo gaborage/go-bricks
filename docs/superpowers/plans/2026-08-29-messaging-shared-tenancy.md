@@ -10,7 +10,7 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-29-multitenant-messaging-end-state.md](../specs/2026-08-29-multitenant-messaging-end-state.md) — tracked in this repo; the same design is the "Agent Brief" comment on #1230 (`GH_TOKEN=$(gh auth token -u gaborage) gh issue view 1230 --comments`). Where they differ, the spec wins.
 
-**Vocabulary:** [CONTEXT.md](../../CONTEXT.md) `### Tenancy` — *Control-plane key*, *Tenancy*, *Replay*, *Tenant stamp*. Use those words in comments, docs and commit messages; avoid "root key", "empty key", "mode", "bootstrap", "tenant header".
+**Vocabulary:** [CONTEXT.md](../../../CONTEXT.md) `### Tenancy` — *Control-plane key*, *Tenancy*, *Replay*, *Tenant stamp*. Use those words in comments, docs and commit messages; avoid "root key", "empty key", "mode", "bootstrap", "tenant header".
 
 **Stack position:** four dependent PRs, one `/gh-stack`, merged bottom-up by the maintainer. The worktree `.claude/worktrees/A` starts on `feat/messaging-tenancy-config` with the `CONTEXT.md` glossary already applied but uncommitted.
 

@@ -381,7 +381,7 @@ so a 60s backoff costs no wall time and the code under test needs no clock seam.
 
 ## SQL Goldens
 
-A store port is judged by the SQL it emits, not by the unit tests that pin substrings of it: `database/testing.SQLGolden` renders everything a `TestDB` and its transactions recorded — each statement verbatim, then every bound argument with its type — and `dbtesting.AssertGolden(t, path, got, *update)` pins that text under `testdata/sql/`. Capture the goldens BEFORE the port in the port PR's first commit, diff them after, and name every deliberate text change in the commit body. `SQLGolden{FixedClock: fixedAt}` prints the fixture time verbatim and any other clock value (a store's own `time.Now()`) as `<time>`, so a wrong binding fails while a wall clock does not. See `outbox/store_sql_golden_test.go` and `inbox/store_sql_golden_test.go`.
+A store port is judged by the SQL it emits, not by the unit tests that pin substrings of it: `database/testing.SQLGolden` renders everything a `TestDB` and its transactions recorded — each statement verbatim, then every bound argument with its type — and `dbtesting.AssertGolden(t, path, got, *update)` pins that text under `testdata/sql/`. Capture the goldens BEFORE the port in the port PR's first commit, diff them after, and name every deliberate text change in the commit body. `SQLGolden{FixedClock: fixedAt}` prints the fixture time verbatim and any other clock value (a store's own `time.Now()`) as `<time>`, so a wrong binding fails while a wall clock does not. See `outbox/store_sql_test.go` and `inbox/store_test.go`.
 
 ## Server / HandlerContext Testing
 
