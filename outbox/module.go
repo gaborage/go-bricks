@@ -397,20 +397,18 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		return fmt.Errorf("outbox: failed to register relay job: %w", err)
 	}
 
-	// Register cleanup job (RetentionPeriod is always positive after applyDefaults,
-	// so this always registers when the module is enabled).
-	if m.cfg.RetentionPeriod > 0 {
-		cleanup := &Cleanup{
-			store:           &lazyStore{module: m},
-			retentionPeriod: m.cfg.RetentionPeriod,
-			getDB:           m.getDB,
-			tenants:         tenants,
-		}
+	// Register cleanup job. RetentionPeriod is always positive after applyDefaults,
+	// so this always registers when the module is enabled.
+	cleanup := &Cleanup{
+		store:           &lazyStore{module: m},
+		retentionPeriod: m.cfg.RetentionPeriod,
+		getDB:           m.getDB,
+		tenants:         tenants,
+	}
 
-		cleanupTime := time.Date(0, 1, 1, 4, 0, 0, 0, time.Local)
-		if err := registrar.DailyAt("outbox-cleanup", cleanup, cleanupTime); err != nil {
-			return fmt.Errorf("outbox: failed to register cleanup job: %w", err)
-		}
+	cleanupTime := time.Date(0, 1, 1, 4, 0, 0, 0, time.Local)
+	if err := registrar.DailyAt("outbox-cleanup", cleanup, cleanupTime); err != nil {
+		return fmt.Errorf("outbox: failed to register cleanup job: %w", err)
 	}
 
 	m.logger.Info().

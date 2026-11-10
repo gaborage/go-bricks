@@ -16,6 +16,7 @@ import (
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/scheduler"
 )
 
@@ -589,3 +590,137 @@ func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
 		})
 	}
 }
+
+// cfg is taken by pointer: InboxConfig grew past the by-value threshold when the
+// hold block landed on it.
+func newCoverageModule(db dbtypes.Interface, cfg *config.InboxConfig) *Module {
+	return &Module{
+		logger: logger.New("info", false),
+		cfg:    *cfg,
+		getDB:  func(context.Context) (dbtypes.Interface, error) { return db, nil },
+	}
+}
+
+func TestEnsureStoreInitializedOracleWithAutoCreate(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	db.ExpectExec(`CREATE TABLE gobricks_inbox`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+	m := newCoverageModule(db, &config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
+
+	store, err := m.ensureStoreInitialized(t.Context())
+	require.NoError(t, err)
+	assert.NotNil(t, store)
+}
+
+func TestEnsureStoreInitializedCreatesTablePerTenant(t *testing.T) {
+	tenants := dbtesting.NewTenantDBMap()
+	dbA := tenants.ForTenant("tenant-a")
+	dbA.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	dbA.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	dbB := tenants.ForTenant("tenant-b")
+	dbB.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	dbB.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	m := &Module{
+		logger: logger.New("info", false),
+		cfg:    config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true},
+		getDB:  tenants.AsGetDBFunc(),
+	}
+
+	storeA, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-a"))
+	require.NoError(t, err)
+	storeB, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-b"))
+	require.NoError(t, err)
+	storeAAgain, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-a"))
+	require.NoError(t, err)
+
+	assert.Same(t, storeA, storeAAgain, "a tenant reuses its cached store")
+	assert.NotSame(t, storeA, storeB, "different tenants receive isolated stores")
+
+	dbtesting.AssertExecExecuted(t, dbA, "CREATE TABLE")
+	dbtesting.AssertExecExecuted(t, dbB, "CREATE TABLE")
+}
+
+func TestEnsureStoreInitializedMixedVendorDialects(t *testing.T) {
+	tenants := dbtesting.NewTenantDBMap()
+	dbPG := tenants.ForTenantWithVendor("tenant-pg", dbtypes.PostgreSQL)
+	dbPG.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	dbPG.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	dbOra := tenants.ForTenantWithVendor("tenant-oracle", dbtypes.Oracle)
+	dbOra.ExpectExec(`CREATE TABLE gobricks_inbox`).WillReturnRowsAffected(0)
+	dbOra.ExpectExec(`CREATE INDEX idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	m := &Module{
+		logger: logger.New("info", false),
+		cfg:    config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true},
+		getDB:  tenants.AsGetDBFunc(),
+	}
+
+	storePG, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-pg"))
+	require.NoError(t, err)
+	storeOra, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-oracle"))
+	require.NoError(t, err)
+
+	assert.IsType(t, &postgresStore{}, storePG, "postgres tenant gets the postgres dialect store")
+	assert.IsType(t, &oracleStore{}, storeOra, "oracle tenant gets the oracle dialect store")
+	dbtesting.AssertExecExecuted(t, dbPG, "CREATE TABLE")
+	dbtesting.AssertExecExecuted(t, dbOra, "CREATE TABLE")
+	assert.Len(t, dbPG.ExecLog(), 2, "postgres tenant's DB only sees its own DDL")
+	assert.Len(t, dbOra.ExecLog(), 2, "oracle tenant's DB only sees its own DDL")
+}
+
+func TestEnsureStoreInitializedSingleTenantIdempotent(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+	m := newCoverageModule(db, &config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
+
+	first, err := m.ensureStoreInitialized(t.Context())
+	require.NoError(t, err)
+	second, err := m.ensureStoreInitialized(t.Context())
+	require.NoError(t, err)
+
+	assert.Same(t, first, second, "single-tenant store identity is preserved across calls")
+	assert.Len(t, db.ExecLog(), 2, "CreateTable runs exactly once for the empty-tenant key")
+}
+
+func TestLazyStoreDelegates(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectTransaction().ExpectExec(`INSERT INTO gobricks_inbox`).WillReturnRowsAffected(1)
+	db.ExpectExec(`CREATE TABLE`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX`).WillReturnRowsAffected(0)
+	m := newCoverageModule(db, &config.InboxConfig{Enabled: true, TableName: "gobricks_inbox"})
+	ls := &lazyStore{module: m}
+
+	tx, err := db.Begin(t.Context())
+	require.NoError(t, err)
+	inserted, err := ls.MarkProcessed(t.Context(), tx, Record{EventID: "e", ProcessedAt: time.Now()})
+	require.NoError(t, err)
+	assert.True(t, inserted)
+
+	require.NoError(t, ls.CreateTable(t.Context(), db))
+}
+
+func TestModuleShutdown(t *testing.T) {
+	m := newCoverageModule(dbtesting.NewTestDB(dbtypes.PostgreSQL), &config.InboxConfig{})
+	require.NoError(t, m.Shutdown())
+}
+
+func TestLazyStorePropagatesInitError(t *testing.T) {
+	m := &Module{
+		cfg:   config.InboxConfig{TableName: "gobricks_inbox"},
+		getDB: func(context.Context) (dbtypes.Interface, error) { return nil, errInitFailed },
+	}
+	ls := &lazyStore{module: m}
+
+	_, err := ls.MarkProcessed(context.Background(), nil, Record{})
+	require.ErrorIs(t, err, errInitFailed)
+	_, err = ls.DeleteProcessed(context.Background(), nil, time.Now())
+	require.ErrorIs(t, err, errInitFailed)
+	err = ls.CreateTable(context.Background(), nil)
+	require.ErrorIs(t, err, errInitFailed)
+}
+
+var errInitFailed = errors.New("db unavailable")

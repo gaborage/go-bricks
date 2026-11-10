@@ -33,7 +33,6 @@ func TestNewPostgresQuiesceControllerRejectsBadTableName(t *testing.T) {
 func TestNewPostgresQuiesceControllerDefaultsTableName(t *testing.T) {
 	c, err := NewPostgresQuiesceController(new(sql.DB), "")
 	require.NoError(t, err)
-	assert.Equal(t, DefaultQuiesceTable, c.tableName)
 	assert.Contains(t, c.quotedTable, DefaultQuiesceTable)
 }
 

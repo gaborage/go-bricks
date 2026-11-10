@@ -45,18 +45,6 @@ type NoDBTags struct {
 	Name string
 }
 
-type DangerousTags struct {
-	ID         int64  `db:"id; DROP TABLE users--"`
-	Name       string `db:"name"`
-	SQLComment string `db:"col/* comment */"`
-}
-
-type QuotedTags struct {
-	ID         int64  `db:"\"id\""` // Pre-quoted (invalid)
-	Name       string `db:"'name'"` // Single quoted (invalid)
-	SingleChar string `db:"x"`
-}
-
 // TestParseStructValidStruct tests successful parsing of a valid struct
 func TestParseStructValidStruct(t *testing.T) {
 	metadata, err := parseStruct(dbtypes.PostgreSQL, &ValidUser{})

@@ -362,10 +362,6 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 func (r *Relay) preflight(ctx context.Context) (down map[string]struct{}, laneErr error) {
 	var errs []error
 	for _, lane := range r.laneOrder {
-		// A zero/negative readyTimeout is "no extra bound" (call with ctx as today) rather
-		// than a zero-deadline ctx that would fail every check instantly: validatePublishTimeout
-		// guarantees a positive value in production, so this only matters for a test or a
-		// misconfigured build that skipped that check.
 		if err := r.readyWithin(ctx, r.shippers[lane]); err != nil {
 			if down == nil {
 				down = make(map[string]struct{}, len(r.shippers))
@@ -377,8 +373,10 @@ func (r *Relay) preflight(ctx context.Context) (down map[string]struct{}, laneEr
 	return down, errors.Join(errs...)
 }
 
-// readyWithin runs one lane's pre-flight under readyTimeout, or unbounded when the timeout
-// is not positive (see preflight).
+// readyWithin runs one lane's pre-flight under readyTimeout. A zero/negative readyTimeout
+// is "no extra bound" (call with ctx as-is) rather than a zero-deadline ctx that would fail
+// every check instantly: validatePublishTimeout guarantees a positive value in production,
+// so this only matters for a test or a misconfigured build that skipped that check.
 func (r *Relay) readyWithin(ctx context.Context, sh shipper) error {
 	if r.readyTimeout <= 0 {
 		return sh.Ready(ctx)

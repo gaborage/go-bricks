@@ -73,7 +73,8 @@ const maxPGTableSegment = 52
 // used elsewhere in the migration package (see migration/roles.go). The
 // per-segment cap (maxPGTableSegment) is below NAMEDATALEN-1 so the
 // derived index names also fit; see PostgresStateTableIndexes.
-var safePGTableIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,51}(\.[A-Za-z_][A-Za-z0-9_]{0,51})?$`)
+var safePGTableIdent = regexp.MustCompile(fmt.Sprintf(
+	`^[A-Za-z_][A-Za-z0-9_]{0,%[1]d}(\.[A-Za-z_][A-Za-z0-9_]{0,%[1]d})?$`, maxPGTableSegment-1))
 
 // ErrInvalidTableName is returned by NewPostgresStore when the supplied
 // table name fails the safe-identifier check.
@@ -82,8 +83,7 @@ var ErrInvalidTableName = errors.New("provisioning: invalid PostgreSQL table nam
 // PostgresStore is the PostgreSQL-backed reference implementation of
 // StateStore. Construct via NewPostgresStore so the table name is validated.
 type PostgresStore struct {
-	db        *sql.DB
-	tableName string
+	db *sql.DB
 	// quotedTable is the double-quoted form used in DDL/DML. Computed once
 	// at construction so per-call SQL building doesn't repeat the quoting.
 	quotedTable string
@@ -109,7 +109,6 @@ func NewPostgresStore(db *sql.DB, tableName string) (*PostgresStore, error) {
 	}
 	return &PostgresStore{
 		db:          db,
-		tableName:   tableName,
 		quotedTable: quoteQualified(tableName),
 		indexBase:   sqlid.IndexBaseName(tableName),
 	}, nil

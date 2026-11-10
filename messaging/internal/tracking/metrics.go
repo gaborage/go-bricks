@@ -220,14 +220,16 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 		commonAttrs = append(commonAttrs, attribute.String(attrErrorType, errorType))
 	}
 
+	attrSet := metric.WithAttributes(commonAttrs...)
+
 	// Record duration histogram (in seconds)
 	if amqpOperationDuration != nil {
-		amqpOperationDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(commonAttrs...))
+		amqpOperationDuration.Record(ctx, duration.Seconds(), attrSet)
 	}
 
 	// Record sent messages counter (only on success)
 	if amqpMessagesSent != nil && err == nil {
-		amqpMessagesSent.Add(ctx, 1, metric.WithAttributes(commonAttrs...))
+		amqpMessagesSent.Add(ctx, 1, attrSet)
 	}
 }
 

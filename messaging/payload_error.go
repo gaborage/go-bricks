@@ -100,7 +100,7 @@ func (e *PayloadError) Unwrap() error {
 	return e.body.Unwrap()
 }
 
-// Is maps the stage onto its sentinel so consumers can discriminate the two
+// Is maps the stage onto its sentinel so consumers can discriminate the three
 // failure modes without reading Stage.
 func (e *PayloadError) Is(target error) bool {
 	if e == nil {

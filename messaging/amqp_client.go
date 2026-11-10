@@ -476,7 +476,7 @@ func (c *AMQPClientImpl) preparePublishing(ctx context.Context, options publishO
 	// error by shutting down the whole Connection every publisher in the process
 	// shares (ADR-070).
 	traceID, _ := accessor.Get(gobrickstrace.HeaderXRequestID).(string)
-	if publishing.CorrelationId == "" && gobrickstrace.ValidateRequestID(traceID) != "" {
+	if gobrickstrace.ValidateRequestID(traceID) != "" {
 		publishing.CorrelationId = traceID
 	}
 	if publishing.MessageId == "" {

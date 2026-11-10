@@ -208,11 +208,6 @@ func TestTrackedConnectionMultipleOperations(t *testing.T) {
 	assertDBElapsedPositive(ctx, t)
 }
 
-func TestTrackedTxContextMethods(t *testing.T) {
-	// Simplified test - functionality tested in internal packages
-	t.Skip("Skipping complex transaction test for simplicity - functionality tested in internal packages")
-}
-
 func TestTrackedConnectionBeginErrors(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()

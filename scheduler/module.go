@@ -163,14 +163,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 	// Store multi-tenant resource resolvers
 	m.getDB = deps.DB
-	m.getMessaging = func(ctx context.Context) (messaging.AMQPClient, error) {
-		amqpClient, err := deps.Messaging(ctx)
-		if err != nil {
-			return nil, err
-		}
-		// Convert AMQPClient to generic Client interface
-		return amqpClient, nil
-	}
+	m.getMessaging = deps.Messaging
 
 	// Note: Scheduler itself is lazy-initialized in ensureSchedulerInitialized()
 	// per FR-016 (optional jobs, zero overhead)
@@ -1000,7 +993,7 @@ func (m *Module) sealWindows() {
 // - job.execution.duration (Histogram) - Duration in seconds (UCUM unit "s")
 // - job.panic.total (Counter) - Singular "panic" for consistency
 //
-// Attributes: job.id, job.status (success/failure/panic), job.schedule_type (fixed_rate/daily/weekly/hourly/monthly)
+// Attributes: job.id, job.status (success/failure/panic), job.schedule_type (fixed-rate/daily/weekly/hourly/monthly)
 //
 // ctx must be the traced job context: the SDK's default exemplar filter attaches
 // an exemplar only when the recording context carries a sampled span.

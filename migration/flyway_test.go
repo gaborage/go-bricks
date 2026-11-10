@@ -638,11 +638,6 @@ func TestValidateFlywayPathComprehensiveEdgeCases(t *testing.T) {
 			expectError: false,
 			setup:       createSimpleFlywayStub,
 		},
-		{
-			name:        "valid_relative_path",
-			expectError: false,
-			setup:       createSimpleFlywayStub,
-		},
 	}
 
 	for _, tt := range tests {

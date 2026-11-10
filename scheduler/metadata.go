@@ -105,11 +105,10 @@ func (m *JobMetadata) snapshot() *JobMetadata {
 		mu:                  sync.Mutex{}, // Explicit zero value - not a copy
 	}
 
-	// Copy time pointers if they exist
-	if m.NextExecutionTime != nil {
-		t := *m.NextExecutionTime
-		snapshot.NextExecutionTime = &t
-	}
+	// NextExecutionTime is never set on stored metadata: the caller fills it on the
+	// snapshot from the live gocron job.
+
+	// Copy the time pointer if it exists
 	if m.LastExecutionTime != nil {
 		t := *m.LastExecutionTime
 		snapshot.LastExecutionTime = &t
