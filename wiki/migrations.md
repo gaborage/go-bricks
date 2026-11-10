@@ -16072,7 +16072,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: every AMQP broker URL and stream URI, judged by its resolved VALUE. As in C74.2, the
   key greps list file names only (`-l`), since a matching line can hold the URL.
   - YAML and env: the C74.2 key greps, plus `messaging.streams.uri`
-    (`git grep -lE '(^|[[:space:]{,.])uri[[:space:]]*:' -- '*.yaml' '*.yml'`, keeping only files
+    (`git grep -lE "(^|[[:space:]{,.'\"])uri['\"]?[[:space:]]*:" -- '*.yaml' '*.yml'`, keeping only files
     that set it under `messaging:` → `streams:`, and repeating it with `grep -rlE` over untracked
     deployment config as C74.2 does) and `MESSAGING_STREAMS_URI`
     (`git grep -l 'MESSAGING_STREAMS_URI'`, plus the same `grep -rl` over `k8s/ deploy/ .env*`).
