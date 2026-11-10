@@ -256,8 +256,9 @@ func TestConnectionNewConnectionRedactsBuiltDSNPassword(t *testing.T) {
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), password, "built-DSN password leaked into the startup error")
-	assert.Contains(t, err.Error(), "testuser", "username must stay visible so the failing connection is identifiable")
-	assert.Contains(t, err.Error(), "zonk", "host must stay visible so the failing connection is identifiable")
+	assert.Contains(t, err.Error(), `parse "xxxxx": `, "a DSN url.Parse rejects is masked whole")
+	assert.NotContains(t, err.Error(), "testuser")
+	assert.NotContains(t, err.Error(), "zonk")
 }
 
 // TestConnectionNewConnectionRedactsDelimiterPasswords covers passwords carrying an
@@ -290,7 +291,9 @@ func TestConnectionNewConnectionRedactsDelimiterPasswords(t *testing.T) {
 
 			require.Error(t, err)
 			assert.NotContains(t, err.Error(), leadingSegment, "password leaked into the startup error")
-			assert.Contains(t, err.Error(), "appuser", "username must stay visible so the failing connection is identifiable")
+			assert.Contains(t, err.Error(), `parse "xxxxx": `+invalidDSNReason, "a DSN url.Parse rejects is masked whole")
+			assert.NotContains(t, err.Error(), "appuser")
+			assert.NotContains(t, err.Error(), "plinth")
 		})
 	}
 }
@@ -315,8 +318,8 @@ func TestConnectionNewConnectionRedactsAtSignUsername(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), leadingSegment, "password leaked into the startup error")
 	assert.NotContains(t, err.Error(), "cretPW", "password leaked into the startup error")
-	assert.NotContains(t, err.Error(), "svc@corp", "an '@' username is masked whole with its userinfo")
-	assert.Contains(t, err.Error(), "oracle://xxxxx@host:1521/XE")
+	assert.NotContains(t, err.Error(), "svc@corp")
+	assert.Contains(t, err.Error(), `parse "xxxxx": `+invalidDSNReason, "a DSN url.Parse rejects is masked whole")
 }
 
 func TestRedactDSNErrorPreservesErrorChain(t *testing.T) {
@@ -330,7 +333,7 @@ func TestRedactDSNErrorPreservesErrorChain(t *testing.T) {
 	err := redactDSNError(fmt.Errorf("%s: %w", oraclePingErrorMsg, parseErr), dsn)
 
 	assert.NotContains(t, err.Error(), "s3cr3t")
-	assert.Contains(t, err.Error(), "appuser")
+	assert.NotContains(t, err.Error(), "appuser")
 	// A net/url reason that quotes nothing carries no password material, so it survives.
 	assert.Contains(t, err.Error(), "invalid control character")
 

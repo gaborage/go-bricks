@@ -1755,13 +1755,12 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 	tests := []struct {
 		name     string
 		user     string // empty: "user"
-		shown    string // the userinfo rendered after "//"; empty: user + ":"
 		password string
+		hostless bool // nothing follows the password
 		suffix   string
 		secrets  []string
-		hostCut  bool
 	}{
-		{name: "password_with_question_mark", password: "s3cr?etPW", secrets: brokerPasswordSecrets, hostCut: true},
+		{name: "password_with_question_mark", password: "s3cr?etPW", secrets: brokerPasswordSecrets},
 		{name: "password_with_percent", password: "s3cr%etPW", secrets: brokerPasswordSecrets},
 		{name: "password_with_slash", password: "s3cr/etPW", secrets: brokerPasswordSecrets},
 		{name: "password_with_hash", password: "s3cr#etPW", secrets: brokerPasswordSecrets},
@@ -1771,15 +1770,21 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 		// the URL connect() dialed makes "user:2024" userinfo.
 		{name: "digit_password_with_invalid_escape_before_hash", password: "2024/%zz#x", secrets: []string{"2024", "%zz", "#x"}},
 		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
-		{name: "username_with_at_password_with_slash", user: "svc@corp", shown: "xxxxx@", password: "Se/cretPW", secrets: []string{"Se/", "cretPW", `":Se"`, "svc@corp"}},
+		{name: "username_with_at_password_with_slash", user: "svc@corp", password: "Se/cretPW", secrets: []string{"Se/", "cretPW", `":Se"`, "svc@corp"}},
 		// url.Parse reports "amqp://user:p@ss:x", cut at the '#'; the last '@' is past it.
 		{name: "password_with_at_and_colon_before_hash", password: "p@ss:x#y", secrets: []string{"ss:x", "p@ss", "#y"}},
+		// With no host after the password, its text sits where a path, host or port belongs.
+		{name: "hostless_password_read_as_path", password: "zq9x/s3cret", hostless: true, secrets: []string{"zq9x", "s3cret", "amqp://"}},
+		{name: "hostless_password_read_as_host_and_port", password: "s3@cret:zq9x", hostless: true, secrets: []string{"zq9x", "cret", "amqp://"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			user := cmp.Or(tt.user, "user")
-			raw := "amqp://" + user + ":" + tt.password + "@broker:5672/vh" + tt.suffix
+			raw := "amqp://" + user + ":" + tt.password
+			if !tt.hostless {
+				raw += "@broker:5672/vh" + tt.suffix
+			}
 			// Premise: the dial fails at parse, before any network I/O, and the vendor's
 			// error carries the password.
 			_, dialErr := amqp.Dial(raw)
@@ -1796,12 +1801,9 @@ func TestConnectRedactsBrokerURLPassword(t *testing.T) {
 			for _, secret := range tt.secrets {
 				assert.NotContains(t, err.Error(), secret)
 			}
-			assert.Contains(t, err.Error(), "//"+cmp.Or(tt.shown, user+":"), "the username identifies the failing connection")
-			if tt.hostCut {
-				assert.NotContains(t, err.Error(), "broker", "a '?' before the last '@' masks the host with the tail")
-			} else {
-				assert.Contains(t, err.Error(), "broker", "the dialed URL's host shows, even past a '#' url.Parse cut")
-			}
+			assert.Contains(t, err.Error(), `parse "xxxxx": `, "a URL url.Parse rejects is masked whole")
+			assert.NotContains(t, err.Error(), "broker")
+			assert.NotContains(t, err.Error(), "//")
 			assert.Contains(t, err.Error(), "must be percent-encoded", "the vendor's hint survives")
 			var urlErr *url.Error
 			require.ErrorAs(t, err, &urlErr)
@@ -4004,7 +4006,8 @@ func TestHandleReconnectRedactsDialErrorOnEveryAttempt(t *testing.T) {
 		assertNoBrokerPassword(t, h.log.Lines())
 		for _, line := range failures {
 			require.Len(t, line.Values("error"), 1)
-			assert.Contains(t, line.Values("error")[0], "user", "the username identifies the failing connection")
+			assert.Contains(t, line.Values("error")[0], `parse "xxxxx": invalid URL`, "a rejected broker URL is masked whole")
+			assert.NotContains(t, line.Values("error")[0], "broker")
 		}
 	})
 }

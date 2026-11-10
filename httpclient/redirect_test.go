@@ -376,8 +376,9 @@ func TestClientLocationParseErrorWithholdsTheLocation(t *testing.T) {
 
 func TestClientRequestBuildErrorWithholdsTheURL(t *testing.T) {
 	tests := []struct{ name, url, want string }{
-		{name: "password_escape_withheld", url: "https://u:zq9x%zz@api.example/x?token=zq9x#frag", want: `parse "https://api.example/x?xxxxx": invalid URL`},
-		{name: "path_escape_keeps_reason", url: "https://api.example/x%zz?token=zq9x#frag", want: `parse "https://api.example/x%zz?xxxxx": invalid URL escape "%zz"`},
+		{name: "password_escape_withheld", url: "https://u:zq9x%zz@api.example/x?token=zq9x#frag", want: `parse "xxxxx": invalid URL`},
+		{name: "password_read_as_port_withheld", url: "https://user:s3@cret:zq9x", want: `parse "xxxxx": invalid URL`},
+		{name: "path_escape_withheld", url: "https://api.example/x%zz?token=zq9x#frag", want: `parse "xxxxx": invalid URL`},
 	}
 	c, err := NewBuilder(quietLogger()).Build()
 	require.NoError(t, err)
@@ -408,7 +409,7 @@ func TestExecutionErrorRedactsTheURLError(t *testing.T) {
 			err:  errors.New(`refusing "https://u:zq9x@h"`),
 			want: `"http://host/landing": transport error detail withheld`,
 		},
-		{name: "unparseable_host_userinfo_dropped", url: "http://user:" + redirectSecret + "@[::1%zz]/", want: `"http://[::1%zz]/": ` + ErrRedirectDowngrade.Error()},
+		{name: "unparseable_host_masked_whole", url: "http://user:" + redirectSecret + "@[::1%zz]/", want: `"xxxxx": ` + ErrRedirectDowngrade.Error()},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

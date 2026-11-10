@@ -79,12 +79,12 @@ func maskRawIn(msg, raw string) string {
 // that copy behind, so rebuild the whole rendering instead of scrubbing it. urlErr.URL
 // is what url.Parse actually saw — raw with any '#' fragment already cut — so it, not
 // raw, is the string that reached the message. When raw extends it, or rebuiltFrom
-// reports it, the rebuild renders raw, since the '@' ending the userinfo can sit in the
-// cut. A *url.Error naming another URL, such as a dialer's own, is judged alone.
+// reports it, the rebuild renders raw: a raw url.Parse accepts keeps its host there.
+// A *url.Error naming another URL, such as a dialer's own, is judged alone.
 func maskURLError(msg string, urlErr *url.Error, raw, reason string) string {
 	src := urlErr.URL
 	if strings.HasPrefix(raw, src) || rebuiltFrom(raw, src) {
-		src = raw // url.Parse cut raw's '#' tail, or the rebuild's, before reporting
+		src = raw
 	}
 	masked := Redact(src)
 	if masked == urlErr.URL {
@@ -199,20 +199,20 @@ func decodedUserinfo(raw string) (prefix, password string) {
 // dropped. The username is kept only beside a password that is non-empty and does
 // not start with '@', and only when it holds no '@', '/', '?' or '#'; any other
 // userinfo is masked whole. The userinfo runs to the last '@', wherever url.Parse would end
-// it; when a '?' precedes that '@', all after the '@' renders as one xxxxx. With no
-// '@', a URL url.Parse rejects is masked from the first ':' to the end of its
-// authority. Input with no "://", or with a ':', '/', '?', '#' or '@' before its
-// first "://", renders as xxxxx, and empty input as "".
+// it; when a '?' precedes that '@', all after the '@' renders as one xxxxx. A URL
+// url.Parse rejects, or reads with no scheme or no host, renders as xxxxx: with no host
+// to anchor on, password text cannot be told from a host, port or path. Empty input
+// renders as "".
 func Redact(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	const schemeSep = "://"
-	sep := strings.Index(raw, schemeSep)
-	if sep == -1 || strings.ContainsAny(raw[:sep], ":/?#@") {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return redactionPlaceholder
 	}
-	authority := sep + len(schemeSep)
+	// A host follows "scheme://", so raw's own spelling of the scheme is kept.
+	authority := len(u.Scheme) + len("://")
 	head, rest := raw[:authority], raw[authority:]
 	if at := strings.LastIndex(rest, "@"); at != -1 {
 		head += maskUserinfo(rest[:at])
@@ -221,8 +221,6 @@ func Redact(raw string) string {
 			return head + redactionPlaceholder
 		}
 		rest = rest[at+1:]
-	} else if _, err := url.Parse(raw); err != nil {
-		rest = maskRejectedAuthority(rest)
 	}
 	rest, _, _ = strings.Cut(rest, "#")
 	rest, query, _ := strings.Cut(rest, "?")
@@ -239,12 +237,12 @@ func maskUserinfo(userinfo string) string {
 	return redactionPlaceholder + "@"
 }
 
-// RedactForLog renders raw for a log field. A URL url.Parse rejects, one it reads with no
-// host, or one with a '#' before its last '@' renders as xxxxx: with no host to anchor on,
-// or with url.Parse's host cut at that '#' while the scan reads past it, password text
-// cannot be told from a host, port or path. Any other URL renders as Redact renders it.
+// RedactForLog renders raw for a log field. A URL with a '#' before its last '@' renders
+// as xxxxx: url.Parse's host is cut at that '#' while the scan reads past it, so password
+// text cannot be told from a host. So does empty input, which names no host. Any other
+// URL renders as Redact renders it.
 func RedactForLog(raw string) string {
-	if u, err := url.Parse(raw); err != nil || u.Host == "" || strings.Contains(raw[:max(strings.LastIndex(raw, "@"), 0)], "#") {
+	if raw == "" || strings.Contains(raw[:max(strings.LastIndex(raw, "@"), 0)], "#") {
 		return redactionPlaceholder
 	}
 	return Redact(raw)
@@ -306,24 +304,4 @@ func StripUserinfo(rendered string) string {
 	}
 	authority := strings.Index(rendered, "://") + len("://")
 	return rendered[:authority] + rendered[at+1:]
-}
-
-// maskRejectedAuthority masks an authority with no '@' from its first ':' outside an
-// IPv6 literal: an unescaped '/', '?' or '#' in a password can hide or cut away the
-// '@', so a rejected host:port may be userinfo.
-func maskRejectedAuthority(rest string) string {
-	end := strings.IndexAny(rest, "/?#")
-	if end == -1 {
-		end = len(rest)
-	}
-	from := 0
-	if strings.HasPrefix(rest, "[") {
-		// An unterminated literal yields 0, so its first ':' is masked from.
-		from = strings.Index(rest[:end], "]") + 1
-	}
-	colon := strings.Index(rest[from:end], ":")
-	if colon == -1 {
-		return rest
-	}
-	return rest[:from+colon+1] + redactionPlaceholder + rest[end:]
 }
