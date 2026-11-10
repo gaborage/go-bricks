@@ -25,9 +25,11 @@ const (
 	metricPublishRetries   = "messaging.client.publish.retries"
 	metricConnectionCreate = "messaging.connection.create"
 	metricConnectionClose  = "messaging.connection.close"
-	metricChannelCreate    = "messaging.channel.create"
-	metricChannelClose     = "messaging.channel.close"
-	metricSettlementTotal  = "messaging.settlement.total"
+	// A failed dial is neither a create nor a close, so it has its own counter.
+	metricConnectionDialFailures = "messaging.connection.dial.failures"
+	metricChannelCreate          = "messaging.channel.create"
+	metricChannelClose           = "messaging.channel.close"
+	metricSettlementTotal        = "messaging.settlement.total"
 
 	// Attribute keys (following OTel semconv)
 	attrMessagingSystem             = "messaging.system"
@@ -38,6 +40,7 @@ const (
 	attrMessagingRabbitMQRoutingKey = "messaging.rabbitmq.routing_key"
 	attrMessagingRabbitMQQueue      = "messaging.rabbitmq.queue"
 	attrRetryReason                 = "retry.reason"
+	attrFailureReason               = "failure.reason"
 	attrLane                        = "lane"
 	attrOutcome                     = "outcome"
 
@@ -74,6 +77,7 @@ var (
 	amqpPublishRetries   metric.Int64Counter
 	amqpConnectionCreate metric.Int64Counter
 	amqpConnectionClose  metric.Int64Counter
+	amqpDialFailures     metric.Int64Counter
 	amqpChannelCreate    metric.Int64Counter
 	amqpChannelClose     metric.Int64Counter
 	amqpSettlementTotal  metric.Int64Counter
@@ -146,6 +150,13 @@ func initAMQPMeter() {
 		metric.WithUnit("{connection}"),
 	)
 	logMetricError(metricConnectionClose, err)
+
+	amqpDialFailures, err = amqpMeter.Int64Counter(
+		metricConnectionDialFailures,
+		metric.WithDescription("Number of failed AMQP connection dials"),
+		metric.WithUnit("{failure}"),
+	)
+	logMetricError(metricConnectionDialFailures, err)
 
 	amqpChannelCreate, err = amqpMeter.Int64Counter(
 		metricChannelCreate,
@@ -430,6 +441,36 @@ func recordLifecycleEvent(eventType string, err error, kind lifecycleKind) {
 // eventType should be "create" or "close".
 func RecordConnectionEvent(eventType string, err error) {
 	recordLifecycleEvent(eventType, err, lifecycleConnection)
+}
+
+// WarmMeter binds the instruments to the installed MeterProvider. A recorder that
+// must not initialize them itself (RecordDialFailure) relies on its owner calling
+// this first.
+func WarmMeter() { getAMQPMeter() }
+
+// DialFailureUnknown is the reason of a dial failure the broker gave no reply code for.
+const DialFailureUnknown = "unknown"
+
+// RecordDialFailure counts one failed AMQP dial. reason is the caller's bounded
+// label: an AMQP reply code or DialFailureUnknown. The attribute set is exactly
+// {messaging.system, failure.reason}: a tenant or a URL would be unbounded, and
+// the URL carries credentials.
+//
+// It runs on the client's reconnect goroutine, which can outlive whatever started
+// it, so like RecordSettlement it never initializes the meter: the client
+// constructor does that (WarmMeter) before the goroutine exists, and the counter
+// pointer is snapshotted under meterInitMu.
+func RecordDialFailure(reason string) {
+	meterInitMu.Lock()
+	counter := amqpDialFailures
+	meterInitMu.Unlock()
+	if counter == nil {
+		return
+	}
+	counter.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
+		attribute.String(attrFailureReason, reason),
+	))
 }
 
 // RecordChannelEvent records AMQP channel lifecycle events.

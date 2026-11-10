@@ -233,6 +233,46 @@ func TestRecordConnectionEvent(t *testing.T) {
 	assertHasAttribute(t, attrs, attrErrorType, "context.Canceled")
 }
 
+func TestRecordDialFailure(t *testing.T) {
+	mp := setupMeter(t)
+
+	RecordDialFailure("530")
+	RecordDialFailure("530")
+	RecordDialFailure("unknown")
+
+	rm := mp.Collect(t)
+	m := obtest.FindMetric(rm, metricConnectionDialFailures)
+	require.NotNil(t, m)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	byReason := map[string]int64{}
+	for _, dp := range sum.DataPoints {
+		attrs := dp.Attributes.ToSlice()
+		assertHasAttribute(t, attrs, attrMessagingSystem, messagingSystemRabbitMQ)
+		require.Len(t, attrs, 2, "a dial failure carries the system and the reason only: no tenant, no URL")
+		reason, present := dp.Attributes.Value("failure.reason")
+		require.True(t, present)
+		byReason[reason.AsString()] = dp.Value
+	}
+	assert.Equal(t, map[string]int64{"530": 2, "unknown": 1}, byReason)
+	assert.Zero(t, counterValue(t, rm, metricConnectionCreate), "a dial failure is not a connection create")
+	assert.Zero(t, counterValue(t, rm, metricConnectionClose), "a dial failure is not a connection close")
+}
+
+// The recorder runs on a goroutine that can outlive its starter, so it never
+// initializes the meter itself: WarmMeter, called by the client constructor, does.
+func TestRecordDialFailureCountsOnceTheMeterIsWarm(t *testing.T) {
+	mp := coldMeter(t)
+
+	RecordDialFailure("unknown")
+	assert.Zero(t, counterValue(t, mp.Collect(t), metricConnectionDialFailures), "a cold meter records nothing")
+
+	WarmMeter()
+	RecordDialFailure("unknown")
+
+	assert.Equal(t, int64(1), counterValue(t, mp.Collect(t), metricConnectionDialFailures))
+}
+
 func TestRecordChannelEvent(t *testing.T) {
 	mp := setupMeter(t)
 

@@ -20,6 +20,7 @@ func ResetMeterForTesting() {
 	amqpPublishRetries = nil
 	amqpConnectionCreate = nil
 	amqpConnectionClose = nil
+	amqpDialFailures = nil
 	amqpChannelCreate = nil
 	amqpChannelClose = nil
 	amqpSettlementTotal = nil

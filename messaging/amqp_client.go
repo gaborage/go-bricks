@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"strconv"
 	"sync"
 	"time"
 
@@ -377,6 +378,10 @@ func NewAMQPClient(brokerURL string, log logger.Logger, opts ...ClientOption) *A
 		}
 		opt(client)
 	}
+
+	// Bind the instruments here, on the caller's goroutine: the reconnect goroutine
+	// counts dial failures but must never initialize the meter itself.
+	tracking.WarmMeter()
 
 	// Start connection management in background
 	go client.handleReconnect()
@@ -1468,6 +1473,9 @@ func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	dial := getAmqpDialFunc()
 	ac, err := dial(c.brokerURL)
 	if err != nil {
+		// Before the masking below, which may rebuild the error: the label is the
+		// broker's reply code, never the error's text.
+		tracking.RecordDialFailure(dialFailureReason(err))
 		// SECURITY: a broker URL url.Parse rejects comes back rendered whole, password
 		// included, and every reconnect attempt logs it. Masking here covers every dialer.
 		return nil, credurl.RedactError(err, c.brokerURL, invalidBrokerURLReason)
@@ -1556,6 +1564,26 @@ func (c *AMQPClientImpl) onChanClose(amqpErr *amqp.Error) {
 	closeErr := closeReason(amqpErr)
 	c.log.Info().Err(closeErr).Msg("AMQP channel closed, reinitializing...")
 	tracking.RecordChannelEvent("close", closeErr)
+}
+
+// The AMQP reply codes are three digits; anything else is not a code a broker sends.
+const (
+	minReplyCode = 100
+	maxReplyCode = 599
+)
+
+// dialFailureReason is the bounded metric label of a failed dial: the broker's reply
+// code when the dial got far enough to receive one (530 for a refused vhost or a
+// connection limit), else tracking.DialFailureUnknown.
+func dialFailureReason(err error) string {
+	var amqpErr *amqp.Error
+	if !errors.As(err, &amqpErr) || amqpErr == nil {
+		return tracking.DialFailureUnknown
+	}
+	if amqpErr.Code < minReplyCode || amqpErr.Code > maxReplyCode {
+		return tracking.DialFailureUnknown
+	}
+	return strconv.Itoa(amqpErr.Code)
 }
 
 // closeReason keeps the nil *amqp.Error of a close without a reason (graceful,
