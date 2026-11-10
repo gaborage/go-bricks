@@ -12,7 +12,9 @@
 > single map lookup; a lane with no shipper is poison, as before. Every outcome and its
 > semantics are unchanged: connectivity advances `retry_count` and parks the key, poison
 > dead-letters at `maxretries`, a shutdown-aborted attempt counts nothing, a lane that
-> drops mid-batch routes the unattempted remainder through the outage path, and a stalled
+> drops mid-batch routes that lane's unattempted rows through the outage path, with other
+> lanes' rows (and unknown-lane rows) held back (parked) for the cycle (2026-11-09, #2295:
+> previously every later row of any lane took the outage charge), and a stalled
 > super stream holds back only its own rows. Two things are new. The stream lane now asks
 > `(*streams.Publisher).Closed()` and then `Ready()` before it publishes: a producer the
 > manager already stopped is a shutdown, so its row aborts and nothing is written (the

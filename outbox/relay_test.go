@@ -393,10 +393,11 @@ func TestRelayAbortedShipDoesNotInflateRetryCount(t *testing.T) {
 }
 
 // TestRelayBrokerDownStopsTheCycleAndRoutesTheRemainder: once a lane reports it dropped
-// mid-batch, every REMAINING record would otherwise pay its own serial readiness pre-flight
-// (BatchSize x readyTimeout stall). The relay instead routes the unattempted remainder
-// through the same no-publish outage path the cycle-start pre-flight uses, and the remainder
-// still counts as failed so the cycle's numbers sum to its batch.
+// mid-batch, every REMAINING record of that lane would otherwise pay its own serial readiness
+// pre-flight (BatchSize x readyTimeout stall). The relay instead routes the dropped lane's
+// unattempted rows through the same no-publish outage path the cycle-start pre-flight uses,
+// and they still count as failed so the cycle's numbers sum to its batch. This batch is
+// AMQP-only, so the whole remainder is the dropped lane's.
 func TestRelayBrokerDownStopsTheCycleAndRoutesTheRemainder(t *testing.T) {
 	store := &fakeStore{FetchPendingResult: []Record{
 		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk1"},
@@ -430,6 +431,58 @@ func TestRelayBrokerDownStopsTheCycleAndRoutesTheRemainder(t *testing.T) {
 	assert.Equal(t, int64(2), numbers["failed"], "the outage remainder is counted, not just marked")
 	assert.Equal(t, int64(3), numbers["total"])
 	assert.Equal(t, int64(90), numbers["stall_wait_ms"], "the stall the cycle actually paid")
+}
+
+// TestRelayBrokerDownChargesOnlyTheDroppedLanesRemainder pins that a mid-batch AMQP drop
+// charges the outage to the AMQP lane's unattempted rows alone, exactly as the cycle-start
+// pre-flight does: a stream row never uses that connection, and an unknown-lane row needs no
+// broker at all. Both are held back untouched for the next cycle. The trailing row carries
+// the empty legacy lane, which resolves to AMQP and so takes the charge.
+func TestRelayBrokerDownChargesOnlyTheDroppedLanesRemainder(t *testing.T) {
+	s2 := streamRow()
+	s2.ID, s2.PartitionKey = "S2", "beta"
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Lane: LaneAMQP, Exchange: "ex", RoutingKey: "a"},
+		{ID: "A2", Lane: LaneAMQP, Exchange: "ex", RoutingKey: "b"},
+		streamRow(),
+		{ID: "X1", Lane: "carrier-pigeon", Exchange: "ex", RoutingKey: "c", RetryCount: 2}, // MaxRetries-1
+		s2,
+		{ID: "A3", Exchange: "ex", RoutingKey: "d"},
+	}}
+	r, amqpLane, streamLane := newRelayWithLanes(store)
+	require.Equal(t, 3, r.config.MaxRetries, "X1 sits one short of the ceiling, so judging it would dead-letter it")
+	dropped := errors.New("not connected")
+	amqpLane.Verdicts = []verdict{
+		{Kind: shipDelivered}, // A1
+		{Kind: shipBrokerDown, Err: dropped, Waited: 90 * time.Millisecond}, // A2
+	}
+	log := newRecordingLogger()
+	ctx := newFakeJobCtx(dbtesting.NewTestDB("postgresql"))
+	ctx.log = log
+
+	err := runRelay(t, r, ctx)
+	require.Error(t, err)
+	require.ErrorIs(t, err, dropped)
+	assert.Contains(t, err.Error(), "messaging not available")
+
+	assert.Equal(t, []string{"A1", "A2"}, amqpLane.shippedIDs())
+	assert.Empty(t, streamLane.Ships, "the cycle still stops at the drop")
+	assert.Equal(t, []string{"A2: not connected", "A3: messaging unavailable"}, store.MarkFailedLog,
+		"only the dropped lane's rows are charged; stream and unknown-lane rows are left untouched")
+	assert.Zero(t, store.MarkDeadLetteredCalls, "the unknown-lane row is judged next cycle, not dead-lettered now")
+
+	numbers := log.numbers()
+	assert.Equal(t, int64(1), numbers["published_amqp"])
+	assert.Equal(t, int64(2), numbers["failed_amqp"])
+	assert.Equal(t, int64(0), numbers["parked_amqp"])
+	assert.Equal(t, int64(0), numbers["failed_stream"])
+	assert.Equal(t, int64(2), numbers["parked_stream"])
+	assert.Equal(t, int64(2), numbers["failed"])
+	assert.Equal(t, int64(3), numbers["parked"], "the unknown-lane row is held back under its own lane")
+	assert.Equal(t, int64(6), numbers["total"])
+	assert.Equal(t, numbers["total"],
+		numbers["published"]+numbers["unrecorded"]+numbers["failed"]+numbers["deadlettered"]+numbers["parked"],
+		"every fetched row is accounted for exactly once")
 }
 
 // TestRelayBoundsTheErrorItPersists: the helper being correct is not the property that
