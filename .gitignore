@@ -22,7 +22,6 @@
 !README.md
 !LICENSE
 !TESTING.md
-!TODO.md
 !CONTRIBUTING.md
 !MULTI_TENANT.md
 !CLAUDE.md
@@ -45,12 +44,13 @@
 !.out-of-scope/*.md
 
 !.github/workflows/*.yml
-!.github/workflows/*.yaml
 !.github/ISSUE_TEMPLATE/*.yml
 !.github/actions/*/action.yml
 
 !sonar-project.properties
 !.gremlins.yaml
+!.golangci.yml
+!renovate.json
 # Required by `make lint-md` and the lint-docs CI job: it carries the rule set
 # AND the glob/ignore list. Without it markdownlint-cli2 has no globs and exits 2.
 !.markdownlint-cli2.jsonc
@@ -79,6 +79,8 @@
 !**/testdata/**/*.yaml
 # SQL goldens the #1255 store ports are diffed against.
 !**/testdata/**/*.golden
+# Flyway CLI output fixtures.
+!/migration/testdata/flyway/*.txt
 
 # ...even if they are in subdirectories
 !*/
@@ -86,3 +88,5 @@
 # Explicit ignores (override !*/ above)
 .claude/worktrees/
 .agents/
+/plans/
+/.claude/lanes/
