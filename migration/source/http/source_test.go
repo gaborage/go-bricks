@@ -473,8 +473,8 @@ func TestHTTPTenantSourceNewErrorsWithholdCredentials(t *testing.T) {
 		base string
 		want string
 	}{
-		{name: "invalid_escape_after_password", base: "https://u:zq9x%zz@api.example/x?token=zq9x#frag", want: `migration/source/http: parse baseURL: parse "https://api.example/x?xxxxx": invalid URL`},
-		{name: "missing_host", base: "https://u:zq9x@/x?token=zq9x#frag", want: `migration/source/http: baseURL must include scheme and host: "https:///x?xxxxx"`},
+		{name: "invalid_escape_after_password", base: "https://u:zq9x%zz@api.example/x?token=zq9x#frag", want: `migration/source/http: parse baseURL: parse "xxxxx": invalid URL`},
+		{name: "missing_host", base: "https://u:zq9x@/x?token=zq9x#frag", want: `migration/source/http: baseURL must include scheme and host: "xxxxx"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

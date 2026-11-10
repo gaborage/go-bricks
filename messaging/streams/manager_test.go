@@ -1,7 +1,6 @@
 package streams
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1174,6 +1173,16 @@ func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
 	assert.False(t, m.started)
 }
 
+// TestManagerStartMasksAHostlessURIWhole covers a URI with no host after its password:
+// neither the endpoint the error names nor the client's own rendering shows any of it.
+func TestManagerStartMasksAHostlessURIWhole(t *testing.T) {
+	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://user:zq9x/s3cret", Logger: logger.New("error", false)})
+
+	err := m.Start(t.Context(), oneConsumerDecls())
+
+	require.EqualError(t, err, `failed to connect to stream endpoint xxxxx: invalid stream URI: parse "xxxxx": `+invalidStreamURIReason)
+}
+
 func TestSafeEnvError(t *testing.T) {
 	passwordSecrets := []string{"s3cr", "etPW", "%et"}
 	// Table fields, not consts: a constant URL lets staticcheck evaluate the
@@ -1181,7 +1190,6 @@ func TestSafeEnvError(t *testing.T) {
 	tests := []struct {
 		name    string
 		raw     string
-		shown   string // the userinfo rendered after "//"; empty: "svc:"
 		secrets []string
 	}{
 		{name: "space_in_port", raw: "rabbitmq-stream://svc:fixture-pw@broker:55 52/", secrets: []string{"fixture-pw"}},
@@ -1193,8 +1201,8 @@ func TestSafeEnvError(t *testing.T) {
 		// '@' that makes "svc:2024" userinfo rather than host:port.
 		{name: "digit_password_with_hash_and_leading_space", raw: " rabbitmq-stream://svc:2024#x@broker:5552/", secrets: []string{"2024"}},
 		// url.Parse splits the authority on the username's '@', reading "corp:Se" as host:port.
-		{name: "username_with_at_password_with_slash", raw: "rabbitmq-stream://svc@corp:Se/cretPW@127.0.0.1:1/vh", shown: "xxxxx@", secrets: []string{"Se/", "cretPW", "svc@corp"}},
-		// '+' and '.' are scheme characters too, so credurl still reads this URI.
+		{name: "username_with_at_password_with_slash", raw: "rabbitmq-stream://svc@corp:Se/cretPW@127.0.0.1:1/vh", secrets: []string{"Se/", "cretPW", "svc@corp"}},
+		// '+' and '.' are scheme characters too.
 		{name: "scheme_with_plus_and_dot", raw: "rabbitmq+stream.tls://svc:s3cr?etPW@broker:5552/", secrets: passwordSecrets},
 	}
 
@@ -1209,8 +1217,7 @@ func TestSafeEnvError(t *testing.T) {
 			for _, secret := range tt.secrets {
 				assert.NotContains(t, safe.Error(), secret)
 			}
-			assert.Contains(t, safe.Error(), "invalid stream URI")
-			assert.Contains(t, safe.Error(), "//"+cmp.Or(tt.shown, "svc:"), "the username identifies the failing endpoint")
+			assert.Contains(t, safe.Error(), `invalid stream URI: parse "xxxxx": `, "a URI url.Parse rejects is masked whole")
 			var urlErr *url.Error
 			require.ErrorAs(t, safe, &urlErr)
 		})
@@ -1361,8 +1368,8 @@ func TestManagerStartMasksARebuiltBrokerURI(t *testing.T) {
 				assert.NotContains(t, err.Error(), secret)
 			}
 			assert.Contains(t, err.Error(), tt.want)
-			assert.Contains(t, err.Error(), "//user:", "the username identifies the failing endpoint")
-			assert.Contains(t, err.Error(), `@leader:5552/vh": `+invalidStreamURIReason, "a reason quoting the password is replaced")
+			assert.Contains(t, err.Error(), `: parse "xxxxx": `+invalidStreamURIReason, "the rejected rebuild is masked whole and its quoting reason replaced")
+			assert.NotContains(t, err.Error(), "leader")
 			var urlErr *url.Error
 			require.ErrorAs(t, err, &urlErr)
 		})
