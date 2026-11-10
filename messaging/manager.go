@@ -538,7 +538,7 @@ func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient,
 
 	// SECURITY: fixed text only (amqpurl): never add the URL or the vendor's error here.
 	if err := amqpurl.Check(amqpURL); err != nil {
-		return nil, fmt.Errorf("messaging: broker URL for key %q %w: %s", key, err, amqpurl.Hint)
+		return nil, fmt.Errorf("messaging: broker URL for key %q %w: %s", key, err, amqpurl.HintFor(err))
 	}
 
 	// Create AMQP client using injected factory

@@ -1464,6 +1464,13 @@ const invalidBrokerURLReason = "invalid URL"
 
 // connect creates a new AMQP connection.
 func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
+	// SECURITY: a misread URL's host is password text; dialing it sends that text to
+	// the resolver. The refusal is fixed text, and the retry loop treats it as any
+	// other connect error.
+	if err := credurl.CheckAuthority(c.brokerURL); err != nil {
+		return nil, fmt.Errorf("messaging: broker URL %w: %s", err, credurl.AuthorityHint)
+	}
+
 	// Use pluggable dialer
 	dial := getAmqpDialFunc()
 	ac, err := dial(c.brokerURL)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/internal/amqpurl"
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/internal/keyname"
 )
 
@@ -79,7 +80,7 @@ func checkBrokerURL(field, raw string) error {
 			Category: errCategoryInvalid,
 			Field:    field,
 			Message:  err.Error(),
-			Action:   amqpurl.Hint,
+			Action:   amqpurl.HintFor(err),
 		}
 	}
 	return nil
@@ -244,26 +245,45 @@ func checkMessagingStreams(cfg *MessagingConfig, multitenant bool) error {
 				"single-tenant only; multi-tenant stream consumption is not yet supported")
 		}
 
-		u, err := url.Parse(streams.URI)
-		if err != nil {
-			return NewValidationError(fieldMessagingStreamsURI, "must be a valid URI")
-		}
-		if u.Scheme != streamsURIScheme && u.Scheme != streamsURITLSScheme {
-			return NewInvalidFieldError(fieldMessagingStreamsURI,
-				fmt.Sprintf(errNotSupportedFmt, u.Scheme),
-				[]string{streamsURIScheme + "://", streamsURITLSScheme + "://"})
-		}
-		// Nothing to dial in either shape: a missing "//" parses opaque with no host,
-		// and "://:5552" gives a port-only Host that a Host == "" check lets through.
-		// Hostname() strips the port, so it catches both; neither names a host in the
-		// manager's connect error, which shows the fixed placeholder or a bare "@:5552".
-		if u.Hostname() == "" {
-			return NewValidationError(fieldMessagingStreamsURI,
-				"must include a host, e.g. "+streamsURIScheme+"://<user>:<password>@<host>:5552/%2f")
+		if err := checkStreamsURI(streams.URI); err != nil {
+			return err
 		}
 	}
 
 	return validateStreamsAddressResolver(&streams.AddressResolver)
+}
+
+// checkStreamsURI rejects a stream URI that does not parse, is probably misread
+// (credurl.CheckAuthority), has an unsupported scheme, or names no host.
+func checkStreamsURI(uri string) error {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return NewValidationError(fieldMessagingStreamsURI, "must be a valid URI")
+	}
+	// Before the scheme: a misread URI's scheme and host are not what was meant,
+	// and the refusal below echoes neither.
+	if err := credurl.CheckAuthority(uri); err != nil {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldMessagingStreamsURI,
+			Message:  err.Error(),
+			Action:   credurl.AuthorityHint,
+		}
+	}
+	if u.Scheme != streamsURIScheme && u.Scheme != streamsURITLSScheme {
+		return NewInvalidFieldError(fieldMessagingStreamsURI,
+			fmt.Sprintf(errNotSupportedFmt, u.Scheme),
+			[]string{streamsURIScheme + "://", streamsURITLSScheme + "://"})
+	}
+	// Nothing to dial in either shape: a missing "//" parses opaque with no host,
+	// and "://:5552" gives a port-only Host that a Host == "" check lets through.
+	// Hostname() strips the port, so it catches both; neither names a host in the
+	// manager's connect error, which shows the fixed placeholder or a bare "@:5552".
+	if u.Hostname() == "" {
+		return NewValidationError(fieldMessagingStreamsURI,
+			"must include a host, e.g. "+streamsURIScheme+"://<user>:<password>@<host>:5552/%2f")
+	}
+	return nil
 }
 
 // validateStreamsAddressResolver enforces the both-or-neither rule: a host with no

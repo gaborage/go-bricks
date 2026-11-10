@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/credurl"
 )
 
 func TestCheckRefusesWhatTheClientCannotDial(t *testing.T) {
@@ -57,5 +59,34 @@ func TestCheckAcceptsWhatTheClientParses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.NoError(t, Check(tt.raw))
 		})
+	}
+}
+
+// The misread is judged first: these also trip a port or a scheme class, which would
+// name a symptom of the misread, not its cause.
+func TestCheckRefusesAMisreadURLBeforeItsOtherDefects(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "slash_in_digit_password", raw: "amqp://user:1234/Spring@broker/vh"},
+		{name: "port_out_of_range_too", raw: "amqp://user:0123456/zq9x@broker/vh"},
+		{name: "unsupported_scheme_too", raw: "http://user:1234/Spring@broker/vh"},
+		{name: "query_out_of_range_too", raw: "amqp://u:p@h/vh?heartbeat=70000&certfile=/a@b.pem"},
+		{name: "at_in_vhost", raw: "amqp://u:p@h/my@vhost"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Check(tt.raw)
+
+			require.ErrorIs(t, err, credurl.ErrAtAfterAuthority)
+			assert.Equal(t, credurl.AuthorityHint, HintFor(err))
+		})
+	}
+}
+
+func TestHintForAMalformedURLIsThePercentEncodingHint(t *testing.T) {
+	for _, err := range []error{ErrNotAMQPURL, ErrUnsupportedScheme, ErrPortOutOfRange, ErrQueryOutOfRange} {
+		assert.Equal(t, hint, HintFor(err))
 	}
 }

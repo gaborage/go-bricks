@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/internal/amqpurl"
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -2138,6 +2139,9 @@ func TestMessagingManagerRefusesMalformedResolvedBrokerURL(t *testing.T) {
 		{name: "not_a_url", url: "not a url at all", wantErr: amqpurl.ErrNotAMQPURL, secrets: []string{"not a url"}},
 		{name: "port_out_of_range", url: "amqp://app:" + refusedURLPassword + "@" + refusedURLHost + ":99999/vh", wantErr: amqpurl.ErrPortOutOfRange, secrets: []string{"99999"}},
 		{name: "empty", url: "", wantErr: amqpurl.ErrUnsupportedScheme},
+		{name: "misread_question_mark_in_password", url: "amqp://user:s3cr@zq9x?PW@" + refusedURLHost + ":5672/vh", wantErr: credurl.ErrAtAfterAuthority, secrets: []string{"s3cr", "zq9x"}},
+		{name: "misread_slash_in_digit_password", url: "amqp://user:1234/Spring@" + refusedURLHost + "/vh", wantErr: credurl.ErrAtAfterAuthority, secrets: []string{"1234", "Spring"}},
+		{name: "at_in_vhost", url: "amqp://u:p@" + refusedURLHost + "/my@vhost", wantErr: credurl.ErrAtAfterAuthority, secrets: []string{"my@vhost"}},
 	}
 
 	for _, tt := range tests {
@@ -2155,7 +2159,7 @@ func TestMessagingManagerRefusesMalformedResolvedBrokerURL(t *testing.T) {
 			assert.Zero(t, calls, "a refused broker URL must build no client")
 			for _, err := range []error{consumeErr, publishErr} {
 				require.ErrorIs(t, err, tt.wantErr)
-				assert.Equal(t, `messaging: broker URL for key "`+testTenantID+`" `+tt.wantErr.Error()+": "+amqpurl.Hint, err.Error())
+				assert.Equal(t, `messaging: broker URL for key "`+testTenantID+`" `+tt.wantErr.Error()+": "+amqpurl.HintFor(tt.wantErr), err.Error())
 				for _, secret := range append([]string{refusedURLPassword, refusedURLHost}, tt.secrets...) {
 					assert.NotContains(t, err.Error(), secret, "a broker URL refusal must carry no part of the URL")
 				}

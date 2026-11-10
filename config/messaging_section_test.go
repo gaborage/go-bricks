@@ -1366,6 +1366,12 @@ func TestValidateAcceptsWellFormedBrokerURL(t *testing.T) {
 		{name: "no_port", url: "amqp://u:p@h/vh"},
 		{name: "highest_port", url: "amqp://u:p@h:65535/vh"},
 		{name: "lowest_port", url: "amqp://u:p@h:1/vh"},
+		// An '@' is legal inside the userinfo, and percent-encoded anywhere.
+		{name: "at_in_password", url: "amqp://user:pa@ss@broker:5672/vh"},
+		{name: "encoded_reserved_credentials", url: "amqp://u:p%2Fq%3Fr%23s%40t@h:5672/%2f"},
+		{name: "encoded_at_in_vhost", url: "amqp://u:p@h/my%40vhost"},
+		{name: "encoded_at_in_vhost_without_userinfo", url: "amqp://h:5672/my%40vhost"},
+		{name: "encoded_at_in_query_value", url: "amqp://u:p@h/vh?certfile=/a%40b.pem"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1373,5 +1379,78 @@ func TestValidateAcceptsWellFormedBrokerURL(t *testing.T) {
 
 			require.NoError(t, normalizeAndCheckMessaging(cfg, false))
 		})
+	}
+}
+
+// misreadHint is the remedy a misread-URL refusal carries.
+const misreadHint = "percent-encode '/', '?', '#' and '@' in the username and password (url.UserPassword), " +
+	"and write an '@' in the vhost or a query value as %40"
+
+// misreadBrokerURLCases parse without error, but an unencoded '/', '?' or '#' in the
+// password (or an '@' in the vhost or query) leaves an '@' after the authority.
+var misreadBrokerURLCases = []struct {
+	name    string
+	url     string
+	secrets []string
+}{
+	{name: "question_mark_in_password", url: "amqp://user:s3cr@zq9x?PW@" + brokerFixtureHost + ":5672/vh", secrets: []string{"s3cr", "zq9x", "PW@"}},
+	{name: "slash_in_digit_password", url: "amqp://user:1234/Spring@" + brokerFixtureHost + "/vh", secrets: []string{"1234", "Spring"}},
+	{name: "hash_in_digit_password", url: "amqp://user:1234#Spring@" + brokerFixtureHost + "/vh", secrets: []string{"1234", "Spring"}},
+	{name: "slash_in_password_after_an_at", url: "amqp://app:pw@s3cret/x@" + brokerFixtureHost + "/vh", secrets: []string{"s3cret"}},
+	// Also a port out of range: the misread is the refusal that names the cause.
+	{name: "slash_in_leading_zero_password", url: "amqp://user:0123456/zq9x@" + brokerFixtureHost + "/vh", secrets: []string{"0123456", "zq9x"}},
+	{name: "at_in_vhost", url: "amqp://u:p@" + brokerFixtureHost + "/my@vhost", secrets: []string{"my@vhost"}},
+	{name: "at_in_vhost_without_userinfo", url: "amqp://" + brokerFixtureHost + ":5672/my@vhost", secrets: []string{"my@vhost"}},
+	{name: "at_in_query_value", url: "amqp://u:p@" + brokerFixtureHost + "/vh?certfile=/a@b.pem", secrets: []string{"certfile", "b.pem"}},
+}
+
+func TestValidateRefusesMisreadBrokerURL(t *testing.T) {
+	for _, tt := range misreadBrokerURLCases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &MessagingConfig{Broker: BrokerConfig{URL: tt.url}}
+
+			err := normalizeAndCheckMessaging(cfg, false)
+
+			require.Error(t, err)
+			assert.Equal(t, "config_invalid: messaging.broker.url carries an unencoded '@' after its authority "+misreadHint, err.Error())
+			assertNoBrokerURLText(t, err.Error(), tt.url, tt.secrets)
+		})
+	}
+}
+
+func TestValidateRefusesMisreadStreamsURI(t *testing.T) {
+	tests := []struct {
+		name    string
+		uri     string
+		secrets []string
+	}{
+		{name: "two_segments", uri: "rabbitmq-stream://app:2024/Sp/ring@" + brokerFixtureHost + ":5552", secrets: []string{"2024", "Sp/ring"}},
+		{name: "one_segment", uri: "rabbitmq-stream://app:2024/Spring@" + brokerFixtureHost + ":5552", secrets: []string{"2024", "Spring"}},
+		{name: "tls_scheme_at_in_vhost", uri: "rabbitmq-stream+tls://u:p@" + brokerFixtureHost + ":5551/my@vhost", secrets: []string{"my@vhost"}},
+		// The scheme is wrong too: the misread wins, so a credential head never echoes as a scheme.
+		{name: "amqp_scheme", uri: "amqp://user:1234/Spring@" + brokerFixtureHost + "/vh", secrets: []string{"1234", "Spring", "'amqp'"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &MessagingConfig{Streams: StreamsConfig{URI: tt.uri}}
+
+			err := normalizeAndCheckMessaging(cfg, false)
+
+			require.Error(t, err)
+			assert.Equal(t, "config_invalid: messaging.streams.uri carries an unencoded '@' after its authority "+misreadHint, err.Error())
+			assertNoBrokerURLText(t, err.Error(), tt.uri, tt.secrets)
+		})
+	}
+}
+
+func TestValidateAcceptsStreamsURIWithAtInUserinfoOrEncoded(t *testing.T) {
+	for _, uri := range []string{
+		"rabbitmq-stream://user:pass@broker:5552/%2f",
+		"rabbitmq-stream://user:pa@ss@broker:5552/%2f",
+		"rabbitmq-stream://u:p@broker:5552/my%40vhost",
+	} {
+		cfg := &MessagingConfig{Streams: StreamsConfig{URI: uri}}
+
+		require.NoError(t, normalizeAndCheckMessaging(cfg, false), uri)
 	}
 }

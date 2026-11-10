@@ -81,7 +81,7 @@ config, so the error belongs at startup, before anything is dialed.
 ## References
 
 - gaborage/go-bricks#2194
-- `internal/amqpurl/amqpurl.go`: `Check`, `Hint`
+- `internal/amqpurl/amqpurl.go`: `Check`, `HintFor`
 - `config/messaging_section.go`: `checkBrokerURL`; `config/multitenant_section.go`:
   `checkMultitenantTenantEntry`
 - `messaging/manager.go`: `Manager.createAMQPClient`

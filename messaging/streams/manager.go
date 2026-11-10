@@ -223,6 +223,13 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		return err
 	}
 
+	// SECURITY: a misread URI's host is password text, and the vendor both dials it
+	// and prints it through its own logger. Refused first, in fixed text, so no later
+	// message renders it.
+	if err := credurl.CheckAuthority(m.opts.URI); err != nil {
+		return fmt.Errorf("streams: stream URI %w: %s", err, credurl.AuthorityHint)
+	}
+
 	// The dial is a blocking broker round trip the client gives no context for —
 	// the same rule the declare loops below apply between round trips: a caller
 	// that already gave up on startup must not pay for it.
