@@ -10,11 +10,13 @@ The last Consequences bullet lists the request method token and path-read tenant
 scope and unchanged. Both were closed before v0.73.0 shipped:
 
 - **Path-read tenant IDs.** A tenant read from the request path is written to the context, and
-  so to the access line's `tenant` field, only when the tenant store holds it
+  so to the access line's `tenant` field, only when the tenant existence check holds it
   ([ADR-170](adr_170_path_tenant_written_only_when_store_holds_it.md), [migrations.md](migrations.md)
-  `[C73.36]`). Startup refuses path-tenancy wiring the store cannot vouch for
+  `[C73.36]`). Under an App that check is the tenant store serving the tenants' resources, and
+  startup refuses path-tenancy wiring that store cannot vouch for
   ([ADR-171](adr_171_app_refuses_tenant_wiring_store_cannot_vouch_for.md), `[C73.38]`). The public
-  `server.TenantMiddleware` requires an existence check and validates every resolved id
+  `server.TenantMiddleware` uses the check its caller passes, requires one whenever its resolver
+  may read the request path, and validates every resolved id
   ([ADR-172](adr_172_public_tenant_middleware_takes_existence_check.md), `[C73.39]`). Advisory:
   GHSA-5rp9-jp9x-5w69.
 - **The request method token.** A method outside the semantic conventions' known set renders
