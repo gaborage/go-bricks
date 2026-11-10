@@ -1092,7 +1092,7 @@ WHERE lower(rolname) = 'public' OR lower(rolname) LIKE 'pg^_%' ESCAPE '^'`
 // REMOVES or renames one of these is noticed here instead of being silently
 // absorbed, while one that adds a new predefined role does not red the suite.
 // Every name below has existed since PostgreSQL 14; the container runs the
-// renovate-pinned tag in testing/containers/postgresql.go.
+// renovate-pinned tag in testing/containers/postgresql_config.go.
 var pgPredefinedRoleBaseline = []string{
 	"pg_database_owner",
 	"pg_execute_server_program",

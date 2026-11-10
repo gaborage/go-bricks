@@ -39,21 +39,6 @@ var errAdminAfterTerminate = errors.New("postgresql container: admin pool used a
 // return site.
 var errContainerNotInitialized = errors.New("container not initialized")
 
-// DefaultPostgreSQLConfig returns a PostgreSQLContainerConfig populated with sensible defaults.
-//
-// The returned configuration sets Username to "testuser", Password to "testpass",
-// Database to "testdb", and StartupTimeout to 60 seconds.
-func DefaultPostgreSQLConfig() *PostgreSQLContainerConfig {
-	return &PostgreSQLContainerConfig{
-		// renovate: datasource=docker depName=postgres
-		ImageTag:       "18.6-alpine",
-		Username:       "testuser",
-		Password:       "testpass",
-		Database:       "testdb",
-		StartupTimeout: 60 * time.Second,
-	}
-}
-
 // PostgreSQLContainer wraps testcontainers PostgreSQL container with helper methods
 type PostgreSQLContainer struct {
 	container *postgres.PostgresContainer

@@ -2,7 +2,6 @@ package containers
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -17,22 +16,16 @@ func TestPostgreSQLStartLogText(t *testing.T) {
 		{
 			name: "password_holding_at_sign",
 			cfg: &PostgreSQLContainerConfig{
-				Username:       "appuser",
-				Password:       "FAKEp@FAKEtail",
-				Database:       "appdb",
-				StartupTimeout: time.Minute,
+				Username: "appuser",
+				Password: "FAKEp@FAKEtail",
+				Database: "appdb",
 			},
 			want:    "PostgreSQL container started successfully at localhost:54321 (database: appdb, user: appuser)",
 			secrets: []string{"FAKEp", "FAKEtail"},
 		},
 		{
-			name: "default_config",
-			cfg: &PostgreSQLContainerConfig{
-				Username:       "testuser",
-				Password:       "testpass",
-				Database:       "testdb",
-				StartupTimeout: time.Minute,
-			},
+			name:    "default_config",
+			cfg:     DefaultPostgreSQLConfig(),
 			want:    "PostgreSQL container started successfully at localhost:54321 (database: testdb, user: testuser)",
 			secrets: []string{"testpass"},
 		},
