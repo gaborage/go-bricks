@@ -55,7 +55,6 @@ const (
 	sqlOpCommit   = "COMMIT"
 	sqlOpRollback = "ROLLBACK"
 	sqlOpSession  = "SESSION"
-	tableUnknown  = "unknown"
 
 	// Lowercase SQL operation labels returned by extractDBOperation.
 	sqlOpLowerBegin       = "begin"
@@ -333,7 +332,7 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 	}
 
 	// Add collection/table name if identified
-	if table != "" && table != tableUnknown {
+	if table != "" && table != unknownTable {
 		attrs = append(attrs, semconv.DBCollectionName(table))
 	}
 

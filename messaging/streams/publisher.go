@@ -171,9 +171,9 @@ type Publisher struct {
 	tracer trace.Tracer
 	// spanName and spanStartOpts are precomputed because a Publisher targets
 	// exactly one stream for its lifetime, so the name and every attribute but the
-	// body size are constant. The consume-side twin in runner.go deliberately does
-	// NOT do this: one runner serves every partition of a super stream, so its
-	// stream name is only known per delivery.
+	// body size are constant. The consume-side twin in internal/delivery
+	// deliberately does NOT do this: one runner serves every partition of a super
+	// stream, so its stream name is only known per delivery.
 	spanName      string
 	spanStartOpts []trace.SpanStartOption
 

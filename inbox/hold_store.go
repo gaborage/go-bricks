@@ -391,7 +391,7 @@ func (q *holdQueries) NextRows(ctx context.Context, db dbtypes.Interface, consum
 	return scanHoldRows(ctx, db, query, args...)
 }
 
-// deleteRow removes a replayed row while this owner still holds the lease. The
+// DeleteRow removes a replayed row while this owner still holds the lease. The
 // fence is a subquery in the SAME statement: checking the lease first and
 // deleting second would reopen the window the lease exists to close.
 func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
@@ -417,7 +417,7 @@ func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
 	return affectedOne(ctx, db, "delete held row", query, args...)
 }
 
-// release drops the tenant's marker once its last row is gone, under the lease
+// Release drops the tenant's marker once its last row is gone, under the lease
 // and in one statement — a tenant whose rows a concurrent park just added must
 // stay held, which a check-then-delete would miss.
 func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (bool, error) {
@@ -451,7 +451,7 @@ func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consume
 	return affectedOne(ctx, db, "release tenant", query, args...)
 }
 
-// releaseLease drops a lease this owner holds.
+// ReleaseLease drops a lease this owner holds.
 func (q *holdQueries) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
 	f := q.qb.Filter()
 	query, args, err := q.qb.Update(q.tenantTable).

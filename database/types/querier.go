@@ -13,26 +13,37 @@ import (
 // separate from transaction management, health checks, and migration support.
 //
 // Querier is designed for easy mocking in unit tests, requiring only 4 methods instead of the
-// full 12 methods in the Interface type. Most business logic only needs query execution capabilities.
+// full 13 methods in the Interface type. Most business logic only needs query execution capabilities.
 //
 // The database.Interface type embeds Querier, so all existing code continues to work unchanged.
 //
 // Usage in tests:
 //
-//	// Simple mock implementation
+//	// Simple mock implementation: one func field per query method, and
+//	// DatabaseType returning a vendor constant
 //	type mockQuerier struct {
 //	    queryFunc    func(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 //	    queryRowFunc func(ctx context.Context, query string, args ...any) Row
 //	    execFunc     func(ctx context.Context, query string, args ...any) (sql.Result, error)
 //	}
 //
-//	// Inject via ModuleDeps.DB
-//	deps := &app.ModuleDeps{
-//	    DB: func(ctx context.Context) (database.Interface, error) {
-//	        return mockQuerier, nil
-//	    },
+//	func (m *mockQuerier) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+//	    return m.queryFunc(ctx, query, args...)
 //	}
+//	func (m *mockQuerier) QueryRow(ctx context.Context, query string, args ...any) Row {
+//	    return m.queryRowFunc(ctx, query, args...)
+//	}
+//	func (m *mockQuerier) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+//	    return m.execFunc(ctx, query, args...)
+//	}
+//	func (m *mockQuerier) DatabaseType() string { return PostgreSQL }
 //
+//	// Accept Querier where only query execution is needed, and hand it the mock
+//	func NewUserStore(q types.Querier) *UserStore { ... }
+//
+//	store := NewUserStore(&mockQuerier{ ... })
+//
+// ModuleDeps.DB resolves the full Interface, which a Querier-only mock does not satisfy.
 // For comprehensive testing utilities, see the database/testing package which provides
 // TestDB with fluent API for setting up query expectations and assertions.
 type Querier interface {

@@ -107,14 +107,8 @@ func createAccessDeniedError(localhostOnly bool) error {
 	return server.NewForbiddenError("Access denied: IP not in allowlist")
 }
 
-// isLocalhost checks if an IP is localhost (127.0.0.1 or ::1)
+// isLocalhost checks if an IP is localhost (127.0.0.0/8 or ::1)
 func isLocalhost(ip net.IP) bool {
-	// Check IPv4 localhost (127.0.0.0/8)
-	if ip.To4() != nil {
-		return ip.IsLoopback()
-	}
-
-	// Check IPv6 localhost (::1)
 	return ip.IsLoopback()
 }
 

@@ -65,7 +65,8 @@ func (s *heldSet) has(tenant string) bool {
 	return held
 }
 
-// gateClosed reports whether the partition may deliver at all.
+// gateClosed reports whether the gate is closed: while it is, the partition
+// delivers nothing.
 func (s *heldSet) gateClosed() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

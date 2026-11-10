@@ -31,7 +31,6 @@ const PostgresQuiesceTableDDL = `CREATE TABLE IF NOT EXISTS %s (
 // NewPostgresQuiesceController.
 type PostgresQuiesceController struct {
 	db          *sql.DB
-	tableName   string
 	quotedTable string
 	now         func() time.Time
 	audit       Emitter
@@ -54,7 +53,6 @@ func NewPostgresQuiesceController(db *sql.DB, tableName string) (*PostgresQuiesc
 	}
 	return &PostgresQuiesceController{
 		db:          db,
-		tableName:   tableName,
 		quotedTable: quoted,
 	}, nil
 }

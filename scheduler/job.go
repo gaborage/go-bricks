@@ -50,8 +50,9 @@ type JobContext interface {
 	// "manual" = triggered via POST /_sys/job/:jobId
 	TriggerType() string
 
-	// Logger returns the framework logger with job-specific fields pre-populated
-	// (jobID, trigger type). Use this for all job logging per FR-020.
+	// Logger returns the scheduler module's logger. It carries no job-specific
+	// fields: add JobID() and TriggerType() to a line that needs them. Use this
+	// for all job logging per FR-020.
 	Logger() logger.Logger
 
 	// DB returns the database interface (may be nil if not configured in ModuleDeps)

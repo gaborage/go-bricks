@@ -252,7 +252,7 @@ func (m *Module) InboxProcessor() app.InboxProcessor {
 }
 
 // RegisterJobs implements app.JobProvider. The inbox has no relay; it registers
-// only the retention cleanup job, and only when retention is positive.
+// the hold drain when a hold is configured, and the retention cleanup job.
 func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 	if !m.cfg.Enabled {
 		return nil

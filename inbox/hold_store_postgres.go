@@ -46,9 +46,6 @@ CREATE INDEX IF NOT EXISTS idx_%s_tenant_due ON %s (consumer, next_attempt_at)`
 // through the query builder, which renders this vendor's placeholders; the two
 // table names are the constructor's own validated values.
 type postgresHoldStore struct {
-	table       string
-	tenantTable string
-	qb          *database.QueryBuilder
 	// holdQueries carries every statement the query builder renders for both
 	// vendors; this file supplies the vendor's clock spelling, its DDL, and the
 	// one statement that stays raw by design.
@@ -66,9 +63,6 @@ func NewPostgresHoldStore(tableName string) (HoldStore, error) {
 	}
 	qb := database.NewQueryBuilder(dbtypes.PostgreSQL)
 	return &postgresHoldStore{
-		table:       tableName,
-		tenantTable: tableName + holdTenantTableSuffix,
-		qb:          qb,
 		holdQueries: holdQueries{
 			qb:             qb,
 			vendor:         "postgres",

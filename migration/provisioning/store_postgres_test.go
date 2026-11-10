@@ -22,7 +22,6 @@ func TestNewPostgresStoreDefaultsTableName(t *testing.T) {
 	db := stubDB(t)
 	s, err := NewPostgresStore(db, "")
 	require.NoError(t, err)
-	assert.Equal(t, DefaultPostgresTable, s.tableName)
 	assert.Equal(t, `"provisioning_jobs"`, s.quotedTable)
 }
 

@@ -60,8 +60,7 @@ var sharedTracer atomic.Pointer[trace.Tracer]
 
 // tracer returns the one tracer both lanes' deliveries report under. otel.Tracer
 // takes the global provider's lock and re-resolves the scope on every call, so
-// the hot path resolves it once — the streams lane caches its tracer per runner
-// today, and routing it through this seam must not regress that.
+// the hot path resolves it once.
 func tracer() trace.Tracer {
 	if t := sharedTracer.Load(); t != nil {
 		return *t

@@ -229,8 +229,7 @@ type traceAttributeCollector struct {
 }
 
 // collect extracts trace correlation attributes from a key-value pair.
-// Returns false to stop iteration when all required attributes are found.
-func (c *traceAttributeCollector) collect(kv attribute.KeyValue) bool {
+func (c *traceAttributeCollector) collect(kv attribute.KeyValue) {
 	switch kv.Key {
 	// Literal on purpose: these mirror logger.FieldTraceID / logger.FieldSpanID, and
 	// observability does not import logger.
@@ -253,7 +252,6 @@ func (c *traceAttributeCollector) collect(kv attribute.KeyValue) bool {
 			}
 		}
 	}
-	return !c.done()
 }
 
 // done reports whether all three trace correlation fields have been found.

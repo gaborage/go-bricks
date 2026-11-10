@@ -12,14 +12,14 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// Oracle DDL for the hold's two tables and their indexes. VARCHAR2 rather than
-// VARCHAR, SYSTIMESTAMP rather than NOW(), named constraints, and no
-// IF NOT EXISTS — ORA-00955 on an existing object is tolerated by the caller,
-// which treats CreateTable errors as warnings.
 // oracleObjectExistsCode is ORA-00955, "name is already used by an existing
 // object" — what this DDL raises for anything a previous run created.
 const oracleObjectExistsCode = 955
 
+// Oracle DDL for the hold's two tables and their indexes. VARCHAR2 rather than
+// VARCHAR, SYSTIMESTAMP rather than NOW(), named constraints, and no
+// IF NOT EXISTS — CreateTable itself filters the ORA-00955 an existing object
+// raises.
 const (
 	oracleCreateHoldTableSQL = `
 CREATE TABLE %s (
@@ -55,9 +55,6 @@ CREATE INDEX idx_%s_tenant_due ON %s (consumer, next_attempt_at)`
 
 // oracleHoldStore implements HoldStore for Oracle using :N placeholders.
 type oracleHoldStore struct {
-	table       string
-	tenantTable string
-	qb          *database.QueryBuilder
 	// holdQueries carries every statement the query builder renders for both
 	// vendors; this file supplies the vendor's clock spelling, its DDL, and the
 	// one statement that stays raw by design.
@@ -72,9 +69,6 @@ func NewOracleHoldStore(tableName string) (HoldStore, error) {
 	}
 	qb := database.NewQueryBuilder(dbtypes.Oracle)
 	return &oracleHoldStore{
-		table:       tableName,
-		tenantTable: tableName + holdTenantTableSuffix,
-		qb:          qb,
 		holdQueries: holdQueries{
 			qb:             qb,
 			vendor:         "oracle",
