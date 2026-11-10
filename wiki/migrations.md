@@ -15919,8 +15919,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - gist: when the AMQP lane dropped partway through a relay cycle, every later row of the batch,
   of any lane, took the outage charge: `retry_count + 1`, error text `messaging unavailable`,
   counted `failed`. Only the AMQP lane's unattempted rows take it now; a stream-lane row and a
-  row naming a lane this build has no shipper for are left untouched and count as `parked`,
-  matching the cycle-start pre-flight (C74.4). ADR-088 amendment.
+  row naming a lane this build has no shipper for are left untouched and count as `parked`.
+  As at the cycle-start pre-flight, only the down lane's rows are charged (C74.4). ADR-088
+  amendment.
 
 - gist: when pgx could not parse the control-plane `connectionstring`, `go-bricks-migrate
   quiesce` printed pgx's `cannot parse` text, which quotes the connection string with the
@@ -16008,8 +16009,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - after: only the AMQP lane's unattempted rows (an empty legacy lane counts as `amqp`) take that
   charge. Every other unattempted row keeps its `retry_count` and its error text, is counted
   `parked` in its own lane (`parked_stream`; an unknown lane only in the cycle's `parked` total
-  and under `lane="unknown"` on `outbox.relay.records`), and is attempted or judged on the next
-  cycle. The cycle's counts still sum to its batch.
+  and under `lane="unknown"` on `outbox.relay.records`), and stays pending until a later cycle
+  reaches it. The cycle's counts still sum to its batch when the outage marking runs to the
+  end; a shutdown or a lost leadership probe stops it early, as before, and leaves the
+  remaining AMQP rows uncounted.
 - apply: nothing to change in code. Repoint any alert or dashboard that read a stream-lane
   `failed` count as an AMQP-outage signal to the AMQP lane's counts or the job error, and update
   tests that pinned the old charge.
