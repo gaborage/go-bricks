@@ -832,6 +832,21 @@ messaging:
     idlettl: 2h          # Keep publishers longer than the default (1h, or 10m under multi-tenant per-tenant tenancy)
 ```
 
+### Dial failures (`messaging.connection.dial.failures`)
+
+Every failed dial is logged at ERROR and counted on `messaging.connection.dial.failures`, beside
+`messaging.connection.create` and `.close`. The retry and its backoff are unchanged: the counter
+only makes the loop visible. Its attributes are `messaging.system` and a bounded `failure.reason`:
+
+| `failure.reason` | When |
+| --- | --- |
+| an AMQP reply code, `100`–`599` | the broker answered the dial with an `*amqp091.Error`: `403` for refused credentials, `530` for a refused vhost or a connection limit |
+| `unknown` | everything else: DNS, TCP, TLS, or a URL the client cannot parse |
+
+There is no tenant or URL attribute, so the series count stays bounded and no credential reaches a
+metric. A steady `530` is usually a connection limit or a vhost permission, and is transient by
+design: the client keeps retrying. Alert on the rate, not on a single increment.
+
 ### Bounded publish retries (`reconnect.maxpublishattempts`)
 
 A publish through `Publisher[T].Publish` retries a failing publish — publish error,

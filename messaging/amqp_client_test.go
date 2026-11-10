@@ -31,6 +31,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gbtesting "github.com/gaborage/go-bricks/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -1800,6 +1801,136 @@ func TestConnectDialsABrokerURLWithAtInUserinfoOrEncoded(t *testing.T) {
 		require.NoError(t, err, raw)
 		assert.Equal(t, []string{raw}, dialed, "the URL is dialed as written")
 	}
+}
+
+// A refusal is not a dial: nothing was dialed, so the dial-failure counter stays put.
+func TestConnectRefusedBrokerURLCountsNoDialFailure(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+	tracking.WarmMeter()
+	swapDialFunc(t, func(string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp://user:1234/Spring@" + refusedURLHost + "/vh"}
+
+	_, err := c.connect()
+
+	require.ErrorIs(t, err, credurl.ErrAtAfterAuthority)
+	assert.Empty(t, dialFailuresByReason(t, mp.Collect(t)))
+}
+
+// dialFailuresByReason reads the dial-failure counter as reason -> count, failing on
+// any attribute beyond the system and the reason.
+func dialFailuresByReason(t *testing.T, rm metricdata.ResourceMetrics) map[string]int64 {
+	t.Helper()
+	got := map[string]int64{}
+	m := obtest.FindMetric(rm, "messaging.connection.dial.failures")
+	if m == nil {
+		return got
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	for _, dp := range sum.DataPoints {
+		system, _ := dp.Attributes.Value("messaging.system")
+		assert.Equal(t, "rabbitmq", system.AsString())
+		assert.Equal(t, 2, dp.Attributes.Len(), "no tenant or URL attribute")
+		reason, _ := dp.Attributes.Value("failure.reason")
+		got[reason.AsString()] += dp.Value
+	}
+	return got
+}
+
+func TestConnectCountsDialFailureByReplyCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "broker_reply_code", err: &amqp.Error{Code: 530, Reason: "NOT_ALLOWED - vhost access refused"}, want: "530"},
+		{name: "wrapped_broker_reply_code", err: fmt.Errorf("dial: %w", &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED"}), want: "403"},
+		{name: "network_error", err: errors.New("dial tcp: connection refused"), want: "unknown"},
+		{name: "reply_code_below_the_amqp_range", err: &amqp.Error{Code: 99}, want: "unknown"},
+		{name: "reply_code_above_the_amqp_range", err: &amqp.Error{Code: 600}, want: "unknown"},
+		{name: "lowest_reply_code", err: &amqp.Error{Code: 100}, want: "100"},
+		{name: "highest_reply_code", err: &amqp.Error{Code: 599}, want: "599"},
+		// The label is read before the URL is masked: the masked error still unwraps
+		// to the broker's reply, but a label taken from its text would not.
+		{name: "broker_reply_quoting_the_url", err: fmt.Errorf("dial %q: %w", amqpHost, &amqp.Error{Code: 530}), want: "530"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp, cleanup := setupConsumeMetrics(t)
+			defer cleanup()
+			tracking.WarmMeter()
+			swapDialFunc(t, func(string) (amqpConnection, error) { return nil, tt.err })
+			c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: amqpHost}
+
+			_, err := c.connect()
+
+			require.Error(t, err)
+			rm := mp.Collect(t)
+			assert.Equal(t, map[string]int64{tt.want: 1}, dialFailuresByReason(t, rm))
+			assert.Nil(t, obtest.FindMetric(rm, "messaging.connection.create"))
+			assert.Nil(t, obtest.FindMetric(rm, "messaging.connection.close"))
+		})
+	}
+}
+
+func TestConnectSuccessDoesNotCountADialFailure(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+	tracking.WarmMeter()
+	swapDialFunc(t, func(string) (amqpConnection, error) { return stubConn{}, nil })
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: amqpHost}
+
+	_, err := c.connect()
+
+	require.NoError(t, err)
+	rm := mp.Collect(t)
+	assert.Empty(t, dialFailuresByReason(t, rm))
+	obtest.AssertMetricValue(t, rm, "messaging.connection.create", int64(1))
+}
+
+// The first dial is the first thing a client does, so nothing else has bound the
+// instruments yet: the constructor must, or a broker that never answers is uncounted.
+func TestNewAMQPClientCountsDialFailuresFromTheFirstDial(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+	dialed := make(chan struct{}, 1)
+	swapDialFunc(t, func(string) (amqpConnection, error) {
+		select {
+		case dialed <- struct{}{}:
+		default:
+		}
+		return nil, &amqp.Error{Code: 530}
+	})
+
+	c := NewAMQPClient(amqpHost, &stubLogger{})
+	<-dialed
+	closeAndWaitForReconnect(c)
+
+	assert.Positive(t, dialFailuresByReason(t, mp.Collect(t))["530"])
+}
+
+// A close without a reason hands back a nil *amqp.Error; as an error it is non-nil
+// and its Error method panics, so the label must not read through it.
+func TestDialFailureReasonSurvivesATypedNilReply(t *testing.T) {
+	var typedNil *amqp.Error
+
+	assert.Equal(t, "unknown", dialFailureReason(typedNil))
+}
+
+// A dial that lands after Close is not a dial failure: the connection was made.
+func TestConnectAfterCloseDoesNotCountADialFailure(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+	tracking.WarmMeter()
+	swapDialFunc(t, func(string) (amqpConnection, error) { return stubConn{}, nil })
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: amqpHost, closed: true}
+
+	_, err := c.connect()
+
+	require.ErrorIs(t, err, errAlreadyClosed)
+	assert.Empty(t, dialFailuresByReason(t, mp.Collect(t)))
+
 }
 
 // TestConnectRedactsBrokerURLPassword drives the default dialer: amqp091 returns
