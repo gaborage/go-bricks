@@ -16265,9 +16265,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   scheduled job, an HTTP handler or any hook that runs once the server serves.
 
   ```bash
-  # registrations outside RegisterRoutes: review each hit's caller. The typed helpers match
-  # under any qualifier, so an import alias (bricks.GET) or a dot import (GET) is found too
-  git grep -nE '\.(Add|Group|Use)\(|RegisterGlobalMiddleware\(|(^|[^A-Za-z0-9_])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|RegisterHandler)\(' -- '*.go'
+  # registrations outside RegisterRoutes: review each hit's caller. The typed helpers match as
+  # any reference under any qualifier: a call, an import alias (bricks.GET), a dot import
+  # (GET), explicit type arguments (server.GET[Req, Resp]) or a stored value (h := server.GET)
+  git grep -nE '\.(Add|Group|Use)\(|RegisterGlobalMiddleware\(|(^|[^A-Za-z0-9_"])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|RegisterHandler)([^A-Za-z0-9_"]|$)' -- '*.go'
   # a registration kept as a method value (add := registrar.Add) and called later
   git grep -nE '\.(Add|Group|Use|RegisterGlobalMiddleware)([^A-Za-z0-9_(]|$)' -- '*.go'
   # tests that register after Start or read late conflicts from RouteConflicts()
