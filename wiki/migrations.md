@@ -16133,9 +16133,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect: every AMQP broker URL and stream URI, judged by its resolved VALUE. As in C74.2, the
   key greps list file names only (`-l`), since a matching line can hold the URL.
   - YAML and env: the C74.2 key greps, plus `messaging.streams.uri`
-    (`git grep -lE "(^|[[:space:]{,.'\"])uri['\"]?[[:space:]]*:" -- '*.yaml' '*.yml'`, keeping only files
-    that set it under `messaging:` → `streams:` or as the flat-dotted `messaging.streams.uri:`
-    (a custom loader can hand that form to `config.LoadFromMap`), and repeating it with `grep -rlE` over untracked
+    (`git grep -lE "(^|[[:space:]{,.'\"])uri['\"]?[[:space:]]*:" -- '*.yaml' '*.yml'`, keeping every
+    file whose key path resolves to `messaging.streams.uri`, however it is split between nesting
+    and dots: `messaging:` → `streams:` → `uri:`, `messaging.streams:` → `uri:`, `messaging:` →
+    `streams.uri:`, or the flat `messaging.streams.uri:` (a custom loader can hand any of them to
+    `config.LoadFromMap`), and repeating it with `grep -rlE` over untracked
     deployment config as C74.2 does) and `MESSAGING_STREAMS_URI`
     (`git grep -l 'MESSAGING_STREAMS_URI'`, plus the same `grep -rl` over `k8s/ deploy/ .env*`).
   - Go: `git grep -lE 'NewAMQPClient\(|(^|[^[:alnum:]_])NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
