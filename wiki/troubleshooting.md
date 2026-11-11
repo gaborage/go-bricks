@@ -455,7 +455,10 @@ on 1.27.
 #   method, tenant-owned trespass, framework root); it matches both
 #   server.ErrRegistrationAfterStart and server.ErrDuplicateRoute, and is not recorded in
 #   RouteConflicts()
-# → Register it before Start, through the family's registrar or off the prefix
+# → Register it before Start AND clear the conflict, or Start refuses it there instead:
+#   duplicate → keep one registration of that method and path; reserved method → use a real
+#   HTTP method; tenant-owned trespass → register through the family's registrar, or off its
+#   prefix; framework root → move the route off the framework's prefix
 
 # "server: tenant-owned group registration failed for ...: build tenant-owned families in RegisterRoutes, before Start"
 # → Panic: server.TenantOwnedGroup was called after Start (any Start call, even one

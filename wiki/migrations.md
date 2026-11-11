@@ -16114,8 +16114,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   scheduled job, an HTTP handler or any hook that runs once the server serves.
 
   ```bash
-  # registrations outside RegisterRoutes: review each hit's caller
-  git grep -nE '\.(Add|Group|Use)\(|RegisterGlobalMiddleware\(|server\.(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|RegisterHandler)\(' -- '*.go'
+  # registrations outside RegisterRoutes: review each hit's caller. The typed helpers match
+  # under any qualifier, so an import alias (bricks.GET) or a dot import (GET) is found too
+  git grep -nE '\.(Add|Group|Use)\(|RegisterGlobalMiddleware\(|(^|[^A-Za-z0-9_])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|RegisterHandler)\(' -- '*.go'
   # tests that register after Start or read late conflicts from RouteConflicts()
   git grep -nE 'RouteConflicts\(\)|registration after Start|global middleware registered after Start' -- '*_test.go'
   ```
