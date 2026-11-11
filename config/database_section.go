@@ -747,8 +747,8 @@ func validatePostgreSQLConnectionString(cs string) error {
 		}
 	}
 
-	cert, _ := scan.tls.sslcert.over(os.Getenv("PGSSLCERT"))
-	key, _ := scan.tls.sslkey.over(os.Getenv("PGSSLKEY"))
+	cert, _ := scan.tls.sslcert.over(os.Getenv(pgEnvSSLCert))
+	key, _ := scan.tls.sslkey.over(os.Getenv(pgEnvSSLKey))
 	return validatePostgreSQLCertMode(fieldDatabaseConnectionString, scan.tls.sslcertmode, cert != "" || key != "")
 }
 
@@ -758,8 +758,6 @@ const (
 	sslCertModeAllow   = "allow"
 	sslCertModeRequire = "require"
 )
-
-const pgSSLCertModesAllowed = " Allowed values: disable, allow, require."
 
 // pgEffectiveCertMode merges PGSSLCERTMODE under the DSN key with pgx's precedence: a present
 // key wins, empty included; else the variable when SET, empty included, since pgx keeps an
@@ -787,8 +785,7 @@ func validatePostgreSQLCertMode(field string, dsn pgDSNSetting, hasClientCert bo
 			Field:    field,
 			Message: "pgx refuses to parse any other sslcertmode than disable, allow or require, an empty " +
 				"value included, so the connection would fail when it opens",
-			Action: pgCertModeSource(fromEnv) + pgCertModeExit(field, fromEnv, "disable, allow or require") +
-				"." + pgSSLCertModesAllowed,
+			Action: pgCertModeAction(field, fromEnv, "disable, allow or require", ""),
 		}
 	}
 	if mode == sslCertModeDisable && hasClientCert {
@@ -801,11 +798,16 @@ func validatePostgreSQLCertMode(field string, dsn pgDSNSetting, hasClientCert bo
 			Field:    field,
 			Message: "sslcertmode disable makes pgx skip the client certificate and key, so the connection " +
 				"would authenticate without the configured client certificate",
-			Action: pgCertModeSource(fromEnv) + pgCertModeExit(field, fromEnv, "allow or require") +
-				", or remove the client certificate and key (" + certs + ")." + pgSSLCertModesAllowed,
+			Action: pgCertModeAction(field, fromEnv, "allow or require", ", or remove the client certificate and key ("+certs+")"),
 		}
 	}
 	return nil
+}
+
+// pgCertModeAction is the source, the remedy and any extra exit, then the allowed values.
+func pgCertModeAction(field string, fromEnv bool, values, extraExit string) string {
+	return pgCertModeSource(fromEnv) + pgCertModeExit(field, fromEnv, values) + extraExit +
+		". Allowed values: disable, allow, require."
 }
 
 func pgCertModeSource(fromEnv bool) string {

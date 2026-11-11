@@ -16,6 +16,9 @@ const (
 	envPGHOST         = "PGHOST"
 	envPGSSLMODE      = "PGSSLMODE"
 	envPGSSLCERT      = "PGSSLCERT"
+	envPGSSLKEY       = "PGSSLKEY"
+	sslModeDisable    = "disable"
+	sslModeAllow      = "allow"
 	sslModeRequire    = "require"
 	sslModeVerifyFull = "verify-full"
 )
@@ -100,11 +103,11 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 	// Material is judged by presence, so the `system` trust-store sentinel claims like a path.
 	{Name: "socket_pgsslrootcert_system", DSN: socketUserDSN, Env: [][2]string{{"PGSSLROOTCERT", "system"}}, Refuse: true},
 	{Name: "socket_pgsslcert", DSN: socketUserDSN, Env: [][2]string{{envPGSSLCERT, "/etc/pg/client.crt"}}, Refuse: true},
-	{Name: "socket_pgsslkey", DSN: socketUserDSN, Env: [][2]string{{"PGSSLKEY", "/etc/pg/client.key"}}, Refuse: true},
+	{Name: "socket_pgsslkey", DSN: socketUserDSN, Env: [][2]string{{envPGSSLKEY, "/etc/pg/client.key"}}, Refuse: true},
 	{Name: "socket_pgsslnegotiation_direct", DSN: socketUserDSN, Env: [][2]string{{"PGSSLNEGOTIATION", "direct"}}, Refuse: true},
 	{Name: "socket_pgsslmode_prefer", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, "prefer"}}},
-	{Name: "socket_pgsslmode_allow", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, certModeAllow}}},
-	{Name: "socket_pgsslmode_disable", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, certModeDisable}}},
+	{Name: "socket_pgsslmode_allow", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeAllow}}},
+	{Name: "socket_pgsslmode_disable", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeDisable}}},
 	{Name: "socket_empty_pgsslmode", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, ""}}},
 	{Name: "socket_empty_pgsslcert", DSN: socketUserDSN, Env: [][2]string{{envPGSSLCERT, ""}}},
 	{Name: "dsn_sslmode_disable_shadows_pgsslmode", DSN: "host=" + socketHost + " sslmode=disable user=u", Env: [][2]string{{envPGSSLMODE, sslModeVerifyFull}}},
@@ -115,10 +118,10 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 	{Name: "pghost_socket_pgsslmode_require", DSN: "user=u", Env: [][2]string{{envPGHOST, socketHost}, {envPGSSLMODE, sslModeRequire}}, Refuse: true},
 	// sslcertmode governs the client certificate only, so no valid value of it claims TLS.
 	{Name: "socket_pgsslcertmode_require", DSN: socketUserDSN, Env: [][2]string{{EnvPGSSLCertMode, sslModeRequire}}},
-	{Name: "socket_pgsslcertmode_disable", DSN: socketUserDSN, Env: [][2]string{{EnvPGSSLCertMode, certModeDisable}}},
+	{Name: "socket_pgsslcertmode_disable", DSN: socketUserDSN, Env: [][2]string{{EnvPGSSLCertMode, sslModeDisable}}},
 	{Name: "socket_dsn_sslcertmode_require", DSN: socketUserDSN + certModeKey + sslModeRequire},
-	{Name: "socket_dsn_sslcertmode_allow", DSN: socketUserDSN + certModeKey + certModeAllow},
-	{Name: "socket_dsn_sslcertmode_disable", DSN: socketUserDSN + certModeKey + certModeDisable},
+	{Name: "socket_dsn_sslcertmode_allow", DSN: socketUserDSN + certModeKey + sslModeAllow},
+	{Name: "socket_dsn_sslcertmode_disable", DSN: socketUserDSN + certModeKey + sslModeDisable},
 }
 
 // EnvPGSSLCertMode is the one PGSSL* variable pgx honors when set but empty, so a hermetic
@@ -131,13 +134,9 @@ const (
 	uriUserAtTCP    = "postgres://u@" + tcpHost
 	certModeDSNKey  = "sslcertmode"
 	tcpRequireDSN   = tcpHostUserDSN + sslModeKey + sslModeRequire
-	clientCertPair  = " sslcert=/etc/pg/client.crt sslkey=/etc/pg/client.key"
-	tcpCertDSN      = tcpRequireDSN + clientCertPair
+	tcpCertDSN      = tcpRequireDSN + " sslcert=/etc/pg/client.crt sslkey=/etc/pg/client.key"
 	uriCertBase     = uriUserAtTCP + "/db?sslmode=" + sslModeRequire + "&sslcert=/etc/pg/client.crt&sslkey=/etc/pg/client.key"
-	certModeDisable = "disable"
-	certModeAllow   = "allow"
 	certModeInvalid = "bogus"
-	envPGSSLKEY     = "PGSSLKEY"
 	envCertPath     = "/etc/pg/env.crt"
 	envKeyPath      = "/etc/pg/env.key"
 )
@@ -158,24 +157,24 @@ type PostgresSSLCertModeCase struct {
 // PostgresSSLCertModeCases is shared between config's sslcertmode tests and
 // database/postgresql's pgconn.ParseConfig oracle, so the merge cannot drift from a pgx bump.
 var PostgresSSLCertModeCases = []PostgresSSLCertModeCase{
-	{Name: "keyword_disable_with_cert", DSN: tcpCertDSN + certModeKey + certModeDisable, RefusedBy: certModeDSNKey},
-	{Name: "uri_disable_with_cert", DSN: uriCertBase + "&sslcertmode=" + certModeDisable, RefusedBy: certModeDSNKey},
-	{Name: "disable_with_sslcert_only", DSN: tcpRequireDSN + " sslcert=/etc/pg/client.crt" + certModeKey + certModeDisable, RefusedBy: certModeDSNKey},
-	{Name: "disable_with_sslkey_only", DSN: tcpRequireDSN + " sslkey=/etc/pg/client.key" + certModeKey + certModeDisable, RefusedBy: certModeDSNKey},
-	{Name: "disable_with_pgsslcert_and_pgsslkey", DSN: tcpRequireDSN + certModeKey + certModeDisable, Env: [][2]string{{envPGSSLCERT, envCertPath}, {envPGSSLKEY, envKeyPath}}, RefusedBy: certModeDSNKey},
-	{Name: "disable_with_pgsslcert_only", DSN: tcpRequireDSN + certModeKey + certModeDisable, Env: [][2]string{{envPGSSLCERT, envCertPath}}, RefusedBy: certModeDSNKey},
-	{Name: "disable_with_pgsslkey_only", DSN: tcpRequireDSN + certModeKey + certModeDisable, Env: [][2]string{{envPGSSLKEY, envKeyPath}}, RefusedBy: certModeDSNKey},
-	{Name: "pgsslcertmode_disable_with_dsn_cert", DSN: tcpCertDSN, Env: [][2]string{{EnvPGSSLCertMode, certModeDisable}}, RefusedBy: EnvPGSSLCertMode},
-	{Name: "pgsslcertmode_disable_with_env_cert", DSN: tcpRequireDSN, Env: [][2]string{{EnvPGSSLCertMode, certModeDisable}, {envPGSSLCERT, envCertPath}, {envPGSSLKEY, envKeyPath}}, RefusedBy: EnvPGSSLCertMode},
-	{Name: "dsn_allow_shadows_pgsslcertmode_disable", DSN: tcpCertDSN + certModeKey + certModeAllow, Env: [][2]string{{EnvPGSSLCertMode, certModeDisable}}},
+	{Name: "keyword_disable_with_cert", DSN: tcpCertDSN + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "uri_disable_with_cert", DSN: uriCertBase + "&sslcertmode=" + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "disable_with_sslcert_only", DSN: tcpRequireDSN + " sslcert=/etc/pg/client.crt" + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "disable_with_sslkey_only", DSN: tcpRequireDSN + " sslkey=/etc/pg/client.key" + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "disable_with_pgsslcert_and_pgsslkey", DSN: tcpRequireDSN + certModeKey + sslModeDisable, Env: [][2]string{{envPGSSLCERT, envCertPath}, {envPGSSLKEY, envKeyPath}}, RefusedBy: certModeDSNKey},
+	{Name: "disable_with_pgsslcert_only", DSN: tcpRequireDSN + certModeKey + sslModeDisable, Env: [][2]string{{envPGSSLCERT, envCertPath}}, RefusedBy: certModeDSNKey},
+	{Name: "disable_with_pgsslkey_only", DSN: tcpRequireDSN + certModeKey + sslModeDisable, Env: [][2]string{{envPGSSLKEY, envKeyPath}}, RefusedBy: certModeDSNKey},
+	{Name: "pgsslcertmode_disable_with_dsn_cert", DSN: tcpCertDSN, Env: [][2]string{{EnvPGSSLCertMode, sslModeDisable}}, RefusedBy: EnvPGSSLCertMode},
+	{Name: "pgsslcertmode_disable_with_env_cert", DSN: tcpRequireDSN, Env: [][2]string{{EnvPGSSLCertMode, sslModeDisable}, {envPGSSLCERT, envCertPath}, {envPGSSLKEY, envKeyPath}}, RefusedBy: EnvPGSSLCertMode},
+	{Name: "dsn_allow_shadows_pgsslcertmode_disable", DSN: tcpCertDSN + certModeKey + sslModeAllow, Env: [][2]string{{EnvPGSSLCertMode, sslModeDisable}}},
 	{Name: "dsn_require_with_cert", DSN: tcpCertDSN + certModeKey + sslModeRequire},
-	{Name: "pgsslcertmode_allow_with_cert", DSN: tcpCertDSN, Env: [][2]string{{EnvPGSSLCertMode, certModeAllow}}},
+	{Name: "pgsslcertmode_allow_with_cert", DSN: tcpCertDSN, Env: [][2]string{{EnvPGSSLCertMode, sslModeAllow}}},
 	{Name: "unset_with_cert", DSN: tcpCertDSN},
-	{Name: "disable_without_cert", DSN: tcpRequireDSN + certModeKey + certModeDisable},
-	{Name: "pgsslcertmode_disable_without_cert", DSN: tcpRequireDSN, Env: [][2]string{{EnvPGSSLCertMode, certModeDisable}}},
+	{Name: "disable_without_cert", DSN: tcpRequireDSN + certModeKey + sslModeDisable},
+	{Name: "pgsslcertmode_disable_without_cert", DSN: tcpRequireDSN, Env: [][2]string{{EnvPGSSLCertMode, sslModeDisable}}},
 	// An empty DSN key shadows the variable, so no client certificate is in effect.
-	{Name: "disable_with_empty_dsn_cert_shadowing_env", DSN: tcpRequireDSN + " sslcert='' sslkey=''" + certModeKey + certModeDisable, Env: [][2]string{{envPGSSLCERT, envCertPath}, {envPGSSLKEY, envKeyPath}}},
-	{Name: "disable_with_empty_pgsslcert", DSN: tcpRequireDSN + certModeKey + certModeDisable, Env: [][2]string{{envPGSSLCERT, ""}, {envPGSSLKEY, ""}}},
+	{Name: "disable_with_empty_dsn_cert_shadowing_env", DSN: tcpRequireDSN + " sslcert='' sslkey=''" + certModeKey + sslModeDisable, Env: [][2]string{{envPGSSLCERT, envCertPath}, {envPGSSLKEY, envKeyPath}}},
+	{Name: "disable_with_empty_pgsslcert", DSN: tcpRequireDSN + certModeKey + sslModeDisable, Env: [][2]string{{envPGSSLCERT, ""}, {envPGSSLKEY, ""}}},
 	{Name: "pgsslcertmode_empty", DSN: tcpHostUserDSN, Env: [][2]string{{EnvPGSSLCertMode, ""}}, RefusedBy: EnvPGSSLCertMode, Invalid: true},
 	{Name: "pgsslcertmode_empty_with_cert", DSN: tcpCertDSN, Env: [][2]string{{EnvPGSSLCertMode, ""}}, RefusedBy: EnvPGSSLCertMode, Invalid: true},
 	{Name: "pgsslcertmode_bogus", DSN: tcpHostUserDSN, Env: [][2]string{{EnvPGSSLCertMode, certModeInvalid}}, RefusedBy: EnvPGSSLCertMode, Invalid: true},
@@ -190,8 +189,8 @@ var PostgresSSLCertModeCases = []PostgresSSLCertModeCase{
 	{Name: "uri_empty", DSN: uriUserAtTCP + "/db?sslcertmode=", RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "uri_bogus_with_cert", DSN: uriCertBase + "&sslcertmode=" + certModeInvalid, RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "socket_keyword_bogus", DSN: socketUserDSN + certModeKey + certModeInvalid, RefusedBy: certModeDSNKey, Invalid: true},
-	{Name: "dsn_allow_shadows_pgsslcertmode_bogus", DSN: tcpHostUserDSN + certModeKey + certModeAllow, Env: [][2]string{{EnvPGSSLCertMode, certModeInvalid}}},
-	{Name: "dsn_empty_shadows_pgsslcertmode_allow", DSN: tcpHostUserDSN + certModeEmpty, Env: [][2]string{{EnvPGSSLCertMode, certModeAllow}}, RefusedBy: certModeDSNKey, Invalid: true},
+	{Name: "dsn_allow_shadows_pgsslcertmode_bogus", DSN: tcpHostUserDSN + certModeKey + sslModeAllow, Env: [][2]string{{EnvPGSSLCertMode, certModeInvalid}}},
+	{Name: "dsn_empty_shadows_pgsslcertmode_allow", DSN: tcpHostUserDSN + certModeEmpty, Env: [][2]string{{EnvPGSSLCertMode, sslModeAllow}}, RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "unset_without_cert", DSN: tcpHostUserDSN},
 }
 

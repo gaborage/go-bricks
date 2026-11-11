@@ -34,14 +34,18 @@ const (
 var pgSSLEnvKeys = []pgSSLEnvKey{
 	{env: "PGSSLMODE", dsn: pgDSNSSLMode},
 	{env: "PGSSLROOTCERT", dsn: pgDSNSSLRootCert},
-	{env: "PGSSLCERT", dsn: pgDSNSSLCert},
-	{env: "PGSSLKEY", dsn: pgDSNSSLKey},
+	{env: pgEnvSSLCert, dsn: pgDSNSSLCert},
+	{env: pgEnvSSLKey, dsn: pgDSNSSLKey},
 	{env: "PGSSLNEGOTIATION", dsn: pgDSNSSLNegotiation},
 	{env: pgEnvSSLCertMode, dsn: pgDSNSSLCertMode},
 }
 
-// pgEnvSSLCertMode is the one PGSSL* variable pgx keeps when set but empty, to reject it.
-const pgEnvSSLCertMode = "PGSSLCERTMODE"
+const (
+	pgEnvSSLCert = "PGSSLCERT"
+	pgEnvSSLKey  = "PGSSLKEY"
+	// pgEnvSSLCertMode is the one PGSSL* variable pgx keeps when set but empty, to reject it.
+	pgEnvSSLCertMode = "PGSSLCERTMODE"
+)
 
 // pgDSNSetting is one DSN key's presence and value; set includes an empty value, which shadows env.
 type pgDSNSetting struct {
