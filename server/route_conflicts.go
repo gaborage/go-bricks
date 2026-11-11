@@ -82,8 +82,8 @@ type RouteConflict struct {
 }
 
 // DuplicateRouteError reports every refused route registration at once.
-// Server.Start and app startup both fail with it, and a tenant-owned trespass after Start
-// panics with an error wrapping it; errors.As recovers the conflicts,
+// Server.Start and app startup both fail with it, and a refused registration after Start
+// panics with an error wrapping it and ErrRegistrationAfterStart; errors.As recovers the conflicts,
 // errors.Is(err, ErrDuplicateRoute) holds, and Unwrap returns the head (matching
 // ErrDuplicateRoute) followed by one child per conflict.
 type DuplicateRouteError struct {
@@ -181,6 +181,12 @@ type admittedRoute struct {
 // record: the engine families are built on, the logger their refusals go to, the probe paths
 // they may not cover, and each family's full prefix (claimFamily).
 type routeAdmission struct {
+	// mu makes every registration atomic with Start's seal: a route's claim, description and
+	// engine add, a Group or Use, a family's mount and RegisterGlobalMiddleware all run under
+	// it, so a registration racing Start lands whole before Start's checks read their snapshot,
+	// or after the seal, never across it. Lock order: mu, then
+	// DefaultRouteRegistry's lock, a family's catch-all lock and the echo engine; no consumer
+	// code runs under it.
 	mu             sync.Mutex
 	seen           map[string]seenRoute // key: routeNodeKey(method, fullPath)
 	conflicts      []RouteConflict
@@ -191,6 +197,7 @@ type routeAdmission struct {
 	checker        multitenant.TenantChecker // Options.TenantChecker, which families verify their tenant with; written once by New
 	frameworkRoots []string                  // prefixes reserved for framework routes (frameworkRoots); written once by New
 	started        bool                      // set by seal, when Start reads the conflicts
+	globalMW       int                       // global middleware RegisterGlobalMiddleware installed
 	families       []string                  // each tenant-owned family's full prefix, in build order
 	owned          atomic.Pointer[[]string]  // families, republished copy-on-write for owns
 
@@ -231,21 +238,20 @@ func newRouteAdmission() *routeAdmission {
 // registration order for a later family's trespass scan, described in DefaultRouteRegistry, then
 // added through add.
 func (a *routeAdmission) admit(r admittedRoute, add func()) {
-	if !a.claim(r) {
-		return
+	if a != nil {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if !a.claimLocked(r) {
+			return
+		}
 	}
 	DefaultRouteRegistry.Register(r.Descriptor)
 	add()
 }
 
-// claim reports whether r is admitted, recording a conflict when it is not.
-func (a *routeAdmission) claim(r admittedRoute) bool {
-	if a == nil {
-		return true
-	}
+// claimLocked reports whether r is admitted, recording a conflict when it is not. a.mu is held.
+func (a *routeAdmission) claimLocked(r admittedRoute) bool {
 	reg := RouteRegistrant{HandlerName: r.Descriptor.HandlerName, Package: r.Descriptor.Package}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	if r.Method == echo.RouteNotFound || r.Method == echo.RouteAny {
 		a.conflicts = append(a.conflicts, RouteConflict{
 			Method: r.Method, Path: r.Path, Duplicate: reg, Reason: RouteConflictReasonReservedMethod,
@@ -274,15 +280,22 @@ func (a *routeAdmission) claim(r admittedRoute) bool {
 	return true
 }
 
-// admitGroup records a middleware-bearing group not built through a family at its full prefix
-// path, whether or not a family covers it, and records a conflict when one already does. pkg
-// called Group or Use.
-func (a *routeAdmission) admitGroup(path, pkg string) {
+// locked runs fn under a.mu, or bare on a nil admission.
+func (a *routeAdmission) locked(fn func()) {
+	if a != nil {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+	}
+	fn()
+}
+
+// admitGroupLocked records a middleware-bearing group not built through a family at its full
+// prefix path, whether or not a family covers it, and records a conflict when one already does.
+// pkg called Group or Use. a.mu is held.
+func (a *routeAdmission) admitGroupLocked(path, pkg string) {
 	if a == nil {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	c := tenantOwnedConflict("", path, RouteRegistrant{Package: pkg})
 	if a.refuseFrameworkRootLocked(&c) {
 		return
@@ -405,17 +418,24 @@ func (a *routeAdmission) snapshot() []RouteConflict {
 	return out
 }
 
-// seal marks the Server started and returns the conflicts recorded until then, under one lock,
-// so no registration lands between Start's check and the mark.
-func (a *routeAdmission) seal() []RouteConflict {
+// sealedState is what Start's checks read, as one consistent state.
+type sealedState struct {
+	conflicts []RouteConflict
+	families  []string
+	globalMW  int
+}
+
+// seal marks the Server started and returns the state recorded until then, under one lock, so
+// no registration lands between Start's checks and the mark.
+func (a *routeAdmission) seal() sealedState {
 	if a == nil {
-		return nil
+		return sealedState{}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.started = true
 	a.registered = nil
-	return slices.Clone(a.conflicts)
+	return sealedState{conflicts: slices.Clone(a.conflicts), families: slices.Clone(a.families), globalMW: a.globalMW}
 }
 
 // coveredProbePath returns the first probe path full equals or covers.
@@ -430,10 +450,10 @@ func (a *routeAdmission) coveredProbePath(full string) (string, bool) {
 	return "", false
 }
 
-// claimFamily records full as a tenant-owned family's prefix, unless the Server has started or
-// full equals, covers or sits under an existing family's prefix; then it returns why and false,
-// recording nothing.
-func (a *routeAdmission) claimFamily(full string) (string, bool) {
+// claimFamily records full as a tenant-owned family's prefix and runs mount, unless the Server
+// has started or full equals, covers or sits under an existing family's prefix; then it returns
+// why and false, recording nothing.
+func (a *routeAdmission) claimFamily(full string, mount func()) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.started {
@@ -448,6 +468,7 @@ func (a *routeAdmission) claimFamily(full string) (string, bool) {
 	owned := slices.Clone(a.families)
 	a.owned.Store(&owned)
 	a.reportTrespassLocked(full)
+	mount()
 	return "", true
 }
 
