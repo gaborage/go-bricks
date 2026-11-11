@@ -426,8 +426,8 @@ func (s *Server) RootGroup() RouteRegistrar {
 }
 
 // RouteConflicts returns every registration this server's registrars refused (RouteConflict.Reason
-// says why), in registration order. Empty when there are none. A tenant-owned trespass after
-// Start panics at registration instead and is never recorded.
+// says why), in registration order. Empty when there are none. After Start every registration
+// panics instead and is never recorded (ErrRegistrationAfterStart, ADR-179).
 func (s *Server) RouteConflicts() []RouteConflict {
 	return s.admission.snapshot()
 }
@@ -512,8 +512,9 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 // middleware installed beside a tenant-owned route family refuses Start before either bind
 // with an error matching ErrTenantFamilyWithGlobalMiddleware (ADR-164).
 //
-// Both checks read one snapshot, taken under the lock every registration holds, so a
-// registration racing Start lands whole before it or after it.
+// Start seals registration first, whether or not it goes on to serve: both checks read one
+// state, and every later route, Group, Use or installing RegisterGlobalMiddleware panics
+// with an error matching ErrRegistrationAfterStart (ADR-179).
 //
 // With observability enabled, an app.name the HTTP instrumentation cannot use as its
 // host[:port] server name refuses Start before either bind (ADR-132).

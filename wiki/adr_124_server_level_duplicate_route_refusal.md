@@ -15,6 +15,16 @@
 > the key against echo's router over every pair of one- and two-token templates. Migration is
 > [migrations.md](migrations.md) `[C73.10]`.
 
+## Amendment (2026-11-10, #2306): a duplicate registered after Start panics
+
+The consequence "A duplicate registered after `Start` is dropped" no longer holds. Once `Start`
+has claimed the server, served or not, a duplicate route panics at registration with an error
+matching both `server.ErrRegistrationAfterStart` and `ErrDuplicateRoute`, and is never recorded
+in `RouteConflicts()`; so does every other route, group or global-middleware registration after
+`Start` ([ADR-179](adr_179_registration_sealed_at_start.md)). Start's duplicate check and its seal
+now read one state under the lock every registration takes, and admission adds a route to the
+engine under that lock. See [migrations.md](migrations.md) `[C74.8]`.
+
 ## Context
 
 Echo v5's router refuses a second registration of one method + path only when

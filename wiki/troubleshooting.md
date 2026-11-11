@@ -444,18 +444,31 @@ on 1.27.
 # → Attach each gate per group instead: the family's Authenticate (before the tenant)
 #   or Use (after it), and every other group that needs it
 
-# "server: registration after Start: route registration refused (N conflict(s))" + "inside a tenant-owned route family"
-# → Panic: a route, or a group carrying middleware, was registered from outside a family
-#   under its prefix after Start (errors.Is(err, server.ErrDuplicateRoute))
-# → Register it before Start through the family's registrar, or off the prefix
+# "server: registration after Start: route GET /x" (or "Group /x", "Use /x", "RegisterGlobalMiddleware")
+# → Panic: a route, Group, Use or installing RegisterGlobalMiddleware ran after Start, served
+#   or not (a setup error or a Shutdown before Start counts), through any registrar, retained
+#   or fresh (errors.Is(err, server.ErrRegistrationAfterStart), ADR-179). Nothing was added
+# → Register it before Start: in Module.RegisterRoutes, or before your own Start call
+
+# "server: registration after Start: route registration refused (N conflict(s))"
+# → Panic: a late registration that would also have been a conflict (duplicate, reserved
+#   method, tenant-owned trespass, framework root); it matches both
+#   server.ErrRegistrationAfterStart and server.ErrDuplicateRoute, and is not recorded in
+#   RouteConflicts()
+# → Register it before Start AND clear the conflict, or Start refuses it there instead:
+#   duplicate → keep one registration of that method and path; echo_route_not_found →
+#   delete it; echo_route_any → register each HTTP method it served instead; tenant-owned
+#   trespass → register through the family's registrar, or off its prefix; framework root →
+#   move the route off the framework's prefix
 
 # "server: tenant-owned group registration failed for ...: build tenant-owned families in RegisterRoutes, before Start"
 # → Panic: server.TenantOwnedGroup was called after Start (any Start call, even one
 #   that returned an error)
 # → Build it in Module.RegisterRoutes, or before calling Start on a server-only setup
 
-# "server: global middleware registered after Start: tenant-owned route family with global middleware (...)"
+# "server: registration after Start: RegisterGlobalMiddleware: tenant-owned route family with global middleware (...)"
 # → Panic: RegisterGlobalMiddleware was called after Start beside a server.TenantOwnedGroup
-#   family (errors.Is(err, server.ErrTenantFamilyWithGlobalMiddleware))
+#   family (errors.Is(err, server.ErrTenantFamilyWithGlobalMiddleware) and
+#   server.ErrRegistrationAfterStart)
 # → Register global middleware before Start, or attach the gate per group
 ```

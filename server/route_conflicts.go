@@ -20,6 +20,11 @@ import (
 // conflicts. Match it with errors.Is.
 var ErrDuplicateRoute = errors.New("duplicate route registration")
 
+// ErrRegistrationAfterStart is what every registration panics with once Start has claimed the
+// Server, served or not (ADR-179): a route, Group, Use or installing RegisterGlobalMiddleware.
+// Match the recovered value with errors.Is.
+var ErrRegistrationAfterStart = errors.New("server: registration after Start")
+
 // RouteConflictReason says why a route registration was refused.
 type RouteConflictReason string
 
@@ -181,10 +186,9 @@ type admittedRoute struct {
 // record: the engine families are built on, the logger their refusals go to, the probe paths
 // they may not cover, and each family's full prefix (claimFamily).
 type routeAdmission struct {
-	// mu makes every registration atomic with Start's seal: a route's claim, description and
-	// engine add, a Group or Use, a family's mount and RegisterGlobalMiddleware all run under
-	// it, so a registration racing Start lands whole before Start's checks read their snapshot,
-	// or after the seal, never across it. Lock order: mu, then
+	// mu makes every registration atomic with Start's seal (ADR-179): a route's claim,
+	// description and engine add, a Group or Use, a family's mount and RegisterGlobalMiddleware
+	// all run under it, so Start's checks see each whole or it panics. Lock order: mu, then
 	// DefaultRouteRegistry's lock, a family's catch-all lock and the echo engine; no consumer
 	// code runs under it.
 	mu             sync.Mutex
@@ -249,13 +253,12 @@ func (a *routeAdmission) admit(r admittedRoute, add func()) {
 	add()
 }
 
-// claimLocked reports whether r is admitted, recording a conflict when it is not. a.mu is held.
+// claimLocked reports whether r is admitted, recording a conflict when it is not; after Start
+// it panics instead. a.mu is held.
 func (a *routeAdmission) claimLocked(r admittedRoute) bool {
 	reg := RouteRegistrant{HandlerName: r.Descriptor.HandlerName, Package: r.Descriptor.Package}
 	if r.Method == echo.RouteNotFound || r.Method == echo.RouteAny {
-		a.conflicts = append(a.conflicts, RouteConflict{
-			Method: r.Method, Path: r.Path, Duplicate: reg, Reason: RouteConflictReasonReservedMethod,
-		})
+		a.refuseLocked(&RouteConflict{Method: r.Method, Path: r.Path, Duplicate: reg, Reason: RouteConflictReasonReservedMethod})
 		return false
 	}
 	c := tenantOwnedConflict(r.Method, r.Path, reg)
@@ -267,16 +270,15 @@ func (a *routeAdmission) claimLocked(r admittedRoute) bool {
 	}
 	key := routeNodeKey(r.Method, r.Path)
 	if first, dup := a.seen[key]; dup {
-		a.conflicts = append(a.conflicts, RouteConflict{
+		a.refuseLocked(&RouteConflict{
 			Method: r.Method, Path: r.Path, FirstPath: first.path, First: first.reg, Duplicate: reg,
 			Reason: RouteConflictReasonDuplicate,
 		})
 		return false
 	}
+	a.refuseAfterStartLocked("route " + r.Method + " " + r.Path)
 	a.seen[key] = seenRoute{reg: reg, path: r.Path}
-	if !a.started {
-		a.registered = append(a.registered, c)
-	}
+	a.registered = append(a.registered, c)
 	return true
 }
 
@@ -287,6 +289,13 @@ func (a *routeAdmission) locked(fn func()) {
 		defer a.mu.Unlock()
 	}
 	fn()
+}
+
+// refuseAfterStartLocked panics naming call once Start has sealed registration. a.mu is held.
+func (a *routeAdmission) refuseAfterStartLocked(call string) {
+	if a != nil && a.started {
+		panic(fmt.Errorf("%w: %s", ErrRegistrationAfterStart, call))
+	}
 }
 
 // admitGroupLocked records a middleware-bearing group not built through a family at its full
@@ -349,12 +358,17 @@ func (a *routeAdmission) refuseTrespassLocked(c *RouteConflict) bool {
 }
 
 // refuseUnderLocked sets c.FirstPath to prefix, the family or framework root that covers
-// c.Path, and records c as a conflict. After Start nothing reads the record, so it panics with
-// c instead. a.mu is held.
+// c.Path, and refuses c (refuseLocked). a.mu is held.
 func (a *routeAdmission) refuseUnderLocked(c *RouteConflict, prefix string) {
 	c.FirstPath = prefix
+	a.refuseLocked(c)
+}
+
+// refuseLocked records c as a conflict. After Start nothing reads the record, so it panics with
+// c instead, matching both ErrRegistrationAfterStart and ErrDuplicateRoute. a.mu is held.
+func (a *routeAdmission) refuseLocked(c *RouteConflict) {
 	if a.started {
-		panic(fmt.Errorf("server: registration after Start: %w", duplicateRouteError([]RouteConflict{*c})))
+		panic(fmt.Errorf("%w: %w", ErrRegistrationAfterStart, duplicateRouteError([]RouteConflict{*c})))
 	}
 	a.conflicts = append(a.conflicts, *c)
 }
