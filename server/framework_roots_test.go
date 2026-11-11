@@ -257,9 +257,9 @@ func TestRouteAdmissionRefusesNonFrameworkRegistrationUnderFrameworkRoot(t *test
 func TestRouteAdmissionRefusesConsumerGroupUnderFrameworkRoot(t *testing.T) {
 	a := newRouteAdmission()
 	a.frameworkRoots = []string{"/_sys"}
-	a.admitGroup("/_sys", schedulerPkg)
-	a.admitGroup("/_sys/extra", consumerPkg)
-	a.admitGroup("/orders", consumerPkg)
+	a.admitGroupLocked("/_sys", schedulerPkg)
+	a.admitGroupLocked("/_sys/extra", consumerPkg)
+	a.admitGroupLocked("/orders", consumerPkg)
 
 	conflicts := a.snapshot()
 	require.Len(t, conflicts, 1)
@@ -282,7 +282,7 @@ func TestRouteAdmissionFrameworkRootAfterStartPanics(t *testing.T) {
 		func() {
 			a.admit(admittedRoute{Method: http.MethodGet, Path: "/_sys/late", Descriptor: modellessDescriptor(http.MethodGet, "/_sys/late", reg)}, func() {})
 		})
-	assert.Panics(t, func() { a.admitGroup("/_sys/late", consumerPkg) })
+	assert.Panics(t, func() { a.admitGroupLocked("/_sys/late", consumerPkg) })
 }
 
 // TestTenantOwnedGroupUnderFrameworkRootRefused pins that a tenant-owned family's prefix at or

@@ -74,9 +74,6 @@ type Server struct {
 
 	// opts carries the programmatic extensions NewWithOptions received.
 	opts Options
-
-	// globalMiddleware counts the global middleware RegisterGlobalMiddleware installed.
-	globalMiddleware int
 }
 
 // probeListener is the probe listener's server and the socket it serves, stored together
@@ -515,13 +512,16 @@ var ErrServerAlreadyStarted = goerrors.New("server: Start called more than once"
 // middleware installed beside a tenant-owned route family refuses Start before either bind
 // with an error matching ErrTenantFamilyWithGlobalMiddleware (ADR-164).
 //
+// Both checks read one snapshot, taken under the lock every registration holds, so a
+// registration racing Start lands whole before it or after it.
+//
 // With observability enabled, an app.name the HTTP instrumentation cannot use as its
 // host[:port] server name refuses Start before either bind (ADR-132).
 func (s *Server) Start() error {
 	if !s.started.CompareAndSwap(false, true) {
 		return ErrServerAlreadyStarted
 	}
-	conflicts := s.admission.seal()
+	sealed := s.admission.seal()
 	if s.stopping.Load() {
 		s.closeProbeErrs()
 		return http.ErrServerClosed
@@ -530,11 +530,11 @@ func (s *Server) Start() error {
 		s.closeProbeErrs()
 		return s.setupErr
 	}
-	if err := duplicateRouteError(conflicts); err != nil {
+	if err := duplicateRouteError(sealed.conflicts); err != nil {
 		s.closeProbeErrs()
 		return err
 	}
-	if err := s.tenantFamilyGlobalMiddlewareError(); err != nil {
+	if err := tenantFamilyGlobalMiddlewareError(sealed); err != nil {
 		s.closeProbeErrs()
 		return err
 	}
