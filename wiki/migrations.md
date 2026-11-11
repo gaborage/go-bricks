@@ -16151,7 +16151,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   Filter's own operand, guard a predicate variable that can be nil before calling `Having`, and
   match the build error with `errors.Is(err, dbtypes.ErrUnsupportedHavingPredicate)`, not
   squirrel's text.
-- verify: the detect returns no hit; on Oracle,
+- verify: every detect hit is resolved, or is a reviewed, non-nil consumer-defined
+  `dbtypes.Filter` with no trailing arguments; on Oracle,
   `qb.Select("department").From("users").GroupBy("department").Having(f.Gt("number", 100)).ToSQL()`
   returns `SELECT department FROM users GROUP BY department HAVING "number" > :1` with args
   `[100]`, and `Having(squirrel.Eq{"number": 1})` fails with
