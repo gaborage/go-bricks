@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -17,11 +18,19 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/publishdoor"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/scheduler"
 )
+
+// TestMain unsets the PGSSL* variables config judges, so an ambient value cannot flip a
+// PostgreSQL section's validation verdict in this package's tests.
+func TestMain(m *testing.M) {
+	testutil.UnsetPostgresSSLEnv()
+	os.Exit(m.Run())
+}
 
 // oversizedShortStr is one byte past what an AMQP shortstr can carry, and
 // maxLengthShortStr is exactly at the ceiling — the pair every destination-bound

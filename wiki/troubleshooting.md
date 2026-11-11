@@ -92,6 +92,13 @@ Currently this is a documented developer convenience: TestMain always spins up a
 # → The DSN is redacted on purpose. errors.As the error to *pgconn.ParseConfigError
 #   for pgx's message; since pgx v5.11 a raw connectionstring follows libpq rules
 #   exactly (double backslashes, %20 not +, first @ ends userinfo) — see database.md
+#   An invalid or empty sslcertmode / PGSSLCERTMODE is refused at startup instead
+#   ([C74.9]), naming its source, never the value
+
+# config_invalid naming sslcertmode or PGSSLCERTMODE
+# → The effective value (DSN key, else a SET variable, empty included) must be
+#   exactly disable/allow/require, and not disable beside a client certificate.
+#   Unset the variable, or shadow it with sslcertmode=allow in the DSN ([C74.9])
 
 # config_missing: database.host on a DBConfigProvider result
 # → The connect seam refuses an empty PostgreSQL host since pgx v5.11 would dial a

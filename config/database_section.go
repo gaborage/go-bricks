@@ -660,7 +660,7 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 // ADR-050 amendment's one identity exception lives. Check order is load-bearing:
 // connectionstring short-circuits (into validatePostgreSQLConnectionString), then the
 // empty-host refusal, then the mode allowlist, then the unix-socket-host refusal, then the
-// material/mode coherence rule, then the cert/key pairing.
+// material/mode coherence rule, then the cert/key pairing, then PGSSLCERTMODE (#2310).
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.ConnectionString != "" {
 		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
@@ -685,15 +685,19 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 	if cfg.TLS.Mode != "" && !slices.Contains(pgSSLModes, cfg.TLS.Mode) {
 		return NewInvalidFieldError("database.tls.mode", fmt.Sprintf(errInvalidField, cfg.TLS.Mode), pgSSLModes)
 	}
-	return validatePostgreSQLTLSCoherence(cfg)
+	if err := validatePostgreSQLTLSCoherence(cfg); err != nil {
+		return err
+	}
+	return validatePostgreSQLCertMode(fieldDatabaseTLS, pgDSNSetting{}, cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "")
 }
 
 // validatePostgreSQLConnectionString refuses a DSN that resolves through a libpq service
 // ([C66.3]), then on the two axes the typed fields above are refused on ([C65.2], widened by
 // [C66.1]): a resolved host that names nothing, and a unix-socket host under a TLS claim. An
-// untokenizable DSN passes through — this seam must never refuse what pgx accepts. PGSERVICE,
-// PGHOST and the five PGSSL* variables are consulted only when the DSN names no matching key
-// at all; an empty DSN key still shadows env, mirroring pgx's own precedence.
+// untokenizable DSN passes through — this seam must never refuse what pgx accepts. Last, the
+// effective sslcertmode is judged (#2310), which is never a TLS claim. PGSERVICE, PGHOST and
+// the PGSSL* variables are consulted only when the DSN names no matching key at all; an empty
+// DSN key still shadows env, mirroring pgx's own precedence.
 func validatePostgreSQLConnectionString(cs string) error {
 	scan, ok := scanPostgresDSN(cs)
 	if !ok {
@@ -742,7 +746,88 @@ func validatePostgreSQLConnectionString(cs string) error {
 			Action:   pgTLSOnSocketAction(claims),
 		}
 	}
+
+	cert, _ := scan.tls.sslcert.over(os.Getenv(pgEnvSSLCert))
+	key, _ := scan.tls.sslkey.over(os.Getenv(pgEnvSSLKey))
+	return validatePostgreSQLCertMode(fieldDatabaseConnectionString, scan.tls.sslcertmode, cert != "" || key != "")
+}
+
+// Client-certificate modes pgx v5 parseSSLCertMode accepts, compared exactly: no folding, no trim.
+const (
+	sslCertModeDisable = "disable"
+	sslCertModeAllow   = "allow"
+	sslCertModeRequire = "require"
+)
+
+// pgEffectiveCertMode merges PGSSLCERTMODE under the DSN key with pgx's precedence: a present
+// key wins, empty included; else the variable when SET, empty included, since pgx keeps an
+// empty PGSSLCERTMODE to reject it. judged is false when neither names it (pgx defaults to allow).
+func pgEffectiveCertMode(dsn pgDSNSetting) (mode string, fromEnv, judged bool) {
+	if dsn.set {
+		return dsn.value, false, true
+	}
+	mode, judged = os.LookupEnv(pgEnvSSLCertMode)
+	return mode, true, judged
+}
+
+// validatePostgreSQLCertMode refuses an effective sslcertmode pgx would fail to parse, and a
+// disable that makes pgx skip a client certificate or key in effect (#2310). field picks the
+// arm: the typed fields' DSN carries no sslcertmode, so only the connection string can shadow
+// the variable. The error names the source, never a value.
+func validatePostgreSQLCertMode(field string, dsn pgDSNSetting, hasClientCert bool) error {
+	mode, fromEnv, judged := pgEffectiveCertMode(dsn)
+	if !judged {
+		return nil
+	}
+	if mode != sslCertModeDisable && mode != sslCertModeAllow && mode != sslCertModeRequire {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    field,
+			Message: "pgx refuses to parse any other sslcertmode than disable, allow or require, an empty " +
+				"value included, so the connection would fail when it opens",
+			Action: pgCertModeAction(field, fromEnv, "disable, allow or require", ""),
+		}
+	}
+	if mode == sslCertModeDisable && hasClientCert {
+		certs := "database.tls.cert and database.tls.key"
+		if field == fieldDatabaseConnectionString {
+			certs = "sslcert/sslkey in the connection string and PGSSLCERT/PGSSLKEY in the environment"
+		}
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    field,
+			Message: "sslcertmode disable makes pgx skip the client certificate and key, so the connection " +
+				"would authenticate without the configured client certificate",
+			Action: pgCertModeAction(field, fromEnv, "allow or require", ", or remove the client certificate and key ("+certs+")"),
+		}
+	}
 	return nil
+}
+
+// pgCertModeAction is the source, the remedy and any extra exit, then the allowed values.
+func pgCertModeAction(field string, fromEnv bool, values, extraExit string) string {
+	return pgCertModeSource(fromEnv) + pgCertModeExit(field, fromEnv, values) + extraExit +
+		". Allowed values: disable, allow, require."
+}
+
+func pgCertModeSource(fromEnv bool) string {
+	source := pgDSNSSLCertMode + " in the connection string. "
+	if fromEnv {
+		source = pgEnvSSLCertMode + " in the environment, where a set but empty value counts. "
+	}
+	return "this one arrived through " + source
+}
+
+// pgCertModeExit is the remedy per arm. A DSN-sourced value is changed, not dropped, since
+// dropping the key would expose PGSSLCERTMODE behind it.
+func pgCertModeExit(field string, fromEnv bool, values string) string {
+	if !fromEnv {
+		return "Set that key in the connection string to " + values
+	}
+	if field == fieldDatabaseConnectionString {
+		return "Unset that variable, or shadow it with an explicit sslcertmode=allow in the connection string"
+	}
+	return "Unset that variable or set it to " + values
 }
 
 // pgServiceSource names what makes pgx resolve a libpq service, or "" when nothing does. pgx

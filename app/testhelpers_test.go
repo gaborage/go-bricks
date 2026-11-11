@@ -10,8 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/server"
 )
+
+// TestMain unsets the PGSSL* variables config judges, so an ambient value cannot flip a
+// PostgreSQL section's validation verdict in this package's tests.
+func TestMain(m *testing.M) {
+	testutil.UnsetPostgresSSLEnv()
+	os.Exit(m.Run())
+}
 
 // minimalAppConfig is the smallest config NewWithConfig accepts: no Messaging and no
 // Database block at all.

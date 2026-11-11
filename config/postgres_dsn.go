@@ -7,8 +7,9 @@ import (
 )
 
 // pgSSLEnvKey pairs a libpq PGSSL* environment variable with its DSN keyword.
-// pgx's parseEnvSettings maps these five (skipping empty values) and mergeSettings
-// copies DSN over env, so a present DSN key — empty included — shadows the variable.
+// pgx's parseEnvSettings maps these six, skipping an empty value except PGSSLCERTMODE's,
+// and mergeSettings copies DSN over env, so a present DSN key — empty included — shadows
+// the variable.
 type pgSSLEnvKey struct {
 	env string
 	dsn string
@@ -20,20 +21,31 @@ const (
 	pgDSNSSLCert        = "sslcert"
 	pgDSNSSLKey         = "sslkey"
 	pgDSNSSLNegotiation = "sslnegotiation"
+	// pgDSNSSLCertMode governs only whether pgx sends a client certificate; it never claims TLS.
+	pgDSNSSLCertMode = "sslcertmode"
 	// pgDSNSSLAlias is the URI-only spelling pgx rewrites into sslmode=require.
 	pgDSNSSLAlias = "ssl"
 	pgDSNService  = "service"
 )
 
-// pgSSLEnvKeys is the production table of TLS-claim env names. Hermetic test
-// helpers reuse it so a newly judged variable cannot slip past the scrub.
+// pgSSLEnvKeys is the production table of judged PGSSL* env names: the five TLS-claim keys
+// and sslcertmode. Hermetic test helpers reuse it so a newly judged variable cannot slip
+// past the scrub.
 var pgSSLEnvKeys = []pgSSLEnvKey{
 	{env: "PGSSLMODE", dsn: pgDSNSSLMode},
 	{env: "PGSSLROOTCERT", dsn: pgDSNSSLRootCert},
-	{env: "PGSSLCERT", dsn: pgDSNSSLCert},
-	{env: "PGSSLKEY", dsn: pgDSNSSLKey},
+	{env: pgEnvSSLCert, dsn: pgDSNSSLCert},
+	{env: pgEnvSSLKey, dsn: pgDSNSSLKey},
 	{env: "PGSSLNEGOTIATION", dsn: pgDSNSSLNegotiation},
+	{env: pgEnvSSLCertMode, dsn: pgDSNSSLCertMode},
 }
+
+const (
+	pgEnvSSLCert = "PGSSLCERT"
+	pgEnvSSLKey  = "PGSSLKEY"
+	// pgEnvSSLCertMode is the one PGSSL* variable pgx keeps when set but empty, to reject it.
+	pgEnvSSLCertMode = "PGSSLCERTMODE"
+)
 
 // pgDSNSetting is one DSN key's presence and value; set includes an empty value, which shadows env.
 type pgDSNSetting struct {
@@ -41,13 +53,14 @@ type pgDSNSetting struct {
 	value string
 }
 
-// pgDSNTLSKeys is the five TLS keys scanPostgresDSN records presence for, parallel to pgSSLEnvKeys.
+// pgDSNTLSKeys is the TLS keys scanPostgresDSN records presence for, parallel to pgSSLEnvKeys.
 type pgDSNTLSKeys struct {
 	sslmode        pgDSNSetting
 	sslrootcert    pgDSNSetting
 	sslcert        pgDSNSetting
 	sslkey         pgDSNSetting
 	sslnegotiation pgDSNSetting
+	sslcertmode    pgDSNSetting
 }
 
 // pgDSNScan is a connection string's own host, service and TLS-key presence; hostSet includes an empty host, which shadows PGHOST.
@@ -92,6 +105,7 @@ func pgDSNTLSKeysFrom(settings map[string]string) pgDSNTLSKeys {
 		sslcert:        pgDSNSettingOf(settings, pgDSNSSLCert),
 		sslkey:         pgDSNSettingOf(settings, pgDSNSSLKey),
 		sslnegotiation: pgDSNSettingOf(settings, pgDSNSSLNegotiation),
+		sslcertmode:    pgDSNSettingOf(settings, pgDSNSSLCertMode),
 	}
 }
 
@@ -107,6 +121,8 @@ func (t *pgDSNTLSKeys) setting(dsn string) pgDSNSetting {
 		return t.sslkey
 	case pgDSNSSLNegotiation:
 		return t.sslnegotiation
+	case pgDSNSSLCertMode:
+		return t.sslcertmode
 	default:
 		return pgDSNSetting{}
 	}
@@ -114,6 +130,9 @@ func (t *pgDSNTLSKeys) setting(dsn string) pgDSNSetting {
 
 // pgTLSKeyClaims is the unchanged [C65.2] rule 2 claim test, applied to one merged key.
 func pgTLSKeyClaims(dsnKey, value string) bool {
+	if dsnKey == pgDSNSSLCertMode {
+		return false
+	}
 	switch dsnKey {
 	case pgDSNSSLMode:
 		return slices.Contains(pgTLSMandatorySSLModes, value)
