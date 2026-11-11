@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -1115,8 +1116,6 @@ func TestManagerStartRendersEndpointInOnePosture(t *testing.T) {
 		{name: "unparseable_uri_masked_whole", uri: "rabbitmq-stream://svc:fixture-pw@broker:55 52/%2f", want: "xxxxx", secrets: []string{"fixture-pw"}},
 		{name: "empty_uri", uri: "", want: "xxxxx"},
 		{name: "tls_scheme_is_preserved", uri: "rabbitmq-stream+tls://svc:fixture-pw@broker:5551/%2f", want: "rabbitmq-stream+tls://svc:xxxxx@broker:5551/%2f", secrets: []string{"fixture-pw"}},
-		// url.Parse reads "app:2024" as host:port, so a renderer that trusts it shows the password.
-		{name: "misparsed_password_endpoint_prefix_masked", uri: "rabbitmq-stream://app:2024/Sp/ring@broker:5552", want: "rabbitmq-stream://app:xxxxx@broker:5552", secrets: []string{"2024", "Sp/ring", "Sp", "ring"}},
 	}
 
 	for _, tt := range tests {
@@ -1134,10 +1133,72 @@ func TestManagerStartRendersEndpointInOnePosture(t *testing.T) {
 	}
 }
 
-// TestManagerStartMasksAHashBeforeTheLastAtAtEveryDoor pins the canceled-start endpoint
-// and the connected uri field to RedactForLog: Redact would show ZJV8 here.
-func TestManagerStartMasksAHashBeforeTheLastAtAtEveryDoor(t *testing.T) {
-	const uri = "rabbitmq-stream://u@ser:#Q@ZJV8/vh"
+// A URI handed to NewManager never passed config validation, so Start is its door: a
+// misread URI must not reach the environment constructor, which would dial its host
+// (password text) and whose own logger prints it.
+func TestManagerStartRefusesAMisreadURIBeforeDialing(t *testing.T) {
+	tests := []struct {
+		name    string
+		uri     string
+		secrets []string
+	}{
+		{name: "two_segments", uri: "rabbitmq-stream://app:2024/Sp/ring@rmq-fixture-host:5552", secrets: []string{"2024", "Sp", "ring"}},
+		{name: "one_segment", uri: "rabbitmq-stream://app:2024/Spring@rmq-fixture-host:5552", secrets: []string{"2024", "Spring"}},
+		{name: "hash_before_the_last_at", uri: "rabbitmq-stream://u@ser:#Q@ZJV8/vh", secrets: []string{"ZJV8", "u@ser"}},
+		{name: "at_in_vhost", uri: "rabbitmq-stream://u:p@rmq-fixture-host:5552/my@vhost", secrets: []string{"my@vhost"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewManager(ManagerOptions{URI: tt.uri, Logger: logger.New("error", false)})
+			dialed := false
+			m.dialEnvironment = func(*stream.EnvironmentOptions) (environment, error) {
+				dialed = true
+				return newFakeEnvironment(), nil
+			}
+
+			err := m.Start(context.Background(), oneConsumerDecls())
+
+			assert.False(t, dialed, "a refused stream URI must create no environment")
+			assert.Nil(t, m.env)
+			require.ErrorIs(t, err, credurl.ErrAtAfterAuthority)
+			assert.Equal(t, "streams: stream URI carries an unencoded '@' after its authority: "+credurl.AuthorityHint, err.Error())
+			for _, secret := range append([]string{tt.uri, "rmq-fixture-host"}, tt.secrets...) {
+				assert.NotContains(t, err.Error(), secret, "the refusal must carry no part of the URI")
+			}
+		})
+	}
+}
+
+// The refusal comes before the canceled-context door, whose message renders the endpoint.
+func TestManagerStartRefusesAMisreadURIEvenWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://app:2024/Spring@rmq-fixture-host:5552", Logger: logger.New("error", false)})
+
+	err := m.Start(ctx, oneConsumerDecls())
+
+	require.ErrorIs(t, err, credurl.ErrAtAfterAuthority)
+	require.NotErrorIs(t, err, context.Canceled)
+}
+
+func TestManagerStartDialsAURIWithAtInUserinfoOrEncoded(t *testing.T) {
+	for _, uri := range []string{
+		"rabbitmq-stream://user:pass@broker:5552/%2f",
+		"rabbitmq-stream://user:pa@ss@broker:5552/%2f",
+		"rabbitmq-stream://u:p@broker:5552/my%40vhost",
+	} {
+		m := NewManager(ManagerOptions{URI: uri, Logger: logger.New("error", false)})
+		startOnFake(t, m, newFakeEnvironment(), oneConsumerDecls())
+		t.Cleanup(func() { _ = m.Close() })
+
+		assert.NotNil(t, m.env, uri)
+	}
+}
+
+// TestManagerStartMasksAHostlessURIAtEveryDoor pins the canceled-start endpoint and the
+// connected uri field to RedactForLog: Redact would show the password's tail here.
+func TestManagerStartMasksAHostlessURIAtEveryDoor(t *testing.T) {
+	const uri = "rabbitmq-stream://svc:ZJV8@/vh"
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := NewManager(ManagerOptions{URI: uri, Logger: logger.New("error", false)}).Start(ctx, oneConsumerDecls())
@@ -1227,9 +1288,11 @@ func TestSafeEnvError(t *testing.T) {
 	assert.Same(t, other, safeEnvError(other, "rabbitmq-stream://svc:fixture-pw@broker:5552/"), "a non-URL error with nothing to mask passes through untouched")
 }
 
-// TestManagerStartMasksAnUnquotedVendorEcho: the client's pre-dial URI check echoes the
-// path as it decoded it, which is password text url.Parse misread.
-func TestManagerStartMasksAnUnquotedVendorEcho(t *testing.T) {
+// TestSafeEnvErrorMasksAnUnquotedVendorEcho: the client's pre-dial URI check echoes the
+// path as it decoded it, which on a misread URI is password text. Start refuses such a
+// URI before the client sees it, so this drives the client's own check and pins the mask
+// itself, for any door that does not refuse.
+func TestSafeEnvErrorMasksAnUnquotedVendorEcho(t *testing.T) {
 	tests := []struct {
 		name, uri string
 		secrets   []string
@@ -1240,13 +1303,16 @@ func TestManagerStartMasksAnUnquotedVendorEcho(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := NewManager(ManagerOptions{URI: tt.uri, Logger: logger.New("error", false)})
+			_, vendorErr := dialVendorEnvironment(stream.NewEnvironmentOptions().SetUri(tt.uri))
+			require.Error(t, vendorErr)
+			require.Contains(t, vendorErr.Error(), "ring", "the premise: the vendor echoes the misread path")
 
-			err := m.Start(t.Context(), oneConsumerDecls())
+			safe := safeEnvError(vendorErr, tt.uri)
 
-			require.EqualError(t, err, "failed to connect to stream endpoint rabbitmq-stream://app:xxxxx@broker:5552: multiple segments in URI path: xxxxx:5552")
+			require.EqualError(t, safe, "multiple segments in URI path: xxxxx:5552")
+			require.ErrorIs(t, safe, vendorErr)
 			for _, secret := range tt.secrets {
-				assert.NotContains(t, err.Error(), secret)
+				assert.NotContains(t, safe.Error(), secret)
 			}
 		})
 	}

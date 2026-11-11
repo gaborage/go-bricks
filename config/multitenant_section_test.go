@@ -1104,3 +1104,21 @@ func TestCheckStaticTenantMapAcceptsWellFormedBrokerURLs(t *testing.T) {
 
 	require.NoError(t, checkStaticTenantMap(tenants, &MessagingConfig{}))
 }
+
+func TestCheckStaticTenantMapRefusesMisreadBrokerURL(t *testing.T) {
+	for _, tt := range misreadBrokerURLCases {
+		t.Run(tt.name, func(t *testing.T) {
+			tenants := map[string]TenantEntry{
+				"acme":   {Messaging: TenantMessagingConfig{URL: "amqp://u:p@h:5672/vh"}},
+				"globex": {Messaging: TenantMessagingConfig{URL: tt.url}},
+			}
+
+			err := checkStaticTenantMap(tenants, &MessagingConfig{})
+
+			require.Error(t, err)
+			assert.Equal(t, "tenants: config_invalid: multitenant.tenants.globex.messaging.url "+
+				"carries an unencoded '@' after its authority "+misreadHint, err.Error())
+			assertNoBrokerURLText(t, err.Error(), tt.url, tt.secrets)
+		})
+	}
+}

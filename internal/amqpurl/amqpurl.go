@@ -9,11 +9,21 @@ import (
 	"strings"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+
+	"github.com/gaborage/go-bricks/internal/credurl"
 )
 
-// Hint is the remedy every refusal carries: the usual cause is a reserved character
+// hint is the remedy a malformed-URL refusal carries: the usual cause is a reserved character
 // left unencoded in the credentials.
-const Hint = "percent-encode reserved characters in the username and password (url.UserPassword)"
+const hint = "percent-encode reserved characters in the username and password (url.UserPassword)"
+
+// HintFor is the remedy that travels with a refusal Check returned.
+func HintFor(err error) string {
+	if errors.Is(err, credurl.ErrAtAfterAuthority) {
+		return credurl.AuthorityHint
+	}
+	return hint
+}
 
 // The refusals are fixed text. A broker URL carries credentials, and the vendor's
 // parse errors quote the URL, so neither reaches a message: only a reason class does.
@@ -32,7 +42,14 @@ const (
 // Check reports why raw may not be dialed, or nil. The verdict is amqp.ParseURI's own,
 // plus a written port outside 1-65535, which ParseURI accepts; the returned error only
 // names the class, so a rule the vendor adds later still refuses, under the last one.
+//
+// A URL that parses but carries an unencoded '@' after its authority is refused first
+// (credurl.CheckAuthority): its host and port are probably password text, so the
+// misread names the cause where a port or scheme class would name a symptom.
 func Check(raw string) error {
+	if err := credurl.CheckAuthority(raw); err != nil {
+		return err
+	}
 	u, err := url.Parse(raw)
 	if err != nil || strings.Contains(raw, " ") {
 		return ErrNotAMQPURL

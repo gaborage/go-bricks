@@ -27,6 +27,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/internal/publishdoor"
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
@@ -1750,6 +1751,72 @@ func TestConnectDialFailure(t *testing.T) {
 	}
 }
 
+// A hand-built client never passed config validation or the manager, so connect()
+// is its only door: a misread URL must not reach the dialer, where its host, which is
+// password text, would go to the resolver.
+func TestConnectRefusesMisreadBrokerURLBeforeDialing(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		secrets []string
+	}{
+		{name: "question_mark_in_password", raw: "amqp://user:s3cr@zq9x?PW@" + refusedURLHost + ":5672/vh", secrets: []string{"s3cr", "zq9x", "PW@"}},
+		{name: "slash_in_digit_password", raw: "amqp://user:1234/Spring@" + refusedURLHost + "/vh", secrets: []string{"1234", "Spring"}},
+		{name: "hash_in_digit_password", raw: "amqp://user:1234#Spring@" + refusedURLHost + "/vh", secrets: []string{"1234", "Spring"}},
+		// Only the misread refuses this one here: connect() does not judge the port.
+		{name: "slash_in_leading_zero_password", raw: "amqp://user:0123456/zq9x@" + refusedURLHost + "/vh", secrets: []string{"0123456", "zq9x"}},
+		{name: "at_in_vhost", raw: "amqp://u:p@" + refusedURLHost + "/my@vhost", secrets: []string{"my@vhost"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dials := 0
+			swapDialFunc(t, func(string) (amqpConnection, error) { dials++; return stubConn{}, nil })
+			c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: tt.raw}
+
+			conn, err := c.connect()
+
+			assert.Zero(t, dials, "a refused broker URL must never reach the dialer")
+			assert.Nil(t, conn)
+			require.ErrorIs(t, err, credurl.ErrAtAfterAuthority)
+			assert.Equal(t, "messaging: broker URL carries an unencoded '@' after its authority: "+credurl.AuthorityHint, err.Error())
+			for _, secret := range append([]string{tt.raw, refusedURLHost}, tt.secrets...) {
+				assert.NotContains(t, err.Error(), secret, "the refusal must carry no part of the URL")
+			}
+		})
+	}
+}
+
+func TestConnectDialsABrokerURLWithAtInUserinfoOrEncoded(t *testing.T) {
+	for _, raw := range []string{
+		"amqp://user:pa@ss@broker:5672/vh",
+		"amqp://u:p%2Fq%3Fr%23s%40t@h:5672/%2f",
+		"amqp://u:p@h/my%40vhost",
+	} {
+		var dialed []string
+		swapDialFunc(t, func(u string) (amqpConnection, error) { dialed = append(dialed, u); return stubConn{}, nil })
+		c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: raw}
+
+		_, err := c.connect()
+
+		require.NoError(t, err, raw)
+		assert.Equal(t, []string{raw}, dialed, "the URL is dialed as written")
+	}
+}
+
+// A refusal is not a dial: nothing was dialed, so the dial-failure counter stays put.
+func TestConnectRefusedBrokerURLCountsNoDialFailure(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+	tracking.WarmMeter()
+	swapDialFunc(t, func(string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp://user:1234/Spring@" + refusedURLHost + "/vh"}
+
+	_, err := c.connect()
+
+	require.ErrorIs(t, err, credurl.ErrAtAfterAuthority)
+	assert.Empty(t, dialFailuresByReason(t, mp.Collect(t)))
+}
+
 // dialFailuresByReason reads the dial-failure counter as reason -> count, failing on
 // any attribute beyond the system and the reason.
 func dialFailuresByReason(t *testing.T, rm metricdata.ResourceMetrics) map[string]int64 {
@@ -1935,15 +2002,12 @@ func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
 		name, raw, want string
 		secrets         []string
 	}{
-		{name: "port_out_of_range", raw: "amqp://user:12345678901/zq9x@broker/vh", want: `strconv.ParseInt: parsing "xxxxx": value out of range`, secrets: []string{"12345678901"}},
 		// Redact drops the query whole, so an echo of its key goes too.
 		{name: "heartbeat", raw: "amqp://app:zq9x@broker/vh?heartbeat=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		{name: "connection_timeout", raw: "amqp://app:zq9x@broker/vh?connection_timeout=k3y7", want: `xxxxx is not an integer: strconv.Atoi: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		{name: "channel_max", raw: "amqp://app:zq9x@broker/vh?channel_max=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		// amqp091 quotes the query value it percent-decoded.
 		{name: "decoded_heartbeat", raw: "amqp://app:zq9x@broker:5672/vh?heartbeat=k3%797", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
-		// amqp091 dials the digits url.Parse read as the port as an integer, without the leading zero.
-		{name: "leading_zero_port", raw: "amqp://user:0123456/zq9x@broker/vh", want: "dial tcp: address xxxxx: invalid port", secrets: []string{"123456"}},
 		// The port is kept in the redacted URL, so its quote is too.
 		{name: "kept_port_quote_survives", raw: "amqp://app:zq9x@broker:99999999999/vh", want: `strconv.ParseInt: parsing "99999999999": value out of range`},
 	}
@@ -1966,34 +2030,78 @@ func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
 	}
 }
 
-// TestConnectRedactsADecodedHostEcho covers a password holding an '@' and a '/': url.Parse
-// reads the text between them as the host and percent-decodes it, and the dial error
-// names that decoded host. The dialer is stubbed, so nothing is resolved.
-func TestConnectRedactsADecodedHostEcho(t *testing.T) {
-	swapDialFunc(t, func(string) (amqpConnection, error) {
-		return nil, errors.New("dial tcp: lookup s3cr\u00e9t: no such host")
+// TestConnectErrorMaskCoversMisreadURLEchoes pins the mask connect() applies to a dial
+// error, on the two echoes only a misread URL produces. connect() now refuses such a URL
+// before the dialer runs, so these drive the mask itself: it still stands behind any
+// dialer reached another way.
+func TestConnectErrorMaskCoversMisreadURLEchoes(t *testing.T) {
+	// amqp091 dials the digits url.Parse read as the port as an integer, without the leading zero.
+	t.Run("leading_zero_port", func(t *testing.T) {
+		raw := "amqp" + "://user:0123456/zq9x@broker/vh"
+		_, dialErr := amqp.Dial(raw)
+		var premise *url.Error
+		require.Error(t, dialErr)
+		require.NotErrorAs(t, dialErr, &premise, "premise: amqp091 fails its own check, after url.Parse")
+		require.Contains(t, dialErr.Error(), "123456", "premise: the vendor echoes the misread port")
+
+		err := credurl.RedactError(dialErr, raw, invalidBrokerURLReason)
+
+		require.EqualError(t, err, "dial tcp: address xxxxx: invalid port")
+		assert.NotContains(t, err.Error(), "123456")
 	})
-	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp" + "://app:pw@s3cr%C3%A9t/x@broker/vh"}
 
-	_, err := c.connect()
+	// A password holding an '@' and a '/': url.Parse reads the text between them as the
+	// host and percent-decodes it, and the dial error names that decoded host.
+	t.Run("decoded_host_echo", func(t *testing.T) {
+		raw := "amqp" + "://app:pw@s3cr%C3%A9t/x@broker/vh"
+		dialErr := errors.New("dial tcp: lookup s3cr\u00e9t: no such host")
 
-	require.EqualError(t, err, "dial tcp: lookup xxxxx: no such host")
+		err := credurl.RedactError(dialErr, raw, invalidBrokerURLReason)
+
+		require.EqualError(t, err, "dial tcp: lookup xxxxx: no such host")
+	})
 }
 
 // TestHandleReconnectLogsBrokerURLRedacted pins broker_url to credurl.RedactForLog, on a
-// URL url.Parse splits at the wrong '@'.
+// URL url.Parse rejects, which a hand-built client still dials.
 func TestHandleReconnectLogsBrokerURLRedacted(t *testing.T) {
 	dial, entered, release := gatedDial(func() (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
 	swapDialFunc(t, dial)
 	log := newRecordingLogger()
 
-	c := NewAMQPClient("amqp://user:1234/Spr#ing@broker/vh", log)
+	c := NewAMQPClient("amqp://user:zq@9x:QZXJ", log)
 	waitSignal(t, entered, "dial to start")
 	closeNonBlocking(t, c)
 	close(release)
 	waitSignal(t, c.reconnectDone, "reconnect goroutine to exit")
 
 	assert.Equal(t, []string{"xxxxx"}, log.Line(t, "Attempting to connect to AMQP broker").Values("broker_url"))
+}
+
+// A refused URL is an ordinary connect error to the retry loop: logged, backed off,
+// retried. What changes is that nothing is dialed and the logged error is fixed text.
+func TestHandleReconnectLogsARefusedBrokerURLWithoutDialingIt(t *testing.T) {
+	var dials atomic.Int32
+	swapDialFunc(t, func(string) (amqpConnection, error) { dials.Add(1); return stubConn{}, nil })
+	log := newRecordingLogger()
+
+	c := NewAMQPClient("amqp://user:1234/Spring@rmq-fixture-host/vh", log)
+	require.Eventually(t, func() bool { return len(log.Matching(msgConnectFailed)) > 0 },
+		2*time.Second, 5*time.Millisecond, "the refusal to be logged")
+	closeAndWaitForReconnect(c)
+
+	assert.Zero(t, dials.Load(), "a refused broker URL must never reach the dialer")
+	for _, line := range log.Matching(msgConnectFailed) {
+		got := line.Values("error")
+		require.Equal(t, []string{"messaging: broker URL carries an unencoded '@' after its authority: " + credurl.AuthorityHint}, got)
+	}
+	for _, line := range log.Lines() {
+		// broker_url keeps its one posture (credurl.RedactForLog); the password is what
+		// no line may show.
+		for _, secret := range []string{"1234", "Spring"} {
+			assert.NotContains(t, fmt.Sprint(line), secret, "no log line may carry the refused URL's password")
+		}
+	}
 }
 
 // ===== Enhanced Publishing & Confirmation Tests =====

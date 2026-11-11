@@ -3039,6 +3039,22 @@ remedy, never the URL. See [migrations.md](migrations.md) `[C74.2]`.
 **Key Benefits:** a malformed broker URL names its key at startup instead of hiding behind a
 readiness timeout, with no part of the URL or its credentials in the message.
 
+### [ADR-176: A Broker URL With an Unencoded `@` After Its Authority Is Refused](adr_176_broker_url_with_at_after_authority_refused.md)
+
+**Date:** 2026-11-09 | **Status:** Accepted | **Breaking:** a broker URL, static tenant `messaging.url` or `messaging.streams.uri` with an unencoded `@` in its path, query or fragment is refused before anything is dialed, including a valid vhost or query value; write that `@` as `%40`
+
+`url.Parse` ends the authority at the first `/`, `?` or `#`, so one left unencoded in a password
+turns password text into the host, and the real `@host` lands after the authority: the client
+dialed the misread host, and ADR-159 masked only the rendered error. One predicate,
+`credurl.CheckAuthority`, refuses an unencoded `@` after the authority at `config.Validate`, at
+`messaging.Manager`, at a hand-built AMQP client's connect step and at `streams.Manager.Start`,
+with fixed text that carries no part of the URL. See [migrations.md](migrations.md) `[C74.3]`.
+
+**Key Benefits:** a URL whose password `url.Parse` split is refused before its password text is
+looked up or dialed as a host.
+
+---
+
 ### [ADR-177: `Having` Accepts a Closed Set of Predicate Forms](adr_177_having_accepts_closed_predicate_forms.md)
 
 **Date:** 2026-11-10 | **Status:** Accepted | **Breaking:** a `Having` predicate that is not a string, a `RawExpression` (or a non-nil pointer to one) or a `dbtypes.Filter`, and a Filter followed by trailing arguments, fail `ToSQL()` with `ErrUnsupportedHavingPredicate`

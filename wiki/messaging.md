@@ -40,6 +40,11 @@ u := url.URL{Scheme: "amqps", User: url.UserPassword(user, pass), Host: "broker:
 cfg.Messaging.Broker.URL = u.String() // or render it into the secret your deployment loads
 ```
 
+An unencoded `/`, `?` or `#` in the password makes `url.Parse` read password text as the host, so
+a URL with an unencoded `@` after its authority is refused at startup, at `messaging.Manager` and
+at a hand-built client's connect step, before anything is dialed (ADR-176). Write a literal `@` in
+a vhost or query value as `%40`.
+
 ## Helper Functions for Simplified Declarations
 
 GoBricks provides production-safe defaults to reduce AMQP boilerplate (~50+ lines → ~15 lines):

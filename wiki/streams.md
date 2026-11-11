@@ -48,7 +48,10 @@ messaging:
 
 - `messaging.streams.uri` is **not** derived from `messaging.broker.url`: the
   stream protocol is a separate listener a deployment may not expose at all. It
-  carries credentials and is never logged raw.
+  carries credentials and is never logged raw. Percent-encode reserved characters
+  in the credentials: a URI with an unencoded `@` after its authority fails
+  `config.Validate` and `streams.Manager.Start` (ADR-176); write an `@` in the
+  vhost as `%40`.
 - `addressresolver` is **required** behind a load balancer, NAT, or Docker port
   mapping. Without it the client dials the address the broker advertises in its
   metadata response, which from outside the cluster is unreachable.

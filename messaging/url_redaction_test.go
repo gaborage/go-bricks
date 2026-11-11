@@ -33,8 +33,6 @@ func TestCreateAMQPClientLogsBrokerURLInOnePosture(t *testing.T) {
 		{name: "url_with_ip_address", input: "amqp://admin:secret@192.168.1.100:5672/", want: "amqp://admin:xxxxx@192.168.1.100:5672/", secrets: []string{"secret"}},
 		{name: "url_with_long_password", input: "amqp://user:verylongpasswordwithmanychars123456789@localhost:5672/", want: "amqp://user:xxxxx@localhost:5672/", secrets: []string{"verylongpassword"}},
 		{name: "keeps_debugging_info", input: "amqp://admin:secret@rabbitmq.example.com:5672/production", want: "amqp://admin:xxxxx@rabbitmq.example.com:5672/production", secrets: []string{"secret"}},
-		// url.Parse reads "user:1234" as host:port, so a renderer that trusts it shows the password.
-		{name: "misparsed_password_masked", input: "amqp://user:1234/Spring@broker/vh", want: "amqp://user:xxxxx@broker/vh", secrets: []string{"1234", "Spring"}},
 	}
 
 	for _, tt := range tests {
@@ -75,6 +73,8 @@ func TestCreateAMQPClientRefusesMalformedBrokerURLWithoutRenderingIt(t *testing.
 		{name: "forgot_host_at_in_password_masked_whole", input: "amqp://user:zq@9x:QZXJ", want: "xxxxx", secrets: []string{"zq", "9x", "QZXJ"}},
 		{name: "empty_url", input: "", want: "xxxxx"},
 		{name: "non_amqp_scheme", input: "http://user:hunter2@localhost:80/", want: "http://user:xxxxx@localhost:80/", secrets: []string{"hunter2"}},
+		// url.Parse reads "user:1234" as host:port, so a renderer that trusts it shows the password.
+		{name: "misparsed_password_masked", input: "amqp://user:1234/Spring@broker/vh", want: "amqp://user:xxxxx@broker/vh", secrets: []string{"1234", "Spring"}},
 	}
 
 	for _, tt := range tests {

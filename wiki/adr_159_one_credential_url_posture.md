@@ -310,6 +310,10 @@ start), and it has no exact trigger. `amqp://user:1234/Spring@broker/vh` (mispar
 `amqp://h:5672/my@vhost` (host, port, `@` vhost) have the same shape, and the candidate heuristics
 each either refuse a valid vhost or miss a misparse. Left open.
 
+Settled by [ADR-176](adr_176_broker_url_with_at_after_authority_refused.md): a broker URL or stream
+URI with an unencoded `@` after its authority is refused before dialing, and a literal `@` in a
+vhost or query value is written `%40`. See [migrations.md](migrations.md) `[C74.3]`.
+
 ## References
 
 - `internal/credurl/credurl.go`: `Redact`, `RedactForLog`, `RedactError`, `RedactURLError`,
