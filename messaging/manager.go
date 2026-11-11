@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/amqpurl"
 	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/internal/resourcepool"
 	"github.com/gaborage/go-bricks/logger"
@@ -525,12 +526,19 @@ func (m *Manager) registryFor(key string) *Registry {
 	return entry.registry
 }
 
-// createAMQPClient creates a new AMQP client for the given key
+// createAMQPClient creates a new AMQP client for the given key, refusing a resolved
+// URL the client could never dial (amqpurl.Check) before the factory runs: a dynamic
+// source's URL never passed config validation.
 func (m *Manager) createAMQPClient(ctx context.Context, key string) (AMQPClient, error) {
 	// Get AMQP URL for this key (error is already well-formatted from tenant store)
 	amqpURL, err := m.resourceSource.BrokerURL(ctx, key)
 	if err != nil {
 		return nil, err
+	}
+
+	// SECURITY: fixed text only (amqpurl): never add the URL or the vendor's error here.
+	if err := amqpurl.Check(amqpURL); err != nil {
+		return nil, fmt.Errorf("messaging: broker URL for key %q %w: %s", key, err, amqpurl.Hint)
 	}
 
 	// Create AMQP client using injected factory

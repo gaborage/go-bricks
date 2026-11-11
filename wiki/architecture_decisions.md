@@ -3024,6 +3024,23 @@ holds.
 
 ---
 
+### [ADR-175: A Broker URL the AMQP Client Cannot Parse Fails Startup](adr_175_malformed_broker_url_fails_startup.md)
+
+**Date:** 2026-11-09 | **Status:** Accepted | **Breaking:** a `messaging.broker.url` or static tenant `messaging.url` that `amqp.ParseURI` refuses, or that writes a port outside 1-65535, fails `config.Validate` instead of failing at the dial
+
+Startup checked the broker URLs only for being non-empty, so a URL the client could never parse
+surfaced at the first dial and was retried forever: consumers failed after the 30s readiness wait
+with a generic timeout, and a publisher-only or per-tenant service booted. Every statically
+configured AMQP URL now passes the client's own parser plus a port range check at startup, and
+`messaging.Manager` applies the same check to a URL a dynamic source resolves, before the client
+factory runs. The message is fixed text: the key, one reason class and the percent-encoding
+remedy, never the URL. See [migrations.md](migrations.md) `[C74.2]`.
+
+**Key Benefits:** a malformed broker URL names its key at startup instead of hiding behind a
+readiness timeout, with no part of the URL or its credentials in the message.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3833,7 +3850,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-174) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-175) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

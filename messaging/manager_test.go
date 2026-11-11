@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/amqpurl"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
 )
@@ -2112,5 +2113,53 @@ func TestManagerStopsAPublisherObserverWhoseClientKeepsAnnouncing(t *testing.T) 
 	case <-pooled.observerDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the observer outlived a client that keeps announcing; the pool closer's stop never reached it")
+	}
+}
+
+// The refused-URL fixtures are fixture values, not credentials: distinctive enough that
+// a leak assertion on them cannot be met by the fixed refusal text.
+const (
+	refusedURLPassword = "zq9xPW"
+	refusedURLHost     = "rmq-fixture-host"
+)
+
+// TestMessagingManagerRefusesMalformedResolvedBrokerURL pins the runtime half of the
+// startup check: a URL a dynamic source resolves is judged before any client exists.
+func TestMessagingManagerRefusesMalformedResolvedBrokerURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr error
+		secrets []string
+	}{
+		{name: "heartbeat_out_of_range", url: "amqp://app:" + refusedURLPassword + "@" + refusedURLHost + ":5672/vh?heartbeat=70000", wantErr: amqpurl.ErrQueryOutOfRange, secrets: []string{"70000"}},
+		{name: "unencoded_percent_in_password", url: "amqp://app:" + refusedURLPassword + "%w@" + refusedURLHost + ":5672/vh", wantErr: amqpurl.ErrNotAMQPURL},
+		{name: "http_scheme", url: "http://" + refusedURLHost + "/", wantErr: amqpurl.ErrUnsupportedScheme, secrets: []string{"http"}},
+		{name: "not_a_url", url: "not a url at all", wantErr: amqpurl.ErrNotAMQPURL, secrets: []string{"not a url"}},
+		{name: "port_out_of_range", url: "amqp://app:" + refusedURLPassword + "@" + refusedURLHost + ":99999/vh", wantErr: amqpurl.ErrPortOutOfRange, secrets: []string{"99999"}},
+		{name: "empty", url: "", wantErr: amqpurl.ErrUnsupportedScheme},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			manager := NewMessagingManager(
+				&stubMessagingSource{urls: map[string]string{testTenantID: tt.url}}, logger.New("error", false),
+				ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+				func(string, logger.Logger) AMQPClient { calls++; return &stubAMQPClient{} })
+			defer func() { _ = manager.Close() }()
+
+			consumeErr := manager.EnsureConsumers(context.Background(), testTenantID, newSetupDeclarations())
+			_, _, publishErr := manager.Publisher(context.Background(), testTenantID)
+
+			assert.Zero(t, calls, "a refused broker URL must build no client")
+			for _, err := range []error{consumeErr, publishErr} {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Equal(t, `messaging: broker URL for key "`+testTenantID+`" `+tt.wantErr.Error()+": "+amqpurl.Hint, err.Error())
+				for _, secret := range append([]string{refusedURLPassword, refusedURLHost}, tt.secrets...) {
+					assert.NotContains(t, err.Error(), secret, "a broker URL refusal must carry no part of the URL")
+				}
+			}
+		})
 	}
 }

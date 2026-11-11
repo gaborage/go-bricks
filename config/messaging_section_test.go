@@ -1266,3 +1266,112 @@ func TestValidatePublisherPoolDefaultsFollowMessagingTenancy(t *testing.T) {
 		})
 	}
 }
+
+// Fixture values, not credentials: distinctive enough that a leak assertion on
+// them cannot be satisfied by the config key or the fixed refusal text.
+const (
+	brokerFixturePassword = "zq9xPW"
+	brokerFixtureHost     = "rmq-fixture-host"
+	brokerFixtureVhost    = "vh-fixture"
+)
+
+// malformedBrokerURLCases are the shapes amqp.ParseURI or the port range refuse,
+// each with the fixed reason class the refusal carries.
+var malformedBrokerURLCases = []struct {
+	name    string
+	url     string
+	wantErr string
+	secrets []string
+}{
+	{
+		name:    "heartbeat_out_of_range",
+		url:     "amqp://app:" + brokerFixturePassword + "@" + brokerFixtureHost + ":5672/" + brokerFixtureVhost + "?heartbeat=70000",
+		wantErr: "carries a query parameter out of range",
+		secrets: []string{"70000"},
+	},
+	{
+		name:    "unencoded_percent_in_password",
+		url:     "amqp://app:" + brokerFixturePassword + "%w@" + brokerFixtureHost + ":5672/" + brokerFixtureVhost,
+		wantErr: "is not a valid AMQP URL",
+	},
+	{
+		name:    "http_scheme",
+		url:     "http://" + brokerFixtureHost + "/",
+		wantErr: "uses an unsupported scheme",
+		secrets: []string{"http"},
+	},
+	{
+		name:    "not_a_url",
+		url:     "not a url at all",
+		wantErr: "is not a valid AMQP URL",
+		secrets: []string{"not a url"},
+	},
+	{
+		name:    "port_out_of_range",
+		url:     "amqp://app:" + brokerFixturePassword + "@" + brokerFixtureHost + ":99999/" + brokerFixtureVhost,
+		wantErr: "carries a port out of range",
+		secrets: []string{"99999"},
+	},
+	{
+		name:    "port_zero",
+		url:     "amqp://app:" + brokerFixturePassword + "@" + brokerFixtureHost + ":0/" + brokerFixtureVhost,
+		wantErr: "carries a port out of range",
+	},
+	{
+		name:    "port_beyond_int32",
+		url:     "amqp://app:" + brokerFixturePassword + "@" + brokerFixtureHost + ":99999999999/" + brokerFixtureVhost,
+		wantErr: "carries a port out of range",
+		secrets: []string{"99999999999"},
+	},
+	{
+		name:    "schemeless_credentials",
+		url:     "app:" + brokerFixturePassword + "@" + brokerFixtureHost,
+		wantErr: "uses an unsupported scheme",
+	},
+}
+
+// assertNoBrokerURLText fails when a refusal carries any part of the URL it refused.
+func assertNoBrokerURLText(t *testing.T, msg, raw string, secrets []string) {
+	t.Helper()
+	for _, secret := range append([]string{raw, brokerFixturePassword, brokerFixtureHost, brokerFixtureVhost}, secrets...) {
+		assert.NotContains(t, msg, secret, "a broker URL refusal must carry no part of the URL")
+	}
+}
+
+func TestValidateRefusesMalformedBrokerURL(t *testing.T) {
+	for _, tt := range malformedBrokerURLCases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &MessagingConfig{Broker: BrokerConfig{URL: tt.url}}
+
+			err := normalizeAndCheckMessaging(cfg, false)
+
+			require.Error(t, err)
+			assert.Equal(t, "config_invalid: messaging.broker.url "+tt.wantErr+
+				" percent-encode reserved characters in the username and password (url.UserPassword)", err.Error())
+			assertNoBrokerURLText(t, err.Error(), tt.url, tt.secrets)
+		})
+	}
+}
+
+func TestValidateAcceptsWellFormedBrokerURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "unset", url: ""},
+		{name: "unreachable_host", url: "amqp://app:pw@unreachable.invalid:5672/vh"},
+		{name: "leading_zero_port", url: "amqp://h:05672/vh"},
+		{name: "two_segment_path", url: "amqp://u:p@h/a/b"},
+		{name: "amqps_with_heartbeat", url: "amqps://u:p@h:5671/vh?heartbeat=30"},
+		{name: "no_port", url: "amqp://u:p@h/vh"},
+		{name: "highest_port", url: "amqp://u:p@h:65535/vh"},
+		{name: "lowest_port", url: "amqp://u:p@h:1/vh"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &MessagingConfig{Broker: BrokerConfig{URL: tt.url}}
+
+			require.NoError(t, normalizeAndCheckMessaging(cfg, false))
+		})
+	}
+}

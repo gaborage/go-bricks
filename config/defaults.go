@@ -295,6 +295,7 @@ const (
 	fieldAuthJWKSMinRefresh   = "auth.jwt.jwks.minrefreshinterval"
 	fieldAuthJWKSMaxBodyBytes = "auth.jwt.jwks.maxbodybytes"
 
+	fieldMessagingBrokerURL      = "messaging.broker.url"
 	fieldMessagingStreamsURI     = "messaging.streams.uri"
 	fieldMessagingSealActive     = "messaging.seal.active"
 	fieldMessagingPublishTimeout = "messaging.publishtimeout"
