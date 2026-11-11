@@ -818,16 +818,15 @@ func TestMigrateAllParallelRechecksQuiesceAfterWaitingForSlot(t *testing.T) {
 	done := migrateAllAsync(context.Background(), fm, ids, configs,
 		MigrateAllOptions{BaseConfig: base, Parallelism: 2, Quiesce: gate, Hook: hook})
 	deadline := time.After(10 * time.Second)
-	hookEntered, t2Resolved := (<-chan struct{})(hookStarted), (<-chan struct{})(configs.resolved)
-	for hookEntered != nil || t2Resolved != nil {
-		select {
-		case <-hookEntered:
-			hookEntered = nil
-		case <-t2Resolved:
-			t2Resolved = nil
-		case <-deadline:
-			t.Fatalf("timed out: hook pending=%v, t2 dispatch pending=%v", hookEntered != nil, t2Resolved != nil)
-		}
+	select {
+	case <-hookStarted:
+	case <-deadline:
+		t.Fatal("no tenant finished while both worker slots were free")
+	}
+	select {
+	case <-configs.resolved:
+	case <-deadline:
+		t.Fatal("t2 was never dispatched")
 	}
 	_, err := gate.Set(context.Background(), QuiesceSetOptions{By: "deployer", TTL: time.Hour})
 	require.NoError(t, err)
