@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-28
 
-## Amendment (2026-11-09, #2274): a rejected or hostless URL renders whole as `xxxxx` at every door
+## Amendment (2026-11-09, #2274, #2272, #2271, #2273): a rejected or hostless URL renders whole as `xxxxx` at every door, and three more vendor echoes are masked
 
 The decision kept a whole mask for the log doors only, on the ground that logs fan out to more
 sinks than an error. That split does not hold: the AMQP dial error is the `error` field of the
@@ -36,6 +36,59 @@ renders a URL that url.Parse rejects, or reads with an empty host, as the bare p
   defers to `Redact`, which renders empty input as the empty string.
 - Not changed: refusing a URL at startup, the `#`-before-last-`@` residual at the error doors,
   and Oracle connect-descriptor dial targets.
+
+**The normalized port (#2272).** When a password starts with `0` and is all digits up to an
+unencoded `/`, `?` or `#`, url.Parse reads those digits as the port, and amqp091 and go-ora dial
+it as an integer: `amqp://user:0123456/zq9x@broker/vh` fails with
+`dial tcp: address 123456: invalid port`, text neither the URL nor the decoded password holds
+aligned. The integer rendering of a digit-only port url.Parse reads is now one more source for
+the quoted and unquoted passes, so that error renders `address xxxxx: invalid port`. The existing
+guard still applies: `amqp://h:05672/vh` renders as written, so `5672` stays readable. A port too
+large for an integer has no integer rendering and is handled as before.
+
+**Percent-decoded echoes (#2271).** This replaces "A percent-decoded query value is not checked"
+in the decision and "that echo is not covered" in the consequences. The passes, and `quotesInput`
+behind `RedactURLError`, also take as sources the decoded forms url.Parse reads: the hostname,
+the path, and each query key and value decoded on its own, `+` read as a space, a pair that fails
+to decode skipped.
+
+- `unknown URL option: s3cret` for `…/svc?wallet%20password=ab&s3%63ret` renders
+  `unknown URL option: xxxxx`; `multiple segments in URI path: /Sp@ring/x@broker:5552` for
+  `rabbitmq-stream://app:2024/Sp%40ring/x@broker:5552` renders `… path: xxxxx:5552`;
+  `lookup s3crét: no such host` for an AMQP URL whose password is `pw@s3cr%C3%A9t/x` renders
+  `lookup xxxxx: no such host`; `parsing "k3y7"` for `?heartbeat=k3%797` renders
+  `parsing "xxxxx"`.
+- The guard is extended for those sources only: text found through a decoded source is never
+  masked when the rendering shows it, as written or once percent-decoded, so
+  `amqp://u:p@h/my%20vhost` keeps `vhost "my vhost" not found`. Text the URL as written or the
+  decoded password holds keeps the original guard: it stays only when the rendering shows it as
+  written.
+- Decoded query keys count, as raw ones do, so a vendor word equal to one may be masked. The
+  one-byte rule is unchanged.
+- That narrows the #2271 brief, which extended the guard to every source ("text that the kept
+  rendering shows, as written or once percent-decoded, is never masked"). Applied to written
+  text, the decoded guard showed passwords the rules above already masked, because a password
+  can repeat text the rendering shows only once decoded. A door may render stricter, never
+  looser, so written text keeps the as-written guard and the result masks a superset of what it
+  masked before:
+
+  | URL | Vendor text | Decoded guard on every source | As built |
+  | --- | --- | --- | --- |
+  | `amqp://user:et@db/s3cr%65t` | `login refused: et` | `login refused: et` | `login refused: xxxxx` |
+  | `amqp://al%40corp:al@corp@db/vh` | `bad credentials al@corp` | `bad credentials al@corp` | `bad credentials xxxxx` |
+
+- At the httpclient and migration doors a reason is replaced more often, since `quotesInput`
+  uses the same sources. A percent-encoded Oracle connect descriptor is still not checked.
+
+**A rebuild under a substituted username (#2273).** The stream client fills an empty configured
+username with its default one before it rebuilds each leader or replica URI, so for
+`rabbitmq-stream://:p%2Fzq9xs3cret%231@broker:5552/vh` the rebuild, cut at the `#`, did not open
+with the configured `<scheme>://<user>:` and was judged alone. The rebuilt-URI rule now reads: for
+a configured URI with an empty username, any username holding no `/`, `?`, `#` or `@` counts, so
+that rebuild is judged as the configured URI and the start error renders
+`parse "rabbitmq-stream://:xxxxx@broker:5552/vh": invalid URL`. A configured non-empty username
+is still matched exactly, and a `*url.Error` naming an unrelated URL is still judged alone.
+`credurl` names no client and no default username.
 
 See [migrations.md](migrations.md) `[C74.1]`.
 
@@ -265,7 +318,7 @@ vhost or query value is written `%40`. See [migrations.md](migrations.md) `[C74.
 
 - `internal/credurl/credurl.go`: `Redact`, `RedactForLog`, `RedactError`, `RedactURLError`,
   `RedactURLErrorIn`, `StripUserinfo`, `maskURLError`, `maskQuoted`, `maskRawTokens`,
-  `rebuiltFrom`
+  `dropsRawText`, `rawSources`, `rebuiltFrom`
 - `httpclient/client.go`: `executionError`, `buildRequest`
 - `migration/source/http/source.go`: `New`, `redirectGuard`, `fetchPage`, `redactedURL`
 - `messaging/amqp_client.go`: `connect`

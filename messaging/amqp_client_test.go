@@ -2006,6 +2006,8 @@ func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
 		{name: "heartbeat", raw: "amqp://app:zq9x@broker/vh?heartbeat=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		{name: "connection_timeout", raw: "amqp://app:zq9x@broker/vh?connection_timeout=k3y7", want: `xxxxx is not an integer: strconv.Atoi: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		{name: "channel_max", raw: "amqp://app:zq9x@broker/vh?channel_max=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
+		// amqp091 quotes the query value it percent-decoded.
+		{name: "decoded_heartbeat", raw: "amqp://app:zq9x@broker:5672/vh?heartbeat=k3%797", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		// The port is kept in the redacted URL, so its quote is too.
 		{name: "kept_port_quote_survives", raw: "amqp://app:zq9x@broker:99999999999/vh", want: `strconv.ParseInt: parsing "99999999999": value out of range`},
 	}
@@ -2026,6 +2028,38 @@ func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestConnectErrorMaskCoversMisreadURLEchoes pins the mask connect() applies to a dial
+// error, on the two echoes only a misread URL produces. connect() now refuses such a URL
+// before the dialer runs, so these drive the mask itself: it still stands behind any
+// dialer reached another way.
+func TestConnectErrorMaskCoversMisreadURLEchoes(t *testing.T) {
+	// amqp091 dials the digits url.Parse read as the port as an integer, without the leading zero.
+	t.Run("leading_zero_port", func(t *testing.T) {
+		raw := "amqp" + "://user:0123456/zq9x@broker/vh"
+		_, dialErr := amqp.Dial(raw)
+		var premise *url.Error
+		require.Error(t, dialErr)
+		require.NotErrorAs(t, dialErr, &premise, "premise: amqp091 fails its own check, after url.Parse")
+		require.Contains(t, dialErr.Error(), "123456", "premise: the vendor echoes the misread port")
+
+		err := credurl.RedactError(dialErr, raw, invalidBrokerURLReason)
+
+		require.EqualError(t, err, "dial tcp: address xxxxx: invalid port")
+		assert.NotContains(t, err.Error(), "123456")
+	})
+
+	// A password holding an '@' and a '/': url.Parse reads the text between them as the
+	// host and percent-decodes it, and the dial error names that decoded host.
+	t.Run("decoded_host_echo", func(t *testing.T) {
+		raw := "amqp" + "://app:pw@s3cr%C3%A9t/x@broker/vh"
+		dialErr := errors.New("dial tcp: lookup s3cr\u00e9t: no such host")
+
+		err := credurl.RedactError(dialErr, raw, invalidBrokerURLReason)
+
+		require.EqualError(t, err, "dial tcp: lookup xxxxx: no such host")
+	})
 }
 
 // TestHandleReconnectLogsBrokerURLRedacted pins broker_url to credurl.RedactForLog, on a
