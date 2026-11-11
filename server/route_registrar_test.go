@@ -818,16 +818,26 @@ var sealServer = []struct {
 var errSealSetup = errors.New("setup failed")
 
 // requireLateRegistrationPanic fails unless fn panics with an error matching
-// ErrRegistrationAfterStart whose text is want.
-func requireLateRegistrationPanic(t *testing.T, want string, fn func()) {
+// ErrRegistrationAfterStart and every one of also, whose text is want.
+func requireLateRegistrationPanic(t *testing.T, want string, fn func(), also ...error) {
+	t.Helper()
+	assert.EqualError(t, requireLateRegistrationPanicIs(t, fn, also...), want)
+}
+
+// requireLateRegistrationPanicIs fails unless fn panics with an error matching
+// ErrRegistrationAfterStart and every one of also, and returns that error.
+func requireLateRegistrationPanicIs(t *testing.T, fn func(), also ...error) (err error) {
 	t.Helper()
 	defer func() {
-		err, ok := recover().(error)
+		var ok bool
+		err, ok = recover().(error)
 		require.True(t, ok, "expected registration to panic with an error")
-		require.ErrorIs(t, err, ErrRegistrationAfterStart)
-		assert.EqualError(t, err, want)
+		for _, target := range append([]error{ErrRegistrationAfterStart}, also...) {
+			require.ErrorIs(t, err, target)
+		}
 	}()
 	fn()
+	return nil
 }
 
 // TestRouteRegistrarRefusesRegistrationAfterStart pins that once Start has claimed the server,
@@ -905,14 +915,7 @@ func TestRouteRegistrarLateConflictPanicsUnrecorded(t *testing.T) {
 				mg.Add(http.MethodGet, "/taken", answerWith("first"))
 				s.seal(t, srv)
 				for range 2 {
-					func() {
-						defer func() {
-							err, _ := recover().(error)
-							require.ErrorIs(t, err, ErrRegistrationAfterStart)
-							require.ErrorIs(t, err, ErrDuplicateRoute)
-						}()
-						mg.Add(method, "/taken", answerWith("second"))
-					}()
+					requireLateRegistrationPanicIs(t, func() { mg.Add(method, "/taken", answerWith("second")) }, ErrDuplicateRoute)
 				}
 				assert.Empty(t, srv.RouteConflicts())
 				assert.Equal(t, "first", serveFamilyRequest(srv, "/taken").Body.String())

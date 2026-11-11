@@ -359,7 +359,7 @@ func TestRegisterGlobalMiddlewareAfterStartPanics(t *testing.T) {
 				trespassFamily + "); " + tenantFamilyGlobalMiddlewareHint,
 		},
 		{name: "without_family_panics", wantPanic: "server: registration after Start: RegisterGlobalMiddleware"},
-		{name: "nil_beside_family_is_noop", family: true, nilOnly: true},
+		{name: "nil_beside_family_is_noop", family: true},
 	}
 	for _, seal := range sealServer {
 		for _, tt := range tests {
@@ -371,10 +371,9 @@ func TestRegisterGlobalMiddlewareAfterStartPanics(t *testing.T) {
 // lateGlobalMiddlewareCase is one RegisterGlobalMiddleware call after Start.
 type lateGlobalMiddlewareCase struct {
 	name      string
-	family    bool  // build a tenant-owned family before Start
-	nilOnly   bool  // register only nil middleware
-	alsoIs    error // a second sentinel the panic matches, beside ErrRegistrationAfterStart
-	wantPanic string
+	family    bool   // build a tenant-owned family before Start
+	alsoIs    error  // a second sentinel the panic matches, beside ErrRegistrationAfterStart
+	wantPanic string // empty: register only nil middleware, a no-op
 }
 
 func (tt lateGlobalMiddlewareCase) run(t *testing.T, seal func(*testing.T, *Server)) {
@@ -389,19 +388,18 @@ func (tt lateGlobalMiddlewareCase) run(t *testing.T, seal func(*testing.T, *Serv
 		mwRan = true
 		return next()
 	}
-	if tt.nilOnly {
-		mw = nil
-	}
 	register := func() { srv.RegisterGlobalMiddleware(mw) }
 
-	if tt.nilOnly {
+	if tt.wantPanic == "" {
+		mw = nil
 		require.NotPanics(t, register)
 	} else {
-		requireLateRegistrationPanic(t, tt.wantPanic, register)
-		requireLateRegistrationPanic(t, tt.wantPanic, register)
-	}
-	if tt.alsoIs != nil {
-		assert.True(t, panicsWith(t, tt.alsoIs, register))
+		var also []error
+		if tt.alsoIs != nil {
+			also = append(also, tt.alsoIs)
+		}
+		requireLateRegistrationPanic(t, tt.wantPanic, register, also...)
+		requireLateRegistrationPanic(t, tt.wantPanic, register, also...)
 	}
 	assert.Equal(t, http.StatusOK, serveFamilyRequest(srv, "/open").Code)
 	assert.False(t, mwRan, "refused global middleware never runs")
