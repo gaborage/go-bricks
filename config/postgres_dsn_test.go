@@ -38,6 +38,9 @@ func TestScanPostgresDSN(t *testing.T) {
 		{name: "keyword_socket_disable", dsn: "host=/var/run/postgresql sslmode=disable", want: pgDSNScan{hostSet: true, host: "/var/run/postgresql"}},
 		{name: "keyword_socket_prefer", dsn: "host=/var/run/postgresql sslmode=prefer", want: pgDSNScan{hostSet: true, host: "/var/run/postgresql"}},
 		{name: "keyword_socket_allow", dsn: "host=/var/run/postgresql sslmode=allow", want: pgDSNScan{hostSet: true, host: "/var/run/postgresql"}},
+		// sslcertmode governs the client certificate only, so no value of it claims TLS.
+		{name: "keyword_socket_sslcertmode_require_no_claim", dsn: "host=/var/run/postgresql sslcertmode=require", want: pgDSNScan{hostSet: true, host: "/var/run/postgresql"}},
+		{name: "uri_socket_sslcertmode_allow_no_claim", dsn: "postgres:///db?host=/s&sslcertmode=allow", want: pgDSNScan{hostSet: true, host: "/s"}},
 		{name: "keyword_socket_no_claim", dsn: "host=/var/run/postgresql", want: pgDSNScan{hostSet: true, host: "/var/run/postgresql"}},
 		// pgx drops an unquoted backslash and keeps the next byte, so this Windows spelling names host "C:pg".
 		{
@@ -165,6 +168,7 @@ func TestPGSSLEnvKeys(t *testing.T) {
 		{env: "PGSSLCERT", dsn: pgDSNSSLCert},
 		{env: "PGSSLKEY", dsn: pgDSNSSLKey},
 		{env: "PGSSLNEGOTIATION", dsn: pgDSNSSLNegotiation},
+		{env: "PGSSLCERTMODE", dsn: pgDSNSSLCertMode},
 	}, pgSSLEnvKeys)
 }
 
@@ -183,6 +187,10 @@ func TestScanPostgresDSNRecordsTLSKeyPresence(t *testing.T) {
 		{name: "sslkey_present", dsn: "host=/s sslkey=/k", key: pgDSNSSLKey, want: pgDSNSetting{set: true, value: "/k"}},
 		{name: "sslnegotiation_direct", dsn: "host=/s sslnegotiation=direct", key: pgDSNSSLNegotiation, want: pgDSNSetting{set: true, value: "direct"}},
 		{name: "uri_sslmode_from_ssl_true_alias", dsn: "postgres://h?ssl=true", key: pgDSNSSLMode, want: pgDSNSetting{set: true, value: sslModeRequire}},
+		{name: "sslcertmode_present", dsn: "host=/s sslcertmode=disable", key: pgDSNSSLCertMode, want: pgDSNSetting{set: true, value: "disable"}},
+		{name: "sslcertmode_empty_still_present", dsn: "host=/s sslcertmode=''", key: pgDSNSSLCertMode, want: pgDSNSetting{set: true}},
+		{name: "uri_sslcertmode_empty_still_present", dsn: "postgres://h?sslcertmode=", key: pgDSNSSLCertMode, want: pgDSNSetting{set: true}},
+		{name: "sslcertmode_absent", dsn: "host=/s", key: pgDSNSSLCertMode, want: pgDSNSetting{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

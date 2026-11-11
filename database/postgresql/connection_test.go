@@ -359,6 +359,7 @@ func hermeticPgxEnv(t *testing.T) {
 	for _, k := range []string{"PGSSLMODE", "PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY", "PGSSLNEGOTIATION"} {
 		t.Setenv(k, "")
 	}
+	testutil.UnsetEnv(t, testutil.EnvPGSSLCertMode)
 }
 
 // TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures uses pgx as the oracle for
@@ -382,6 +383,60 @@ func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPgxAgreesWithConfigSSLCertModeFixtures uses pgx as the oracle for
+// testutil.PostgresSSLCertModeCases: every invalid value the config seam refuses fails pgx's
+// parse, every refused disable parses with a TLS config holding no client certificate, and no
+// accepted row fails on sslcertmode (gaborage/go-bricks#2310).
+func TestPgxAgreesWithConfigSSLCertModeFixtures(t *testing.T) {
+	hermeticPgxEnv(t)
+
+	for _, c := range testutil.PostgresSSLCertModeCases {
+		t.Run(c.Name, func(t *testing.T) {
+			testutil.SetEnv(t, c.Env)
+			pc, err := pgconn.ParseConfig(c.DSN)
+			switch {
+			case c.Invalid:
+				require.ErrorContains(t, err, "invalid sslcertmode")
+			case c.RefusedBy != "":
+				require.NoError(t, err)
+				assert.Equal(t, "disable", pc.SSLCertMode)
+				require.NotNil(t, pc.TLSConfig)
+				assert.Empty(t, pc.TLSConfig.Certificates)
+				for _, fb := range pc.Fallbacks {
+					if fb.TLSConfig != nil {
+						assert.Empty(t, fb.TLSConfig.Certificates)
+					}
+				}
+			case err != nil:
+				assert.NotContains(t, err.Error(), "invalid sslcertmode")
+			}
+		})
+	}
+}
+
+// TestPgxSkipsTypedFieldClientCertUnderPGSSLCertModeDisable is the typed-field arm's oracle:
+// the framework-built DSN names no sslcertmode, so PGSSLCERTMODE=disable reaches pgx, which
+// then loads none of database.tls.cert/key, while allow makes it read them (#2310).
+func TestPgxSkipsTypedFieldClientCertUnderPGSSLCertModeDisable(t *testing.T) {
+	hermeticPgxEnv(t)
+	cfg := &config.DatabaseConfig{
+		Host: "db.example.com", Port: 5432, Username: "u", Database: "d",
+		TLS: config.TLSConfig{Mode: "require", CertFile: "/nonexistent/client.crt", KeyFile: "/nonexistent/client.key"},
+	}
+	dsn := buildPostgresDSN(cfg)
+	assert.NotContains(t, dsn, "sslcertmode")
+
+	t.Setenv(testutil.EnvPGSSLCertMode, "disable")
+	pc, err := pgconn.ParseConfig(dsn)
+	require.NoError(t, err)
+	require.NotNil(t, pc.TLSConfig)
+	assert.Empty(t, pc.TLSConfig.Certificates)
+
+	t.Setenv(testutil.EnvPGSSLCertMode, "allow")
+	_, err = pgconn.ParseConfig(dsn)
+	require.ErrorContains(t, err, "unable to read")
 }
 
 // TestPgxResolvesServiceHostOverPGHOST uses pgx as the oracle for

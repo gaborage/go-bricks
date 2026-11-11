@@ -28,8 +28,9 @@ func hermeticPGEnv(t *testing.T) {
 	for _, k := range []string{"PGHOST", "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE"} {
 		t.Setenv(k, "")
 	}
+	// Unset, not empty: pgx honors a set but empty PGSSLCERTMODE, to reject it.
 	for _, k := range pgSSLEnvKeys {
-		t.Setenv(k.env, "")
+		testutil.UnsetEnv(t, k.env)
 	}
 }
 
@@ -3761,6 +3762,163 @@ func TestApplyDatabasePoolDefaultsMatchesSharedTLSEnvFixtures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestApplyDatabasePoolDefaultsJudgesConnectionStringSSLCertMode pins #2310 against
+// testutil.PostgresSSLCertModeCases: the effective sslcertmode (a present DSN key, empty
+// included, else PGSSLCERTMODE when set, empty included) is refused when pgx would fail to
+// parse it, and as disable when a client certificate or key is in effect.
+func TestApplyDatabasePoolDefaultsJudgesConnectionStringSSLCertMode(t *testing.T) {
+	hermeticPGEnv(t)
+	for _, c := range testutil.PostgresSSLCertModeCases {
+		t.Run(c.Name, func(t *testing.T) {
+			testutil.SetEnv(t, c.Env)
+			if c.RefusedBy == "" {
+				cfg := DatabaseConfig{ConnectionString: c.DSN}
+				require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+				return
+			}
+			cfgErr := requireConnStringRefusal(t, c.DSN)
+			assert.Equal(t, errCategoryInvalid, cfgErr.Category)
+			assertSSLCertModeRefusal(t, cfgErr, c.RefusedBy, c.Invalid)
+			if c.RefusedBy == testutil.EnvPGSSLCertMode {
+				assert.Contains(t, cfgErr.Action, "Unset that variable, or shadow it with an explicit sslcertmode=allow in the connection string")
+			} else {
+				assert.Contains(t, cfgErr.Action, "Set that key in the connection string to")
+				assert.NotContains(t, cfgErr.Action, "Unset that variable")
+			}
+			if !c.Invalid {
+				assert.Contains(t, cfgErr.Action, "sslcert/sslkey in the connection string and PGSSLCERT/PGSSLKEY in the environment")
+			}
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsSSLCertModeKeepsEarlierConnectionStringRules pins that the
+// sslcertmode rules run last: a libpq service is still refused first, and a DSN the scanner
+// cannot tokenize still passes through unjudged (#2310).
+func TestApplyDatabasePoolDefaultsSSLCertModeKeepsEarlierConnectionStringRules(t *testing.T) {
+	t.Run("service_refused_ahead", func(t *testing.T) {
+		hermeticPGEnv(t)
+		assertServiceRefusal(t, "service=svc sslcertmode=bogus", "service=")
+	})
+	t.Run("untokenizable_passes_under_invalid_pgsslcertmode", func(t *testing.T) {
+		hermeticPGEnv(t)
+		t.Setenv(pgEnvSSLCertMode, "bogus")
+		for i, dsn := range testutil.UntokenizablePostgresDSNs {
+			cfg := DatabaseConfig{Type: PostgreSQL, ConnectionString: dsn}
+			require.NoError(t, ApplyDatabasePoolDefaults(&cfg), "untokenizable_%02d", i)
+		}
+	})
+}
+
+// TestApplyDatabasePoolDefaultsJudgesTypedFieldSSLCertMode pins #2310 on the typed fields,
+// whose framework-built DSN carries no sslcertmode, so only PGSSLCERTMODE applies: when set
+// (empty included) it must be a value pgx parses, and not disable beside database.tls.cert/key.
+func TestApplyDatabasePoolDefaultsJudgesTypedFieldSSLCertMode(t *testing.T) {
+	const tcpHost = "db.internal"
+	mtls := TLSConfig{Mode: sslModeRequire, CertFile: testTLSCertFile, KeyFile: testTLSKeyFile}
+	tests := []struct {
+		name        string
+		host        string
+		tls         TLSConfig
+		env         *string
+		wantInvalid bool
+		wantDisable bool
+	}{
+		{name: "cert_key_disable_refused", host: tcpHost, tls: mtls, env: new(sslCertModeDisable), wantDisable: true},
+		{name: "cert_key_allow_accepted", host: tcpHost, tls: mtls, env: new(sslCertModeAllow)},
+		{name: "cert_key_require_accepted", host: tcpHost, tls: mtls, env: new(sslCertModeRequire)},
+		{name: "cert_key_unset_accepted", host: tcpHost, tls: mtls},
+		{name: "cert_key_empty_refused", host: tcpHost, tls: mtls, env: new(""), wantInvalid: true},
+		{name: "cert_key_bogus_refused", host: tcpHost, tls: mtls, env: new("bogus"), wantInvalid: true},
+		{name: "ca_only_disable_accepted", host: tcpHost, tls: TLSConfig{Mode: sslModeVerifyFull, CAFile: testTLSCAFile}, env: new(sslCertModeDisable)},
+		{name: "no_tls_disable_accepted", host: tcpHost, env: new(sslCertModeDisable)},
+		{name: "no_tls_allow_accepted", host: tcpHost, env: new(sslCertModeAllow)},
+		{name: "no_tls_require_accepted", host: tcpHost, env: new(sslCertModeRequire)},
+		{name: "no_tls_empty_refused", host: tcpHost, env: new(""), wantInvalid: true},
+		{name: "no_tls_bogus_refused", host: tcpHost, env: new("bogus"), wantInvalid: true},
+		{name: "no_tls_capitalized_refused", host: tcpHost, env: new("Disable"), wantInvalid: true},
+		{name: "socket_host_require_accepted", host: "/var/run/postgresql", env: new(sslCertModeRequire)},
+		{name: "socket_host_bogus_refused", host: "/var/run/postgresql", env: new("bogus"), wantInvalid: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hermeticPGEnv(t)
+			if tt.env != nil {
+				t.Setenv(pgEnvSSLCertMode, *tt.env)
+			}
+			cfg := DatabaseConfig{Type: PostgreSQL, Host: tt.host, Database: "d", Username: "u", TLS: tt.tls}
+			err := ApplyDatabasePoolDefaults(&cfg)
+			if !tt.wantInvalid && !tt.wantDisable {
+				require.NoError(t, err)
+				return
+			}
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, fieldDatabaseTLS, cfgErr.Field)
+			assert.Equal(t, errCategoryInvalid, cfgErr.Category)
+			assertSSLCertModeRefusal(t, cfgErr, pgEnvSSLCertMode, tt.wantInvalid)
+			assert.Contains(t, cfgErr.Action, "Unset that variable or set it to")
+			assert.NotContains(t, cfgErr.Action, "connection string")
+			if tt.wantDisable {
+				assert.Contains(t, cfgErr.Action, "remove the client certificate and key (database.tls.cert and database.tls.key)")
+			}
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsSSLCertModeRefusalRendersNoValue pins that an sslcertmode
+// refusal names keys and variables only: no DSN text, path or value reaches the error.
+func TestApplyDatabasePoolDefaultsSSLCertModeRefusalRendersNoValue(t *testing.T) {
+	const (
+		password = "hunter2pw"
+		certPath = "/very/private/client.crt"
+		envValue = "s3cretmode"
+	)
+	t.Run("connection_string_disable", func(t *testing.T) {
+		hermeticPGEnv(t)
+		cs := "host=db.internal user=u password=" + password + " sslmode=require sslcert=" + certPath + " sslkey=/k sslcertmode=disable"
+		assertNoSSLCertModeEcho(t, requireConnStringRefusal(t, cs), password, certPath, "/k")
+	})
+	t.Run("connection_string_env_value", func(t *testing.T) {
+		hermeticPGEnv(t)
+		t.Setenv(pgEnvSSLCertMode, envValue)
+		cs := "host=db.internal user=u password=" + password
+		assertNoSSLCertModeEcho(t, requireConnStringRefusal(t, cs), password, envValue)
+	})
+	t.Run("typed_fields_env_value", func(t *testing.T) {
+		hermeticPGEnv(t)
+		t.Setenv(pgEnvSSLCertMode, envValue)
+		cfg := DatabaseConfig{
+			Type: PostgreSQL, Host: "db.internal", Database: "d", Username: "u", Password: password,
+			TLS: TLSConfig{Mode: sslModeRequire, CertFile: certPath, KeyFile: "/k"},
+		}
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
+		assertNoSSLCertModeEcho(t, cfgErr, password, envValue, certPath)
+	})
+}
+
+func assertNoSSLCertModeEcho(t *testing.T, cfgErr *ConfigError, secrets ...string) {
+	t.Helper()
+	assert.Contains(t, cfgErr.Error(), "sslcertmode")
+	for _, s := range secrets {
+		assert.NotContains(t, cfgErr.Error(), s)
+	}
+}
+
+// assertSSLCertModeRefusal pins what every sslcertmode refusal carries whichever arm raised it:
+// the rule it broke, the source, and the allowed values.
+func assertSSLCertModeRefusal(t *testing.T, cfgErr *ConfigError, source string, invalid bool) {
+	t.Helper()
+	if invalid {
+		assert.Contains(t, cfgErr.Message, "pgx refuses to parse any other sslcertmode")
+	} else {
+		assert.Contains(t, cfgErr.Message, "sslcertmode disable makes pgx skip the client certificate and key")
+	}
+	assert.Contains(t, cfgErr.Action, "this one arrived through "+source+" in the ")
+	assert.Contains(t, cfgErr.Action, "Allowed values: disable, allow, require.")
 }
 
 // claimingPGSSLEnv is the PGSSL* variable that actually carried the claim. PGHOST is a
