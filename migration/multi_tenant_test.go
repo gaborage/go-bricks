@@ -72,6 +72,22 @@ func (f *fakeConfigProvider) DBConfig(_ context.Context, key string) (*config.Da
 	return &cfgCopy, nil
 }
 
+// signalingConfigProvider closes resolved on the first DBConfig call for key: a
+// worker's first act is resolving its config, so the close proves key was dispatched.
+type signalingConfigProvider struct {
+	database.DBConfigProvider
+	key      string
+	once     sync.Once
+	resolved chan struct{}
+}
+
+func (s *signalingConfigProvider) DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error) {
+	if key == s.key {
+		s.once.Do(func() { close(s.resolved) })
+	}
+	return s.DBConfigProvider.DBConfig(ctx, key)
+}
+
 func newFlywayMigratorForTest(t *testing.T) *FlywayMigrator {
 	t.Helper()
 	return newFlywayMigratorForVendor(t, config.PostgreSQL)
@@ -791,12 +807,27 @@ func TestMigrateAllParallelRechecksQuiesceAfterWaitingForSlot(t *testing.T) {
 		<-release
 	}
 
-	done := migrateAllAsync(context.Background(), fm, ids, newFakeConfigProvider(stubTenantConfigs(ids...)),
+	// The flag must not be set until t2 has passed its dispatch check, or a fast
+	// t1 lets the dispatcher see the flag for t2 as well.
+	configs := &signalingConfigProvider{
+		DBConfigProvider: newFakeConfigProvider(stubTenantConfigs(ids...)),
+		key:              "t2",
+		resolved:         make(chan struct{}),
+	}
+
+	done := migrateAllAsync(context.Background(), fm, ids, configs,
 		MigrateAllOptions{BaseConfig: base, Parallelism: 2, Quiesce: gate, Hook: hook})
-	select {
-	case <-hookStarted:
-	case <-time.After(10 * time.Second):
-		t.Fatal("no tenant finished while both worker slots were free")
+	deadline := time.After(10 * time.Second)
+	hookEntered, t2Resolved := (<-chan struct{})(hookStarted), (<-chan struct{})(configs.resolved)
+	for hookEntered != nil || t2Resolved != nil {
+		select {
+		case <-hookEntered:
+			hookEntered = nil
+		case <-t2Resolved:
+			t2Resolved = nil
+		case <-deadline:
+			t.Fatalf("timed out: hook pending=%v, t2 dispatch pending=%v", hookEntered != nil, t2Resolved != nil)
+		}
 	}
 	_, err := gate.Set(context.Background(), QuiesceSetOptions{By: "deployer", TTL: time.Hour})
 	require.NoError(t, err)
