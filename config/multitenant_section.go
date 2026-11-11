@@ -99,10 +99,10 @@ func checkStaticTenantMap(tenants map[string]TenantEntry, msg *MessagingConfig) 
 	return nil
 }
 
-// checkMultitenantTenantEntry rejects one static tenant's ID and cache
-// section: an empty or dotted ID, an ID no environment variable can address
+// checkMultitenantTenantEntry rejects one static tenant's ID, broker URL and
+// cache section: an empty or dotted ID, an ID no environment variable can address
 // (checkSectionName), an ID over the tenant-ID grammar's 64-byte bound, or
-// (once the ID is valid) whatever checkTenantCache rejects.
+// (once the ID is valid) whatever checkBrokerURL and checkTenantCache reject.
 func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 	if tenantID == "" {
 		return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")
@@ -130,6 +130,11 @@ func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 			Message:  fmt.Sprintf("tenant ID is %d bytes, maximum is 64 (the tenant-ID grammar)", len(tenantID)),
 			Action:   "rename it to 64 bytes or fewer: the request seat and the message stamp refuse a longer tenant ID",
 		}
+	}
+	// Judged as written, like the tenant store reads it: only the empty string is
+	// "not configured" there, so a whitespace-only URL is one the client would dial.
+	if err := checkBrokerURL(tenantField(tenantID, "messaging.url"), entry.Messaging.URL); err != nil {
+		return err
 	}
 	return checkTenantCache(tenantID, &entry.Cache)
 }
