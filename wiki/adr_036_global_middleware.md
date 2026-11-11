@@ -9,6 +9,16 @@
 > tenant in context, and the route's handler adapter answers 400 "Invalid tenant" afterwards. A
 > global gate that requires a tenant must pass a tenant-less request through.
 
+## Amendment (2026-11-10, #2306): `RegisterGlobalMiddleware` after Start panics
+
+`RegisterGlobalMiddleware` is startup-only by construction now: after `Start`, served or not, a
+call that would install at least one middleware panics with an error matching
+`server.ErrRegistrationAfterStart` and installs nothing; an empty or all-nil call stays a no-op
+([ADR-179](adr_179_registration_sealed_at_start.md)). It used to install onto a serving engine's
+root chain, racing request serving, and kept the `GlobalMiddlewareCount` counter unsynchronized.
+The install and the count now run under the lock `Start`'s seal takes. See
+[migrations.md](migrations.md) `[C74.8]`.
+
 ## Context
 
 Applications need app-wide HTTP middleware — canonically an auth gate — that runs once

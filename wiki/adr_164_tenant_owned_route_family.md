@@ -5,6 +5,21 @@
 **Issue:** #2166
 **Amends:** [ADR-036](adr_036_global_middleware.md), [ADR-039](adr_039_composite_resolver_order.md), [ADR-160](adr_160_rate_limit_keys_on_client_ip.md)
 
+## Amendment (2026-11-10, #2306): every registration after Start panics, not only trespass
+
+After `Start` a route, `Group` or `Use` through the family's own registrar, or anywhere outside
+every family, no longer registers: it panics with an error matching
+`server.ErrRegistrationAfterStart`, as does an installing `RegisterGlobalMiddleware` with or
+without a family ([ADR-179](adr_179_registration_sealed_at_start.md)). The after-Start trespass
+and framework-root panics keep their `server: registration after Start:` text and
+`ErrDuplicateRoute`, and the global-middleware-beside-family panic keeps
+`ErrTenantFamilyWithGlobalMiddleware`; each now also matches the new sentinel, and the latter's
+text reads `server: registration after Start: RegisterGlobalMiddleware: ...`. Start's family
+check reads the family prefixes and the global-middleware count from the same locked snapshot as
+its seal, so global middleware racing Start either refuses Start or panics. A family's engine
+mount runs under that lock too. `TenantOwnedGroup` after Start keeps its own refusal. See
+[migrations.md](migrations.md) `[C74.8]`.
+
 ## Context
 
 With `multitenant.enabled: true`, tenant resolution is one seat on the root chain

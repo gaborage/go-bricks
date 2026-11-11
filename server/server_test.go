@@ -2182,25 +2182,30 @@ func raceStart(srv *Server, round int) <-chan error {
 	return ch
 }
 
-// TestServerStartRacingRouteRegistration pins that route registrations racing Start land whole
-// on one side of its seal: before it, a duplicate refuses Start; after it, the duplicate is
-// recorded where Start no longer reads, and the first handler and the fresh route serve.
+// TestServerStartRacingRouteRegistration pins that a route registration racing Start lands whole
+// before Start's checks (a duplicate refuses Start, a fresh route serves) or panics and is never
+// recorded.
 func TestServerStartRacingRouteRegistration(t *testing.T) {
 	for round := range 64 {
 		srv := newTrespassTestServer(t)
 		mg := srv.ModuleGroup()
 		mg.Add(http.MethodGet, "/dup", answerWith("first"))
 		errCh := raceStart(srv, round)
-		mg.Add(http.MethodGet, "/fresh", answerWith("fresh"))
-		mg.Add(http.MethodGet, "/dup", answerWith("second"))
+		freshPanicked := panicsWith(t, ErrRegistrationAfterStart, func() { mg.Add(http.MethodGet, "/fresh", answerWith("fresh")) })
+		dupPanicked := panicsWith(t, ErrRegistrationAfterStart, func() { mg.Add(http.MethodGet, "/dup", answerWith("second")) })
 
 		select {
 		case err := <-errCh:
 			require.ErrorIs(t, err, ErrDuplicateRoute)
+			assert.False(t, dupPanicked, "Start refused a duplicate whose registration panicked")
 		case <-srv.ReadyCh():
-			assert.Len(t, srv.RouteConflicts(), 1, "Start served past a duplicate recorded before its seal")
-			assert.Equal(t, "fresh", serveFamilyRequest(srv, "/fresh").Body.String())
-			assert.Equal(t, "first", serveFamilyRequest(srv, "/dup").Body.String())
+			assert.True(t, dupPanicked, "Start served past a duplicate it never saw")
+			assert.Empty(t, srv.RouteConflicts())
+			want := http.StatusOK
+			if freshPanicked {
+				want = http.StatusNotFound
+			}
+			assert.Equal(t, want, serveFamilyRequest(srv, "/fresh").Code)
 			shutdownAndDrain(t, srv, errCh)
 		}
 	}
