@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -35,8 +36,9 @@ func (e *redactedError) Unwrap() error { return e.err }
 // Shapes url.Parse accepts never yield a *url.Error, so they are masked only where
 // raw, or text of it Redact drops, is in the message. A *url.Error's rendering is
 // rebuilt rather than scrubbed, and a failure reason that quotes part of the URL is
-// replaced by reason. The result unwraps to err; when
-// nothing needs masking, err itself is returned.
+// replaced by reason. A *url.Error naming a client's rebuild of raw, cut inside the
+// decoded password, renders raw. The result unwraps to err; when nothing needs masking,
+// err itself is returned.
 //
 // err must be non-nil, and a *url.Error in it must be reachable through errors.As and
 // rendered as its own Error() text. A later errors.As on the result reaches the
@@ -52,8 +54,8 @@ func RedactError(err error, raw, reason string) error {
 	}
 	redacted = maskRawIn(redacted, raw)
 	// SECURITY: a vendor reason can quote raw text outside any *url.Error, such as a port or
-	// query value it failed to parse, as written; one byte reveals at most itself, and a
-	// vendor hint quotes reserved characters one by one.
+	// query value it failed to parse; one byte reveals at most itself, and a vendor hint
+	// quotes reserved characters one by one.
 	redacted = maskQuoted(redacted, dropsRawText(raw, strings.Contains))
 	redacted = maskRawTokens(redacted, raw)
 	if redacted == msg {
@@ -167,31 +169,74 @@ func isAlignDelimiter(r rune) bool {
 	return isValueDelimiter(r) || strings.ContainsRune("/@?#&=", r)
 }
 
-// dropsRawText reports text that holds finds in raw or its decoded password, and Redact drops.
+// dropsRawText reports text that holds finds in a source of raw, and Redact drops. Text
+// raw holds as written, or its decoded password holds, is dropped unless the rendering
+// shows it as written. Text only a decoded reading of raw holds is dropped unless the
+// rendering shows it as written or once percent-decoded: a stricter test for written
+// text, so a password that repeats decoded kept text is still masked.
 func dropsRawText(raw string, holds func(source, text string) bool) func(text string) bool {
 	kept := Redact(raw)
-	_, password := decodedUserinfo(raw)
-	return func(text string) bool {
-		return !strings.Contains(kept, text) && (holds(raw, text) || holds(password, text))
+	decoded, _ := url.PathUnescape(kept) // "" on a bad escape: no text is in it
+	written, read := rawSources(raw)
+	held := func(sources []string, text string) bool {
+		return slices.ContainsFunc(sources, func(source string) bool { return holds(source, text) })
 	}
+	return func(text string) bool {
+		if strings.Contains(kept, text) {
+			return false
+		}
+		return held(written, text) || !strings.Contains(decoded, text) && held(read, text)
+	}
+}
+
+// rawSources returns the texts a vendor error can echo of raw. written is raw itself and
+// the password url.Parse decodes. read is what a driver reads out of raw in another
+// form: the decoded hostname and path, each decoded query key and value ('+' read as a
+// space), and the port as it is dialed, an integer without leading zeros.
+func rawSources(raw string) (written, read []string) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return []string{raw}, nil
+	}
+	password, _ := u.User.Password()
+	written = []string{raw, password}
+	read = []string{u.Hostname(), u.Path}
+	if port, err := strconv.ParseUint(u.Port(), 10, 64); err == nil {
+		read = append(read, strconv.FormatUint(port, 10))
+	}
+	// url.ParseQuery gives up on a pair it cannot decode; each side is tried alone here.
+	for pair := range strings.SplitSeq(u.RawQuery, "&") {
+		key, value, _ := strings.Cut(pair, "=")
+		for _, piece := range []string{key, value} {
+			if decoded, err := url.QueryUnescape(piece); err == nil {
+				read = append(read, decoded)
+			}
+		}
+	}
+	return written, read
 }
 
 // SECURITY: url.Parse cuts a client's rebuild around raw's decoded password at a '#' in it, and
-// the cut shows password text. rebuiltFrom reports raw's "scheme://username:" plus a password prefix,
-// possibly empty.
+// the cut shows password text. rebuiltFrom reports raw's "scheme://username:" plus a password
+// prefix, possibly empty. A client fills an empty username with one of its own, so for a
+// raw without one any username free of '/', '?', '#' and '@' counts.
 func rebuiltFrom(raw, cut string) bool {
-	prefix, password := decodedUserinfo(raw)
-	rest, found := strings.CutPrefix(cut, prefix)
-	return found && strings.HasPrefix(password, rest)
-}
-
-// decodedUserinfo returns raw's "scheme://username:" and the password url.Parse decodes.
-func decodedUserinfo(raw string) (prefix, password string) {
-	if u, err := url.Parse(raw); err == nil {
-		prefix = u.Scheme + "://" + u.User.Username() + ":"
-		password, _ = u.User.Password()
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
 	}
-	return prefix, password
+	rest, found := strings.CutPrefix(cut, u.Scheme+"://")
+	if !found {
+		return false
+	}
+	if username := u.User.Username(); username != "" {
+		rest, found = strings.CutPrefix(rest, username+":")
+	} else {
+		username, rest, found = strings.Cut(rest, ":")
+		found = found && !strings.ContainsAny(username, usernameBreakers)
+	}
+	password, _ := u.User.Password()
+	return found && strings.HasPrefix(password, rest)
 }
 
 // Redact renders raw with its credentials masked. Scheme, host, port and path are
@@ -230,8 +275,11 @@ func Redact(raw string) string {
 	return head + rest
 }
 
+// usernameBreakers are the characters a username Redact keeps never holds.
+const usernameBreakers = "@/?#"
+
 func maskUserinfo(userinfo string) string {
-	if user, password, _ := strings.Cut(userinfo, ":"); password != "" && !strings.HasPrefix(password, "@") && !strings.ContainsAny(user, "@/?#") {
+	if user, password, _ := strings.Cut(userinfo, ":"); password != "" && !strings.HasPrefix(password, "@") && !strings.ContainsAny(user, usernameBreakers) {
 		return user + ":" + redactionPlaceholder + "@"
 	}
 	return redactionPlaceholder + "@"

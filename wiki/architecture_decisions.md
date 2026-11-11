@@ -2715,9 +2715,11 @@ all after it masked when a `?` precedes it, and a rejected URL with no `@` is ma
 scheme separator renders `xxxxx`. Refusing a misparsed URL before the dial is left open. See
 [migrations.md](migrations.md) `[C73.18]`.
 
-Amended 2026-11-09 (#2274): a URL url.Parse rejects, or reads with no host, renders whole as
-`xxxxx` at every door, the error doors included, so the rejected-without-`@` rule is gone. See
-`[C74.1]`.
+Amended 2026-11-09 (#2274, #2272, #2271, #2273): a URL url.Parse rejects, or reads with no host,
+renders whole as `xxxxx` at every door, the error doors included, so the rejected-without-`@` rule
+is gone. Vendor text is also masked where it echoes a digit-only port as the integer a driver
+dials, or text the driver percent-decoded (a hostname, a path, a query key or value), and the
+stream client's rebuilt URI is recognized under a substituted username. See `[C74.1]`.
 
 **Key Benefits:** a password that url.Parse misreads as host, port or path no longer reaches error
 text, and the query, a lone username and a non-URL DSN are masked with it.
@@ -2871,7 +2873,7 @@ framework chain, so it is outside the framework's guarantees.
 
 ### [ADR-167: Inbound Paths Render From the Matched Route Template](adr_167_inbound_paths_render_from_route_template.md)
 
-**Date:** 2026-11-03 | **Status:** Accepted | **Breaking:** `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path
+**Date:** 2026-11-03 (amended 2026-11-10) | **Status:** Accepted | **Breaking:** `url.path`, the access-log message and every framework WARN and ERROR `path` print the masked route template, never the request path
 
 A request path is caller-written, so a card number in a segment reached the access log's
 `url.path` and message, the span's `url.path` and six framework WARN and ERROR lines as sent; the
