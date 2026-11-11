@@ -397,8 +397,15 @@ the builder. The grammar will not accept a computed one.
 - **`Having`** takes a *predicate*, not an identifier, so no identifier grammar
   can judge it and its argument is interpolated as written: both a STRING
   predicate and the preferred `Having(qb.MustExpr(...))` are raw-SQL doors (list
-  below). `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
-  unlike `Having` they have no `qb.Expr()` alternative. `Options` is the vendor
+  below). It accepts three forms: a string or a `RawExpression` (or a non-nil
+  pointer to one), each with its trailing arguments, or a `qb.Filter()`
+  predicate without trailing arguments, `Having(f.Gt("total", 100))`, which needs no `// SECURITY:`
+  annotation of its own (a consumer's own `dbtypes.Filter` implementation
+  renders its `ToSql` unjudged and is the consumer's to review). Anything else, a filter followed by
+  trailing arguments included, fails `ToSQL()` with
+  `ErrUnsupportedHavingPredicate` (ADR-177). `InsertQueryBuilder.Prefix`,
+  `.Suffix` and `.Options` are the same shape, and unlike `Having` they have no
+  `qb.Expr()` alternative. `Options` is the vendor
   hint slot, rendered between `INSERT` and `INTO` (Oracle's `/*+ APPEND */`);
   neither supported vendor accepts `OR IGNORE`/`OR REPLACE` there. On PostgreSQL
   and Oracle the placeholder pass rewrites an unescaped `?` in their text, even

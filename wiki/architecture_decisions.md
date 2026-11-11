@@ -3039,6 +3039,23 @@ remedy, never the URL. See [migrations.md](migrations.md) `[C74.2]`.
 **Key Benefits:** a malformed broker URL names its key at startup instead of hiding behind a
 readiness timeout, with no part of the URL or its credentials in the message.
 
+### [ADR-177: `Having` Accepts a Closed Set of Predicate Forms](adr_177_having_accepts_closed_predicate_forms.md)
+
+**Date:** 2026-11-10 | **Status:** Accepted | **Breaking:** a `Having` predicate that is not a string, a `RawExpression` (or a non-nil pointer to one) or a `dbtypes.Filter`, and a Filter followed by trailing arguments, fail `ToSQL()` with `ErrUnsupportedHavingPredicate`
+
+`Having` judged only a `RawExpression` value and passed every other predicate to squirrel: a map
+or squirrel literal rendered its keys as unvalidated, unquoted columns and bound its values
+unjudged, any other Sqlizer was spliced, nil rendered an empty `HAVING`, a pointer to an
+expression failed with squirrel's untyped text, and arguments after a Filter were dropped. It now
+accepts a string, a `RawExpression` or a non-nil pointer to one (judged alike), or a Filter
+rendered through its own `ToSql`, the bar `Where` applies; anything else fails with one sentinel
+whose message names the received type (`%T`) and the accepted forms. Extends ADR-082 and ADR-158
+to `Having`, where an unjudged map still reached SQL. See [migrations.md](migrations.md) `[C74.6]`.
+
+**Key Benefits:** a HAVING comparison passed as a `qb.Filter()` predicate passes the column funnel
+and the operand judge, a string or `qb.MustExpr` body stays raw SQL under manual review, and every
+refused shape fails at `ToSQL()` with one matchable error.
+
 ### [ADR-178: A `squirrel.Sqlizer` Operand Is Refused Where the Builder Spliced It](adr_178_sqlizer_operand_refused_where_spliced.md)
 
 **Date:** 2026-11-11 | **Status:** Accepted | **Breaking:** a `RawExpression` is the only spliceable operand; any other `squirrel.Sqlizer` where the builder would splice it (a `jf` compare door, a `jf.Between` bound, a SET/VALUES cell) fails `ToSQL()` with `ErrSqlizerOperand`

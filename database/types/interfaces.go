@@ -163,7 +163,8 @@ type JoinFilterFactory interface {
 //
 // Having takes a predicate rather than an identifier, so no identifier grammar
 // can judge it: a string argument is interpolated as written, and
-// Having(qb.MustExpr(...)) is the preferred form, annotated the same way.
+// Having(qb.MustExpr(...)) is the preferred form, annotated the same way. A
+// Filter predicate is judged by its own door instead (ADR-177).
 // Prefix, Suffix and Options on the INSERT builder are the same shape, minus the
 // qb.Expr() alternative.
 //
@@ -189,12 +190,22 @@ type SelectQueryBuilder interface {
 	// GroupBy and OrderBy.
 	GroupBy(groupBys ...any) SelectQueryBuilder
 
-	// Having adds a HAVING predicate. Prefer a RawExpression from qb.Expr() —
-	// Having(qb.MustExpr("SUM(amount) > ?"), 100), or qb.Expr when you handle its
-	// (RawExpression, error) return — which is the expression form for
-	// the aggregate comparisons HAVING exists for; an alias on that expression is
-	// an error (ErrAliasInHaving), since a predicate projects nothing. Both forms are
-	// raw SQL needing the SECURITY annotation at every call site; see dbtypes.RawExpression.
+	// Having adds a HAVING predicate. It accepts exactly three forms (ADR-177):
+	//   - a string with its trailing arguments;
+	//   - a RawExpression, or a non-nil pointer to one, with its trailing
+	//     arguments: prefer Having(qb.MustExpr("SUM(amount) > ?"), 100), or qb.Expr
+	//     when you handle its (RawExpression, error) return, for the aggregate
+	//     comparisons HAVING exists for; an alias on it is an error
+	//     (ErrAliasInHaving), since a predicate projects nothing;
+	//   - a Filter, Having(f.Gt("total", 100)), whose column and operand the
+	//     qb.Filter() door judges (a consumer's own Filter renders its ToSql
+	//     unjudged and is the consumer's to review); it takes no trailing
+	//     arguments.
+	// The string and expression forms are raw SQL needing the SECURITY annotation
+	// at every call site (see RawExpression); a Filter needs none of its own.
+	// Anything else — a map, a Sqlizer that is not a Filter (a squirrel literal
+	// included), nil, a nil pointer, any other type — and a Filter followed by
+	// trailing arguments fail ToSQL() with ErrUnsupportedHavingPredicate.
 	Having(pred any, rest ...any) SelectQueryBuilder
 	// OrderBy orders by columns or RawExpressions. An expression renders its body
 	// without its alias, by design, as at GroupBy.
