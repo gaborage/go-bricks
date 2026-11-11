@@ -16069,8 +16069,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `amqp://u:p@h/a/b` and an empty username, which are accepted; `messaging.streams.uri`, which
   keeps its own validation; credential URL rendering (ADR-159), retry and backoff; and a
   hand-built `messaging.NewAMQPClient`, which still finds a `ParseURI` failure at the dial.
-- gate: match = a detect hit whose resolved value `ParseURI` refuses or whose written port is
-  outside 1-65535. no-match = no hit, or every value passes.
+- gate: match = a broker URL value any environment delivers that `ParseURI` refuses or whose
+  written port is outside 1-65535. The detect greps find where a key is named, but a value can
+  arrive with no key in any searched file (a Kubernetes `envFrom` Secret, a secret manager), so
+  judge the resolved `MESSAGING_BROKER_URL` and every tenant URL of each environment, grep hit
+  or not. no-match = every delivered value passes, or the service sets no broker URL.
 - before (v0.73.0): startup checked only that the URL was non-empty. A URL `ParseURI` refuses
   (`?heartbeat=70000`, an unencoded `%` in the password, a non-AMQP scheme, a string with a space)
   was found at the first dial and retried forever: a service with consumers on the control-plane
@@ -16094,7 +16097,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   0-65535, and keep a written port within 1-65535. Fix the value where it lives, including the
   secret manager.
 - verify: `config.Load()` succeeds in every environment, and a consumer service reaches ready
-  without the 30s `timeout waiting for AMQP client to be ready`.
+  without the 30s `timeout waiting for AMQP client to be ready`. With a `BrokerURLProvider`,
+  `config.Load()` proves nothing about its URLs: one provider can return a different URL per
+  key, each judged at that key's first `EnsureConsumers` or `Publisher` call, so run the probe
+  over the URL of every key it serves.
 - ref: gaborage/go-bricks#2194 · [ADR-175](adr_175_malformed_broker_url_fails_startup.md) ·
   `internal/amqpurl/amqpurl.go` (`Check`) · `config/messaging_section.go` (`checkBrokerURL`) ·
   `config/multitenant_section.go` (`checkMultitenantTenantEntry`) · `messaging/manager.go`
