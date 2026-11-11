@@ -16202,11 +16202,20 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep -nE '\.(Eq|NotEq|Lt|Lte|Gt|Gte|Between|Set|SetMap|Values)\(.*(squirrel\.|[^A-Za-z0-9_]f\.[A-Z]|Filter\(\)\.)' -- '*.go'
   # struct fields typed as a Sqlizer or a Filter, read by SetStruct/InsertStruct/InsertFields
   git grep -nE 'squirrel\.Sqlizer|(dbtypes|types)\.Filter' -- '*.go'
+  # variables assigned a squirrel value (squirrel or sq import) or a filter door, passed later
+  git grep -nE '(:=|[^=!<>]=)[[:space:]]*&?(squirrel|sq)\.(Expr\(|(Eq|NotEq|Lt|LtOrEq|Gt|GtOrEq|Like|NotLike|ILike|NotILike|And|Or)\{)' -- '*.go'
+  git grep -nE '(:=|[^=!<>]=)[[:space:]]*(f\.[A-Z]|[A-Za-z0-9_.]*Filter\(\)\.[A-Z])' -- '*.go'
+  # your own types with a ToSql method; then grep each type's values, e.g. '(^|[^A-Za-z0-9_])Now\{'
+  git grep -nE 'func \([^)]*\) ToSql\(' -- '*.go'
+  # BuildUpsert calls and column maps built apart from them
+  git grep -nE 'BuildUpsert\(|map\[string\](any|interface\{\})\{' -- '*.go'
   ```
 
-  Keep the hits on a `qb.JoinFilter()` compare door or `Between`, an UPDATE or INSERT value door,
-  a struct passed to `SetStruct`/`InsertStruct`/`InsertFields`, or a `BuildUpsert` column map on
-  PostgreSQL.
+  The first two greps find a value built on the call's own line or typed as a Sqlizer; the rest
+  find one built apart from its use: trace each such variable, value of your type, or column map
+  to where it is passed. Keep the hits that reach a `qb.JoinFilter()` compare door or `Between`,
+  an UPDATE or INSERT value door, a struct passed to `SetStruct`/`InsertStruct`/`InsertFields`,
+  or a `BuildUpsert` column map on PostgreSQL.
 - scope: `jf.Eq`, `jf.NotEq`, `jf.Lt`, `jf.Lte`, `jf.Gt`, `jf.Gte` and both `jf.Between` bounds,
   judged on the RESOLVED operand (a pointer to a Sqlizer is refused; a `driver.Valuer` is judged
   by its answer); `Set`, `SetMap` and `SetStruct` on UPDATE, `SetMap` and `Values` on INSERT,

@@ -423,7 +423,8 @@ the builder. The grammar will not accept a computed one.
   (`ErrAliasInValue`) naming the column or one-based position — a `SET` or
   `VALUES` cell projects nothing, so it could only be dropped silently. Any
   other `squirrel.Sqlizer` in a cell fails `ToSQL()` with `ErrSqlizerOperand`
-  (ADR-178). So is an
+  (ADR-178), except in an Oracle `BuildUpsert` cell, which binds it as one
+  argument. So is an
   alias at one of the nine `jf` operand doors (`ErrAliasInPredicate`), judged
   before the grammar. The nine `f` operand doors refuse an expression with
   `ErrExpressionInFilter` before any alias judgment. `GroupBy` and `OrderBy`
