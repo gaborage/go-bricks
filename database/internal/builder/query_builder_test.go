@@ -3604,6 +3604,8 @@ func TestSelectQueryBuilderHavingRefusesUnsupportedPredicate(t *testing.T) {
 		{name: "nil", pred: func(*QueryBuilder) any { return nil }, wantMsg: accepted + "<nil>"},
 		{name: "int", pred: func(*QueryBuilder) any { return 42 }, wantMsg: accepted + "int"},
 		{name: "typed_nil_expression_pointer", pred: func(*QueryBuilder) any { return nilExpr }, wantMsg: accepted + "*types.RawExpression"},
+		{name: "typed_nil_filter_pointer", pred: func(*QueryBuilder) any { return (*existsFilter)(nil) }, wantMsg: accepted + "*builder.existsFilter"},
+		{name: "typed_nil_filter_pointer_with_trailing_args", pred: func(*QueryBuilder) any { return (*existsFilter)(nil) }, rest: []any{"secret-bound"}, wantMsg: accepted + "*builder.existsFilter"},
 		{
 			name:    "filter_with_trailing_args",
 			pred:    func(qb *QueryBuilder) any { return qb.Filter().Gt("number", 100) },
@@ -3720,6 +3722,29 @@ func TestSelectQueryBuilderHavingAcceptsFilterPredicate(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantSQL, sql)
 			assert.Equal(t, tt.wantArgs, args)
+		})
+	}
+}
+
+// A non-nil pointer Filter passes the nil-pointer refusal and renders.
+func TestSelectQueryBuilderHavingAcceptsPointerFilter(t *testing.T) {
+	tests := []struct {
+		vendor  dbtypes.Vendor
+		wantSQL string
+	}{
+		{vendor: dbtypes.PostgreSQL, wantSQL: "SELECT department FROM users GROUP BY department HAVING COUNT(*) > $1"},
+		{vendor: dbtypes.Oracle, wantSQL: "SELECT department FROM users GROUP BY department HAVING COUNT(*) > :1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			pred := &existsFilter{sqlizer: squirrel.Expr("COUNT(*) > ?", 1)}
+
+			sql, args, err := qb.Select("department").From(tableUsers).GroupBy("department").Having(pred).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{1}, args)
 		})
 	}
 }

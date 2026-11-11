@@ -400,7 +400,8 @@ the builder. The grammar will not accept a computed one.
   below). It accepts three forms: a string or a `RawExpression` (or a non-nil
   pointer to one), each with its trailing arguments, or a `qb.Filter()`
   predicate, `Having(f.Gt("total", 100))`, which needs no `// SECURITY:`
-  annotation of its own. Anything else fails `ToSQL()` with
+  annotation of its own (a consumer's own `dbtypes.Filter` implementation
+  renders its `ToSql` unjudged and is the consumer's to review). Anything else fails `ToSQL()` with
   `ErrUnsupportedHavingPredicate` (ADR-177). `InsertQueryBuilder.Prefix`,
   `.Suffix` and `.Options` are the same shape, and unlike `Having` they have no
   `qb.Expr()` alternative. `Options` is the vendor

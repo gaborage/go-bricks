@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -1227,6 +1228,10 @@ func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQuery
 		}
 		sqb.havingExpr(*p, rest)
 	case dbtypes.Filter:
+		if isNilPointer(p) {
+			sqb.Fail(unsupportedHaving(pred))
+			return sqb
+		}
 		if len(rest) != 0 {
 			sqb.Fail(fmt.Errorf("%w: got %T with %d trailing argument(s) (a Filter binds its own)",
 				dbtypes.ErrUnsupportedHavingPredicate, pred, len(rest)))
@@ -1243,6 +1248,12 @@ func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQuery
 // naming its type (%T), never its value.
 func unsupportedHaving(pred any) error {
 	return fmt.Errorf("%w: got %T", dbtypes.ErrUnsupportedHavingPredicate, pred)
+}
+
+// isNilPointer reports a typed-nil pointer, which squirrel would dereference.
+func isNilPointer(v any) bool {
+	r := reflect.ValueOf(v)
+	return r.Kind() == reflect.Pointer && r.IsNil()
 }
 
 // havingExpr judges and renders a RawExpression HAVING predicate.

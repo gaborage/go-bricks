@@ -195,7 +195,9 @@ type SelectQueryBuilder interface {
 	//     comparisons HAVING exists for; an alias on it is an error
 	//     (ErrAliasInHaving), since a predicate projects nothing;
 	//   - a Filter, Having(f.Gt("total", 100)), whose column and operand the
-	//     filter door judges; it takes no trailing arguments.
+	//     qb.Filter() door judges (a consumer's own Filter renders its ToSql
+	//     unjudged and is the consumer's to review); it takes no trailing
+	//     arguments.
 	// The string and expression forms are raw SQL needing the SECURITY annotation
 	// at every call site (see RawExpression); a Filter needs none of its own.
 	// Anything else — a map, a Sqlizer that is not a Filter (a squirrel literal

@@ -16116,6 +16116,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`git grep -nE 'Having\((squirrel|sq)\.[A-Z]' -- '*.go'`), a `squirrel.Expr(…)` or any other
   `squirrel.Sqlizer` that is not a `dbtypes.Filter`, a variable that may hold nil, or any other
   type. Also keep a `qb.Filter()` predicate followed by more arguments (`Having(f.Gt(c, v), x)`).
+  A `.Having` method value (`h := q.Having`, invoked later) escapes that call-site grep: also run
+  `git grep -nE '\.Having([^(A-Za-z0-9_]|$)' -- '*.go'`, trace each value to its invocations and
+  classify their first argument by the same rules.
 - scope: `SelectQueryBuilder.Having` on PostgreSQL and Oracle. **Unchanged**: the signature; the
   string form and the `RawExpression` value form, which render byte-identically; an expression's
   alias refusal (`ErrAliasInHaving`) and `Validate()` errors; `testing/mocks`, whose `Having`
@@ -16127,12 +16130,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `squirrel.Sqlizer`, a `qb.Filter()` door result included, was spliced through its `ToSql`; nil
   rendered an empty `HAVING ` with no error; a pointer to a `RawExpression` and any other type
   (`42`) failed with squirrel's untyped `expected string-keyed map or string, not <type>`, so an
-  aliased pointer never reported `ErrAliasInHaving`; arguments after a Sqlizer predicate were
-  dropped silently.
+  aliased pointer never reported `ErrAliasInHaving`; a typed-nil pointer `Filter` panicked in
+  `ToSQL()`; arguments after a Sqlizer predicate were dropped silently.
 - after: `Having` accepts a string with its arguments, a `RawExpression` or a non-nil pointer to
   one with its arguments (judged alike: alias first, then `Validate()`), or a `dbtypes.Filter`,
-  rendered through its own `ToSql` and numbered after any `Where` placeholders. Everything else,
-  a typed-nil `*RawExpression` and a Filter with trailing arguments included, fails the
+  rendered through its own `ToSql` and numbered after any `Where` placeholders (a `qb.Filter()`
+  door judges its column and operand; a consumer's own implementation renders whatever its `ToSql`
+  returns and is the consumer's to review). Everything else, a typed-nil `*RawExpression`, a
+  typed-nil pointer `Filter` and a Filter with trailing arguments included, fails the
   statement's `ToSQL()` with `dbtypes.ErrUnsupportedHavingPredicate`, wrapped as
   `HAVING predicate must be a string, a RawExpression (or a non-nil pointer to one) or a Filter: got <type>`
   (`… got builder.Filter with <n> trailing argument(s) (a Filter binds its own)` for the latter),

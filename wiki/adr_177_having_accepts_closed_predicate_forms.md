@@ -34,13 +34,13 @@ still let an unjudged map reach SQL.
    - a `dbtypes.RawExpression`, with its trailing arguments: judged as before (alias first, then
      `Validate()`). A non-nil `*dbtypes.RawExpression` is judged the same way and renders exactly
      as the value form; both share one judgment;
-   - a `dbtypes.Filter`, the bar `Where` applies: rendered through its own `ToSql`, so its column
-     and operand are judged by the filter doors, and its placeholders number after any `Where`
-     arguments.
+   - a `dbtypes.Filter`, the bar `Where` applies: rendered through its own `ToSql`, so a filter
+     built by a `qb.Filter()` door has its column and operand judged by that door, and its
+     placeholders number after any `Where` arguments.
 2. **Everything else fails `ToSQL()` with one sentinel, `dbtypes.ErrUnsupportedHavingPredicate`**,
    matchable with `errors.Is`: a map, a `squirrel.Sqlizer` that is not a `dbtypes.Filter` (a
-   squirrel literal or `squirrel.Expr(…)` included), nil, a typed-nil `*RawExpression` and any
-   other type. The wrapped message names the accepted forms and
+   squirrel literal or `squirrel.Expr(…)` included), nil, a typed-nil `*RawExpression`, a
+   typed-nil pointer that satisfies `dbtypes.Filter`, and any other type. The wrapped message names the accepted forms and
    the received type, rendered with `%T` only, never the value, since a map carries bound values:
    `HAVING predicate must be a string, a RawExpression (or a non-nil pointer to one) or a Filter: got <type>`.
 3. **Trailing arguments beside a Filter are refused, not dropped**, with the same sentinel:
@@ -73,7 +73,10 @@ A Filter predicate needs no `// SECURITY:` annotation of its own; an expression 
   catches nothing.
 - `dbtypes.Filter` is a method set: any value with both `ToSql` and `ToSQL` passes, exactly the bar
   `Where` applies, so a `JoinFilter` passes `Having` as it passes `Where`, while a squirrel literal
-  (which has no `ToSQL`) is refused.
+  (which has no `ToSQL`) is refused. Only a filter built by a `qb.Filter()` door has its column and
+  operand judged; a consumer's own implementation renders whatever its `ToSql` returns and is the
+  consumer's to review. A typed-nil pointer implementation is refused with the sentinel rather
+  than dereferenced.
 - The refusal is deferred through the builder's first-error mechanism, while the list-shaped
   sibling doors (`GroupBy`, `OrderBy`, `Select`, via `appendClauseValue`) panic on an unsupported
   type (ADR-031). `Having` narrows a previously open `any` whose other forms compiled and ran for
