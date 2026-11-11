@@ -16273,6 +16273,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep -nE '\.(Eq|NotEq|Lt|Lte|Gt|Gte|Between|Set|SetMap|Values)\(.*((squirrel|sq)\.|[^A-Za-z0-9_]f\.[A-Z]|Filter\(\)\.)' -- '*.go'
   # struct fields typed as a Sqlizer or a Filter, read by SetStruct/InsertStruct/InsertFields
   git grep -nE 'squirrel\.Sqlizer|(dbtypes|types)\.Filter' -- '*.go'
+  # the struct doors themselves: read each struct type's fields, a concrete Sqlizer type included
+  git grep -nE '(SetStruct|InsertStruct|InsertFields)\(' -- '*.go'
   # variables assigned a squirrel value (squirrel or sq import) or a filter door, passed later
   git grep -nE '(:=|[^=!<>]=)[[:space:]]*&?(squirrel|sq)\.(Expr\(|(Eq|NotEq|Lt|LtOrEq|Gt|GtOrEq|Like|NotLike|ILike|NotILike|And|Or)\{)' -- '*.go'
   git grep -nE '(:=|[^=!<>]=)[[:space:]]*(f\.[A-Z]|[A-Za-z0-9_.]*Filter\(\)\.[A-Z])' -- '*.go'
@@ -16285,7 +16287,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   The greps spell the import as `squirrel` or `sq`; under another alias
   (`git grep -nE '"github.com/Masterminds/squirrel"' -- '*.go'` shows it), substitute it, or read
   each value-door call and trace its operands.
-  The first two greps find a value built on the call's own line or typed as a Sqlizer; the rest
+  The first two greps find a value built on the call's own line or typed as a Sqlizer; the third
+  lists the struct doors, whose struct fields may hold a concrete Sqlizer type (`squirrel.Eq`, a
+  type of yours with `ToSql`) that no interface-typed grep shows; the rest
   find one built apart from its use: trace each such variable, value of your type, or column map
   to where it is passed. Keep the hits that reach a `qb.JoinFilter()` compare door or `Between`,
   an UPDATE or INSERT value door, a struct passed to `SetStruct`/`InsertStruct`/`InsertFields`,
@@ -16296,8 +16300,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `InsertStruct`, `InsertFields` and the PostgreSQL `BuildUpsert` insert and update values, judged
   on the value as passed (a type whose pointer alone has `ToSql` is refused as a pointer and bound
   as a value). **Unchanged**: every `f` door, `jf.In`/`jf.NotIn` and `f.In`/`f.NotIn`, list
-  elements, a Sqlizer slice such as `squirrel.And` (a list), and Oracle's `BuildUpsert` MERGE,
-  which bind it as one argument; `SetExpr`'s trailing arguments and `f.Raw`/`jf.Raw` arguments,
+  elements and Oracle's `BuildUpsert` MERGE, which bind it as one argument; a Sqlizer slice such
+  as `squirrel.And` at a `jf` door, which is a list as before (`jf.Eq`/`jf.NotEq` bind its
+  elements as an IN list, an ordering door refuses a list), though a SET / VALUES cell refuses it
+  like any other Sqlizer; `SetExpr`'s trailing arguments and `f.Raw`/`jf.Raw` arguments,
   which still expand it; a `RawExpression`, still spliced and judged as before; and every other
   operand, byte-identical.
 - gate: match = a detect hit at a refused position. no-match = no hit.
