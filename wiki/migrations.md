@@ -16138,9 +16138,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   empty username with a password and leading-zero ports; credential URL rendering (ADR-159) and
   the pre-dial `broker_url` log field; retry and backoff; opaque or hostless shapes and URLs
   `url.Parse` or `amqp.ParseURI` reject, which stay C74.2's; Oracle and HTTP credential URLs.
-- gate: match = a detect hit whose resolved value parses and has a `@` after the first `/`, `?`
-  or `#` that follows the `scheme://` authority (the probe prints true). no-match = no hit, or
-  every value prints false.
+- gate: match = a broker URL or stream URI value any environment delivers that parses and has
+  a `@` after the first `/`, `?` or `#` that follows the `scheme://` authority (the probe prints
+  true). As in C74.2, judge every delivered value, grep hit or not: one can arrive with no key in
+  any searched file. no-match = every delivered value prints false.
 - before (v0.73.0): a password holding an unencoded `/`, `?` or `#` was split without error.
   An AMQP URL for user `user`, password `s3cr@zq9x?PW` and host `broker:5672` read host `zq9x`
   and query `PW@broker:5672/vh`;
@@ -16176,8 +16177,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`url.URL{Scheme: "amqps", User: url.UserPassword(user, pass), Host: "broker:5671", Path: "/vhost"}`),
   which percent-encodes `/`, `?`, `#` and `@` in them; write a literal `@` in a vhost or query value
   as `%40`. Fix the value where it lives, including the secret manager.
-- verify: the probe prints false for every resolved value; `config.Load()` succeeds in every
-  environment; and a hand-built client or `streams.Manager.Start` connects without the
+- verify: the probe prints false for every resolved value, the URL of every key a
+  `BrokerURLProvider` serves included; `config.Load()` succeeds in every environment; and a hand-built client or `streams.Manager.Start` connects without the
   `carries an unencoded '@' after its authority` error.
 - ref: gaborage/go-bricks#2264 · [ADR-176](adr_176_broker_url_with_at_after_authority_refused.md) ·
   `internal/credurl/authority.go` (`CheckAuthority`, `ErrAtAfterAuthority`, `AuthorityHint`) ·
