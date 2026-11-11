@@ -2175,8 +2175,7 @@ func panicsWith(t *testing.T, target error, fn func()) (panicked bool) {
 // raceStart runs Start in the background, then yields round%8 times so the caller's next
 // registration lands before, during or after Start's seal across rounds.
 func raceStart(srv *Server, round int) <-chan error {
-	ch := make(chan error, 1)
-	go func() { ch <- srv.Start() }()
+	ch := startServer(srv)
 	for range round % 8 {
 		runtime.Gosched()
 	}

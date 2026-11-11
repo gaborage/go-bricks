@@ -121,16 +121,16 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 	normalized := pathutil.NormalizePrefix(prefix)
 	child := &routeGroup{prefix: rg.combinePrefix(normalized), cfg: rg.cfg, admission: rg.admission, family: rg.family}
 	rg.admission.locked(func() {
-		// Marked first, so a trespass after Start panics before echo registers the group's catch-alls.
-		if rg.family == nil && (rg.carriesMiddleware || len(middleware) > 0) {
-			child.markMiddlewareLocked(pkg)
-		}
 		if rg.family != nil {
 			// Echo's Group with middleware auto-registers a catch-all pair carrying only that
 			// middleware, replacing the family's; the child node keeps it for its routes instead.
 			child.group = rg.group.Group(normalized)
 			child.familyNode = &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)}
 			return
+		}
+		// Marked first, so a trespass after Start panics before echo registers the group's catch-alls.
+		if rg.carriesMiddleware || len(middleware) > 0 {
+			child.markMiddlewareLocked(pkg)
 		}
 		child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
 	})
@@ -140,14 +140,14 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
 	pkg := getCallerPackage(2)
 	rg.admission.locked(func() {
-		if rg.family == nil && len(middleware) > 0 {
-			rg.markMiddlewareLocked(pkg)
-		}
 		if rg.family != nil {
 			// Echo's Group.Use auto-registers a catch-all pair (see Group): the middleware reaches
 			// only routes registered after this call, through this registrar or a Group below it.
 			rg.familyNode.mw = append(rg.familyNode.mw, rg.adaptAll(middleware)...)
 			return
+		}
+		if len(middleware) > 0 {
+			rg.markMiddlewareLocked(pkg)
 		}
 		rg.group.Use(rg.adaptAll(middleware)...)
 	})
