@@ -16412,10 +16412,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `BuildUpsert("t", []string{"id"}, map[string]any{"id": 1, "c": squirrel.Expr("NOW()")}, nil)`
   rendered `MERGE INTO t target USING (SELECT :1 AS c, :2 AS id FROM dual) source ON (target.id = source.id) WHEN NOT MATCHED THEN INSERT (c, id) VALUES (source.c, source.id)`
   with the `squirrel.Expr` value as argument 1, and an update value rendered
-  `WHEN MATCHED THEN UPDATE SET c = :2` with it as an argument. The build succeeded and the driver
-  received the Go value as a bind: a squirrel struct is not bindable, so the statement failed at
-  execution, while a `driver.Valuer` that is also a Sqlizer, or a Sqlizer over a bindable kind,
-  bound and may have executed.
+  `WHEN MATCHED THEN UPDATE SET c = :2` with it as an argument. The build succeeded and handed
+  the driver the Go value as a bind, unjudged; whether the statement then ran depended on the
+  driver accepting that value.
 - after: `ToSQL()` (or `BuildUpsert`) returns an error matching `dbtypes.ErrSqlizerOperand`:
   `resolving the <op> operand: a squirrel.Sqlizer operand is not allowed (use qb.Expr() for an intended expression): <type>`
   at a `jf` door (under `JoinOn filter error: ` from `JoinOn`), and

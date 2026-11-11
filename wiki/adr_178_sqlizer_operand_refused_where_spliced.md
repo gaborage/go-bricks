@@ -86,7 +86,7 @@ resolved value that is still a `driver.Valuer` (a Valuer answering a Valuer) a s
   unchanged, outside this decision. Those are raw-SQL doors, and every call site already carries
   the `// SECURITY: Manual SQL review completed` annotation, so the audit grep sees them.
 
-## Amendment (2026-11-11): Oracle's `BuildUpsert` values are refused like PostgreSQL's
+## Amendment (2026-11-11, #2261): Oracle's `BuildUpsert` values are refused like PostgreSQL's
 
 The maintainer decided that both vendors refuse a `squirrel.Sqlizer` in a `BuildUpsert` value, so
 the same Go code gets the same verdict on PostgreSQL and Oracle. For upsert values the rule is one
@@ -106,10 +106,9 @@ In v0.73.0 Oracle's MERGE bound a Sqlizer as one `:N` argument and never spliced
 `BuildUpsert("t", []string{"id"}, map[string]any{"id": 1, "c": squirrel.Expr("NOW()")}, nil)`
 rendered `MERGE INTO t target USING (SELECT :1 AS c, :2 AS id FROM dual) source ON (target.id = source.id) WHEN NOT MATCHED THEN INSERT (c, id) VALUES (source.c, source.id)`
 with the `squirrel.Expr` value as argument 1, and an update value rendered as a `:N` in
-`WHEN MATCHED THEN UPDATE SET`. The driver received the Go value as a bind: a squirrel struct is
-not a bindable value, so such a statement failed at execution, while a `driver.Valuer` that is
-also a Sqlizer, or a Sqlizer over a bindable kind, bound and may have executed. The change lands in
-the unreleased 0.74.0 epoch and extends this ADR and `[C74.7]` in place.
+`WHEN MATCHED THEN UPDATE SET`. The build succeeded and handed the driver the Go value as a bind,
+unjudged; whether the statement then ran depended on the driver accepting that value. The change
+lands in the unreleased 0.74.0 epoch and extends this ADR and `[C74.7]` in place.
 
 ## References
 
