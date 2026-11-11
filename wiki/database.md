@@ -211,7 +211,7 @@ query := qb.Select("*").
 
 **Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Nine of them follow the *Operand contract* above — the six compare doors, `In`, `NotIn` and `Between`, whose two bounds are each resolved as an ordering operand. `Like` does NOT: it takes a string pattern, so there is no operand to resolve.
 
-**Expression Support:** Every `jf` value door — the six compare doors, both `Between` bounds, `In` and `NotIn` — splices a `qb.Expr()` expression, or a non-nil pointer to one, without placeholders; an aliased one is refused with `dbtypes.ErrAliasInPredicate`. Any other `squirrel.Sqlizer` at the six compare doors or a `Between` bound fails with `dbtypes.ErrSqlizerOperand` (ADR-178). The `f` value doors refuse one with `dbtypes.ErrExpressionInFilter`; a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
+**Expression Support:** Every `jf` value door — the six compare doors, both `Between` bounds, `In` and `NotIn` — splices a `qb.Expr()` expression, or a non-nil pointer to one, without placeholders; an aliased one is refused with `dbtypes.ErrAliasInPredicate`. A `RawExpression` is the only spliceable operand; any other `squirrel.Sqlizer` at a compare door or a `Between` bound fails `ToSQL()` with `dbtypes.ErrSqlizerOperand` (ADR-178). The `f` value doors refuse one with `dbtypes.ErrExpressionInFilter`; a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
 
 **Raw() Escape Hatch:** Use `jf.Raw()` only for conditions type-safe methods cannot express (e.g., spatial functions, exotic operators).
 
@@ -421,12 +421,9 @@ the builder. The grammar will not accept a computed one.
   `SET updated_at = now()` with no placeholder and no argument, every other value
   staying parameterized. An alias in a value position is an error
   (`ErrAliasInValue`) naming the column or one-based position — a `SET` or
-  `VALUES` cell projects nothing, so it could only be dropped silently. A
-  `squirrel.Sqlizer` value at those positions (a `squirrel.Expr`, a squirrel map
-  literal, a `dbtypes.Filter`, any type whose value as passed has `ToSql`) is an
-  error too (`ErrSqlizerOperand`, ADR-178) naming the column or position, where
-  squirrel spliced it (`SET c = NOW()`); Oracle's `BuildUpsert` MERGE binds it
-  as an argument, as before. So is an
+  `VALUES` cell projects nothing, so it could only be dropped silently. Any
+  other `squirrel.Sqlizer` in a cell fails `ToSQL()` with `ErrSqlizerOperand`
+  (ADR-178). So is an
   alias at one of the nine `jf` operand doors (`ErrAliasInPredicate`), judged
   before the grammar. The nine `f` operand doors refuse an expression with
   `ErrExpressionInFilter` before any alias judgment. `GroupBy` and `OrderBy`

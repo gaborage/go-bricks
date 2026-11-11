@@ -45,33 +45,27 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 // `?` placeholders (SetExpr's door); Set passes none. The label names the
 // column in the error.
 func valueCell(label string, value any, args ...any) (any, error) {
-	judged, err := judgeOperand("", value, valueFamily)
+	judged, err := judgeValueCell(value)
 	if err != nil {
 		return nil, cellErr(label, err)
 	}
 	if judged.kind != operandSpliced {
-		if err := refuseSqlizer(judged.value); err != nil {
-			return nil, cellErr(label, err)
-		}
 		return judged.value, nil
 	}
 	return squirrel.Expr(judged.sql, args...), nil
 }
 
-// valueCells applies valueCell's judgment to every cell, copying the slice on
-// the first spliced expression so a caller's variadic slice is never
-// rewritten; label is called only on the error path.
+// valueCells judges every cell as valueCell does, copying the slice on the
+// first spliced expression so a caller's variadic slice is never rewritten;
+// label is called only on the error path.
 func valueCells(values []any, label func(i int) string) ([]any, error) {
 	out := values
 	for i, v := range values {
-		judged, err := judgeOperand("", v, valueFamily)
+		judged, err := judgeValueCell(v)
 		if err != nil {
 			return nil, cellErr(label(i), err)
 		}
 		if judged.kind != operandSpliced {
-			if err := refuseSqlizer(judged.value); err != nil {
-				return nil, cellErr(label(i), err)
-			}
 			continue
 		}
 		if len(out) == len(values) && &out[0] == &values[0] {
@@ -80,6 +74,22 @@ func valueCells(values []any, label func(i int) string) ([]any, error) {
 		out[i] = squirrel.Expr(judged.sql)
 	}
 	return out, nil
+}
+
+// judgeValueCell judges one SET / VALUES cell: the value family's judgment,
+// then refuseSqlizer on anything it does not splice. The caller names the
+// cell in the error (cellErr).
+func judgeValueCell(value any) (operand, error) {
+	judged, err := judgeOperand("", value, valueFamily)
+	if err != nil {
+		return operand{}, err
+	}
+	if judged.kind != operandSpliced {
+		if err := refuseSqlizer(judged.value); err != nil {
+			return operand{}, err
+		}
+	}
+	return judged, nil
 }
 
 // cellErr names the cell a judged value failed in: its column, or its one-based

@@ -3026,15 +3026,14 @@ holds.
 
 ### [ADR-178: A `squirrel.Sqlizer` Operand Is Refused Where the Builder Spliced It](adr_178_sqlizer_operand_refused_where_spliced.md)
 
-**Date:** 2026-11-11 | **Status:** Accepted | **Breaking:** a `squirrel.Sqlizer` (a `squirrel.Expr`, a squirrel map, a `Filter`, or a pointer to one) at a `jf` compare door, a `jf.Between` bound, or a `Set`/`SetMap`/`SetStruct`/`Values`/`InsertStruct`/`InsertFields`/PostgreSQL `BuildUpsert` value fails `ToSQL()` with `ErrSqlizerOperand`, where it was spliced
+**Date:** 2026-11-11 | **Status:** Accepted | **Breaking:** a `RawExpression` is the only spliceable operand; any other `squirrel.Sqlizer` where the builder would splice it (a `jf` compare door, a `jf.Between` bound, a SET/VALUES cell) fails `ToSQL()` with `ErrSqlizerOperand`
 
 The six `jf` compare doors and both `Between` bounds rendered a resolved scalar through
 `squirrel.Expr`, and the SET / VALUES cells handed theirs to squirrel's SET / VALUES rendering;
 both expand a Sqlizer argument in place, so `jf.Eq("c", f.Eq("x", 1))` rendered `c = x = $1` and
 `Set("c", squirrel.Expr("NOW()"))` rendered `SET c = NOW()`, with none of the `RawExpression`
 checks run. Those positions now refuse one with `dbtypes.ErrSqlizerOperand`, naming the operator
-or the cell and the operand's type; the `f` doors, `In`/`NotIn`, list elements and Oracle's MERGE
-bind it as before. Option A, binding it at `jf` as `f` does, was rejected: the cells would keep
+or the cell and the operand's type; a position that bound one still does. Option A, binding it at `jf` as `f` does, was rejected: the cells would keep
 splicing and a bound Sqlizer fails only at execution. Relates ADR-147 and ADR-158. See
 [migrations.md](migrations.md) `[C74.7]`.
 

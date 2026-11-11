@@ -3707,7 +3707,8 @@ func TestValueDoorsRejectInvalidRawExpression(t *testing.T) {
 // the expression's `?` placeholders are renumbered with the statement's own,
 // in order, on both vendors — the interval-arithmetic shape the hold stores
 // hand-write today. The table VARIES argument count and position so a mutant
-// that dropped or reordered the args is caught.
+// that dropped or reordered the args is caught. It also pins that the cell's
+// own squirrel.Expr is not re-judged as a caller's Sqlizer (ADR-178).
 func TestSetExprBindsArgumentsPerVendor(t *testing.T) {
 	cases := []struct {
 		name     string

@@ -1109,12 +1109,17 @@ func nullVerdict(d compareDoor) operandVerdict {
 	return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IS NULL", "IS NOT NULL")})
 }
 
+// resolvingErr is the text of an error met resolving the operand under op.
+func resolvingErr(op, msg string) string {
+	return "resolving the " + op + " operand: " + msg
+}
+
 func valuerBoomVerdict(d compareDoor) operandVerdict {
-	return operandVerdict{errText: "resolving the " + d.op + " operand: boom", is: errJudgeBoom}
+	return operandVerdict{errText: resolvingErr(d.op, "boom"), is: errJudgeBoom}
 }
 
 func cyclicVerdict(d compareDoor) operandVerdict {
-	return operandVerdict{errText: "resolving the " + d.op + " operand: operand pointer chain is cyclic"}
+	return operandVerdict{errText: resolvingErr(d.op, "operand pointer chain is cyclic")}
 }
 
 func aliasedVerdict(d compareDoor) operandVerdict {
@@ -1207,7 +1212,7 @@ var sqlizerShapes = []sqlizerShape{
 // sqlizerRefused is the refusal of a Sqlizer operand under op.
 func sqlizerRefused(op, typeName string) operandVerdict {
 	return operandVerdict{
-		errText: "resolving the " + op + " operand: " + dbtypes.ErrSqlizerOperand.Error() + ": " + typeName,
+		errText: resolvingErr(op, dbtypes.ErrSqlizerOperand.Error()+": "+typeName),
 		is:      dbtypes.ErrSqlizerOperand,
 	}
 }
@@ -1229,21 +1234,20 @@ func sqlizerRows() []operandRow {
 
 // sqlizerBoundRows are the Sqlizer rows of a Between door, one per bound.
 func sqlizerBoundRows() []operandRow {
+	// boundRow puts the shape at one bound, op's, with other at the other.
+	boundRow := func(s sqlizerShape, suffix, op string, operands, bound [2]any) operandRow {
+		return operandRow{s.name + suffix, operands, func(d compareDoor) operandVerdict {
+			if d.jf == nil {
+				return operandVerdict{pred: "(c >= ?1 AND c <= ?2)", args: bound[:]}
+			}
+			return sqlizerRefused(op, s.resolvedType)
+		}}
+	}
 	rows := make([]operandRow, 0, 2*len(sqlizerShapes))
 	for _, s := range sqlizerShapes {
 		rows = append(rows,
-			operandRow{s.name + "_lower", [2]any{s.operand, 9}, func(d compareDoor) operandVerdict {
-				if d.jf == nil {
-					return operandVerdict{pred: "(c >= ?1 AND c <= ?2)", args: []any{s.bound, 9}}
-				}
-				return sqlizerRefused(">=", s.resolvedType)
-			}},
-			operandRow{s.name + "_upper", [2]any{1, s.operand}, func(d compareDoor) operandVerdict {
-				if d.jf == nil {
-					return operandVerdict{pred: "(c >= ?1 AND c <= ?2)", args: []any{1, s.bound}}
-				}
-				return sqlizerRefused("<=", s.resolvedType)
-			}},
+			boundRow(s, "_lower", ">=", [2]any{s.operand, 9}, [2]any{s.bound, 9}),
+			boundRow(s, "_upper", "<=", [2]any{1, s.operand}, [2]any{1, s.bound}),
 		)
 	}
 	return rows
@@ -1703,26 +1707,33 @@ func TestOperandJudgeAtTheValueCells(t *testing.T) {
 		for _, d := range cellDoors {
 			for _, row := range rows {
 				t.Run(v.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
-					var sqlText string
-					var args []any
-					var err error
-					require.NotPanics(t, func() { sqlText, args, err = d.render(NewQueryBuilder(v.vendor), row.operand) })
-
-					if row.errText != "" {
-						require.EqualError(t, err, d.label+": "+row.errText)
-						require.ErrorIs(t, err, row.is)
-						assert.Empty(t, sqlText)
-						assert.Nil(t, args)
-						return
-					}
-					require.NoError(t, err)
-					wantSQL, wantArgs := d.want(row.cell, append([]any(nil), row.args...))
-					assert.Equal(t, numberPlaceholders(v.vendor, wantSQL), sqlText)
-					assert.Equal(t, wantArgs, args)
+					assertCellRow(t, v.vendor, d, row)
 				})
 			}
 		}
 	}
+}
+
+// assertCellRow renders row's operand through door d on vendor and checks the
+// statement, or the error naming d's label.
+func assertCellRow(t *testing.T, vendor string, d cellDoor, row cellOperandRow) {
+	t.Helper()
+	var sqlText string
+	var args []any
+	var err error
+	require.NotPanics(t, func() { sqlText, args, err = d.render(NewQueryBuilder(vendor), row.operand) })
+
+	if row.errText != "" {
+		require.EqualError(t, err, d.label+": "+row.errText)
+		require.ErrorIs(t, err, row.is)
+		assert.Empty(t, sqlText)
+		assert.Nil(t, args)
+		return
+	}
+	require.NoError(t, err)
+	wantSQL, wantArgs := d.want(row.cell, append([]any(nil), row.args...))
+	assert.Equal(t, numberPlaceholders(vendor, wantSQL), sqlText)
+	assert.Equal(t, wantArgs, args)
 }
 
 // cellOperandRow is one operand shape at a SET / VALUES cell: the cell it
@@ -1755,15 +1766,12 @@ func sqlizerCellRows() []cellOperandRow {
 	)
 }
 
-// upsertCellDoor is one BuildUpsert value position on one vendor: render
-// builds the statement with v in the cell, want the expected statement with
-// cell in its place, and spliced whether that vendor splices a Sqlizer there.
+// upsertCellDoor is one BuildUpsert value position on one vendor, and whether
+// that vendor splices a Sqlizer there.
 type upsertCellDoor struct {
-	name    string
+	cellDoor
 	vendor  string
 	spliced bool
-	render  func(qb *QueryBuilder, v any) (string, []any, error)
-	want    func(cell string, cellArgs []any) (string, []any)
 }
 
 func upsertInsertCell(qb *QueryBuilder, v any) (string, []any, error) {
@@ -1774,91 +1782,62 @@ func upsertUpdateCell(qb *QueryBuilder, v any) (string, []any, error) {
 	return qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1}, map[string]any{"c": v})
 }
 
+const upsertCellLabel = "BuildUpsert: c"
+
 var upsertCellDoors = []upsertCellDoor{
 	{
-		name: "insert", vendor: dbtypes.PostgreSQL, spliced: true, render: upsertInsertCell,
-		want: func(cell string, a []any) (sqlText string, args []any) {
-			return `INSERT INTO t ("c","id") VALUES (` + cell + `,?) ON CONFLICT ("id") DO NOTHING`, append(a, 1)
+		vendor: dbtypes.PostgreSQL, spliced: true,
+		cellDoor: cellDoor{
+			name: "insert", label: upsertCellLabel, render: upsertInsertCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return `INSERT INTO t ("c","id") VALUES (` + cell + `,?) ON CONFLICT ("id") DO NOTHING`, append(a, 1)
+			},
 		},
 	},
 	{
-		name: "update", vendor: dbtypes.PostgreSQL, spliced: true, render: upsertUpdateCell,
-		want: func(cell string, a []any) (sqlText string, args []any) {
-			return `INSERT INTO t ("id") VALUES (?) ON CONFLICT ("id") DO UPDATE SET "c" = ` + cell, append([]any{1}, a...)
+		vendor: dbtypes.PostgreSQL, spliced: true,
+		cellDoor: cellDoor{
+			name: "update", label: upsertCellLabel, render: upsertUpdateCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return `INSERT INTO t ("id") VALUES (?) ON CONFLICT ("id") DO UPDATE SET "c" = ` + cell, append([]any{1}, a...)
+			},
 		},
 	},
 	{
-		name: "insert", vendor: dbtypes.Oracle, render: upsertInsertCell,
-		want: func(cell string, a []any) (sqlText string, args []any) {
-			return "MERGE INTO t target USING (SELECT " + cell + " AS c, ? AS id FROM dual) source ON (target.id = source.id)" +
-				" WHEN NOT MATCHED THEN INSERT (c, id) VALUES (source.c, source.id)", append(a, 1)
+		vendor: dbtypes.Oracle,
+		cellDoor: cellDoor{
+			name: "insert", label: upsertCellLabel, render: upsertInsertCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return "MERGE INTO t target USING (SELECT " + cell + " AS c, ? AS id FROM dual) source ON (target.id = source.id)" +
+					" WHEN NOT MATCHED THEN INSERT (c, id) VALUES (source.c, source.id)", append(a, 1)
+			},
 		},
 	},
 	{
-		name: "update", vendor: dbtypes.Oracle, render: upsertUpdateCell,
-		want: func(cell string, a []any) (sqlText string, args []any) {
-			return "MERGE INTO t target USING (SELECT ? AS id FROM dual) source ON (target.id = source.id)" +
-				" WHEN MATCHED THEN UPDATE SET c = " + cell + " WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)", append([]any{1}, a...)
+		vendor: dbtypes.Oracle,
+		cellDoor: cellDoor{
+			name: "update", label: upsertCellLabel, render: upsertUpdateCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return "MERGE INTO t target USING (SELECT ? AS id FROM dual) source ON (target.id = source.id)" +
+					" WHEN MATCHED THEN UPDATE SET c = " + cell + " WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)", append([]any{1}, a...)
+			},
 		},
 	},
 }
 
-// TestOperandJudgeAtTheUpsertCells pins BuildUpsert's value positions: an
-// expression splices on both vendors; a Sqlizer, which PostgreSQL's INSERT
-// rendering would splice, is refused there, while Oracle's MERGE binds it as
-// written, as it always has.
+// TestOperandJudgeAtTheUpsertCells pins a Sqlizer at BuildUpsert's value
+// positions: PostgreSQL's INSERT rendering would splice it, so it is refused
+// there, while Oracle's MERGE binds it as written, as it always has. The
+// expression rows live in the postgres and oracle upsert tests.
 func TestOperandJudgeAtTheUpsertCells(t *testing.T) {
 	for _, d := range upsertCellDoors {
-		rows := []cellOperandRow{
-			{name: "scalar", operand: 5, cell: "?", args: []any{5}},
-			{name: "expression", operand: judgeExpr, cell: "UPPER(x)"},
-			{
-				name: "aliased_expression", operand: judgeAliased, is: dbtypes.ErrAliasInValue,
-				errText: dbtypes.ErrAliasInValue.Error() + ": d",
-			},
-		}
 		for _, row := range sqlizerCellRows() {
 			if !d.spliced {
 				row = cellOperandRow{name: strings.TrimSuffix(row.name, "_refused") + "_binds", operand: row.operand, cell: "?", args: []any{row.operand}}
 			}
-			rows = append(rows, row)
-		}
-		for _, row := range rows {
 			t.Run(d.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
-				var sqlText string
-				var args []any
-				var err error
-				require.NotPanics(t, func() { sqlText, args, err = d.render(NewQueryBuilder(d.vendor), row.operand) })
-
-				if row.errText != "" {
-					require.EqualError(t, err, "BuildUpsert: c: "+row.errText)
-					require.ErrorIs(t, err, row.is)
-					assert.Empty(t, sqlText)
-					assert.Nil(t, args)
-					return
-				}
-				require.NoError(t, err)
-				wantSQL, wantArgs := d.want(row.cell, append([]any(nil), row.args...))
-				assert.Equal(t, numberPlaceholders(d.vendor, wantSQL), sqlText)
-				assert.Equal(t, wantArgs, args)
+				assertCellRow(t, d.vendor, d.cellDoor, row)
 			})
 		}
-	}
-}
-
-// TestSetExprCellIsNotRejudged pins that SetExpr's own rendering of a judged
-// expression, a Sqlizer carrying the caller's arguments, is never judged as a
-// caller's cell.
-func TestSetExprCellIsNotRejudged(t *testing.T) {
-	for _, v := range inListVendors {
-		t.Run(v.vendor, func(t *testing.T) {
-			qb := NewQueryBuilder(v.vendor)
-			// SECURITY: Manual SQL review completed - literal COALESCE over a fixed column, value side parameterized
-			sqlText, args, err := qb.Update("t").SetExpr("c", dbtypes.MustExpr("COALESCE(c, ?)"), 5).Where(qb.Filter().Eq("id", 1)).ToSQL()
-
-			require.NoError(t, err)
-			assert.Equal(t, numberPlaceholders(v.vendor, "UPDATE t SET c = COALESCE(c, ?) WHERE id = ?"), sqlText)
-			assert.Equal(t, []any{5, 1}, args)
-		})
 	}
 }

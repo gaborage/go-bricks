@@ -79,7 +79,8 @@ resolved value that is still a `driver.Valuer` (a Valuer answering a Valuer) a s
   configuration key moves. Remedy: wrap an intended expression in `qb.Expr()`/`qb.MustExpr()` with
   its `// SECURITY:` annotation, or pass the plain value.
 - PostgreSQL and Oracle now disagree on a Sqlizer in a `BuildUpsert` value: PostgreSQL refuses it
-  at build, and Oracle's MERGE binds it as an argument, as before.
+  at build, and Oracle's MERGE binds it as an argument, as before. This is deliberate, the result
+  of refusing exactly what splices today; aligning Oracle's MERGE is a possible follow-up.
 - `SetExpr`'s trailing arguments and `f.Raw`/`jf.Raw` arguments still expand a Sqlizer:
   unchanged, outside this decision.
 
