@@ -1064,3 +1064,43 @@ func TestValidateMultitenantTenantCacheKeyPrefixDefaultNeedsAValidAppName(t *tes
 	assert.Equal(t, "app.name", cfgErr.Field)
 	assert.Contains(t, cfgErr.Action, "cache.redis.keyprefix")
 }
+
+func TestCheckStaticTenantMapRefusesMalformedBrokerURL(t *testing.T) {
+	for _, tt := range malformedBrokerURLCases {
+		t.Run(tt.name, func(t *testing.T) {
+			// "acme" sorts first and is well-formed: the refusal must name the tenant
+			// that holds the malformed URL, not the first one checked.
+			tenants := map[string]TenantEntry{
+				"acme":   {Messaging: TenantMessagingConfig{URL: "amqp://u:p@h:5672/vh"}},
+				"globex": {Messaging: TenantMessagingConfig{URL: tt.url}},
+			}
+
+			err := checkStaticTenantMap(tenants, &MessagingConfig{})
+
+			require.Error(t, err)
+			assert.Equal(t, "tenants: config_invalid: multitenant.tenants.globex.messaging.url "+tt.wantErr+
+				" percent-encode reserved characters in the username and password (url.UserPassword)", err.Error())
+			assertNoBrokerURLText(t, err.Error(), tt.url, tt.secrets)
+		})
+	}
+}
+
+// The tenant store hands the URL to the client as written, so a whitespace-only one
+// is a URL to dial, not an unset key: it must not wait for the tenant's first use.
+func TestCheckStaticTenantMapRefusesWhitespaceOnlyBrokerURL(t *testing.T) {
+	tenants := map[string]TenantEntry{"acme": {Messaging: TenantMessagingConfig{URL: "   "}}}
+
+	err := checkStaticTenantMap(tenants, &MessagingConfig{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multitenant.tenants.acme.messaging.url is not a valid AMQP URL")
+}
+
+func TestCheckStaticTenantMapAcceptsWellFormedBrokerURLs(t *testing.T) {
+	tenants := map[string]TenantEntry{
+		"acme":   {Messaging: TenantMessagingConfig{URL: "amqp://app:pw@unreachable.invalid:5672/vh"}},
+		"globex": {Messaging: TenantMessagingConfig{URL: "amqp://h:05672/vh"}},
+	}
+
+	require.NoError(t, checkStaticTenantMap(tenants, &MessagingConfig{}))
+}

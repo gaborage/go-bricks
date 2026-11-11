@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/credurl"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -27,13 +28,6 @@ func TestCreateAMQPClientLogsBrokerURLInOnePosture(t *testing.T) {
 		{name: "url_with_username_only_no_password", input: "amqp://guest@localhost:5672/", want: "amqp://xxxxx@localhost:5672/", secrets: []string{"guest"}},
 		{name: "url_with_query_parameters", input: "amqp://user:pass@localhost:5672/?heartbeat=30&connection_timeout=10", want: "amqp://user:xxxxx@localhost:5672/?xxxxx", secrets: []string{"pass", "heartbeat"}},
 		{name: "query_string_is_masked_not_leaked", input: "amqp://user:secret@host:5672/vhost?token=leakme&heartbeat=60", want: "amqp://user:xxxxx@host:5672/vhost?xxxxx", secrets: []string{"secret", "leakme"}},
-		{name: "malformed_url_masked_whole", input: "not-a-valid-url", want: "xxxxx", secrets: []string{"valid"}},
-		{name: "rejected_without_at_masked_whole", input: "amqp://user:pass/broker", want: "xxxxx", secrets: []string{"pass"}},
-		{name: "forgot_host_path_masked_whole", input: "amqp://user:QZ/XJK", want: "xxxxx", secrets: []string{"QZ", "XJK"}},
-		{name: "forgot_host_at_in_username_masked_whole", input: "amqp://u@ser:QZXJ/vh", want: "xxxxx", secrets: []string{"QZXJ"}},
-		{name: "forgot_host_at_in_password_masked_whole", input: "amqp://user:pa@ss:QZXJ", want: "xxxxx", secrets: []string{"pa", "ss", "QZXJ"}},
-		{name: "empty_url", input: "", want: "xxxxx"},
-		{name: "non_amqp_scheme", input: "http://user:pass@localhost:80/", want: "http://user:xxxxx@localhost:80/", secrets: []string{"pass"}},
 		{name: "empty_host_masked_whole", input: "amqp://guest:secret@/vhost", want: "xxxxx", secrets: []string{"secret", "guest"}},
 		{name: "encoded_credentials_are_masked", input: "amqp://user%2Fname:p%40ss@localhost:5672/vh%2Fost", want: "amqp://user%2Fname:xxxxx@localhost:5672/vh%2Fost", secrets: []string{"p%40ss", "p@ss"}},
 		{name: "url_with_ip_address", input: "amqp://admin:secret@192.168.1.100:5672/", want: "amqp://admin:xxxxx@192.168.1.100:5672/", secrets: []string{"secret"}},
@@ -58,6 +52,48 @@ func TestCreateAMQPClientLogsBrokerURLInOnePosture(t *testing.T) {
 			require.Equal(t, []string{tt.want}, got)
 			for _, secret := range tt.secrets {
 				assert.NotContains(t, got[0], secret)
+			}
+		})
+	}
+}
+
+// TestCreateAMQPClientRefusesMalformedBrokerURLWithoutRenderingIt covers the shapes the
+// manager no longer builds a client for: nothing is logged for them, the refusal
+// carries no URL text, and the posture a hand-built client's log line still renders
+// for the same input is unchanged.
+func TestCreateAMQPClientRefusesMalformedBrokerURLWithoutRenderingIt(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		secrets []string
+	}{
+		{name: "malformed_url_masked_whole", input: "not-a-real-url", want: "xxxxx", secrets: []string{"real"}},
+		{name: "rejected_without_at_masked_whole", input: "amqp://user:hunter2/broker", want: "xxxxx", secrets: []string{"hunter2"}},
+		{name: "forgot_host_path_masked_whole", input: "amqp://user:QZ/XJK", want: "xxxxx", secrets: []string{"QZ", "XJK"}},
+		{name: "forgot_host_at_in_username_masked_whole", input: "amqp://u@ser:QZXJ/vh", want: "xxxxx", secrets: []string{"QZXJ"}},
+		{name: "forgot_host_at_in_password_masked_whole", input: "amqp://user:zq@9x:QZXJ", want: "xxxxx", secrets: []string{"zq", "9x", "QZXJ"}},
+		{name: "empty_url", input: "", want: "xxxxx"},
+		{name: "non_amqp_scheme", input: "http://user:hunter2@localhost:80/", want: "http://user:xxxxx@localhost:80/", secrets: []string{"hunter2"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := newRecordingLogger()
+			built := 0
+			manager := NewMessagingManager(
+				&stubMessagingSource{urls: map[string]string{testTenantID: tt.input}},
+				log, ManagerOptions{}, func(string, logger.Logger) AMQPClient { built++; return &stubAMQPClient{} })
+			defer func() { _ = manager.Close() }()
+
+			_, err := manager.createAMQPClient(context.Background(), testTenantID)
+
+			require.Error(t, err)
+			assert.Zero(t, built, "a refused broker URL must build no client")
+			assert.Empty(t, log.Matching("Created AMQP client for key"))
+			assert.Equal(t, tt.want, credurl.RedactForLog(tt.input))
+			for _, secret := range tt.secrets {
+				assert.NotContains(t, err.Error(), secret)
 			}
 		})
 	}
