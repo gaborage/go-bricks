@@ -16137,9 +16137,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     that set it under `messaging:` → `streams:`, and repeating it with `grep -rlE` over untracked
     deployment config as C74.2 does) and `MESSAGING_STREAMS_URI`
     (`git grep -l 'MESSAGING_STREAMS_URI'`, plus the same `grep -rl` over `k8s/ deploy/ .env*`).
-  - Go: `git grep -lE 'NewAMQPClient\(|\.NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
-    lists the hand-built doors under any import alias (keep the `NewManager` hits whose package is
-    `messaging/streams`) and a stream URI set in code, and C74.2's hand-built config and
+  - Go: `git grep -lE 'NewAMQPClient\(|(^|[^[:alnum:]_])NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
+    lists the hand-built doors under any import alias or a dot import (keep the `NewManager` hits
+    whose import is `messaging/streams`) and a stream URI set in code, and C74.2's hand-built config and
     `BrokerURL` method greps list the rest; judge the URLs each can receive.
   - A hit locates the key, not the verdict. Judge each resolved value, in every environment, with
     a throwaway Go program that prints only a boolean, never the URL:
