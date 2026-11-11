@@ -143,7 +143,7 @@ func NewProductService(db database.Interface) *ProductService {
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`.
 
-**Operand contract (both families, nine value doors — `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `Between`, `In`, `NotIn`):** `f` and `jf` resolve an operand the same way before doing anything with it — a NIL pointer is nil before it is asked for anything, then a `driver.Valuer` becomes its `Value()`, then a pointer becomes its element — and classify the RESULT as NIL (`nil`, a typed nil pointer, a Valuer reporting NULL), a LIST (a slice or an array), or a SCALAR (anything else, `[]byte` and a Valuer holding a value included). A `dbtypes.RawExpression` operand (`qb.Expr(…)`) is judged right after resolution, before classification, so a non-nil pointer to one counts too: the `jf` doors refuse one carrying an alias with `dbtypes.ErrAliasInPredicate`, then run `Validate()` and splice its SQL into the predicate verbatim, with no placeholder and no argument, and the `f` doors refuse it with `dbtypes.ErrExpressionInFilter` — a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
+**Operand contract (both families, nine value doors — `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `Between`, `In`, `NotIn`):** `f` and `jf` resolve an operand the same way before doing anything with it — a NIL pointer is nil before it is asked for anything, then a `driver.Valuer` becomes its `Value()`, then a pointer becomes its element — and classify the RESULT as NIL (`nil`, a typed nil pointer, a Valuer reporting NULL), a LIST (a slice or an array), or a SCALAR (anything else, `[]byte` and a Valuer holding a value included). A `dbtypes.RawExpression` operand (`qb.Expr(…)`) is judged right after resolution, before classification, so a non-nil pointer to one counts too: the `jf` doors refuse one carrying an alias with `dbtypes.ErrAliasInPredicate`, then run `Validate()` and splice its SQL into the predicate verbatim, with no placeholder and no argument, and the `f` doors refuse it with `dbtypes.ErrExpressionInFilter` — a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation. A `RawExpression` is the only operand any door splices: a resolved SCALAR that is a `squirrel.Sqlizer` (a `squirrel.Expr`, a squirrel map literal, a `dbtypes.Filter`, any type with `ToSql`, or a pointer to one) fails `ToSQL()` at the six `jf` compare doors and either `jf.Between` bound with `dbtypes.ErrSqlizerOperand`, `resolving the <op> operand: …: <type>`, where it was spliced (`c = x = $1`); the `f` doors, `In`/`NotIn` and list elements of both families bind it as one argument, as before (ADR-178). Use `qb.Expr()` for an intended expression.
 
 - **Equality** (`Eq`, `NotEq`): NIL renders `IS NULL` / `IS NOT NULL`; a LIST expands to `IN (…)` / `NOT IN (…)`, its elements resolved and judged as `In` judges them, an empty one to the constant `(1=0)` / `(1=1)`; a SCALAR is bound to `col op ?` whatever its Go type — a struct no driver accepts is passed through, not diagnosed.
 - **Ordering** (`Lt`, `Lte`, `Gt`, `Gte`) and both bounds of `Between`: a NIL or LIST operand is refused with `dbtypes.ErrOrderingOperandNotComparable` (exported from `database/types`, so `errors.Is` works from your own code), surfaced at `ToSQL()`. There is no rendering for `col < NULL` or for an ordering against a set, so the door fails closed rather than emitting SQL that silently matches nothing.
@@ -211,7 +211,7 @@ query := qb.Select("*").
 
 **Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Nine of them follow the *Operand contract* above — the six compare doors, `In`, `NotIn` and `Between`, whose two bounds are each resolved as an ordering operand. `Like` does NOT: it takes a string pattern, so there is no operand to resolve.
 
-**Expression Support:** Every `jf` value door — the six compare doors, both `Between` bounds, `In` and `NotIn` — splices a `qb.Expr()` expression, or a non-nil pointer to one, without placeholders; an aliased one is refused with `dbtypes.ErrAliasInPredicate`. The `f` value doors refuse one with `dbtypes.ErrExpressionInFilter`; a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
+**Expression Support:** Every `jf` value door — the six compare doors, both `Between` bounds, `In` and `NotIn` — splices a `qb.Expr()` expression, or a non-nil pointer to one, without placeholders; an aliased one is refused with `dbtypes.ErrAliasInPredicate`. A `RawExpression` is the only spliceable operand; any other `squirrel.Sqlizer` at a compare door or a `Between` bound fails `ToSQL()` with `dbtypes.ErrSqlizerOperand` (ADR-178). The `f` value doors refuse one with `dbtypes.ErrExpressionInFilter`; a WHERE-side expression uses `f.Raw` with its `// SECURITY:` annotation.
 
 **Raw() Escape Hatch:** Use `jf.Raw()` only for conditions type-safe methods cannot express (e.g., spatial functions, exotic operators).
 
@@ -428,7 +428,10 @@ the builder. The grammar will not accept a computed one.
   `SET updated_at = now()` with no placeholder and no argument, every other value
   staying parameterized. An alias in a value position is an error
   (`ErrAliasInValue`) naming the column or one-based position — a `SET` or
-  `VALUES` cell projects nothing, so it could only be dropped silently. So is an
+  `VALUES` cell projects nothing, so it could only be dropped silently. Any
+  other `squirrel.Sqlizer` in a cell fails `ToSQL()` with `ErrSqlizerOperand`
+  (ADR-178), except in an Oracle `BuildUpsert` cell, which binds it as one
+  argument. So is an
   alias at one of the nine `jf` operand doors (`ErrAliasInPredicate`), judged
   before the grammar. The nine `f` operand doors refuse an expression with
   `ErrExpressionInFilter` before any alias judgment. `GroupBy` and `OrderBy`

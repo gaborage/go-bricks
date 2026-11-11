@@ -1109,12 +1109,17 @@ func nullVerdict(d compareDoor) operandVerdict {
 	return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IS NULL", "IS NOT NULL")})
 }
 
+// resolvingErr is the text of an error met resolving the operand under op.
+func resolvingErr(op, msg string) string {
+	return "resolving the " + op + " operand: " + msg
+}
+
 func valuerBoomVerdict(d compareDoor) operandVerdict {
-	return operandVerdict{errText: "resolving the " + d.op + " operand: boom", is: errJudgeBoom}
+	return operandVerdict{errText: resolvingErr(d.op, "boom"), is: errJudgeBoom}
 }
 
 func cyclicVerdict(d compareDoor) operandVerdict {
-	return operandVerdict{errText: "resolving the " + d.op + " operand: operand pointer chain is cyclic"}
+	return operandVerdict{errText: resolvingErr(d.op, "operand pointer chain is cyclic")}
 }
 
 func aliasedVerdict(d compareDoor) operandVerdict {
@@ -1169,7 +1174,84 @@ var (
 	judgeNested = squirrel.Eq{"x": 1}
 	// SECURITY: Manual SQL review completed - literal NOW() call, no user input
 	judgeStructSqlizer = squirrel.Expr("NOW()")
+	// judgeFilter is a Filter: a Sqlizer the builder itself returns.
+	judgeFilter = NewQueryBuilder(dbtypes.PostgreSQL).Filter().Eq("x", 1)
 )
+
+// valuerSqlizer is both a driver.Valuer and a squirrel.Sqlizer.
+type valuerSqlizer struct{}
+
+func (valuerSqlizer) Value() (driver.Value, error) { return "answer", nil }
+
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (valuerSqlizer) ToSql() (sql string, args []any, err error) { return "VALUER_SQL()", nil, nil }
+
+// ptrOnlySqlizer has ToSql on its pointer alone: the value is no Sqlizer.
+type ptrOnlySqlizer struct{}
+
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
+func (*ptrOnlySqlizer) ToSql() (sql string, args []any, err error) { return "PTR_SQL()", nil, nil }
+
+// sqlizerShape is a Sqlizer operand a splicing position refuses: bound is what
+// an f door binds for it, resolvedType the type a jf door names (after
+// resolution) and cellType the type a cell names (its surface).
+type sqlizerShape struct {
+	name                   string
+	operand                any
+	bound                  any
+	resolvedType, cellType string
+}
+
+var sqlizerShapes = []sqlizerShape{
+	{name: "sqlizer", operand: judgeNested, bound: judgeNested, resolvedType: "squirrel.Eq", cellType: "squirrel.Eq"},
+	{name: "sqlizer_expr", operand: judgeStructSqlizer, bound: judgeStructSqlizer, resolvedType: "squirrel.expr", cellType: "squirrel.expr"},
+	{name: "sqlizer_filter", operand: judgeFilter, bound: judgeFilter, resolvedType: "builder.Filter", cellType: "builder.Filter"},
+	{name: "pointer_to_sqlizer", operand: &judgeNested, bound: judgeNested, resolvedType: "squirrel.Eq", cellType: "*squirrel.Eq"},
+}
+
+// sqlizerRefused is the refusal of a Sqlizer operand under op.
+func sqlizerRefused(op, typeName string) operandVerdict {
+	return operandVerdict{
+		errText: resolvingErr(op, dbtypes.ErrSqlizerOperand.Error()+": "+typeName),
+		is:      dbtypes.ErrSqlizerOperand,
+	}
+}
+
+// sqlizerRows are the Sqlizer rows of a compare door: an f door binds the
+// operand whole, a jf door refuses it.
+func sqlizerRows() []operandRow {
+	rows := make([]operandRow, 0, len(sqlizerShapes))
+	for _, s := range sqlizerShapes {
+		rows = append(rows, operandRow{s.name + "_operand", s.operand, func(d compareDoor) operandVerdict {
+			if d.jf == nil {
+				return operandVerdict{pred: "c " + d.op + " ?1", args: []any{s.bound}}
+			}
+			return sqlizerRefused(d.op, s.resolvedType)
+		}})
+	}
+	return rows
+}
+
+// sqlizerBoundRows are the Sqlizer rows of a Between door, one per bound.
+func sqlizerBoundRows() []operandRow {
+	// boundRow puts the shape at one bound, op's, with other at the other.
+	boundRow := func(s sqlizerShape, suffix, op string, operands, bound [2]any) operandRow {
+		return operandRow{s.name + suffix, operands, func(d compareDoor) operandVerdict {
+			if d.jf == nil {
+				return operandVerdict{pred: "(c >= ?1 AND c <= ?2)", args: bound[:]}
+			}
+			return sqlizerRefused(op, s.resolvedType)
+		}}
+	}
+	rows := make([]operandRow, 0, 2*len(sqlizerShapes))
+	for _, s := range sqlizerShapes {
+		rows = append(rows,
+			boundRow(s, "_lower", ">=", [2]any{s.operand, 9}, [2]any{s.bound, 9}),
+			boundRow(s, "_upper", "<=", [2]any{1, s.operand}, [2]any{1, s.bound}),
+		)
+	}
+	return rows
+}
 
 // TestOperandJudgeAtTheCompareDoors pins, as one table through the public doors
 // of both vendors, what every operand shape renders to at f and jf Eq..Gte.
@@ -1180,7 +1262,7 @@ func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
 	seven := 7
 	payload := map[string]any{"k": 1}
 
-	runOperandRows(t, compareDoors, []operandRow{
+	runOperandRows(t, compareDoors, append([]operandRow{
 		{"scalar", 5, bound(5)},
 		{"byte_slice_is_one_scalar", []byte("ab"), bound([]byte("ab"))},
 		{"map_is_one_scalar", payload, bound(payload)},
@@ -1206,13 +1288,13 @@ func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
 		{"list_aliased_element", []any{judgeAliased}, func(d compareDoor) operandVerdict {
 			return d.equalityOnly(inElement(0, d.op, aliasedVerdict(d)))
 		}},
-		// Known family difference: an f door binds a Sqlizer operand whole, a jf
-		// door expands it in place. Pinned as it is today.
-		{"sqlizer_operand", judgeNested, func(d compareDoor) operandVerdict {
-			if d.jf == nil {
-				return operandVerdict{pred: "c " + d.op + " ?1", args: []any{judgeNested}}
-			}
-			return operandVerdict{pred: "c " + d.op + " x = ?1", args: []any{1}}
+		// A Sqlizer is judged after resolution: a Valuer's answer and a pointer
+		// whose target has no ToSql bind at both families, and a Sqlizer slice
+		// is a list.
+		{"valuer_sqlizer_answer_is_bound", valuerSqlizer{}, bound("answer")},
+		{"pointer_only_sqlizer_is_bound", &ptrOnlySqlizer{}, bound(ptrOnlySqlizer{})},
+		{"sqlizer_slice_is_a_list", squirrel.And{judgeNested}, func(d compareDoor) operandVerdict {
+			return d.equalityOnly(operandVerdict{pred: "c " + d.negated("IN", "NOT IN") + " (?1)", args: []any{judgeNested}})
 		}},
 		{"valuer_over_ints", inValuerList{1, 2}, bound("asked")},
 		{"valuer_over_pointers", intPtrsValuer{&seven}, bound("asked")},
@@ -1222,13 +1304,13 @@ func TestOperandJudgeAtTheCompareDoors(t *testing.T) {
 		{"pointer_to_expression", &judgeExpr, splicedVerdict},
 		{"aliased_expression", judgeAliased, aliasedVerdict},
 		{"blank_expression", judgeBlank, blankVerdict},
-	})
+	}, sqlizerRows()...))
 }
 
 // TestOperandJudgeAtTheBetweenDoors pins both BETWEEN bounds as ordering
 // operands judged one at a time: lower under `>=`, upper under `<=`.
 func TestOperandJudgeAtTheBetweenDoors(t *testing.T) {
-	runOperandRows(t, betweenDoors, []operandRow{
+	runOperandRows(t, betweenDoors, append([]operandRow{
 		{"values", [2]any{1, 9}, func(compareDoor) operandVerdict {
 			return operandVerdict{pred: "(c >= ?1 AND c <= ?2)", args: []any{1, 9}}
 		}},
@@ -1246,13 +1328,7 @@ func TestOperandJudgeAtTheBetweenDoors(t *testing.T) {
 		{"aliased_lower", [2]any{judgeAliased, 9}, func(d compareDoor) operandVerdict {
 			return d.joinOnly(">=", operandVerdict{errText: ">=: alias is not allowed in a predicate operand: d", is: dbtypes.ErrAliasInPredicate})
 		}},
-		{"sqlizer_upper", [2]any{1, judgeNested}, func(d compareDoor) operandVerdict {
-			if d.jf == nil {
-				return operandVerdict{pred: "(c >= ?1 AND c <= ?2)", args: []any{1, judgeNested}}
-			}
-			return operandVerdict{pred: "(c >= ?1 AND c <= x = ?2)", args: []any{1, 1}}
-		}},
-	})
+	}, sqlizerBoundRows()...))
 }
 
 // runOperandRows runs every row at every door on both vendors.
@@ -1288,6 +1364,8 @@ func assertOperandVerdict(t *testing.T, qb *QueryBuilder, placeholders *strings.
 		if want.is != nil {
 			require.ErrorIs(t, err, want.is)
 		}
+		assert.Empty(t, sqlText)
+		assert.Nil(t, args)
 		return
 	}
 	require.NoError(t, err)
@@ -1536,6 +1614,13 @@ var cellDoors = []cellDoor{
 		want: updateCellWant,
 	},
 	{
+		name: "update_set_struct", label: "c",
+		render: func(qb *QueryBuilder, v any) (string, []any, error) {
+			return qb.Update("t").SetStruct(&cellRow{ID: 1, C: v}, "C").Where(qb.Filter().Eq("id", 1)).ToSQL()
+		},
+		want: updateCellWant,
+	},
+	{
 		name: "insert_values", label: "value position 2",
 		render: func(qb *QueryBuilder, v any) (string, []any, error) {
 			return qb.Insert("t").Columns("id", "c").Values(1, v).ToSQL()
@@ -1596,22 +1681,16 @@ func TestOperandJudgeAtTheValueCells(t *testing.T) {
 	var cyclic any
 	cyclic = &cyclic
 
-	rows := []struct {
-		name    string
-		operand any
-		cell    string
-		args    []any
-		errText string
-		is      error
-	}{
+	rows := append([]cellOperandRow{
 		{name: "scalar", operand: 5, cell: "?", args: []any{5}},
 		{name: "nil", operand: nil, cell: "?", args: []any{nil}},
 		{name: "valuer_is_not_asked", operand: valuer, cell: "?", args: []any{valuer}},
 		{name: "valuer_error_is_not_asked", operand: failing, cell: "?", args: []any{failing}},
 		{name: "typed_nil_binds_as_written", operand: typedNil, cell: "?", args: []any{typedNil}},
 		{name: "cyclic_pointer_binds", operand: cyclic, cell: "?", args: []any{cyclic}},
-		// A Sqlizer in a cell is expanded by squirrel's SET / VALUES rendering.
-		{name: "sqlizer_splices", operand: judgeNested, cell: "x = ?", args: []any{1}},
+		// A cell judges its surface, as squirrel's SET / VALUES rendering does: a
+		// value without ToSql binds, its pointer and a Valuer with ToSql do not.
+		{name: "pointer_only_sqlizer_value_binds", operand: ptrOnlySqlizer{}, cell: "?", args: []any{ptrOnlySqlizer{}}},
 		{name: "expression", operand: judgeExpr, cell: "UPPER(x)"},
 		{name: "pointer_to_expression_binds", operand: &judgeExpr, cell: "?", args: []any{&judgeExpr}},
 		{
@@ -1622,28 +1701,143 @@ func TestOperandJudgeAtTheValueCells(t *testing.T) {
 			name: "blank_expression", operand: judgeBlank, is: dbtypes.ErrEmptyExpressionSQL,
 			errText: dbtypes.ErrEmptyExpressionSQL.Error(),
 		},
-	}
+	}, sqlizerCellRows()...)
 
 	for _, v := range inListVendors {
 		for _, d := range cellDoors {
 			for _, row := range rows {
 				t.Run(v.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
-					var sqlText string
-					var args []any
-					var err error
-					require.NotPanics(t, func() { sqlText, args, err = d.render(NewQueryBuilder(v.vendor), row.operand) })
-
-					if row.errText != "" {
-						require.EqualError(t, err, d.label+": "+row.errText)
-						require.ErrorIs(t, err, row.is)
-						return
-					}
-					require.NoError(t, err)
-					wantSQL, wantArgs := d.want(row.cell, append([]any(nil), row.args...))
-					assert.Equal(t, numberPlaceholders(v.vendor, wantSQL), sqlText)
-					assert.Equal(t, wantArgs, args)
+					assertCellRow(t, v.vendor, d, &row)
 				})
 			}
+		}
+	}
+}
+
+// assertCellRow renders row's operand through door d on vendor and checks the
+// statement, or the error naming d's label.
+func assertCellRow(t *testing.T, vendor string, d cellDoor, row *cellOperandRow) {
+	t.Helper()
+	var sqlText string
+	var args []any
+	var err error
+	require.NotPanics(t, func() { sqlText, args, err = d.render(NewQueryBuilder(vendor), row.operand) })
+
+	if row.errText != "" {
+		require.EqualError(t, err, d.label+": "+row.errText)
+		require.ErrorIs(t, err, row.is)
+		assert.Empty(t, sqlText)
+		assert.Nil(t, args)
+		return
+	}
+	require.NoError(t, err)
+	wantSQL, wantArgs := d.want(row.cell, append([]any(nil), row.args...))
+	assert.Equal(t, numberPlaceholders(vendor, wantSQL), sqlText)
+	assert.Equal(t, wantArgs, args)
+}
+
+// cellOperandRow is one operand shape at a SET / VALUES cell: the cell it
+// renders to and its arguments, or the exact error text and its sentinel.
+type cellOperandRow struct {
+	name    string
+	operand any
+	cell    string
+	args    []any
+	errText string
+	is      error
+}
+
+// sqlizerCellRows are the cell rows of every value whose surface is a Sqlizer:
+// each is refused, naming its surface type.
+func sqlizerCellRows() []cellOperandRow {
+	refused := func(name string, operand any, typeName string) cellOperandRow {
+		return cellOperandRow{
+			name: name, operand: operand, is: dbtypes.ErrSqlizerOperand,
+			errText: dbtypes.ErrSqlizerOperand.Error() + ": " + typeName,
+		}
+	}
+	rows := make([]cellOperandRow, 0, len(sqlizerShapes)+2)
+	for _, s := range sqlizerShapes {
+		rows = append(rows, refused(s.name+"_refused", s.operand, s.cellType))
+	}
+	return append(rows,
+		refused("valuer_sqlizer_refused", valuerSqlizer{}, "builder.valuerSqlizer"),
+		refused("pointer_only_sqlizer_refused", &ptrOnlySqlizer{}, "*builder.ptrOnlySqlizer"),
+	)
+}
+
+// upsertCellDoor is one BuildUpsert value position on one vendor, and whether
+// that vendor splices a Sqlizer there.
+type upsertCellDoor struct {
+	cellDoor
+	vendor  string
+	spliced bool
+}
+
+func upsertInsertCell(qb *QueryBuilder, v any) (sql string, args []any, err error) {
+	return qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1, "c": v}, nil)
+}
+
+func upsertUpdateCell(qb *QueryBuilder, v any) (sql string, args []any, err error) {
+	return qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1}, map[string]any{"c": v})
+}
+
+const upsertCellLabel = "BuildUpsert: c"
+
+var upsertCellDoors = []upsertCellDoor{
+	{
+		vendor: dbtypes.PostgreSQL, spliced: true,
+		cellDoor: cellDoor{
+			name: "insert", label: upsertCellLabel, render: upsertInsertCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return `INSERT INTO t ("c","id") VALUES (` + cell + `,?) ON CONFLICT ("id") DO NOTHING`, append(a, 1)
+			},
+		},
+	},
+	{
+		vendor: dbtypes.PostgreSQL, spliced: true,
+		cellDoor: cellDoor{
+			name: "update", label: upsertCellLabel, render: upsertUpdateCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return `INSERT INTO t ("id") VALUES (?) ON CONFLICT ("id") DO UPDATE SET "c" = ` + cell, append([]any{1}, a...)
+			},
+		},
+	},
+	{
+		vendor: dbtypes.Oracle,
+		cellDoor: cellDoor{
+			name: "insert", label: upsertCellLabel, render: upsertInsertCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return "MERGE INTO t target USING (SELECT " + cell + " AS c, ? AS id FROM dual) source ON (target.id = source.id)" +
+					" WHEN NOT MATCHED THEN INSERT (c, id) VALUES (source.c, source.id)", append(a, 1)
+			},
+		},
+	},
+	{
+		vendor: dbtypes.Oracle,
+		cellDoor: cellDoor{
+			name: "update", label: upsertCellLabel, render: upsertUpdateCell,
+			want: func(cell string, a []any) (sqlText string, args []any) {
+				return "MERGE INTO t target USING (SELECT ? AS id FROM dual) source ON (target.id = source.id)" +
+					" WHEN MATCHED THEN UPDATE SET c = " + cell + " WHEN NOT MATCHED THEN INSERT (id) VALUES (source.id)", append([]any{1}, a...)
+			},
+		},
+	},
+}
+
+// TestOperandJudgeAtTheUpsertCells pins a Sqlizer at BuildUpsert's value
+// positions: PostgreSQL's INSERT rendering would splice it, so it is refused
+// there, while Oracle's MERGE binds it as written, as it always has. The
+// expression rows live in the postgres and oracle upsert tests.
+func TestOperandJudgeAtTheUpsertCells(t *testing.T) {
+	for _, d := range upsertCellDoors {
+		for _, row := range sqlizerCellRows() {
+			if !d.spliced {
+				row = cellOperandRow{name: strings.TrimSuffix(row.name, "_refused") + "_binds", operand: row.operand, cell: "?", args: []any{row.operand}}
+			}
+			t.Run(d.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
+				assertCellRow(t, d.vendor, d.cellDoor, &row)
+			})
 		}
 	}
 }
