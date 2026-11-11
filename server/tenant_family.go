@@ -111,7 +111,7 @@ func (n *familyNode) appendChain(chain []echo.MiddlewareFunc) []echo.MiddlewareF
 // A route, or a group carrying middleware, at or below the prefix that was not registered
 // through the family is trespass and fails startup as a RouteConflictReasonTenantOwned
 // conflict; after Start it panics at registration instead, with an error matching
-// ErrDuplicateRoute. Under a tenant resolver that may read the path, a prefix at or below a
+// ErrDuplicateRoute and ErrRegistrationAfterStart, as every registration after Start does. Under a tenant resolver that may read the path, a prefix at or below a
 // framework route root (ADR-168) fails startup as a RouteConflictReasonFrameworkRoot conflict
 // (it panics after Start), and the family's steps are not mounted. Startup also refuses any installed global middleware beside a family
 // (ErrTenantFamilyWithGlobalMiddleware).

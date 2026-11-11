@@ -520,7 +520,7 @@ v0.46.0, `feat(server):` not `feat!:`.
 
 ### [ADR-036: Module-Contributed Global Middleware](adr_036_global_middleware.md)
 
-**Date:** 2026-07-05 | **Status:** Accepted
+**Date:** 2026-07-05 (amended 2026-11-10, #2306) | **Status:** Accepted
 
 Adds an optional duck-typed module interface `GlobalMiddlewareRegisterer` (mirroring
 `RouteRegisterer` / `MessagingDeclarer`) so a module can contribute app-wide middleware —
@@ -2048,7 +2048,7 @@ the supervisor to exit within the same flush budget.
 
 ### [ADR-124: The Server Keeps the First Registration of a Route and Refuses to Start on a Duplicate](adr_124_server_level_duplicate_route_refusal.md)
 
-**Date:** 2026-09-27 | **Status:** Accepted | **Breaking:** a service built on `server.New` that registers one route twice now keeps the first handler and fails `Start`, where the later handler used to serve; templates differing only in a parameter or wildcard name now conflict under `app` too; `RouteConflict` gains `FirstPath`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
+**Date:** 2026-09-27 (amended 2026-11-10, #2306) | **Status:** Accepted | **Breaking:** a service built on `server.New` that registers one route twice now keeps the first handler and fails `Start`, where the later handler used to serve; templates differing only in a parameter or wildcard name now conflict under `app` too; `RouteConflict` gains `FirstPath`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
 
 `echo.New()` sets `AllowOverwritingRoute`, so a second `Add` of one route replaced the handler
 under the kept template, and only `app` checked for duplicates — by literal template string,
@@ -2615,7 +2615,7 @@ or `server.NewWithOptions` without `config.Validate` is outside this rule.
 
 ### [ADR-155: Framework-Built Route Doors Refuse Echo's Reserved Engine Methods](adr_155_reserved_engine_methods_refused.md)
 
-**Date:** 2026-10-28 | **Status:** Accepted | **Breaking:** a route registered with `echo_route_not_found` or `echo_route_any` through a framework-built route door now fails the framework server's `Start`, and app startup when its server reports `RouteConflicts()` (an injected `ServerRunner` without that method is left to its own `Start`), where `echo_route_not_found` replaced, or was replaced by, a middleware-bearing group's catch-all in registration order and `echo_route_any` answered every method there without the group's middleware; `RouteConflict` gains `Reason`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
+**Date:** 2026-10-28 (amended 2026-11-10, #2306) | **Status:** Accepted | **Breaking:** a route registered with `echo_route_not_found` or `echo_route_any` through a framework-built route door now fails the framework server's `Start`, and app startup when its server reports `RouteConflicts()` (an injected `ServerRunner` without that method is left to its own `Start`), where `echo_route_not_found` replaced, or was replaced by, a middleware-bearing group's catch-all in registration order and `echo_route_any` answered every method there without the group's middleware; `RouteConflict` gains `Reason`, so an unkeyed `server.RouteConflict{...}` literal no longer compiles
 
 Every route door accepted echo's two sentinel methods, so a module's not-found handler at a
 middleware-bearing group's `<prefix>/*` and the group's own catch-all replaced each other in
@@ -2808,7 +2808,7 @@ text reaches an operator terminal or CI log unescaped through the source.
 
 ### [ADR-164: A Tenant-Owned Route Family Resolves Its Own Tenant](adr_164_tenant_owned_route_family.md)
 
-**Date:** 2026-11-02 | **Status:** Accepted
+**Date:** 2026-11-02 (amended 2026-11-10, #2306) | **Status:** Accepted
 
 Tenant resolution was one seat on the root chain, ahead of every group and route middleware, with
 its resolver from `multitenant.resolver.*` only, so no module could name the tenant from a catalog
@@ -3021,6 +3021,24 @@ No signature or configuration key moves. See [migrations.md](migrations.md) `[C7
 **Key Benefits:** the tenant and a route parameter at the same position always name the same
 segment, which ADR-170's existence check cannot guarantee when both ids are tenants the store
 holds.
+
+---
+
+### [ADR-179: Start Seals Every Route, Group and Global-Middleware Registration](adr_179_registration_sealed_at_start.md)
+
+**Date:** 2026-11-10 | **Status:** Accepted | **Breaking:** after `Start`, served or not, a route, `Group` or `Use` (even with no middleware) on any registrar, and an installing `RegisterGlobalMiddleware`, panic with an error matching the new `server.ErrRegistrationAfterStart` where they used to take effect on the live engine; a late duplicate or reserved-method route panics instead of being recorded in `RouteConflicts()`
+
+Registration after `Start` mutated a serving echo engine and raced request serving; a late
+conflict was recorded where nothing reads it; and neither route admission (which added a claimed
+route after releasing its lock) nor `RegisterGlobalMiddleware` (an unlocked started check and
+counter) was atomic with Start's seal. Every registration now runs under the admission lock and
+panics once the seal has run; the seal returns the conflicts, family prefixes and
+global-middleware count Start judges as one snapshot. The `RegisterHandler` fallback describes a
+route only after the registrar's `Add` returns. Amends ADR-036, ADR-124, ADR-155 and ADR-164.
+See [migrations.md](migrations.md) `[C74.8]`.
+
+**Key Benefits:** the engine never changes after Start's checks, so what Start verified is what
+serves, and a late registration fails loudly at its call site.
 
 ---
 
@@ -3833,7 +3851,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-174) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-179) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
