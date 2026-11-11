@@ -1,7 +1,42 @@
 # ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)
 
-**Status:** Accepted (amended 2026-08-24, 2026-09-13)
+**Status:** Accepted (amended 2026-08-24, 2026-09-13, 2026-11-10)
 **Date:** 2026-08-14
+
+## Amendment (2026-11-10, #2310): the effective `sslcertmode` is judged on both doors
+
+pgx v5.12.0, the pin this amendment ships with, reads `sslcertmode` from the DSN and
+`PGSSLCERTMODE` from the environment (`disable`, `allow` by default, `require`). Under
+`disable`, `configTLS` clears `sslcert`/`sslkey` before loading them, so a section with
+`database.tls.cert`/`key`, or a `connectionstring` whose `sslcert`/`sslkey` is in effect,
+passed validation and connected with no client certificate. Any other value, a set but empty
+`PGSSLCERTMODE=` or `sslcertmode=` included, passed validation and failed pgx's parse when the
+connection opened, behind the redacted `failed to parse PostgreSQL config`.
+
+`validatePostgreSQLFields` now computes the effective value with pgx's precedence: a
+`sslcertmode` key present in the connection string wins, empty included; otherwise
+`PGSSLCERTMODE` when it is set, where set but empty counts as set (pgx keeps that value to
+reject it, unlike every other `PGSSL*` variable); otherwise nothing is judged and pgx's
+`allow` applies. The framework-built DSN carries no such key, so the typed-field arm reads the
+variable alone, the first environment read on that arm. Two refusals follow, each after every
+existing rule of its arm, so no earlier verdict moves:
+
+- a value other than `disable`, `allow` or `require`, compared exactly as pgx does (no case
+  folding, no trimming), is refused for every PostgreSQL section, TLS block or not;
+- `disable` is refused when a client certificate or key is in effect: `database.tls.cert`/`key`
+  on the typed fields; in a connection string, a non-empty effective `sslcert` or `sslkey`
+  (the DSN key, else `PGSSLCERT`/`PGSSLKEY` when the DSN names no such key).
+
+Both are `ConfigError`s on `database.tls` for the typed fields and on
+`database.connectionstring` otherwise, naming the source (`sslcertmode` in the connection
+string, or `PGSSLCERTMODE` in the environment), the exit and the allowed values, never a value
+or DSN text. An env-sourced value is unset, or, on the connection-string arm, shadowed with an
+explicit `sslcertmode=allow`; a DSN-sourced one is changed, not dropped, since dropping it would
+expose the variable. `sslcertmode` is not a TLS claim: it joins the `PGSSL*` table and the
+scanner's key record, but `allow`, `disable` or `require` on a unix-socket host does not trigger
+R6 or `[C66.1]`; only the `Judged:` tail of the `[C66.1]` Action grows to six keys and six
+variables. Out of scope: `sslcertmode=require` where TLS is not guaranteed, which pgx
+fails at connect, and emitting `sslcertmode` in the framework-built DSN. See `[C74.9]`.
 
 ## Amendment — 2026-09-13: the fail-closed rules reason about host transport (#1555)
 
