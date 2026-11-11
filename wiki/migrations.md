@@ -16137,8 +16137,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     that set it under `messaging:` → `streams:`, and repeating it with `grep -rlE` over untracked
     deployment config as C74.2 does) and `MESSAGING_STREAMS_URI`
     (`git grep -l 'MESSAGING_STREAMS_URI'`, plus the same `grep -rl` over `k8s/ deploy/ .env*`).
-  - Go: `git grep -lE 'NewAMQPClient\(|streams\.NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
-    lists the hand-built doors and a stream URI set in code, and C74.2's hand-built config and
+  - Go: `git grep -lE 'NewAMQPClient\(|\.NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
+    lists the hand-built doors under any import alias (keep the `NewManager` hits whose package is
+    `messaging/streams`) and a stream URI set in code, and C74.2's hand-built config and
     `BrokerURL` method greps list the rest; judge the URLs each can receive.
   - A hit locates the key, not the verdict. Judge each resolved value, in every environment, with
     a throwaway Go program that prints only a boolean, never the URL:
@@ -16152,7 +16153,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `amqp://u:p%2Fq%3Fr%23s%40t@h:5672/%2f` and `rabbitmq-stream://user:pass@broker:5552/%2f`; an
   empty username with a password and leading-zero ports; credential URL rendering (ADR-159) and
   the pre-dial `broker_url` log field; retry and backoff; opaque or hostless shapes and URLs
-  `url.Parse` or `amqp.ParseURI` reject, which stay C74.2's; Oracle and HTTP credential URLs.
+  `url.Parse` rejects, which stay C74.2's; Oracle and HTTP credential URLs. A URL that
+  `url.Parse` accepts and that trips both checks (an `@` in the vhost beside `?heartbeat=70000`)
+  is reported here first, as the misread; its C74.2 defect shows once the `@` is encoded.
 - gate: match = a broker URL or stream URI value any environment delivers that parses and has
   a `@` after the first `/`, `?` or `#` that follows the `scheme://` authority (the probe prints
   true). As in C74.2, judge every delivered value, grep hit or not: one can arrive with no key in
