@@ -2,11 +2,21 @@ package database
 
 import (
 	"fmt"
+	"os"
+	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	testconsts "github.com/gaborage/go-bricks/testing"
 )
+
+// TestMain unsets the PGSSL* variables config judges, so an ambient value cannot flip a
+// PostgreSQL section's validation verdict in this package's tests.
+func TestMain(m *testing.M) {
+	testutil.UnsetPostgresSSLEnv()
+	os.Exit(m.Run())
+}
 
 // newTestLogger creates a logger for database package tests.
 // Uses debug level with pretty printing for better test output readability.

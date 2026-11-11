@@ -156,9 +156,6 @@ func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 	if err := vetExistence(rg.admission.checker); err != nil {
 		panic(tenantFamilyRefusal(full, err.Error()))
 	}
-	if reason, claimed := rg.admission.claimFamily(full); !claimed {
-		panic(tenantFamilyRefusal(full, reason))
-	}
 	// Copied before p is captured, so a later edit to the caller's slice cannot reach the chain.
 	p.Authenticate = slices.Clone(p.Authenticate)
 	fam := &tenantFamily{
@@ -168,11 +165,16 @@ func TenantOwnedGroup(r RouteRegistrar, prefix string, p TenantPolicy) RouteRegi
 		catchAlls: map[string]struct{}{catchAllKey(full + "/*"): {}},
 	}
 	group := rg.admission.engine.Group(full)
-	// Registered on the engine outside admission, which refuses RouteAny and RouteNotFound
-	// (ADR-155). The any slot takes every method no family route takes at the bare prefix, so
-	// echo never backtracks from it to a route outside the family.
-	group.Any("", familyNotFound, fam.steps)
-	group.RouteNotFound("/*", familyNotFound, fam.steps)
+	// Mounted under the claim's lock, so it never mutates the engine after Start's seal, and
+	// outside route admission, which refuses RouteAny and RouteNotFound (ADR-155). The any slot
+	// takes every method no family route takes at the bare prefix, so echo never backtracks from
+	// it to a route outside the family.
+	if reason, claimed := rg.admission.claimFamily(full, func() {
+		group.Any("", familyNotFound, fam.steps)
+		group.RouteNotFound("/*", familyNotFound, fam.steps)
+	}); !claimed {
+		panic(tenantFamilyRefusal(full, reason))
+	}
 	return &routeGroup{
 		group:      group,
 		prefix:     full,
