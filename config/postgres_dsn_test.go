@@ -170,6 +170,12 @@ func TestPGSSLEnvKeys(t *testing.T) {
 		{env: "PGSSLNEGOTIATION", dsn: pgDSNSSLNegotiation},
 		{env: "PGSSLCERTMODE", dsn: pgDSNSSLCertMode},
 	}, pgSSLEnvKeys)
+
+	envs := make([]string, 0, len(pgSSLEnvKeys))
+	for _, k := range pgSSLEnvKeys {
+		envs = append(envs, k.env)
+	}
+	assert.Equal(t, envs, testutil.PostgresSSLEnvVars, "the test-binary scrub must cover every judged variable")
 }
 
 func TestScanPostgresDSNRecordsTLSKeyPresence(t *testing.T) {

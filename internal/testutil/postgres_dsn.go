@@ -15,6 +15,8 @@ const (
 	socketUserDSN     = "host=" + socketHost + userPair
 	envPGHOST         = "PGHOST"
 	envPGSSLMODE      = "PGSSLMODE"
+	envPGSSLROOTCERT  = "PGSSLROOTCERT"
+	envPGSSLNEG       = "PGSSLNEGOTIATION"
 	envPGSSLCERT      = "PGSSLCERT"
 	envPGSSLKEY       = "PGSSLKEY"
 	sslModeDisable    = "disable"
@@ -99,12 +101,12 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 	{Name: "socket_pgsslmode_verify_full", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeVerifyFull}}, Refuse: true},
 	{Name: "socket_pgsslmode_require", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeRequire}}, Refuse: true},
 	{Name: "socket_pgsslmode_verify_ca", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, "verify-ca"}}, Refuse: true},
-	{Name: "socket_pgsslrootcert", DSN: socketUserDSN, Env: [][2]string{{"PGSSLROOTCERT", "/etc/pg/ca.crt"}}, Refuse: true},
+	{Name: "socket_pgsslrootcert", DSN: socketUserDSN, Env: [][2]string{{envPGSSLROOTCERT, "/etc/pg/ca.crt"}}, Refuse: true},
 	// Material is judged by presence, so the `system` trust-store sentinel claims like a path.
-	{Name: "socket_pgsslrootcert_system", DSN: socketUserDSN, Env: [][2]string{{"PGSSLROOTCERT", "system"}}, Refuse: true},
+	{Name: "socket_pgsslrootcert_system", DSN: socketUserDSN, Env: [][2]string{{envPGSSLROOTCERT, "system"}}, Refuse: true},
 	{Name: "socket_pgsslcert", DSN: socketUserDSN, Env: [][2]string{{envPGSSLCERT, "/etc/pg/client.crt"}}, Refuse: true},
 	{Name: "socket_pgsslkey", DSN: socketUserDSN, Env: [][2]string{{envPGSSLKEY, "/etc/pg/client.key"}}, Refuse: true},
-	{Name: "socket_pgsslnegotiation_direct", DSN: socketUserDSN, Env: [][2]string{{"PGSSLNEGOTIATION", "direct"}}, Refuse: true},
+	{Name: "socket_pgsslnegotiation_direct", DSN: socketUserDSN, Env: [][2]string{{envPGSSLNEG, "direct"}}, Refuse: true},
 	{Name: "socket_pgsslmode_prefer", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, "prefer"}}},
 	{Name: "socket_pgsslmode_allow", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeAllow}}},
 	{Name: "socket_pgsslmode_disable", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeDisable}}},
@@ -114,7 +116,7 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 	{Name: "dsn_empty_sslcert_shadows_pgsslcert", DSN: "host=" + socketHost + " sslcert='' user=u", Env: [][2]string{{envPGSSLCERT, "/x"}}},
 	{Name: "tcp_pgsslmode_require", DSN: tcpHostUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeRequire}}, WantPgxTLS: true},
 	{Name: "tcp_pgsslmode_verify_full", DSN: tcpHostUserDSN, Env: [][2]string{{envPGSSLMODE, sslModeVerifyFull}}, WantPgxTLS: true},
-	{Name: "tcp_pgsslnegotiation_direct", DSN: tcpHostUserDSN, Env: [][2]string{{"PGSSLNEGOTIATION", "direct"}}, WantPgxTLS: true},
+	{Name: "tcp_pgsslnegotiation_direct", DSN: tcpHostUserDSN, Env: [][2]string{{envPGSSLNEG, "direct"}}, WantPgxTLS: true},
 	{Name: "pghost_socket_pgsslmode_require", DSN: "user=u", Env: [][2]string{{envPGHOST, socketHost}, {envPGSSLMODE, sslModeRequire}}, Refuse: true},
 	// sslcertmode governs the client certificate only, so no valid value of it claims TLS.
 	{Name: "socket_pgsslcertmode_require", DSN: socketUserDSN, Env: [][2]string{{EnvPGSSLCertMode, sslModeRequire}}},
@@ -259,6 +261,21 @@ var PostgresServiceCases = []PostgresServiceCase{
 	{Name: "empty_service_swallows_next_pair", DSN: "service= " + tcpHostUserDSN, Env: [][2]string{{envPGSERVICE, serviceName}}, RefusedBy: serviceDSNSource},
 	{Name: "dsn_servicefile_without_service", DSN: "servicefile=/x/pg_service.conf " + tcpHostUserDSN, PgxHost: tcpHost},
 	{Name: "pgservicefile_without_service", DSN: tcpHostUserDSN, Env: [][2]string{{"PGSERVICEFILE", "/x"}}, PgxHost: tcpHost},
+}
+
+// PostgresSSLEnvVars is every PGSSL* variable config's PostgreSQL validators judge; config's
+// tests pin it to the production table.
+var PostgresSSLEnvVars = []string{envPGSSLMODE, envPGSSLROOTCERT, envPGSSLCERT, envPGSSLKEY, envPGSSLNEG, EnvPGSSLCertMode}
+
+// UnsetPostgresSSLEnv unsets PostgresSSLEnvVars for a whole test binary, so an ambient value
+// cannot flip a PostgreSQL section's verdict. Call it from TestMain before m.Run; tests that
+// need a value still set it with t.Setenv.
+func UnsetPostgresSSLEnv() {
+	for _, k := range PostgresSSLEnvVars {
+		if err := os.Unsetenv(k); err != nil {
+			panic("unset " + k + ": " + err.Error())
+		}
+	}
 }
 
 // UnsetEnv unsets each variable for the test's duration, restoring it afterwards.

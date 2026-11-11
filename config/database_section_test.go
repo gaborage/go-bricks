@@ -25,11 +25,7 @@ const (
 // TestMain unsets the judged PGSSL* variables for the whole package: the typed-field arm reads
 // PGSSLCERTMODE, so an ambient value would otherwise flip any PostgreSQL section's verdict.
 func TestMain(m *testing.M) {
-	for _, k := range pgSSLEnvKeys {
-		if err := os.Unsetenv(k.env); err != nil {
-			panic(err)
-		}
-	}
+	testutil.UnsetPostgresSSLEnv()
 	os.Exit(m.Run())
 }
 
