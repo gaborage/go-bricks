@@ -109,7 +109,10 @@ type JoinFilter interface {
 //	jf.Eq("amount", qb.MustExpr("TO_NUMBER('100')"))  // Expression support (no placeholders inside expressions)
 //	jf.Eq("status", "active")                         // Simple value with placeholder
 //
-// An expression carrying an alias is refused with ErrAliasInPredicate.
+// An expression carrying an alias is refused with ErrAliasInPredicate. A
+// RawExpression is the only spliceable operand; any other squirrel.Sqlizer
+// where the builder would splice it (a compare door, a Between bound) fails
+// ToSQL() with ErrSqlizerOperand (ADR-178).
 type JoinFilterFactory interface {
 	// Column-to-column comparison operators
 	EqColumn(leftColumn, rightColumn string) JoinFilter
@@ -245,7 +248,9 @@ type InsertQueryBuilder interface {
 
 	// Values and SetMap parameterize every value except a RawExpression, which
 	// is validated and spliced inline; an alias on it is a ToSQL() error naming
-	// the column or one-based position (#1318). See RawExpression.
+	// the column or one-based position (#1318). See RawExpression. It is the
+	// only spliceable value; any other squirrel.Sqlizer fails ToSQL() with
+	// ErrSqlizerOperand (ADR-178).
 	Values(values ...any) InsertQueryBuilder
 	SetMap(clauses map[string]any) InsertQueryBuilder
 
@@ -279,7 +284,8 @@ type InsertQueryBuilder interface {
 type UpdateQueryBuilder interface {
 	// Set and SetMap parameterize every value except a RawExpression, which is
 	// validated and spliced inline; an alias on it is a ToSQL() error naming the
-	// column (#1318). See RawExpression.
+	// column (#1318). See RawExpression. It is the only spliceable value; any
+	// other squirrel.Sqlizer fails ToSQL() with ErrSqlizerOperand (ADR-178).
 	Set(column string, value any) UpdateQueryBuilder
 	SetMap(clauses map[string]any) UpdateQueryBuilder
 
