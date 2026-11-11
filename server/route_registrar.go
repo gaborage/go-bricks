@@ -114,44 +114,52 @@ func modellessDescriptor(method, path string, reg RouteRegistrant) *RouteDescrip
 	}
 }
 
+// Group and Use run under admission's lock: echo registers catch-all routes for group
+// middleware, so they land whole before Start's seal or after it.
 func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
+	pkg := getCallerPackage(2)
 	normalized := pathutil.NormalizePrefix(prefix)
 	child := &routeGroup{prefix: rg.combinePrefix(normalized), cfg: rg.cfg, admission: rg.admission, family: rg.family}
-	if rg.family != nil {
-		// Echo's Group with middleware auto-registers a catch-all pair carrying only that
-		// middleware, replacing the family's; the child node keeps it for its routes instead.
-		child.group = rg.group.Group(normalized)
-		child.familyNode = &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)}
-		return child
-	}
-	// Marked first, so a trespass after Start panics before echo registers the group's catch-alls.
-	if rg.carriesMiddleware || len(middleware) > 0 {
-		child.markMiddleware(getCallerPackage(2))
-	}
-	child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
+	rg.admission.locked(func() {
+		// Marked first, so a trespass after Start panics before echo registers the group's catch-alls.
+		if rg.family == nil && (rg.carriesMiddleware || len(middleware) > 0) {
+			child.markMiddlewareLocked(pkg)
+		}
+		if rg.family != nil {
+			// Echo's Group with middleware auto-registers a catch-all pair carrying only that
+			// middleware, replacing the family's; the child node keeps it for its routes instead.
+			child.group = rg.group.Group(normalized)
+			child.familyNode = &familyNode{parent: rg.familyNode, mw: rg.adaptAll(middleware)}
+			return
+		}
+		child.group = rg.group.Group(normalized, rg.adaptAll(middleware)...)
+	})
 	return child
 }
 
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
-	if rg.family != nil {
-		// Echo's Group.Use auto-registers a catch-all pair (see Group): the middleware reaches
-		// only routes registered after this call, through this registrar or a Group below it.
-		rg.familyNode.mw = append(rg.familyNode.mw, rg.adaptAll(middleware)...)
-		return
-	}
-	if len(middleware) > 0 {
-		rg.markMiddleware(getCallerPackage(2))
-	}
-	rg.group.Use(rg.adaptAll(middleware)...)
+	pkg := getCallerPackage(2)
+	rg.admission.locked(func() {
+		if rg.family == nil && len(middleware) > 0 {
+			rg.markMiddlewareLocked(pkg)
+		}
+		if rg.family != nil {
+			// Echo's Group.Use auto-registers a catch-all pair (see Group): the middleware reaches
+			// only routes registered after this call, through this registrar or a Group below it.
+			rg.familyNode.mw = append(rg.familyNode.mw, rg.adaptAll(middleware)...)
+			return
+		}
+		rg.group.Use(rg.adaptAll(middleware)...)
+	})
 }
 
-// markMiddleware records rg's group with admission the first time it carries middleware; pkg
-// called Group or Use.
-func (rg *routeGroup) markMiddleware(pkg string) {
+// markMiddlewareLocked records rg's group with admission the first time it carries middleware;
+// pkg called Group or Use. The admission lock is held.
+func (rg *routeGroup) markMiddlewareLocked(pkg string) {
 	if rg.carriesMiddleware {
 		return
 	}
-	rg.admission.admitGroup(rg.prefix, pkg)
+	rg.admission.admitGroupLocked(rg.prefix, pkg)
 	rg.carriesMiddleware = true
 }
 
