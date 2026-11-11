@@ -132,6 +132,7 @@ const EnvPGSSLCertMode = "PGSSLCERTMODE"
 
 const (
 	certModeKey     = " sslcertmode="
+	uriCertModeKey  = "&sslcertmode="
 	certModeEmpty   = " sslcertmode=''"
 	uriUserAtTCP    = "postgres://u@" + tcpHost
 	certModeDSNKey  = "sslcertmode"
@@ -160,7 +161,7 @@ type PostgresSSLCertModeCase struct {
 // database/postgresql's pgconn.ParseConfig oracle, so the merge cannot drift from a pgx bump.
 var PostgresSSLCertModeCases = []PostgresSSLCertModeCase{
 	{Name: "keyword_disable_with_cert", DSN: tcpCertDSN + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
-	{Name: "uri_disable_with_cert", DSN: uriCertBase + "&sslcertmode=" + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "uri_disable_with_cert", DSN: uriCertBase + uriCertModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
 	{Name: "disable_with_sslcert_only", DSN: tcpRequireDSN + " sslcert=/etc/pg/client.crt" + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
 	{Name: "disable_with_sslkey_only", DSN: tcpRequireDSN + " sslkey=/etc/pg/client.key" + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
 	{Name: "disable_with_pgsslcert_and_pgsslkey", DSN: tcpRequireDSN + certModeKey + sslModeDisable, Env: [][2]string{{envPGSSLCERT, envCertPath}, {envPGSSLKEY, envKeyPath}}, RefusedBy: certModeDSNKey},
@@ -189,7 +190,7 @@ var PostgresSSLCertModeCases = []PostgresSSLCertModeCase{
 	{Name: "keyword_bogus", DSN: tcpHostUserDSN + certModeKey + certModeInvalid, RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "keyword_bogus_with_cert", DSN: tcpCertDSN + certModeKey + certModeInvalid, RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "uri_empty", DSN: uriUserAtTCP + "/db?sslcertmode=", RefusedBy: certModeDSNKey, Invalid: true},
-	{Name: "uri_bogus_with_cert", DSN: uriCertBase + "&sslcertmode=" + certModeInvalid, RefusedBy: certModeDSNKey, Invalid: true},
+	{Name: "uri_bogus_with_cert", DSN: uriCertBase + uriCertModeKey + certModeInvalid, RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "socket_keyword_bogus", DSN: socketUserDSN + certModeKey + certModeInvalid, RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "dsn_allow_shadows_pgsslcertmode_bogus", DSN: tcpHostUserDSN + certModeKey + sslModeAllow, Env: [][2]string{{EnvPGSSLCertMode, certModeInvalid}}},
 	{Name: "dsn_empty_shadows_pgsslcertmode_allow", DSN: tcpHostUserDSN + certModeEmpty, Env: [][2]string{{EnvPGSSLCertMode, sslModeAllow}}, RefusedBy: certModeDSNKey, Invalid: true},
@@ -197,9 +198,9 @@ var PostgresSSLCertModeCases = []PostgresSSLCertModeCase{
 	// A repeated key keeps its last value; a URI key and value are percent-decoded.
 	{Name: "keyword_repeated_last_disable_with_cert", DSN: tcpCertDSN + certModeKey + sslModeAllow + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
 	{Name: "keyword_repeated_last_allow_with_cert", DSN: tcpCertDSN + certModeKey + sslModeDisable + certModeKey + sslModeAllow},
-	{Name: "uri_repeated_last_disable_with_cert", DSN: uriCertBase + "&sslcertmode=" + sslModeAllow + "&sslcertmode=" + sslModeDisable, RefusedBy: certModeDSNKey},
-	{Name: "uri_repeated_last_allow_with_cert", DSN: uriCertBase + "&sslcertmode=" + sslModeDisable + "&sslcertmode=" + sslModeAllow},
-	{Name: "uri_encoded_value_disable_with_cert", DSN: uriCertBase + "&sslcertmode=dis%61ble", RefusedBy: certModeDSNKey},
+	{Name: "uri_repeated_last_disable_with_cert", DSN: uriCertBase + uriCertModeKey + sslModeAllow + uriCertModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "uri_repeated_last_allow_with_cert", DSN: uriCertBase + uriCertModeKey + sslModeDisable + uriCertModeKey + sslModeAllow},
+	{Name: "uri_encoded_value_disable_with_cert", DSN: uriCertBase + uriCertModeKey + "dis%61ble", RefusedBy: certModeDSNKey},
 	{Name: "uri_encoded_key_disable_with_cert", DSN: uriCertBase + "&%73slcertmode=" + sslModeDisable, RefusedBy: certModeDSNKey},
 	{Name: "uri_encoded_space_padded", DSN: uriUserAtTCP + "/db?sslcertmode=%20allow", RefusedBy: certModeDSNKey, Invalid: true},
 }
