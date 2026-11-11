@@ -3024,6 +3024,25 @@ holds.
 
 ---
 
+### [ADR-178: A `squirrel.Sqlizer` Operand Is Refused Where the Builder Spliced It](adr_178_sqlizer_operand_refused_where_spliced.md)
+
+**Date:** 2026-11-11 | **Status:** Accepted | **Breaking:** a `squirrel.Sqlizer` (a `squirrel.Expr`, a squirrel map, a `Filter`, or a pointer to one) at a `jf` compare door, a `jf.Between` bound, or a `Set`/`SetMap`/`SetStruct`/`Values`/`InsertStruct`/`InsertFields`/PostgreSQL `BuildUpsert` value fails `ToSQL()` with `ErrSqlizerOperand`, where it was spliced
+
+The six `jf` compare doors and both `Between` bounds rendered a resolved scalar through
+`squirrel.Expr`, and the SET / VALUES cells handed theirs to squirrel's SET / VALUES rendering;
+both expand a Sqlizer argument in place, so `jf.Eq("c", f.Eq("x", 1))` rendered `c = x = $1` and
+`Set("c", squirrel.Expr("NOW()"))` rendered `SET c = NOW()`, with none of the `RawExpression`
+checks run. Those positions now refuse one with `dbtypes.ErrSqlizerOperand`, naming the operator
+or the cell and the operand's type; the `f` doors, `In`/`NotIn`, list elements and Oracle's MERGE
+bind it as before. Option A, binding it at `jf` as `f` does, was rejected: the cells would keep
+splicing and a bound Sqlizer fails only at execution. Relates ADR-147 and ADR-158. See
+[migrations.md](migrations.md) `[C74.7]`.
+
+**Key Benefits:** a `RawExpression` is the only operand the builder splices, so every spliced
+fragment went through `qb.Expr()` and its `// SECURITY:` annotation.
+
+---
+
 ### [ADR-106: The Dead-Letter Helper Declares Quorum Queues on Both Sides](adr_106_dlq_helper_declares_quorum_queues.md)
 
 **Date:** 2026-09-08 (amended 2026-10-04, #1568) | **Status:** Accepted | **Breaking:** `DeclareQueueWithDLQ` declares the primary queue AND the derived `<queue>.dlq` parking queue as QUORUM queues by default, where both used to take the broker's default queue type; the amendment is additive
@@ -3833,7 +3852,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-174) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-178) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

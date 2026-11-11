@@ -66,6 +66,15 @@ var (
 	// OrderBy render the body by design).
 	ErrAliasInPredicate = errors.New("alias is not allowed in a predicate operand")
 
+	// ErrSqlizerOperand is returned when a squirrel.Sqlizer (a squirrel.Expr, a
+	// squirrel map literal, a Filter, any type with ToSql) reaches a position that
+	// would splice its SQL: a JoinFilterFactory Eq, NotEq, Lt, Lte, Gt or Gte
+	// operand (judged after resolution, so a pointer to one too), either Between
+	// bound, or a SET / VALUES cell (Set, SetMap, SetStruct, Values,
+	// InsertStruct, InsertFields, a PostgreSQL BuildUpsert value). A RawExpression
+	// is the only spliceable operand (ADR-178).
+	ErrSqlizerOperand = errors.New("a squirrel.Sqlizer operand is not allowed (use qb.Expr() for an intended expression)")
+
 	// ErrExpressionInFilter is returned when a RawExpression, or a non-nil
 	// pointer to one, reaches a FilterFactory value door: Eq, NotEq, Lt, Lte, Gt,
 	// Gte, either Between bound, In or NotIn. A FilterFactory door takes values:

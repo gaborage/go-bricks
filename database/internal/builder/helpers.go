@@ -39,24 +39,28 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 }
 
 // valueCell prepares one SET/VALUES cell for squirrel: an expression the judge
-// splices becomes squirrel.Expr so no placeholder or argument is emitted, and
-// any other value is returned untouched. args, when given, bind the
-// expression's `?` placeholders (SetExpr's door); Set passes none. The label
-// names the column in the error.
+// splices becomes squirrel.Expr so no placeholder or argument is emitted, a
+// squirrel.Sqlizer squirrel would splice is refused (refuseSqlizer), and any
+// other value is returned untouched. args, when given, bind the expression's
+// `?` placeholders (SetExpr's door); Set passes none. The label names the
+// column in the error.
 func valueCell(label string, value any, args ...any) (any, error) {
 	judged, err := judgeOperand("", value, valueFamily)
 	if err != nil {
 		return nil, cellErr(label, err)
 	}
 	if judged.kind != operandSpliced {
+		if err := refuseSqlizer(judged.value); err != nil {
+			return nil, cellErr(label, err)
+		}
 		return judged.value, nil
 	}
 	return squirrel.Expr(judged.sql, args...), nil
 }
 
-// valueCells applies the judge to every cell, copying the slice on the first
-// spliced expression so a caller's variadic slice is never rewritten; label is
-// called only on the error path.
+// valueCells applies valueCell's judgment to every cell, copying the slice on
+// the first spliced expression so a caller's variadic slice is never
+// rewritten; label is called only on the error path.
 func valueCells(values []any, label func(i int) string) ([]any, error) {
 	out := values
 	for i, v := range values {
@@ -65,6 +69,9 @@ func valueCells(values []any, label func(i int) string) ([]any, error) {
 			return nil, cellErr(label(i), err)
 		}
 		if judged.kind != operandSpliced {
+			if err := refuseSqlizer(judged.value); err != nil {
+				return nil, cellErr(label(i), err)
+			}
 			continue
 		}
 		if len(out) == len(values) && &out[0] == &values[0] {
@@ -79,6 +86,16 @@ func valueCells(values []any, label func(i int) string) ([]any, error) {
 // position.
 func cellErr(label string, err error) error {
 	return fmt.Errorf("%s: %w", label, err)
+}
+
+// refuseSqlizer refuses a caller's value that squirrel would expand in place
+// of a placeholder: a squirrel.Sqlizer, judged as squirrel receives it
+// (ADR-178). Only the type is named, never the value.
+func refuseSqlizer(value any) error {
+	if _, isSqlizer := value.(squirrel.Sqlizer); isSqlizer {
+		return fmt.Errorf("%w: %T", dbtypes.ErrSqlizerOperand, value)
+	}
+	return nil
 }
 
 // quotedColumnsInNameOrder sorts a map-shaped column set by the CALLER's names,
@@ -631,10 +648,11 @@ const (
 	// operandBound renders `col op ?` through squirrel's own construct for op,
 	// binding the resolved value whole.
 	operandBound operandKind = iota
-	// operandPlaceholder renders `col op ?` through squirrel.Expr: the same
-	// token, but an operand that is itself a squirrel.Sqlizer expands in place.
-	// Only a jf door answers it, where an f door answers operandBound — the two
-	// families have always differed there.
+	// operandPlaceholder renders `col op ?` through squirrel.Expr, binding the
+	// resolved value as written. Only a jf door answers it, and never for a
+	// squirrel.Sqlizer, which it refuses (ADR-178). It stays apart from
+	// operandBound because squirrel's own construct asks a still-Valuer
+	// resolved value (a Valuer answering a Valuer) a second time.
 	operandPlaceholder
 	// operandSpliced renders a RawExpression's SQL verbatim, binding nothing.
 	operandSpliced
@@ -667,7 +685,9 @@ type operand struct {
 // operator has no rendering for a nil or a set, so it fails closed with
 // ErrOrderingOperandNotComparable at `f` and `jf` alike (#1167, #1205); an
 // equality operator renders nil as IS [NOT] NULL and a set as IN / NOT IN, its
-// elements judged the way an In door judges them (judgeElements).
+// elements judged the way an In door judges them (judgeElements). A resolved
+// scalar that is a squirrel.Sqlizer is refused at a jf door, which would
+// splice it, and bound whole at an f door (ADR-178).
 func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 	if family == valueFamily {
 		return judgeCell(value)
@@ -690,6 +710,9 @@ func judgeOperand(op string, value any, family doorFamily) (operand, error) {
 		return operand{kind: operandSpliced, sql: exprSQL}, nil
 	}
 	if !nullOrList && family == joinFilterFamily {
+		if err := refuseSqlizer(resolved); err != nil {
+			return operand{}, wrapOperandErr(op, err)
+		}
 		return operand{kind: operandPlaceholder, value: resolved}, nil
 	}
 	if !nullOrList {
@@ -1003,9 +1026,10 @@ func emptySet(op string) operand {
 }
 
 // judgeCell judges one SET / VALUES cell on its surface: a dbtypes.RawExpression
-// is judged by expressionOperand, and any other value is bound as written. A
+// is judged by expressionOperand, and any other value is answered as written. A
 // cell never resolves, so a pointer to an expression and a driver.Valuer bind
-// untouched.
+// untouched. A squirrel.Sqlizer is refused by valueCell / valueCells, where
+// squirrel would splice it, not here: Oracle's MERGE (mergeCell) binds one.
 func judgeCell(value any) (operand, error) {
 	exprSQL, isExpr, err := expressionOperand("", value, valueFamily)
 	if err != nil {
