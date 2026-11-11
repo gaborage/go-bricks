@@ -397,14 +397,11 @@ the builder. The grammar will not accept a computed one.
 - **`Having`** takes a *predicate*, not an identifier, so no identifier grammar
   can judge it and its argument is interpolated as written: both a STRING
   predicate and the preferred `Having(qb.MustExpr(...))` are raw-SQL doors (list
-  below). It accepts exactly three forms (ADR-177): a string, a `RawExpression`
-  or a non-nil pointer to one (alias refused, then `Validate()`), each with its
-  trailing arguments, or a `qb.Filter()` predicate, `Having(f.Gt("total", 100))`,
-  whose column and operand the filter door judges and which needs no
-  `// SECURITY:` annotation of its own (an `f.Raw` inside it carries one where it
-  is built). Anything else, a map, a squirrel literal or other Sqlizer, nil or a
-  nil pointer included, and a Filter followed by trailing arguments, fails
-  `ToSQL()` with `ErrUnsupportedHavingPredicate`. `InsertQueryBuilder.Prefix`,
+  below). It accepts three forms: a string or a `RawExpression` (or a non-nil
+  pointer to one), each with its trailing arguments, or a `qb.Filter()`
+  predicate, `Having(f.Gt("total", 100))`, which needs no `// SECURITY:`
+  annotation of its own. Anything else fails `ToSQL()` with
+  `ErrUnsupportedHavingPredicate` (ADR-177). `InsertQueryBuilder.Prefix`,
   `.Suffix` and `.Options` are the same shape, and unlike `Having` they have no
   `qb.Expr()` alternative. `Options` is the vendor
   hint slot, rendered between `INSERT` and `INTO` (Oracle's `/*+ APPEND */`);

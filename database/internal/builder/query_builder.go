@@ -1211,20 +1211,9 @@ func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any,
 	}
 }
 
-// Having adds a HAVING clause to the query. It accepts exactly three predicate
-// forms (ADR-177):
-//
-//   - a string with its trailing arguments, interpolated as written;
-//   - a dbtypes.RawExpression, or a non-nil pointer to one, with its trailing
-//     arguments — preferred: `Having(qb.MustExpr("SUM(amount) > ?"), 100)`;
-//   - a dbtypes.Filter, rendered through its own ToSql, so its column and
-//     operand are judged by the filter doors; it takes no trailing arguments.
-//
-// The string and expression forms are raw SQL needing the SECURITY annotation
-// at every call site (HAVING is a predicate, not an identifier, so ADR-082's
-// grammar cannot judge them). Any other predicate — a map, a squirrel literal
-// or other Sqlizer, nil, a nil pointer, any other type — and a Filter followed
-// by trailing arguments fail ToSQL() with dbtypes.ErrUnsupportedHavingPredicate.
+// Having adds a HAVING clause to the query. The accepted predicate forms, how
+// each is judged and the refusal of every other form are documented on
+// dbtypes.SelectQueryBuilder.Having (ADR-177).
 func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQueryBuilder {
 	switch p := pred.(type) {
 	case string:
@@ -1233,7 +1222,7 @@ func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQuery
 		sqb.havingExpr(p, rest)
 	case *dbtypes.RawExpression:
 		if p == nil {
-			sqb.Fail(fmt.Errorf("%w: got %T", dbtypes.ErrUnsupportedHavingPredicate, pred))
+			sqb.Fail(unsupportedHaving(pred))
 			return sqb
 		}
 		sqb.havingExpr(*p, rest)
@@ -1245,9 +1234,15 @@ func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQuery
 		}
 		sqb.selectBuilder = sqb.selectBuilder.Having(p)
 	default:
-		sqb.Fail(fmt.Errorf("%w: got %T", dbtypes.ErrUnsupportedHavingPredicate, pred))
+		sqb.Fail(unsupportedHaving(pred))
 	}
 	return sqb
+}
+
+// unsupportedHaving reports a HAVING predicate outside the accepted forms,
+// naming its type (%T), never its value.
+func unsupportedHaving(pred any) error {
+	return fmt.Errorf("%w: got %T", dbtypes.ErrUnsupportedHavingPredicate, pred)
 }
 
 // havingExpr judges and renders a RawExpression HAVING predicate.

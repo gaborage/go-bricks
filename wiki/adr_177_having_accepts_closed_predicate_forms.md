@@ -38,8 +38,9 @@ still let an unjudged map reach SQL.
      and operand are judged by the filter doors, and its placeholders number after any `Where`
      arguments.
 2. **Everything else fails `ToSQL()` with one sentinel, `dbtypes.ErrUnsupportedHavingPredicate`**,
-   matchable with `errors.Is`: a map, a squirrel map literal, any other `squirrel.Sqlizer`, nil, a
-   typed-nil `*RawExpression` and any other type. The wrapped message names the accepted forms and
+   matchable with `errors.Is`: a map, a `squirrel.Sqlizer` that is not a `dbtypes.Filter` (a
+   squirrel literal or `squirrel.Expr(…)` included), nil, a typed-nil `*RawExpression` and any
+   other type. The wrapped message names the accepted forms and
    the received type, rendered with `%T` only, never the value, since a map carries bound values:
    `HAVING predicate must be a string, a RawExpression (or a non-nil pointer to one) or a Filter: got <type>`.
 3. **Trailing arguments beside a Filter are refused, not dropped**, with the same sentinel:
@@ -61,15 +62,23 @@ A Filter predicate needs no `// SECURITY:` annotation of its own; an expression 
   annotated spellings of the same thing.
 - **Ignore trailing arguments beside a Filter, as squirrel did.** Rejected. A silently dropped
   argument is a predicate that binds something other than what the caller wrote.
-- **Special-case structural Filters that are not WHERE filters** (`JoinFilter`, which also
-  satisfies `dbtypes.Filter`). Rejected here: the bar is the one `Where` applies, and changing it
-  belongs to both doors at once.
+- **Refuse Filter-shaped values that are not WHERE filters.** Rejected here: the bar is the one
+  `Where` applies (see Consequences), and changing it belongs to both doors at once.
 
 ## Consequences
 
-- **Breaking**, at runtime only: a `Having` call with a map, squirrel literal, other Sqlizer, nil,
-  a nil pointer, any other type, or a Filter with trailing arguments now fails `ToSQL()` with
-  `ErrUnsupportedHavingPredicate`. The compiler catches nothing.
+- **Breaking**, at runtime only: a `Having` call with a map, a Sqlizer that is not a
+  `dbtypes.Filter` (a squirrel literal included), nil, a nil pointer, any other type, or a Filter
+  with trailing arguments now fails `ToSQL()` with `ErrUnsupportedHavingPredicate`. The compiler
+  catches nothing.
+- `dbtypes.Filter` is a method set: any value with both `ToSql` and `ToSQL` passes, exactly the bar
+  `Where` applies, so a `JoinFilter` passes `Having` as it passes `Where`, while a squirrel literal
+  (which has no `ToSQL`) is refused.
+- The refusal is deferred through the builder's first-error mechanism, while the list-shaped
+  sibling doors (`GroupBy`, `OrderBy`, `Select`, via `appendClauseValue`) panic on an unsupported
+  type (ADR-031). `Having` narrows a previously open `any` whose other forms compiled and ran for
+  consumers, so the break surfaces as a matchable `ToSQL()` error rather than a panic.
+- A `*RawExpression` is admitted at `Having` only; the other expression doors take the value form.
 - The string form and the `RawExpression` value form render byte-identically to before.
 - A pointer to a `RawExpression` now renders, and an aliased one reports `ErrAliasInHaving`.
 - A column comparison in HAVING goes through `qb.Filter()` (`Having(f.Gt("total", 100))`), so it

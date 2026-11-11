@@ -49,15 +49,15 @@ var (
 	ErrInvalidAlias = errors.New("alias must be an unquoted identifier: a letter or underscore followed by letters, digits, underscore, $ or #")
 
 	// ErrAliasInHaving is returned when a RawExpression carrying an alias, or a
-	// non-nil pointer to one, is passed to Having. HAVING takes a predicate, not a projected column, so an alias has
-	// nowhere to render; accepting one silently would drop it.
+	// non-nil pointer to one, is passed to Having. HAVING takes a predicate, not
+	// a projected column, so an alias has nowhere to render; accepting one
+	// silently would drop it.
 	ErrAliasInHaving = errors.New("alias is not allowed in a HAVING predicate")
 
 	// ErrUnsupportedHavingPredicate is returned when Having receives a predicate
-	// that is not a string, a RawExpression, a non-nil pointer to one, or a
-	// Filter — a map, a squirrel literal or any other Sqlizer, nil, a nil
-	// pointer, any other type — or a Filter followed by trailing arguments. The
-	// wrapped message names the received type (%T), never its value.
+	// outside its accepted forms (see SelectQueryBuilder.Having) or a Filter
+	// followed by trailing arguments. The wrapped message names the received
+	// type (%T), never its value.
 	ErrUnsupportedHavingPredicate = errors.New("HAVING predicate must be a string, a RawExpression (or a non-nil pointer to one) or a Filter")
 
 	// ErrAliasInValue is returned when a RawExpression carrying an alias is passed

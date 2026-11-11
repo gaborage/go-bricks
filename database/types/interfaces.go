@@ -198,9 +198,9 @@ type SelectQueryBuilder interface {
 	//     filter door judges; it takes no trailing arguments.
 	// The string and expression forms are raw SQL needing the SECURITY annotation
 	// at every call site (see RawExpression); a Filter needs none of its own.
-	// Anything else — a map, a squirrel literal or other Sqlizer, nil, a nil
-	// pointer, any other type — and a Filter followed by trailing arguments fail
-	// ToSQL() with ErrUnsupportedHavingPredicate.
+	// Anything else — a map, a Sqlizer that is not a Filter (a squirrel literal
+	// included), nil, a nil pointer, any other type — and a Filter followed by
+	// trailing arguments fail ToSQL() with ErrUnsupportedHavingPredicate.
 	Having(pred any, rest ...any) SelectQueryBuilder
 	// OrderBy orders by columns or RawExpressions. An expression renders its body
 	// without its alias, by design, as at GroupBy.
