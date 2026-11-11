@@ -121,11 +121,12 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 	normalized := pathutil.NormalizePrefix(prefix)
 	child := &routeGroup{prefix: rg.combinePrefix(normalized), cfg: rg.cfg, admission: rg.admission, family: rg.family}
 	rg.admission.locked(func() {
+		call := "Group " + child.FullPath("")
 		// Marked first, so a trespass after Start panics with its conflict.
 		if rg.family == nil && (rg.carriesMiddleware || len(middleware) > 0) {
-			child.markMiddlewareLocked(pkg)
+			child.markMiddlewareLocked(pkg, call)
 		}
-		rg.admission.refuseAfterStartLocked("Group " + child.FullPath(""))
+		rg.admission.refuseAfterStartLocked(call)
 		if rg.family != nil {
 			// Echo's Group with middleware auto-registers a catch-all pair carrying only that
 			// middleware, replacing the family's; the child node keeps it for its routes instead.
@@ -141,10 +142,11 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
 	pkg := getCallerPackage(2)
 	rg.admission.locked(func() {
+		call := "Use " + rg.FullPath("")
 		if rg.family == nil && len(middleware) > 0 {
-			rg.markMiddlewareLocked(pkg)
+			rg.markMiddlewareLocked(pkg, call)
 		}
-		rg.admission.refuseAfterStartLocked("Use " + rg.FullPath(""))
+		rg.admission.refuseAfterStartLocked(call)
 		if rg.family != nil {
 			// Echo's Group.Use auto-registers a catch-all pair (see Group): the middleware reaches
 			// only routes registered after this call, through this registrar or a Group below it.
@@ -156,12 +158,14 @@ func (rg *routeGroup) Use(middleware ...MiddlewareFunc) {
 }
 
 // markMiddlewareLocked records rg's group with admission the first time it carries middleware;
-// pkg called Group or Use. The admission lock is held.
-func (rg *routeGroup) markMiddlewareLocked(pkg string) {
+// pkg called Group or Use, named by call. After Start it panics before marking rg, so a refused
+// call leaves no mark. The admission lock is held.
+func (rg *routeGroup) markMiddlewareLocked(pkg, call string) {
 	if rg.carriesMiddleware {
 		return
 	}
 	rg.admission.admitGroupLocked(rg.prefix, pkg)
+	rg.admission.refuseAfterStartLocked(call)
 	rg.carriesMiddleware = true
 }
 

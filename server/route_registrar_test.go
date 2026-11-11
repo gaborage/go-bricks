@@ -925,6 +925,23 @@ func TestRouteRegistrarLateConflictPanicsUnrecorded(t *testing.T) {
 	}
 }
 
+// TestRouteRegistrarRefusedUseLeavesNoMiddlewareMark pins that a Use refused after Start does
+// not mark its registrar as carrying middleware: a later Group without middleware under a
+// family is refused as a plain late Group, not as trespass.
+func TestRouteRegistrarRefusedUseLeavesNoMiddlewareMark(t *testing.T) {
+	srv := newTrespassTestServer(t)
+	mg := srv.ModuleGroup()
+	buildTrespassFamily(srv)
+	srv.setupErr = errSealSetup
+	require.ErrorIs(t, srv.Start(), errSealSetup)
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+
+	requireLateRegistrationPanic(t, "server: registration after Start: Use /", func() { mg.Use(mw) })
+	requireLateRegistrationPanic(t, "server: registration after Start: Group "+trespassFamily+"/x", func() {
+		mg.Group(trespassFamily + "/x")
+	})
+}
+
 // TestRouteRegistrarLateRegistrationWhileServingIsRaceFree pins, under -race, that late
 // registrations attempted while the server serves requests never touch the engine.
 func TestRouteRegistrarLateRegistrationWhileServingIsRaceFree(t *testing.T) {

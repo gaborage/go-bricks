@@ -89,8 +89,11 @@ of a typed route through a decorator registrar.
   served or not, panics where it used to take effect. Register everything before Start.
 - **Breaking:** a late duplicate or reserved-method route panics instead of being recorded in
   `RouteConflicts()`.
-- The after-Start trespass, framework-root and global-middleware-beside-family panics keep their
-  text and sentinels and add `ErrRegistrationAfterStart`.
+- The after-Start trespass and framework-root panics keep their text and sentinels and add
+  `ErrRegistrationAfterStart`. The global-middleware-beside-family panic keeps
+  `ErrTenantFamilyWithGlobalMiddleware` and adds the new sentinel, but its text now reads
+  `server: registration after Start: RegisterGlobalMiddleware: ...` instead of
+  `server: global middleware registered after Start: ...`.
 - A typed route refused through a decorator registrar leaves no descriptor. Before Start a typed
   route through a decorator is still described twice; that is a separate issue.
 - `TenantOwnedGroup` after Start keeps its own string panic (out of scope, above); its engine
