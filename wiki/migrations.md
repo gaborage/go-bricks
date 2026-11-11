@@ -16134,7 +16134,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   key greps list file names only (`-l`), since a matching line can hold the URL.
   - YAML and env: the C74.2 key greps, plus `messaging.streams.uri`
     (`git grep -lE "(^|[[:space:]{,.'\"])uri['\"]?[[:space:]]*:" -- '*.yaml' '*.yml'`, keeping only files
-    that set it under `messaging:` → `streams:`, and repeating it with `grep -rlE` over untracked
+    that set it under `messaging:` → `streams:` or as the flat-dotted `messaging.streams.uri:`
+    (a custom loader can hand that form to `config.LoadFromMap`), and repeating it with `grep -rlE` over untracked
     deployment config as C74.2 does) and `MESSAGING_STREAMS_URI`
     (`git grep -l 'MESSAGING_STREAMS_URI'`, plus the same `grep -rl` over `k8s/ deploy/ .env*`).
   - Go: `git grep -lE 'NewAMQPClient\(|(^|[^[:alnum:]_])NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
@@ -16152,8 +16153,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   userinfo (`amqp://user:pa@ss@broker/vh`); encoded forms such as
   `amqp://u:p%2Fq%3Fr%23s%40t@h:5672/%2f` and `rabbitmq-stream://user:pass@broker:5552/%2f`; an
   empty username with a password and leading-zero ports; credential URL rendering (ADR-159) and
-  the pre-dial `broker_url` log field; retry and backoff; opaque or hostless shapes and URLs
-  `url.Parse` rejects, which stay C74.2's; Oracle and HTTP credential URLs. A URL that
+  the pre-dial `broker_url` log field; retry and backoff; URLs `url.Parse` rejects, which stay
+  C74.2's, and an opaque shape whose only `@` sits in its opaque part (`amqp:user:pw@host/vh`),
+  which C74.2 leaves accepted; Oracle and HTTP credential URLs. Being opaque or hostless is no
+  exemption: `amqp:///my@vhost` and an opaque URL with an `@` in its query are refused. A URL that
   `url.Parse` accepts and that trips both checks (an `@` in the vhost beside `?heartbeat=70000`)
   is reported here first, as the misread; its C74.2 defect shows once the `@` is encoded.
 - gate: match = a broker URL or stream URI value any environment delivers that parses and has
