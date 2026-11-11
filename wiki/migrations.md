@@ -16204,6 +16204,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   # registrations outside RegisterRoutes: review each hit's caller. The typed helpers match
   # under any qualifier, so an import alias (bricks.GET) or a dot import (GET) is found too
   git grep -nE '\.(Add|Group|Use)\(|RegisterGlobalMiddleware\(|(^|[^A-Za-z0-9_])(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|RegisterHandler)\(' -- '*.go'
+  # a registration kept as a method value (add := registrar.Add) and called later
+  git grep -nE '\.(Add|Group|Use|RegisterGlobalMiddleware)([^A-Za-z0-9_(]|$)' -- '*.go'
   # tests that register after Start or read late conflicts from RouteConflicts()
   git grep -nE 'RouteConflicts\(\)|registration after Start|global middleware registered after Start' -- '*_test.go'
   ```
