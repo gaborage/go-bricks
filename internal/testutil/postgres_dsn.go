@@ -192,6 +192,14 @@ var PostgresSSLCertModeCases = []PostgresSSLCertModeCase{
 	{Name: "dsn_allow_shadows_pgsslcertmode_bogus", DSN: tcpHostUserDSN + certModeKey + sslModeAllow, Env: [][2]string{{EnvPGSSLCertMode, certModeInvalid}}},
 	{Name: "dsn_empty_shadows_pgsslcertmode_allow", DSN: tcpHostUserDSN + certModeEmpty, Env: [][2]string{{EnvPGSSLCertMode, sslModeAllow}}, RefusedBy: certModeDSNKey, Invalid: true},
 	{Name: "unset_without_cert", DSN: tcpHostUserDSN},
+	// A repeated key keeps its last value; a URI key and value are percent-decoded.
+	{Name: "keyword_repeated_last_disable_with_cert", DSN: tcpCertDSN + certModeKey + sslModeAllow + certModeKey + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "keyword_repeated_last_allow_with_cert", DSN: tcpCertDSN + certModeKey + sslModeDisable + certModeKey + sslModeAllow},
+	{Name: "uri_repeated_last_disable_with_cert", DSN: uriCertBase + "&sslcertmode=" + sslModeAllow + "&sslcertmode=" + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "uri_repeated_last_allow_with_cert", DSN: uriCertBase + "&sslcertmode=" + sslModeDisable + "&sslcertmode=" + sslModeAllow},
+	{Name: "uri_encoded_value_disable_with_cert", DSN: uriCertBase + "&sslcertmode=dis%61ble", RefusedBy: certModeDSNKey},
+	{Name: "uri_encoded_key_disable_with_cert", DSN: uriCertBase + "&%73slcertmode=" + sslModeDisable, RefusedBy: certModeDSNKey},
+	{Name: "uri_encoded_space_padded", DSN: uriUserAtTCP + "/db?sslcertmode=%20allow", RefusedBy: certModeDSNKey, Invalid: true},
 }
 
 const (

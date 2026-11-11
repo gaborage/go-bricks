@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,17 @@ const (
 	oracleTNSDescriptorDSN = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=host)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))"
 	oracleEasyConnectDSN   = "user/pass@localhost:1521/svc"
 )
+
+// TestMain unsets the judged PGSSL* variables for the whole package: the typed-field arm reads
+// PGSSLCERTMODE, so an ambient value would otherwise flip any PostgreSQL section's verdict.
+func TestMain(m *testing.M) {
+	for _, k := range pgSSLEnvKeys {
+		if err := os.Unsetenv(k.env); err != nil {
+			panic(err)
+		}
+	}
+	os.Exit(m.Run())
+}
 
 // hermeticPGEnv clears every libpq environment variable the DSN rules read or could be
 // thought to read, so a developer machine's own PG* settings cannot flip a result.
