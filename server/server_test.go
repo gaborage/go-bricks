@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -2154,5 +2155,53 @@ func TestStartRefusesTenantCheckerFailingTheProbe(t *testing.T) {
 			require.EqualError(t, srv.Start(), tt.wantErr)
 			assert.Nil(t, srv.boundAddr.Load(), "refused before binding")
 		})
+	}
+}
+
+// panicsWith runs fn and reports whether it panicked with an error matching target.
+func panicsWith(t *testing.T, target error, fn func()) (panicked bool) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			err, _ := r.(error)
+			require.ErrorIs(t, err, target)
+			panicked = true
+		}
+	}()
+	fn()
+	return false
+}
+
+// raceStart runs Start in the background, then yields round%8 times so the caller's next
+// registration lands before, during or after Start's seal across rounds.
+func raceStart(srv *Server, round int) <-chan error {
+	ch := startServer(srv)
+	for range round % 8 {
+		runtime.Gosched()
+	}
+	return ch
+}
+
+// TestServerStartRacingRouteRegistration pins that route registrations racing Start land whole
+// on one side of its seal: before it, a duplicate refuses Start; after it, the duplicate is
+// recorded where Start no longer reads, and the first handler and the fresh route serve.
+func TestServerStartRacingRouteRegistration(t *testing.T) {
+	for round := range 64 {
+		srv := newTrespassTestServer(t)
+		mg := srv.ModuleGroup()
+		mg.Add(http.MethodGet, "/dup", answerWith("first"))
+		errCh := raceStart(srv, round)
+		mg.Add(http.MethodGet, "/fresh", answerWith("fresh"))
+		mg.Add(http.MethodGet, "/dup", answerWith("second"))
+
+		select {
+		case err := <-errCh:
+			require.ErrorIs(t, err, ErrDuplicateRoute)
+		case <-srv.ReadyCh():
+			assert.Len(t, srv.RouteConflicts(), 1, "Start served past a duplicate recorded before its seal")
+			assert.Equal(t, "fresh", serveFamilyRequest(srv, "/fresh").Body.String())
+			assert.Equal(t, "first", serveFamilyRequest(srv, "/dup").Body.String())
+			shutdownAndDrain(t, srv, errCh)
+		}
 	}
 }

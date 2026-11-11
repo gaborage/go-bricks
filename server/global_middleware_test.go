@@ -395,3 +395,27 @@ func TestRegisterGlobalMiddlewareAfterStartPanicsBesideTenantFamily(t *testing.T
 		})
 	}
 }
+
+// TestRegisterGlobalMiddlewareRacingStartBesideFamily pins that global middleware racing Start
+// beside a tenant-owned family installs before Start's check, which then refuses, or meets the
+// after-Start panic: the server never serves with both.
+func TestRegisterGlobalMiddlewareRacingStartBesideFamily(t *testing.T) {
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	for round := range 64 {
+		srv := newTrespassTestServer(t)
+		buildTrespassFamily(srv)
+		errCh := raceStart(srv, round)
+		panicked := panicsWith(t, ErrTenantFamilyWithGlobalMiddleware, func() { srv.RegisterGlobalMiddleware(mw) })
+
+		select {
+		case err := <-errCh:
+			require.ErrorIs(t, err, ErrTenantFamilyWithGlobalMiddleware)
+			assert.False(t, panicked)
+			assert.Equal(t, 1, srv.GlobalMiddlewareCount())
+		case <-srv.ReadyCh():
+			assert.True(t, panicked, "the server serves a family beside global middleware")
+			assert.Zero(t, srv.GlobalMiddlewareCount())
+			shutdownAndDrain(t, srv, errCh)
+		}
+	}
+}
