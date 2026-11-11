@@ -3582,6 +3582,225 @@ func TestSelectQueryBuilderHavingStringUnchanged(t *testing.T) {
 	})
 }
 
+// Having accepts a string, a RawExpression (value or non-nil pointer) or a
+// Filter; every other predicate, and a Filter followed by trailing arguments,
+// fails ToSQL() with ErrUnsupportedHavingPredicate and renders nothing (#2260).
+// The message names the received type and the accepted forms, never the value.
+func TestSelectQueryBuilderHavingRefusesUnsupportedPredicate(t *testing.T) {
+	const accepted = "HAVING predicate must be a string, a RawExpression (or a non-nil pointer to one) or a Filter: got "
+	var nilExpr *dbtypes.RawExpression
+	// SECURITY: Manual SQL review completed - constant test predicates, no user
+	// input; each is refused before rendering.
+	tests := []struct {
+		name    string
+		pred    func(qb *QueryBuilder) any
+		rest    []any
+		wantMsg string
+	}{
+		{name: "map", pred: func(*QueryBuilder) any { return map[string]any{"total": "secret-bound"} }, wantMsg: accepted + "map[string]interface {}"},
+		{name: "squirrel_eq", pred: func(*QueryBuilder) any { return squirrel.Eq{"total": "secret-bound"} }, wantMsg: accepted + "squirrel.Eq"},
+		{name: "squirrel_lt", pred: func(*QueryBuilder) any { return squirrel.Lt{"total": 5} }, wantMsg: accepted + "squirrel.Lt"},
+		{name: "squirrel_expr", pred: func(*QueryBuilder) any { return squirrel.Expr("SUM(amount) > ?", 5) }, wantMsg: accepted + "squirrel.expr"},
+		{name: "nil", pred: func(*QueryBuilder) any { return nil }, wantMsg: accepted + "<nil>"},
+		{name: "int", pred: func(*QueryBuilder) any { return 42 }, wantMsg: accepted + "int"},
+		{name: "typed_nil_expression_pointer", pred: func(*QueryBuilder) any { return nilExpr }, wantMsg: accepted + "*types.RawExpression"},
+		{name: "typed_nil_filter_pointer", pred: func(*QueryBuilder) any { return (*existsFilter)(nil) }, wantMsg: accepted + "*builder.existsFilter"},
+		{name: "typed_nil_filter_pointer_with_trailing_args", pred: func(*QueryBuilder) any { return (*existsFilter)(nil) }, rest: []any{"secret-bound"}, wantMsg: accepted + "*builder.existsFilter"},
+		{
+			name:    "filter_with_trailing_args",
+			pred:    func(qb *QueryBuilder) any { return qb.Filter().Gt("number", 100) },
+			rest:    []any{"secret-bound", 2},
+			wantMsg: accepted + "builder.Filter with 2 trailing argument(s) (a Filter binds its own)",
+		},
+	}
+	for _, v := range inListVendors {
+		for _, tt := range tests {
+			t.Run(v.vendor+"_"+tt.name, func(t *testing.T) {
+				qb := NewQueryBuilder(v.vendor)
+
+				sql, args, err := qb.Select("department").
+					From(tableUsers).
+					GroupBy("department").
+					Having(tt.pred(qb), tt.rest...).
+					ToSQL()
+
+				require.ErrorIs(t, err, dbtypes.ErrUnsupportedHavingPredicate)
+				require.EqualError(t, err, tt.wantMsg)
+				assert.NotContains(t, err.Error(), "secret-bound")
+				assert.Empty(t, sql)
+				assert.Nil(t, args)
+			})
+		}
+	}
+}
+
+// A non-nil pointer to a RawExpression is judged and rendered exactly as the value.
+func TestSelectQueryBuilderHavingAcceptsRawExpressionPointer(t *testing.T) {
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+			// SECURITY: Manual SQL review completed - constant aggregate predicate,
+			// value side parameterized.
+			expr := qb.MustExpr("SUM(amount) > ?")
+			build := func(pred any) (string, []any, error) {
+				return qb.Select("department").
+					From(tableUsers).
+					Where(qb.Filter().Eq(colStatus, statusActive)).
+					GroupBy("department").
+					Having(pred, 100).
+					ToSQL()
+			}
+
+			wantSQL, wantArgs, err := build(expr)
+			require.NoError(t, err)
+			gotSQL, gotArgs, err := build(&expr)
+			require.NoError(t, err)
+
+			assert.Equal(t, wantSQL, gotSQL)
+			assert.Equal(t, wantArgs, gotArgs)
+		})
+	}
+}
+
+// A pointer is judged like the value: alias first, then Validate().
+// Vendor-invariant: refused in Having itself, so one vendor proves it.
+func TestSelectQueryBuilderHavingRefusesInvalidExpressionPointer(t *testing.T) {
+	// SECURITY: Manual SQL review completed - constant expressions; each is
+	// refused (alias, empty body) before rendering.
+	tests := []struct {
+		name    string
+		pred    *dbtypes.RawExpression
+		rest    []any
+		wantErr error
+	}{
+		{name: "aliased", pred: &dbtypes.RawExpression{SQL: "SUM(amount) > ?", Alias: "total"}, rest: []any{100}, wantErr: dbtypes.ErrAliasInHaving},
+		{name: "empty", pred: &dbtypes.RawExpression{}, wantErr: dbtypes.ErrEmptyExpressionSQL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+			sql, args, err := qb.Select("department").
+				From(tableUsers).
+				GroupBy("department").
+				Having(tt.pred, tt.rest...).
+				ToSQL()
+
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Empty(t, sql)
+			assert.Nil(t, args)
+		})
+	}
+}
+
+// A Filter predicate renders through its own ToSql: the column is judged and
+// quoted by the filter door, and placeholders number after any WHERE argument.
+func TestSelectQueryBuilderHavingAcceptsFilterPredicate(t *testing.T) {
+	tests := []struct {
+		name      string
+		vendor    dbtypes.Vendor
+		withWhere bool
+		wantSQL   string
+		wantArgs  []any
+	}{
+		{name: "postgresql", vendor: dbtypes.PostgreSQL, wantSQL: "SELECT department FROM users GROUP BY department HAVING number > $1", wantArgs: []any{100}},
+		{name: "oracle", vendor: dbtypes.Oracle, wantSQL: `SELECT department FROM users GROUP BY department HAVING "number" > :1`, wantArgs: []any{100}},
+		{name: "postgresql_after_where", vendor: dbtypes.PostgreSQL, withWhere: true, wantSQL: "SELECT department FROM users WHERE status = $1 GROUP BY department HAVING number > $2", wantArgs: []any{statusActive, 100}},
+		{name: "oracle_after_where", vendor: dbtypes.Oracle, withWhere: true, wantSQL: `SELECT department FROM users WHERE status = :1 GROUP BY department HAVING "number" > :2`, wantArgs: []any{statusActive, 100}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
+			q := qb.Select("department").From(tableUsers)
+			if tt.withWhere {
+				q = q.Where(f.Eq(colStatus, statusActive))
+			}
+
+			sql, args, err := q.GroupBy("department").Having(f.Gt("number", 100)).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, tt.wantArgs, args)
+		})
+	}
+}
+
+// A non-nil pointer Filter passes the nil-pointer refusal and renders.
+func TestSelectQueryBuilderHavingAcceptsPointerFilter(t *testing.T) {
+	tests := []struct {
+		vendor  dbtypes.Vendor
+		wantSQL string
+	}{
+		{vendor: dbtypes.PostgreSQL, wantSQL: "SELECT department FROM users GROUP BY department HAVING COUNT(*) > $1"},
+		{vendor: dbtypes.Oracle, wantSQL: "SELECT department FROM users GROUP BY department HAVING COUNT(*) > :1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			pred := &existsFilter{sqlizer: squirrel.Expr("COUNT(*) > ?", 1)}
+
+			sql, args, err := qb.Select("department").From(tableUsers).GroupBy("department").Having(pred).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{1}, args)
+		})
+	}
+}
+
+// A Filter's own error surfaces unchanged, not as a Having refusal.
+// Vendor-invariant: the filter door judges before rendering, so one vendor proves it.
+func TestSelectQueryBuilderHavingKeepsFilterError(t *testing.T) {
+	t.Run("bad_column_keeps_filter_error", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		bad := qb.Filter().Gt("number; DROP TABLE users", 100)
+		_, _, wantErr := bad.ToSQL()
+		require.Error(t, wantErr)
+
+		sql, _, err := qb.Select("department").From(tableUsers).GroupBy("department").Having(bad).ToSQL()
+
+		require.EqualError(t, err, wantErr.Error())
+		require.NotErrorIs(t, err, dbtypes.ErrUnsupportedHavingPredicate)
+		assert.Empty(t, sql)
+	})
+	t.Run("expression_operand_keeps_filter_error", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// SECURITY: Manual SQL review completed - constant expression; refused
+		// by the filter door before rendering.
+		sql, _, err := qb.Select("department").
+			From(tableUsers).
+			GroupBy("department").
+			Having(qb.Filter().Gt("number", qb.MustExpr("SUM(amount)"))).
+			ToSQL()
+
+		require.ErrorIs(t, err, dbtypes.ErrExpressionInFilter)
+		assert.Empty(t, sql)
+	})
+}
+
+// The first deferred error wins: a Having refusal does not replace an earlier
+// one, and a later one does not replace the Having refusal.
+func TestSelectQueryBuilderHavingRefusalKeepsFirstError(t *testing.T) {
+	t.Run("earlier_error_wins", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		_, _, err := qb.Select("department").From("users;").GroupBy("department").Having(42).ToSQL()
+
+		require.Error(t, err)
+		require.NotErrorIs(t, err, dbtypes.ErrUnsupportedHavingPredicate)
+		assert.Contains(t, err.Error(), "From:")
+	})
+	t.Run("having_refusal_wins_over_later_error", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		_, _, err := qb.Select("department").GroupBy("department").Having(42).From("users;").ToSQL()
+
+		require.ErrorIs(t, err, dbtypes.ErrUnsupportedHavingPredicate)
+	})
+}
+
 // TestValueDoorsRenderRawExpressionInline pins #1318: Set, SetMap and Values
 // splice a RawExpression verbatim, with no placeholder and no argument, on
 // both vendors, while every other value stays parameterized in order.
