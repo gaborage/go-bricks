@@ -4,6 +4,15 @@
 **Date:** 2026-10-28
 **Issue:** #2222
 
+## Amendment (2026-11-10, #2306): a sentinel registered after Start panics
+
+The consequence "A sentinel registered after `Start` is dropped" no longer holds. Once `Start` has
+claimed the server, served or not, an `echo_route_not_found` or `echo_route_any` route panics at
+registration with an error matching both `server.ErrRegistrationAfterStart` and
+`ErrDuplicateRoute`, and is never recorded in `RouteConflicts()`, as every registration after
+`Start` does ([ADR-179](adr_179_registration_sealed_at_start.md)). See
+[migrations.md](migrations.md) `[C74.8]`.
+
 ## Context
 
 Echo gives two method strings a meaning of its own. `echo.RouteNotFound`

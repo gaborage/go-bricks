@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -793,4 +794,189 @@ func TestObservedRequestAllocsStable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// sealServer claims srv with Start in one of the three ways that seal registration.
+var sealServer = []struct {
+	name string
+	seal func(t *testing.T, srv *Server)
+}{
+	{name: "served", seal: func(t *testing.T, srv *Server) {
+		errCh := startProbeServer(t, srv)
+		t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+	}},
+	{name: "shutdown_before_start", seal: func(t *testing.T, srv *Server) {
+		require.NoError(t, srv.Shutdown(context.Background()))
+		require.ErrorIs(t, srv.Start(), http.ErrServerClosed)
+	}},
+	{name: "setup_error", seal: func(t *testing.T, srv *Server) {
+		srv.setupErr = errSealSetup
+		require.ErrorIs(t, srv.Start(), errSealSetup)
+	}},
+}
+
+var errSealSetup = errors.New("setup failed")
+
+// requireLateRegistrationPanic fails unless fn panics with an error matching
+// ErrRegistrationAfterStart and every one of also, whose text is want.
+func requireLateRegistrationPanic(t *testing.T, want string, fn func(), also ...error) {
+	t.Helper()
+	assert.EqualError(t, requireLateRegistrationPanicIs(t, fn, also...), want)
+}
+
+// requireLateRegistrationPanicIs fails unless fn panics with an error matching
+// ErrRegistrationAfterStart and every one of also, and returns that error.
+func requireLateRegistrationPanicIs(t *testing.T, fn func(), also ...error) (err error) {
+	t.Helper()
+	defer func() {
+		var ok bool
+		err, ok = recover().(error)
+		require.True(t, ok, "expected registration to panic with an error")
+		for _, target := range append([]error{ErrRegistrationAfterStart}, also...) {
+			require.ErrorIs(t, err, target)
+		}
+	}()
+	fn()
+	return nil
+}
+
+// TestRouteRegistrarRefusesRegistrationAfterStart pins that once Start has claimed the server,
+// whether or not it served, every registrar door panics naming the call, a recovered caller's
+// retry panics again, and the refused call changes nothing.
+func TestRouteRegistrarRefusesRegistrationAfterStart(t *testing.T) {
+	const late = "/late"
+	lateFamily := trespassFamily + late
+	calls := []struct {
+		name, want, path string // path: where the refused call would have served
+		call             func(srv *Server, mg, family RouteRegistrar, mw MiddlewareFunc)
+	}{
+		{name: "raw_add", want: "route GET /late", path: late, call: func(_ *Server, mg, _ RouteRegistrar, mw MiddlewareFunc) {
+			mg.Add(http.MethodGet, late, answerWith("late"), mw)
+		}},
+		{name: "fresh_root_group_add", want: "route GET /late", path: late, call: func(srv *Server, _, _ RouteRegistrar, _ MiddlewareFunc) {
+			srv.RootGroup().Add(http.MethodGet, late, answerWith("late"))
+		}},
+		{name: "typed", want: "route GET /late", path: late, call: func(srv *Server, mg, _ RouteRegistrar, _ MiddlewareFunc) {
+			RegisterHandler(NewHandlerRegistry(srv.cfg), mg, http.MethodGet, late, trespassTyped)
+		}},
+		{name: "group_with_middleware", want: "Group /late", path: late + "/x", call: func(_ *Server, mg, _ RouteRegistrar, mw MiddlewareFunc) {
+			mg.Group(late, mw)
+		}},
+		{name: "group_without_middleware", want: "Group /late", path: late, call: func(_ *Server, mg, _ RouteRegistrar, _ MiddlewareFunc) {
+			mg.Group(late)
+		}},
+		{name: "use", want: "Use /", path: late, call: func(_ *Server, mg, _ RouteRegistrar, mw MiddlewareFunc) { mg.Use(mw) }},
+		{name: "family_add", want: "route GET " + lateFamily, path: lateFamily, call: func(_ *Server, _, family RouteRegistrar, mw MiddlewareFunc) {
+			family.Add(http.MethodGet, late, answerWith("late"), mw)
+		}},
+		{name: "family_group", want: "Group " + lateFamily, path: lateFamily + "/x", call: func(_ *Server, _, family RouteRegistrar, mw MiddlewareFunc) {
+			family.Group(late, mw)
+		}},
+		{name: "family_use", want: "Use " + trespassFamily, path: lateFamily, call: func(_ *Server, _, family RouteRegistrar, mw MiddlewareFunc) {
+			family.Use(mw)
+		}},
+	}
+	for _, s := range sealServer {
+		for _, tt := range calls {
+			t.Run(s.name+"/"+tt.name, func(t *testing.T) {
+				srv := newTrespassTestServer(t)
+				mg := srv.ModuleGroup()
+				family := buildTrespassFamily(srv)
+				s.seal(t, srv)
+				mwRan := false
+				mw := func(_ HandlerContext, next func() error) error {
+					mwRan = true
+					return next()
+				}
+				act := func() { tt.call(srv, mg, family, mw) }
+
+				want := "server: registration after Start: " + tt.want
+				requireLateRegistrationPanic(t, want, act)
+				requireLateRegistrationPanic(t, want, act)
+				assert.Equal(t, http.StatusNotFound, serveFamilyRequest(srv, tt.path).Code)
+				assert.False(t, mwRan, "a refused registration's middleware never runs")
+				assert.Empty(t, DefaultRouteRegistry.ByPath(tt.path))
+				assert.Empty(t, srv.RouteConflicts())
+				assert.Zero(t, srv.GlobalMiddlewareCount())
+			})
+		}
+	}
+}
+
+// TestRouteRegistrarLateConflictPanicsUnrecorded pins that after Start a duplicate or a
+// reserved-method route panics matching both sentinels, is never recorded, and leaves the first
+// registration serving.
+func TestRouteRegistrarLateConflictPanicsUnrecorded(t *testing.T) {
+	for _, s := range sealServer {
+		for _, method := range []string{http.MethodGet, echo.RouteNotFound, echo.RouteAny} {
+			t.Run(s.name+"/"+method, func(t *testing.T) {
+				srv := newTrespassTestServer(t)
+				mg := srv.ModuleGroup()
+				mg.Add(http.MethodGet, "/taken", answerWith("first"))
+				s.seal(t, srv)
+				for range 2 {
+					requireLateRegistrationPanicIs(t, func() { mg.Add(method, "/taken", answerWith("second")) }, ErrDuplicateRoute)
+				}
+				assert.Empty(t, srv.RouteConflicts())
+				assert.Equal(t, "first", serveFamilyRequest(srv, "/taken").Body.String())
+				assert.Len(t, DefaultRouteRegistry.ByPath("/taken"), 1)
+			})
+		}
+	}
+}
+
+// TestRouteRegistrarRefusedUseLeavesNoMiddlewareMark pins that a Use refused after Start does
+// not mark its registrar as carrying middleware: a later Group without middleware under a
+// family is refused as a plain late Group, not as trespass.
+func TestRouteRegistrarRefusedUseLeavesNoMiddlewareMark(t *testing.T) {
+	srv := newTrespassTestServer(t)
+	mg := srv.ModuleGroup()
+	buildTrespassFamily(srv)
+	srv.setupErr = errSealSetup
+	require.ErrorIs(t, srv.Start(), errSealSetup)
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+
+	requireLateRegistrationPanic(t, "server: registration after Start: Use /", func() { mg.Use(mw) })
+	requireLateRegistrationPanic(t, "server: registration after Start: Group "+trespassFamily+"/x", func() {
+		mg.Group(trespassFamily + "/x")
+	})
+}
+
+// TestRouteRegistrarLateRegistrationWhileServingIsRaceFree pins, under -race, that late
+// registrations attempted while the server serves requests never touch the engine.
+func TestRouteRegistrarLateRegistrationWhileServingIsRaceFree(t *testing.T) {
+	srv := newTrespassTestServer(t)
+	mg := srv.ModuleGroup()
+	family := buildTrespassFamily(srv)
+	mg.Add(http.MethodGet, "/open", answerWith("open"))
+	errCh := startProbeServer(t, srv)
+	t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+	mw := func(_ HandlerContext, next func() error) error { return next() }
+	attempts := []func(path string){
+		func(path string) { mg.Add(http.MethodGet, path, answerWith("late")) },
+		func(path string) { mg.Group(path, mw) },
+		func(string) { mg.Use(mw) },
+		func(path string) { family.Add(http.MethodGet, path, answerWith("late")) },
+		func(string) { srv.RegisterGlobalMiddleware(mw) },
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				assert.Equal(t, http.StatusOK, serveFamilyRequest(srv, "/open").Code)
+			}
+		}
+	})
+	for i := range 100 {
+		for _, attempt := range attempts {
+			assert.True(t, panicsWith(t, ErrRegistrationAfterStart, func() { attempt(fmt.Sprintf("/late%d", i)) }))
+		}
+	}
+	close(stop)
+	wg.Wait()
+	assert.Equal(t, http.StatusNotFound, serveFamilyRequest(srv, "/late0").Code)
 }

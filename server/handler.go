@@ -1667,6 +1667,9 @@ func ensureTraceParentHeader(c *echo.Context) {
 //
 // Add does not return a route handle: the value was never consumed anywhere and exposing
 // echo.RouteInfo would re-introduce the leak this abstraction removes.
+//
+// On a registrar a Server hands out, Add, Group and Use panic with an error matching
+// ErrRegistrationAfterStart once Start has claimed the Server (ADR-179).
 type RouteRegistrar interface {
 	Add(method, path string, handler Handler, middleware ...MiddlewareFunc)
 	Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar
@@ -1771,13 +1774,12 @@ func RegisterHandler[T any, R any](
 	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, hr.log, descriptor.RawResponse, joseCfg)
 	// Hot path: register the echo handler directly through routeGroup.addEcho so the typed
 	// handler path adds zero per-request adapter overhead (ADR-026); see routeAdmission.admit.
-	// The fallback adapts for non-routeGroup registrars (test fakes) and describes the route
-	// itself; it round-trips through the unexported escape hatch and never executes on the
-	// framework's real registrar.
+	// The fallback adapts for non-routeGroup registrars (test fakes, decorators) and describes
+	// the route itself once Add returns, so a refused Add leaves no descriptor; it round-trips
+	// through the unexported escape hatch and never executes on the framework's real registrar.
 	if rg, ok := r.(*routeGroup); ok {
 		rg.addEcho(method, path, wrappedHandler, &descriptor)
 	} else {
-		DefaultRouteRegistry.Register(&descriptor)
 		r.Add(method, path, func(c HandlerContext) error {
 			ec := c.echoContext()
 			if ec == nil {
@@ -1785,6 +1787,7 @@ func RegisterHandler[T any, R any](
 			}
 			return wrappedHandler(ec)
 		})
+		DefaultRouteRegistry.Register(&descriptor)
 	}
 }
 

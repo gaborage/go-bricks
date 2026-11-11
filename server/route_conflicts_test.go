@@ -890,6 +890,7 @@ func requireTrespassPanic(t *testing.T, want *RouteConflict, wantLine string, fn
 		err, ok := recover().(error)
 		require.True(t, ok, "expected registration to panic with an error")
 		require.ErrorIs(t, err, ErrDuplicateRoute)
+		require.ErrorIs(t, err, ErrRegistrationAfterStart)
 		var dre *DuplicateRouteError
 		require.ErrorAs(t, err, &dre)
 		assert.Equal(t, []RouteConflict{*want}, dre.Conflicts)
@@ -899,8 +900,9 @@ func requireTrespassPanic(t *testing.T, want *RouteConflict, wantLine string, fn
 }
 
 // TestTenantOwnedTrespassAfterStartPanics pins that after Start, a route or a middleware-bearing
-// group at or below a family prefix, not built through the family, panics at registration and
-// adds nothing, while the family and routes outside every family still register.
+// group at or below a family prefix, not built through the family, panics at registration with
+// its conflict and adds nothing, and that a route through the family or outside every family
+// panics too (ADR-179).
 func TestTenantOwnedTrespassAfterStartPanics(t *testing.T) {
 	const (
 		orders = trespassFamily + "/orders"
@@ -913,9 +915,8 @@ func TestTenantOwnedTrespassAfterStartPanics(t *testing.T) {
 		register func(srv *Server, mg, family, plain RouteRegistrar, mw MiddlewareFunc)
 		want     RouteConflict // the refused registration; zero when register must not panic
 		wantLine string
-		probe    string // after the panic: a path the family still answers, mw never running
-		served   string // without a panic: a path register added, answered 200 with body
-		body     string
+		probe    string // after the panic: a path answering 404, mw never running
+		late     string // a refusal with no conflict: the ErrRegistrationAfterStart panic text
 	}{
 		{
 			name: "trespass_after_start_panics",
@@ -954,18 +955,20 @@ func TestTenantOwnedTrespassAfterStartPanics(t *testing.T) {
 			want:     trespassGroup(admin), wantLine: trespassGroupLine(admin), probe: admin + "/x",
 		},
 		{
-			name: "family_route_after_start_registers",
+			name: "family_route_after_start_panics",
 			register: func(_ *Server, _, family, _ RouteRegistrar, _ MiddlewareFunc) {
 				family.Add(http.MethodGet, "/late", answerWith("family"))
 			},
-			served: trespassFamily + "/late", body: "family",
+			want: RouteConflict{Path: trespassFamily + "/late"}, probe: trespassFamily + "/late",
+			late: "server: registration after Start: route GET " + trespassFamily + "/late",
 		},
 		{
-			name: "outside_route_after_start_registers",
+			name: "outside_route_after_start_panics",
 			register: func(_ *Server, mg, _, _ RouteRegistrar, _ MiddlewareFunc) {
 				mg.Add(http.MethodGet, "/elsewhere", answerWith("outside"))
 			},
-			served: "/elsewhere", body: "outside",
+			want: RouteConflict{Path: "/elsewhere"}, probe: "/elsewhere",
+			late: "server: registration after Start: route GET /elsewhere",
 		},
 	}
 	for _, tt := range tests {
@@ -984,20 +987,17 @@ func TestTenantOwnedTrespassAfterStartPanics(t *testing.T) {
 			}
 			act := func() { tt.register(srv, mg, family, plain, mw) }
 
-			if tt.served != "" {
-				require.NotPanics(t, act)
-				rec := serveFamilyRequest(srv, tt.served)
-				assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-				assert.Equal(t, tt.body, rec.Body.String())
+			if tt.late != "" {
+				requireLateRegistrationPanic(t, tt.late, act)
 			} else {
 				requireTrespassPanic(t, &tt.want, tt.wantLine, act)
 				requireTrespassPanic(t, &tt.want, tt.wantLine, act) // a recovered caller's retry is refused too
-				assert.Empty(t, DefaultRouteRegistry.ByPath(tt.want.Path), "a refused registration is never described")
-				rec := serveFamilyRequest(srv, tt.probe)
-				assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
-				assert.False(t, mwRan, "a refused registration adds nothing the family's requests can reach")
-				assert.Empty(t, srv.RouteConflicts(), "after Start a trespass panics instead of being recorded")
 			}
+			assert.Empty(t, DefaultRouteRegistry.ByPath(tt.want.Path), "a refused registration is never described")
+			rec := serveFamilyRequest(srv, tt.probe)
+			assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+			assert.False(t, mwRan, "a refused registration adds nothing the family's requests can reach")
+			assert.Empty(t, srv.RouteConflicts(), "after Start a refusal panics instead of being recorded")
 			srv.admission.mu.Lock()
 			registered := srv.admission.registered
 			srv.admission.mu.Unlock()

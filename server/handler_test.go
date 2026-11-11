@@ -2628,6 +2628,24 @@ func TestRegisterHandlerFallbackForNonEchoRegistrar(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"meta"`, "fallback must emit the framework meta envelope")
 }
 
+// decoratingRegistrar wraps a framework registrar, so RegisterHandler takes its fallback.
+type decoratingRegistrar struct{ RouteRegistrar }
+
+// TestRegisterHandlerDecoratorAfterStartLeavesNoDescriptor pins that a typed route refused after
+// Start through a registrar wrapping the framework's is never described: the fallback describes
+// the route only once Add returns.
+func TestRegisterHandlerDecoratorAfterStartLeavesNoDescriptor(t *testing.T) {
+	srv := newTrespassTestServer(t)
+	dr := decoratingRegistrar{srv.ModuleGroup()}
+	srv.setupErr = errSealSetup
+	require.ErrorIs(t, srv.Start(), errSealSetup)
+
+	requireLateRegistrationPanic(t, "server: registration after Start: route GET /late", func() {
+		RegisterHandler(NewHandlerRegistry(srv.cfg), dr, http.MethodGet, "/late", trespassTyped)
+	})
+	assert.Empty(t, DefaultRouteRegistry.ByPath("/late"))
+}
+
 func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
 	e := newEngine()
 	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}

@@ -166,8 +166,13 @@ order. Root tenant resolution skips a family's routes, and the family resolves i
 after the root chain, so this slot would run there with no tenant in context. The check counts
 only installed middleware: a gate that returns nil when its config flag is off boots, and is
 refused where the flag is on. Startup warns when a module implements `GlobalMiddleware()`,
-returns nothing, and a family exists. After `Start`, nothing checks again, so
-`RegisterGlobalMiddleware` beside a family panics, and `TenantOwnedGroup` panics outright.
+returns nothing, and a family exists. After `Start`, served or not, `RegisterGlobalMiddleware`
+panics whenever it would install middleware, with an error matching
+`server.ErrRegistrationAfterStart` (and, beside a family, `ErrTenantFamilyWithGlobalMiddleware`
+too), and installs nothing; an empty or all-nil call stays a no-op
+([ADR-179](adr_179_registration_sealed_at_start.md)). `TenantOwnedGroup` panics outright. The
+install and its count run under the lock `Start` seals with, so a call racing `Start` either
+installs before Start's check, which then refuses, or panics.
 
 In such a binary, attach the gate per group instead. On a family, put it in the family's
 `Authenticate` steps (before the tenant) or add it with `Use` (after it). Elsewhere, put it on
