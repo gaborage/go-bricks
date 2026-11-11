@@ -3039,8 +3039,6 @@ remedy, never the URL. See [migrations.md](migrations.md) `[C74.2]`.
 **Key Benefits:** a malformed broker URL names its key at startup instead of hiding behind a
 readiness timeout, with no part of the URL or its credentials in the message.
 
----
-
 ### [ADR-176: A Broker URL With an Unencoded `@` After Its Authority Is Refused](adr_176_broker_url_with_at_after_authority_refused.md)
 
 **Date:** 2026-11-09 | **Status:** Accepted | **Breaking:** a broker URL, static tenant `messaging.url` or `messaging.streams.uri` with an unencoded `@` in its path, query or fragment is refused before anything is dialed, including a valid vhost or query value; write that `@` as `%40`
@@ -3054,6 +3052,25 @@ with fixed text that carries no part of the URL. See [migrations.md](migrations.
 
 **Key Benefits:** a URL whose password `url.Parse` split is refused before its password text is
 looked up or dialed as a host.
+
+---
+
+### [ADR-177: `Having` Accepts a Closed Set of Predicate Forms](adr_177_having_accepts_closed_predicate_forms.md)
+
+**Date:** 2026-11-10 | **Status:** Accepted | **Breaking:** a `Having` predicate that is not a string, a `RawExpression` (or a non-nil pointer to one) or a `dbtypes.Filter`, and a Filter followed by trailing arguments, fail `ToSQL()` with `ErrUnsupportedHavingPredicate`
+
+`Having` judged only a `RawExpression` value and passed every other predicate to squirrel: a map
+or squirrel literal rendered its keys as unvalidated, unquoted columns and bound its values
+unjudged, any other Sqlizer was spliced, nil rendered an empty `HAVING`, a pointer to an
+expression failed with squirrel's untyped text, and arguments after a Filter were dropped. It now
+accepts a string, a `RawExpression` or a non-nil pointer to one (judged alike), or a Filter
+rendered through its own `ToSql`, the bar `Where` applies; anything else fails with one sentinel
+whose message names the received type (`%T`) and the accepted forms. Extends ADR-082 and ADR-158
+to `Having`, where an unjudged map still reached SQL. See [migrations.md](migrations.md) `[C74.6]`.
+
+**Key Benefits:** a HAVING comparison passed as a `qb.Filter()` predicate passes the column funnel
+and the operand judge, a string or `qb.MustExpr` body stays raw SQL under manual review, and every
+refused shape fails at `ToSQL()` with one matchable error.
 
 ---
 
@@ -3866,7 +3883,7 @@ streams replay). See [migrations.md](migrations.md) `[C72.29]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-176) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-177) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

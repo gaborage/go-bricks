@@ -48,10 +48,17 @@ var (
 	// denylist, which accepted everything it did not list.
 	ErrInvalidAlias = errors.New("alias must be an unquoted identifier: a letter or underscore followed by letters, digits, underscore, $ or #")
 
-	// ErrAliasInHaving is returned when a RawExpression carrying an alias is passed
-	// to Having. HAVING takes a predicate, not a projected column, so an alias has
-	// nowhere to render; accepting one silently would drop it.
+	// ErrAliasInHaving is returned when a RawExpression carrying an alias, or a
+	// non-nil pointer to one, is passed to Having. HAVING takes a predicate, not
+	// a projected column, so an alias has nowhere to render; accepting one
+	// silently would drop it.
 	ErrAliasInHaving = errors.New("alias is not allowed in a HAVING predicate")
+
+	// ErrUnsupportedHavingPredicate is returned when Having receives a predicate
+	// outside its accepted forms (see SelectQueryBuilder.Having) or a Filter
+	// followed by trailing arguments. The wrapped message names the received
+	// type (%T), never its value.
+	ErrUnsupportedHavingPredicate = errors.New("HAVING predicate must be a string, a RawExpression (or a non-nil pointer to one) or a Filter")
 
 	// ErrAliasInValue is returned when a RawExpression carrying an alias is passed
 	// to Set, SetMap or Values. A SET or VALUES cell projects nothing, so an alias
