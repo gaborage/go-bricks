@@ -1766,12 +1766,10 @@ func sqlizerCellRows() []cellOperandRow {
 	)
 }
 
-// upsertCellDoor is one BuildUpsert value position on one vendor, and whether
-// that vendor splices a Sqlizer there.
+// upsertCellDoor is one BuildUpsert value position on one vendor.
 type upsertCellDoor struct {
 	cellDoor
-	vendor  string
-	spliced bool
+	vendor string
 }
 
 func upsertInsertCell(qb *QueryBuilder, v any) (sql string, args []any, err error) {
@@ -1786,7 +1784,7 @@ const upsertCellLabel = "BuildUpsert: c"
 
 var upsertCellDoors = []upsertCellDoor{
 	{
-		vendor: dbtypes.PostgreSQL, spliced: true,
+		vendor: dbtypes.PostgreSQL,
 		cellDoor: cellDoor{
 			name: "insert", label: upsertCellLabel, render: upsertInsertCell,
 			want: func(cell string, a []any) (sqlText string, args []any) {
@@ -1795,7 +1793,7 @@ var upsertCellDoors = []upsertCellDoor{
 		},
 	},
 	{
-		vendor: dbtypes.PostgreSQL, spliced: true,
+		vendor: dbtypes.PostgreSQL,
 		cellDoor: cellDoor{
 			name: "update", label: upsertCellLabel, render: upsertUpdateCell,
 			want: func(cell string, a []any) (sqlText string, args []any) {
@@ -1826,15 +1824,11 @@ var upsertCellDoors = []upsertCellDoor{
 }
 
 // TestOperandJudgeAtTheUpsertCells pins a Sqlizer at BuildUpsert's value
-// positions: PostgreSQL's INSERT rendering would splice it, so it is refused
-// there, while Oracle's MERGE binds it as written, as it always has. The
-// expression rows live in the postgres and oracle upsert tests.
+// positions: both vendors refuse it with the same error, so one call gets one
+// verdict. The expression rows live in the postgres and oracle upsert tests.
 func TestOperandJudgeAtTheUpsertCells(t *testing.T) {
 	for _, d := range upsertCellDoors {
 		for _, row := range sqlizerCellRows() {
-			if !d.spliced {
-				row = cellOperandRow{name: strings.TrimSuffix(row.name, "_refused") + "_binds", operand: row.operand, cell: "?", args: []any{row.operand}}
-			}
 			t.Run(d.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
 				assertCellRow(t, d.vendor, d.cellDoor, &row)
 			})

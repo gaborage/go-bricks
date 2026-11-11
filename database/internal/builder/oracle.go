@@ -290,11 +290,12 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	return query, args, nil
 }
 
-// mergeCell renders one MERGE value: an expression the judge splices keeps
-// squirrel's `??` escape resolved, as Set renders it, and any other value is
-// appended to args and rendered as the next `:N`.
+// mergeCell renders one MERGE value through judgeValueCell, the judgment
+// PostgreSQL's upsert applies (ADR-178): a spliced expression keeps squirrel's
+// `??` escape resolved, as Set renders it, and any other value is appended to
+// args and rendered as the next `:N`.
 func mergeCell(column string, value any, args *[]any) (string, error) {
-	judged, err := judgeOperand("", value, valueFamily)
+	judged, err := judgeValueCell(value)
 	if err != nil {
 		return "", cellErr(column, err)
 	}

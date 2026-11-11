@@ -78,8 +78,9 @@ var (
 	// would splice its SQL: a JoinFilterFactory Eq, NotEq, Lt, Lte, Gt or Gte
 	// operand (judged after resolution, so a pointer to one too), either Between
 	// bound, or a SET / VALUES cell (Set, SetMap, SetStruct, Values,
-	// InsertStruct, InsertFields, a PostgreSQL BuildUpsert value). A RawExpression
-	// is the only spliceable operand (ADR-178).
+	// InsertStruct, InsertFields). A BuildUpsert insert or update value is refused
+	// on every vendor, Oracle's MERGE included, which bound it, so one call gets
+	// one verdict. A RawExpression is the only spliceable operand (ADR-178).
 	ErrSqlizerOperand = errors.New("a squirrel.Sqlizer operand is not allowed (use qb.Expr() for an intended expression)")
 
 	// ErrExpressionInFilter is returned when a RawExpression, or a non-nil
