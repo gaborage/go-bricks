@@ -82,7 +82,8 @@ resolved value that is still a `driver.Valuer` (a Valuer answering a Valuer) a s
   at build, and Oracle's MERGE binds it as an argument, as before. This is deliberate, the result
   of refusing exactly what splices today; aligning Oracle's MERGE is a possible follow-up.
 - `SetExpr`'s trailing arguments and `f.Raw`/`jf.Raw` arguments still expand a Sqlizer:
-  unchanged, outside this decision.
+  unchanged, outside this decision. Those are raw-SQL doors, and every call site already carries
+  the `// SECURITY: Manual SQL review completed` annotation, so the audit grep sees them.
 
 ## References
 
