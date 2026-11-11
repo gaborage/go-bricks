@@ -3052,8 +3052,9 @@ rendered through its own `ToSql`, the bar `Where` applies; anything else fails w
 whose message names the received type (`%T`) and the accepted forms. Extends ADR-082 and ADR-158
 to `Having`, where an unjudged map still reached SQL. See [migrations.md](migrations.md) `[C74.6]`.
 
-**Key Benefits:** every HAVING comparison built through go-bricks passes the column funnel and the
-operand judge, and every refused shape fails at `ToSQL()` with one matchable error.
+**Key Benefits:** a HAVING comparison passed as a `qb.Filter()` predicate passes the column funnel
+and the operand judge, a string or `qb.MustExpr` body stays raw SQL under manual review, and every
+refused shape fails at `ToSQL()` with one matchable error.
 
 ---
 

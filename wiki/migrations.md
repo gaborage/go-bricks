@@ -16234,8 +16234,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   becomes `Having(f.Gt("total", 100))`, which validates and quotes the column; combine several
   with `f.And(…)`. An aggregate comparison goes to an expression with its
   `// SECURITY: Manual SQL review completed - …` annotation:
-  `Having(qb.MustExpr("SUM(amount) > ?"), 100)`. Move an argument that followed a Filter into the
-  Filter's own operand, guard a predicate variable that can be nil before calling `Having`, and
+  `Having(qb.MustExpr("SUM(amount) > ?"), 100)`. Remove an argument that followed a Filter: it was
+  ignored before, so the rendered predicate stays the same; change the Filter's operand only once
+  the intended predicate is confirmed. Guard a predicate variable that can be nil before calling
+  `Having`, and
   match the build error with `errors.Is(err, dbtypes.ErrUnsupportedHavingPredicate)`, not
   squirrel's text.
 - verify: every detect hit is resolved, or is a reviewed, non-nil consumer-defined
