@@ -1707,7 +1707,7 @@ func TestOperandJudgeAtTheValueCells(t *testing.T) {
 		for _, d := range cellDoors {
 			for _, row := range rows {
 				t.Run(v.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
-					assertCellRow(t, v.vendor, d, row)
+					assertCellRow(t, v.vendor, d, &row)
 				})
 			}
 		}
@@ -1716,7 +1716,7 @@ func TestOperandJudgeAtTheValueCells(t *testing.T) {
 
 // assertCellRow renders row's operand through door d on vendor and checks the
 // statement, or the error naming d's label.
-func assertCellRow(t *testing.T, vendor string, d cellDoor, row cellOperandRow) {
+func assertCellRow(t *testing.T, vendor string, d cellDoor, row *cellOperandRow) {
 	t.Helper()
 	var sqlText string
 	var args []any
@@ -1774,11 +1774,11 @@ type upsertCellDoor struct {
 	spliced bool
 }
 
-func upsertInsertCell(qb *QueryBuilder, v any) (string, []any, error) {
+func upsertInsertCell(qb *QueryBuilder, v any) (sql string, args []any, err error) {
 	return qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1, "c": v}, nil)
 }
 
-func upsertUpdateCell(qb *QueryBuilder, v any) (string, []any, error) {
+func upsertUpdateCell(qb *QueryBuilder, v any) (sql string, args []any, err error) {
 	return qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1}, map[string]any{"c": v})
 }
 
@@ -1836,7 +1836,7 @@ func TestOperandJudgeAtTheUpsertCells(t *testing.T) {
 				row = cellOperandRow{name: strings.TrimSuffix(row.name, "_refused") + "_binds", operand: row.operand, cell: "?", args: []any{row.operand}}
 			}
 			t.Run(d.vendor+"_"+d.name+"_"+row.name, func(t *testing.T) {
-				assertCellRow(t, d.vendor, d.cellDoor, row)
+				assertCellRow(t, d.vendor, d.cellDoor, &row)
 			})
 		}
 	}
