@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
@@ -1077,4 +1078,32 @@ func TestTenantOwnedTrespassIgnoresFamilyAndMiddlewareFreeGroups(t *testing.T) {
 			assert.Empty(t, srv.RouteConflicts())
 		})
 	}
+}
+
+// TestRouteAdmissionStartWaitsForAnAdmittedRouteToBeAdded pins that Start's seal waits for a
+// route admitted before it to finish its engine add, so the engine never changes after the seal:
+// the family's catch-all lock, taken inside the add, holds one mid-flight.
+func TestRouteAdmissionStartWaitsForAnAdmittedRouteToBeAdded(t *testing.T) {
+	srv := newTrespassTestServer(t)
+	family := buildTrespassFamily(srv)
+	fam := family.(*routeGroup).family
+	fam.mu.Lock()
+	added := make(chan struct{})
+	go func() {
+		defer close(added)
+		family.Add(http.MethodGet, "/files/*", answerWith("files"))
+	}()
+	require.Eventually(t, func() bool { return len(DefaultRouteRegistry.ByPath(trespassFamily+"/files/*")) == 1 },
+		time.Second, time.Millisecond, "the route is claimed and described before its add")
+	errCh := startServer(srv)
+	select {
+	case <-srv.ReadyCh():
+		t.Error("Start served while an admitted route was still being added")
+	case <-time.After(200 * time.Millisecond):
+	}
+	fam.mu.Unlock()
+	<-added
+	waitForServerReady(t, srv)
+	t.Cleanup(func() { shutdownAndDrain(t, srv, errCh) })
+	assert.Equal(t, http.StatusOK, serveFamilyRequest(srv, trespassFamily+"/files/a").Code)
 }

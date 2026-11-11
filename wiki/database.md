@@ -660,6 +660,17 @@ env-sourced one — or shadow that variable with a non-claiming DSN key, which i
 rule reached past — or point the DSN at a TCP host, which clears them all. A DSN the
 scanner cannot tokenize passes through unjudged, same as it always has.
 
+**`sslcertmode` is judged on both doors (ADR-062 amendment 2026-11-10, `[C74.9]`).** The
+effective value is the `connectionstring`'s `sslcertmode` key when present, empty included,
+else `PGSSLCERTMODE` when set — set but empty counts, unlike the other `PGSSL*` variables —
+and the typed fields, whose built DSN carries no such key, read the variable alone. A value
+other than exactly `disable`, `allow` or `require` is refused for every PostgreSQL section,
+because pgx would fail to parse it at connect; `disable` is refused beside
+`database.tls.cert`/`key`, or beside an effective non-empty `sslcert`/`sslkey` in a
+`connectionstring` (`PGSSLCERT`/`PGSSLKEY` included), because pgx would then send no client
+certificate. Unset the variable or shadow it with `sslcertmode=allow` in the DSN. No
+`sslcertmode` value is a TLS claim, so it never trips the unix-socket rule.
+
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
 `verify-ca` (a documented libpq inheritance), and the sentinel `ca: system` means the OS
 trust store and forces `verify-full` regardless of the configured mode. `require` without

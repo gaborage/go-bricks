@@ -37,7 +37,9 @@
 > a mode, several can be in effect and each refuses alone, so naming only the
 > first would send the operator round the loop again. A DSN naming a service, through
 > `service=` or `PGSERVICE`, is refused ahead of this rule by `[C66.3]`. See
-> [migrations.md](migrations.md) `[C66.1]`.
+> [migrations.md](migrations.md) `[C66.1]`. The effective `sslcertmode` (DSN key, else a set
+> `PGSSLCERTMODE`) is judged after these rules and is never a TLS claim: see
+> [ADR-062](adr_062_database_tls_fail_closed.md)'s 2026-11-10 amendment (`[C74.9]`).
 >
 > **Amended (2026-09-13)** — two clauses, `[C65.3]` (inference widening) and `[C65.2]`
 > (connection-string host rules):

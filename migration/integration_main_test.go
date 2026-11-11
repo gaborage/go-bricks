@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/testing/containers"
 )
 
@@ -21,10 +22,12 @@ var pkgPG = containers.NewShared("PostgreSQL", 3*time.Minute,
 		return containers.StartPostgreSQLContainerForTestMain(ctx, nil)
 	})
 
-// TestMain terminates the shared container after the whole binary has run.
+// TestMain unsets the PGSSL* variables config judges, then terminates the shared container
+// after the whole binary has run.
 // It never exits early: without Docker the individual tests still skip
 // themselves, exactly as they did when each booted its own container.
 func TestMain(m *testing.M) {
+	testutil.UnsetPostgresSSLEnv()
 	code := m.Run()
 	pkgPG.Close()
 	os.Exit(code)

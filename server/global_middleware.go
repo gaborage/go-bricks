@@ -21,7 +21,9 @@ const tenantFamilyGlobalMiddlewareHint = "global middleware runs before a family
 // recovery, ...) and before the route handler, and skips the health/ready probes. It must
 // be called during startup, before Start(). Start refuses a server that installs one beside
 // a tenant-owned route family (ErrTenantFamilyWithGlobalMiddleware, ADR-164), and after Start
-// a call beside a family panics with an error matching it, since nothing checks again.
+// a call beside a family panics with an error matching it, since nothing checks again. It runs
+// under the lock Start's seal takes, so a call racing Start installs before Start's check or
+// meets the after-Start rule.
 func (s *Server) RegisterGlobalMiddleware(mw ...MiddlewareFunc) {
 	skipper := newProbeSkipper(s.buildFullPath(s.healthRoute), s.buildFullPath(s.readyRoute))
 	adapted := make([]echo.MiddlewareFunc, 0, len(mw))
@@ -34,20 +36,23 @@ func (s *Server) RegisterGlobalMiddleware(mw ...MiddlewareFunc) {
 	if len(adapted) == 0 {
 		return
 	}
-	if s.started.Load() {
-		if families := s.admission.familyPrefixes(); len(families) > 0 {
-			panic(fmt.Errorf("server: global middleware registered after Start: %w (%s); %s",
-				ErrTenantFamilyWithGlobalMiddleware, strings.Join(families, ", "), tenantFamilyGlobalMiddlewareHint))
-		}
+	a := s.admission
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.started && len(a.families) > 0 {
+		panic(fmt.Errorf("server: global middleware registered after Start: %w (%s); %s",
+			ErrTenantFamilyWithGlobalMiddleware, strings.Join(a.families, ", "), tenantFamilyGlobalMiddlewareHint))
 	}
 	s.echo.Use(adapted...)
-	s.globalMiddleware += len(adapted)
+	a.globalMW += len(adapted)
 }
 
 // GlobalMiddlewareCount returns how many global middleware RegisterGlobalMiddleware installed;
-// nil entries are never installed, so they never count. Startup-only, like that method.
+// nil entries are never installed, so they never count.
 func (s *Server) GlobalMiddlewareCount() int {
-	return s.globalMiddleware
+	s.admission.mu.Lock()
+	defer s.admission.mu.Unlock()
+	return s.admission.globalMW
 }
 
 // TenantFamilyPrefixes returns each tenant-owned route family's full prefix, in build order,
@@ -58,16 +63,15 @@ func (s *Server) TenantFamilyPrefixes() []string {
 	return s.admission.familyPrefixes()
 }
 
-// tenantFamilyGlobalMiddlewareError is Start's backstop: nil unless a tenant-owned route family
-// and at least one installed global middleware share this server.
-func (s *Server) tenantFamilyGlobalMiddlewareError() error {
-	families := s.TenantFamilyPrefixes()
-	if len(families) == 0 || s.globalMiddleware == 0 {
+// tenantFamilyGlobalMiddlewareError is Start's backstop over the sealed state: nil unless a
+// tenant-owned route family and at least one installed global middleware share this server.
+func tenantFamilyGlobalMiddlewareError(sealed sealedState) error {
+	if len(sealed.families) == 0 || sealed.globalMW == 0 {
 		return nil
 	}
 	return fmt.Errorf("%w: %d family(ies) (%s); %d global middleware installed; %s",
-		ErrTenantFamilyWithGlobalMiddleware, len(families), strings.Join(families, ", "),
-		s.globalMiddleware, tenantFamilyGlobalMiddlewareHint)
+		ErrTenantFamilyWithGlobalMiddleware, len(sealed.families), strings.Join(sealed.families, ", "),
+		sealed.globalMW, tenantFamilyGlobalMiddlewareHint)
 }
 
 // skipProbes exempts the probe routes from one global middleware. The decision reads the
