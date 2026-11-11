@@ -16241,9 +16241,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `<column or value position N>: a squirrel.Sqlizer operand is not allowed (use qb.Expr() for an intended expression): <type>`
   at a cell (under `BuildUpsert: ` for an upsert value). `<type>` is the Go type (`squirrel.Eq`,
   `builder.Filter`, `*squirrel.Eq` at a cell); the value is never printed.
-- apply: for an intended expression, pass `qb.Expr(sql)` or `qb.MustExpr(sql)` with a
-  `// SECURITY: Manual SQL review completed - <property>` annotation; at a SET cell whose
-  expression binds a value, `SetExpr(column, qb.MustExpr("… ? …"), args...)`. For a value, pass
+- apply: for an intended expression that binds nothing, pass `qb.Expr(sql)` or `qb.MustExpr(sql)`
+  with a `// SECURITY: Manual SQL review completed - <property>` annotation. An expression takes
+  no arguments, so one that binds a value keeps them through a door that does: at a `jf` door,
+  `jf.Eq("c", squirrel.Expr("COALESCE(?, 0)", v))` becomes `jf.Raw("c = COALESCE(?, 0)", v)`,
+  annotated the same way, with every identifier in the condition quoted by hand for the target
+  database; at a SET cell, `SetExpr(column, qb.MustExpr("… ? …"), args...)`. For a value, pass
   the plain value. A `Filter` meant as a predicate belongs in `Where`, or in `jf.And` beside the
   `jf` condition.
 - verify: `qb.Select("t.id").From("t").JoinOn("u", qb.JoinFilter().Eq("u.c", squirrel.Expr("NOW()"))).ToSQL()`
