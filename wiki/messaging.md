@@ -26,6 +26,20 @@ publishers and consumers it **added** — "added", because `RegisterExchange` an
 mean the module added nothing new, not that its declarer is empty. A module with the wrong method name or signature has no
 line at all.
 
+### Broker URL validation and percent-encoding
+
+`messaging.broker.url` and every static `multitenant.tenants.<id>.messaging.url` are checked at
+startup with the AMQP client's own parser (`amqp.ParseURI`), plus a 1-65535 range for a written
+port; a URL that fails fails `config.Validate` before anything is dialed, and a URL a dynamic
+source resolves gets the same check before its client is built (ADR-175). The error names the key
+and a reason, never the URL. The usual cause is a reserved character left unencoded in the
+credentials, so build the URL rather than concatenating it:
+
+```go
+u := url.URL{Scheme: "amqps", User: url.UserPassword(user, pass), Host: "broker:5671", Path: "/vhost"}
+cfg.Messaging.Broker.URL = u.String() // or render it into the secret your deployment loads
+```
+
 ## Helper Functions for Simplified Declarations
 
 GoBricks provides production-safe defaults to reduce AMQP boilerplate (~50+ lines → ~15 lines):
