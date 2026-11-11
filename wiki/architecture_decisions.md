@@ -3069,8 +3069,10 @@ or the cell and the operand's type; a position that bound one still does. Option
 splicing and a bound Sqlizer fails only at execution. Relates ADR-147 and ADR-158. See
 [migrations.md](migrations.md) `[C74.7]`.
 
-**Key Benefits:** a `RawExpression` is the only operand the builder splices, so every spliced
-fragment went through `qb.Expr()` and its `// SECURITY:` annotation.
+**Key Benefits:** at a `jf` value door and a SET / VALUES cell a `RawExpression` is the only operand
+the builder splices, so a fragment spliced there is one written as an expression, whose call site
+owes the `// SECURITY:` review annotation. `SetExpr`'s arguments and the raw doors still expand a
+Sqlizer.
 
 ### [ADR-179: Start Seals Every Route, Group and Global-Middleware Registration](adr_179_registration_sealed_at_start.md)
 

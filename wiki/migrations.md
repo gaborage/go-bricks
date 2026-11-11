@@ -16270,7 +16270,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
   ```bash
   # squirrel values and filters passed as a value
-  git grep -nE '\.(Eq|NotEq|Lt|Lte|Gt|Gte|Between|Set|SetMap|Values)\(.*(squirrel\.|[^A-Za-z0-9_]f\.[A-Z]|Filter\(\)\.)' -- '*.go'
+  git grep -nE '\.(Eq|NotEq|Lt|Lte|Gt|Gte|Between|Set|SetMap|Values)\(.*((squirrel|sq)\.|[^A-Za-z0-9_]f\.[A-Z]|Filter\(\)\.)' -- '*.go'
   # struct fields typed as a Sqlizer or a Filter, read by SetStruct/InsertStruct/InsertFields
   git grep -nE 'squirrel\.Sqlizer|(dbtypes|types)\.Filter' -- '*.go'
   # variables assigned a squirrel value (squirrel or sq import) or a filter door, passed later
@@ -16282,6 +16282,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep -nE 'BuildUpsert\(|map\[string\](any|interface\{\})\{' -- '*.go'
   ```
 
+  The greps spell the import as `squirrel` or `sq`; under another alias
+  (`git grep -nE '"github.com/Masterminds/squirrel"' -- '*.go'` shows it), substitute it, or read
+  each value-door call and trace its operands.
   The first two greps find a value built on the call's own line or typed as a Sqlizer; the rest
   find one built apart from its use: trace each such variable, value of your type, or column map
   to where it is passed. Keep the hits that reach a `qb.JoinFilter()` compare door or `Between`,
@@ -16317,8 +16320,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   no arguments, so one that binds a value keeps them through a door that does: at a `jf` door,
   `jf.Eq("c", squirrel.Expr("COALESCE(?, 0)", v))` becomes `jf.Raw("c = COALESCE(?, 0)", v)`,
   annotated the same way, with every identifier in the condition quoted by hand for the target
-  database; at a SET cell, `SetExpr(column, qb.MustExpr("… ? …"), args...)`. For a value, pass
-  the plain value. A `Filter` meant as a predicate belongs in `Where`, or in `jf.And` beside the
+  database; at a SET cell, `SetExpr(column, qb.MustExpr("… ? …"), args...)`. An INSERT `Values`
+  cell or a `BuildUpsert` value has no such door: write that statement with
+  `database.Raw(sql, args...)`, annotated, binding every value instead of interpolating it, and
+  keeping the insert and its conflict clause in one statement so the upsert stays atomic. For a
+  value, pass the plain value. A `Filter` meant as a predicate belongs in `Where`, or in `jf.And` beside the
   `jf` condition.
 - verify: `qb.Select("t.id").From("t").JoinOn("u", qb.JoinFilter().Eq("u.c", squirrel.Expr("NOW()"))).ToSQL()`
   and `qb.Update("t").Set("c", squirrel.Expr("NOW()")).ToSQL()` each return an error matching
