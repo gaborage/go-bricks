@@ -1211,31 +1211,60 @@ func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any,
 	}
 }
 
-// Having adds a HAVING clause to the query.
+// Having adds a HAVING clause to the query. It accepts exactly three predicate
+// forms (ADR-177):
 //
-// Prefer `Having(qb.MustExpr("SUM(amount) > ?"), 100)` to a string predicate;
-// HAVING is a predicate, not an identifier, so neither form is validated against
-// the identifier grammar (ADR-082) and both are raw SQL needing the SECURITY
-// annotation at every call site — see dbtypes.RawExpression.
+//   - a string with its trailing arguments, interpolated as written;
+//   - a dbtypes.RawExpression, or a non-nil pointer to one, with its trailing
+//     arguments — preferred: `Having(qb.MustExpr("SUM(amount) > ?"), 100)`;
+//   - a dbtypes.Filter, rendered through its own ToSql, so its column and
+//     operand are judged by the filter doors; it takes no trailing arguments.
+//
+// The string and expression forms are raw SQL needing the SECURITY annotation
+// at every call site (HAVING is a predicate, not an identifier, so ADR-082's
+// grammar cannot judge them). Any other predicate — a map, a squirrel literal
+// or other Sqlizer, nil, a nil pointer, any other type — and a Filter followed
+// by trailing arguments fail ToSQL() with dbtypes.ErrUnsupportedHavingPredicate.
 func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQueryBuilder {
-	if expr, ok := pred.(dbtypes.RawExpression); ok {
-		// The alias is judged BEFORE Validate(): for HAVING no alias is ever legal,
-		// so an alias that also trips Validate's own alias rule must still report
-		// ErrAliasInHaving. Validating first would return that other error instead
-		// and make the sentinel a function of the alias's CONTENT.
-		if expr.Alias != "" {
-			sqb.Fail(fmt.Errorf("%w: %s", dbtypes.ErrAliasInHaving, expr.Alias))
+	switch p := pred.(type) {
+	case string:
+		sqb.selectBuilder = sqb.selectBuilder.Having(p, rest...)
+	case dbtypes.RawExpression:
+		sqb.havingExpr(p, rest)
+	case *dbtypes.RawExpression:
+		if p == nil {
+			sqb.Fail(fmt.Errorf("%w: got %T", dbtypes.ErrUnsupportedHavingPredicate, pred))
 			return sqb
 		}
-		if err := expr.Validate(); err != nil {
-			sqb.Fail(err)
+		sqb.havingExpr(*p, rest)
+	case dbtypes.Filter:
+		if len(rest) != 0 {
+			sqb.Fail(fmt.Errorf("%w: got %T with %d trailing argument(s) (a Filter binds its own)",
+				dbtypes.ErrUnsupportedHavingPredicate, pred, len(rest)))
 			return sqb
 		}
-		sqb.selectBuilder = sqb.selectBuilder.Having(expr.SQL, rest...)
-		return sqb
+		sqb.selectBuilder = sqb.selectBuilder.Having(p)
+	default:
+		sqb.Fail(fmt.Errorf("%w: got %T", dbtypes.ErrUnsupportedHavingPredicate, pred))
 	}
-	sqb.selectBuilder = sqb.selectBuilder.Having(pred, rest...)
 	return sqb
+}
+
+// havingExpr judges and renders a RawExpression HAVING predicate.
+func (sqb *SelectQueryBuilder) havingExpr(expr dbtypes.RawExpression, rest []any) {
+	// The alias is judged BEFORE Validate(): for HAVING no alias is ever legal,
+	// so an alias that also trips Validate's own alias rule must still report
+	// ErrAliasInHaving. Validating first would return that other error instead
+	// and make the sentinel a function of the alias's CONTENT.
+	if expr.Alias != "" {
+		sqb.Fail(fmt.Errorf("%w: %s", dbtypes.ErrAliasInHaving, expr.Alias))
+		return
+	}
+	if err := expr.Validate(); err != nil {
+		sqb.Fail(err)
+		return
+	}
+	sqb.selectBuilder = sqb.selectBuilder.Having(expr.SQL, rest...)
 }
 
 // Paginate applies pagination to the query with vendor-specific syntax.
