@@ -298,6 +298,27 @@ func TestConnectionNewConnectionRedactsDelimiterPasswords(t *testing.T) {
 	}
 }
 
+// TestConnectionNewConnectionRedactsVendorEchoes covers go-ora errors that name text it
+// read out of the DSN in another form than the DSN writes it. Both fail before any
+// network I/O: the port is out of range, and the option is refused at parse.
+func TestConnectionNewConnectionRedactsVendorEchoes(t *testing.T) {
+	tests := []struct{ name, dsn, want, secret string }{
+		// url.Parse reads the digit-only password as the port; go-ora dials it as an integer.
+		{name: "leading_zero_port", dsn: "oracle://user:0123456/zq9x@dbhost:1521/svc", want: "address xxxxx: invalid port", secret: "123456"},
+		// go-ora percent-decodes a query key, then names it as an unknown option.
+		{name: "decoded_query_key", dsn: "oracle://app:zq9x@db:1521/svc?wallet%20password=ab&s3%63ret", want: "unknown URL option: xxxxx", secret: "s3cret"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewConnection(createOracleConfig("connection_string", tt.dsn), dbtestlog.NewTestLogger())
+
+			require.ErrorContains(t, err, tt.want)
+			assert.NotContains(t, err.Error(), tt.secret)
+		})
+	}
+}
+
 // TestConnectionNewConnectionRedactsAtSignUsername covers an '@' in the username:
 // url.Parse splits the authority on it, so the leading password segment lands where
 // the port belongs and the '@' that ends the userinfo lies past the authority.

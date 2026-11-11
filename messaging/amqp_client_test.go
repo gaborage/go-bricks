@@ -1940,6 +1940,10 @@ func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
 		{name: "heartbeat", raw: "amqp://app:zq9x@broker/vh?heartbeat=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		{name: "connection_timeout", raw: "amqp://app:zq9x@broker/vh?connection_timeout=k3y7", want: `xxxxx is not an integer: strconv.Atoi: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
 		{name: "channel_max", raw: "amqp://app:zq9x@broker/vh?channel_max=k3y7", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
+		// amqp091 quotes the query value it percent-decoded.
+		{name: "decoded_heartbeat", raw: "amqp://app:zq9x@broker:5672/vh?heartbeat=k3%797", want: `xxxxx is not an uint16: strconv.ParseUint: parsing "xxxxx": invalid syntax`, secrets: []string{"k3y7"}},
+		// amqp091 dials the digits url.Parse read as the port as an integer, without the leading zero.
+		{name: "leading_zero_port", raw: "amqp://user:0123456/zq9x@broker/vh", want: "dial tcp: address xxxxx: invalid port", secrets: []string{"123456"}},
 		// The port is kept in the redacted URL, so its quote is too.
 		{name: "kept_port_quote_survives", raw: "amqp://app:zq9x@broker:99999999999/vh", want: `strconv.ParseInt: parsing "99999999999": value out of range`},
 	}
@@ -1960,6 +1964,20 @@ func TestConnectRedactsQuotedBrokerURLText(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestConnectRedactsADecodedHostEcho covers a password holding an '@' and a '/': url.Parse
+// reads the text between them as the host and percent-decodes it, and the dial error
+// names that decoded host. The dialer is stubbed, so nothing is resolved.
+func TestConnectRedactsADecodedHostEcho(t *testing.T) {
+	swapDialFunc(t, func(string) (amqpConnection, error) {
+		return nil, errors.New("dial tcp: lookup s3cr\u00e9t: no such host")
+	})
+	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}, brokerURL: "amqp" + "://app:pw@s3cr%C3%A9t/x@broker/vh"}
+
+	_, err := c.connect()
+
+	require.EqualError(t, err, "dial tcp: lookup xxxxx: no such host")
 }
 
 // TestHandleReconnectLogsBrokerURLRedacted pins broker_url to credurl.RedactForLog, on a
