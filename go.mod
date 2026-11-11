@@ -2,7 +2,7 @@ module github.com/gaborage/go-bricks
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
