@@ -3797,8 +3797,52 @@ func TestApplyDatabasePoolDefaultsJudgesConnectionStringSSLCertMode(t *testing.T
 				assert.NotContains(t, cfgErr.Action, "Unset that variable")
 			}
 			if !c.Invalid {
-				assert.Contains(t, cfgErr.Action, "sslcert/sslkey in the connection string and PGSSLCERT/PGSSLKEY in the environment")
+				assert.Contains(t, cfgErr.Action, "or remove the client certificate and key (")
 			}
+		})
+	}
+}
+
+// TestValidatePostgreSQLConnectionStringCertSource pins that a connection string's disable
+// refusal names only what supplies the effective sslcert/sslkey: the DSN keys, the
+// PGSSLCERT/PGSSLKEY variables, or both, never a path (#2376).
+func TestValidatePostgreSQLConnectionStringCertSource(t *testing.T) {
+	const (
+		base      = "host=db.internal user=u sslmode=require sslcertmode=disable"
+		dsnSource = "(sslcert/sslkey in the connection string)"
+		envSource = "(PGSSLCERT/PGSSLKEY in the environment)"
+		both      = "(sslcert/sslkey in the connection string and PGSSLCERT/PGSSLKEY in the environment)"
+		dsnCert   = "/dsn/client.crt"
+		dsnKey    = "/dsn/client.key"
+		envCert   = "/env/client.crt"
+		envKey    = "/env/client.key"
+	)
+	tests := []struct {
+		name string
+		dsn  string
+		env  [][2]string
+		want string
+	}{
+		{name: "dsn_pair_only", dsn: base + " sslcert=" + dsnCert + " sslkey=" + dsnKey, want: dsnSource},
+		{name: "dsn_pair_shadows_env_pair", dsn: base + " sslcert=" + dsnCert + " sslkey=" + dsnKey, env: [][2]string{{pgEnvSSLCert, envCert}, {pgEnvSSLKey, envKey}}, want: dsnSource},
+		{name: "dsn_cert_empty_dsn_key_shadows_env_key", dsn: base + " sslcert=" + dsnCert + " sslkey=''", env: [][2]string{{pgEnvSSLKey, envKey}}, want: dsnSource},
+		{name: "env_pair_only", dsn: base, env: [][2]string{{pgEnvSSLCert, envCert}, {pgEnvSSLKey, envKey}}, want: envSource},
+		{name: "env_key_only", dsn: base, env: [][2]string{{pgEnvSSLKey, envKey}}, want: envSource},
+		{name: "dsn_cert_env_key", dsn: base + " sslcert=" + dsnCert, env: [][2]string{{pgEnvSSLKey, envKey}}, want: both},
+		{name: "env_cert_dsn_key", dsn: base + " sslkey=" + dsnKey, env: [][2]string{{pgEnvSSLCert, envCert}}, want: both},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hermeticPGEnv(t)
+			testutil.SetEnv(t, tt.env)
+			cfgErr := requireConnStringRefusal(t, tt.dsn)
+			assert.Contains(t, cfgErr.Action, tt.want)
+			for _, other := range []string{dsnSource, envSource, both} {
+				if other != tt.want {
+					assert.NotContains(t, cfgErr.Action, other)
+				}
+			}
+			assertNoSSLCertModeEcho(t, cfgErr, dsnCert, dsnKey, envCert, envKey)
 		})
 	}
 }
@@ -3872,7 +3916,10 @@ func TestApplyDatabasePoolDefaultsJudgesTypedFieldSSLCertMode(t *testing.T) {
 			assert.Contains(t, cfgErr.Action, "Unset that variable or set it to")
 			assert.NotContains(t, cfgErr.Action, "connection string")
 			if tt.wantDisable {
+				assert.Contains(t, cfgErr.Action, "set it to allow, or require where the TLS mode guarantees TLS, or remove")
 				assert.Contains(t, cfgErr.Action, "remove the client certificate and key (database.tls.cert and database.tls.key)")
+			} else {
+				assert.NotContains(t, cfgErr.Action, "guarantees TLS")
 			}
 		})
 	}
