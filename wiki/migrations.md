@@ -16072,9 +16072,22 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     `grep -rlE 'MESSAGING_BROKER_URL|MULTITENANT_TENANTS_[[:alnum:]_-]+_MESSAGING_URL' k8s/ deploy/ .env* 2>/dev/null`
     for env files and deployment manifests outside the repository's tracked files. The class
     includes `-` because a tenant ID may.
-  - Go, hand-built config: `git grep -lE 'Broker\.URL|Messaging\.URL|TenantMessagingConfig\{|BrokerConfig\{' -- '*.go'`
+  - Go, hand-built config: ``git grep -lE 'Broker\.URL|Messaging\.URL|BrokerConfig|TenantMessagingConfig|TenantEntry|(^|[^[:alnum:]_])Broker[[:space:]]*:|\.(Broker|Messaging)([^[:alnum:]_]|$)|LoadFromMap|["`]([[:alnum:]_.-]+\.)?url["`]' -- '*.go'``
     lists code that sets the root or a tenant broker URL on a `config.Config` it hands to
-    `app.NewWithConfig` or `Builder.WithConfig`; `config.Validate` judges those values too.
+    `app.NewWithConfig` or `Builder.WithConfig`; `config.Validate` judges those values too. The URL
+    need not be spelled `Broker.URL`: a keyed literal (`Broker: bc`, `TenantEntry{Messaging: tm}`), a variable
+    of type `config.BrokerConfig`, `config.TenantMessagingConfig` or `config.TenantEntry` filled
+    field by field, a whole-field assignment (`cfg.Messaging.Broker = bc`), a tenant's
+    `Messaging` field copied out, changed and assigned back (`m := e.Messaging`, then
+    `e.Messaging = m`) and a Go map handed to `config.LoadFromMap` set it as well. So the pattern
+    names the three types, the `Broker` field, any `.Messaging` selector, `LoadFromMap` as a call
+    or as a function value (`load := config.LoadFromMap`), and a `url` map key, nested (`"url"`)
+    or dotted (`"messaging.broker.url"`), in double quotes or as a raw string. It over-matches on purpose (every
+    `deps.Messaging` use, and any other `Broker` field or `"url"` key, hits): review each listed
+    file by hand and keep the ones that build a broker or tenant messaging config. A map can be
+    built in one file and loaded in another, so from each `LoadFromMap` call trace its argument
+    back to the file that fills it. A function-value hit has no argument on its line: find every
+    call made through that name first, then trace each call's argument the same way.
   - Go, dynamic source: `git grep -lE 'func \([^)]*\) BrokerURL\(' -- '*.go'` lists the files
     declaring a `BrokerURL` method, whatever its parameters are named; one that satisfies
     `messaging.BrokerURLProvider` is a dynamic source, and the URLs it can return are judged by
@@ -16146,10 +16159,20 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     `config.LoadFromMap`), and repeating it with `grep -rlE` over untracked
     deployment config as C74.2 does) and `MESSAGING_STREAMS_URI`
     (`git grep -l 'MESSAGING_STREAMS_URI'`, plus the same `grep -rl` over `k8s/ deploy/ .env*`).
-  - Go: `git grep -lE 'NewAMQPClient\(|(^|[^[:alnum:]_])NewManager\(|ManagerOptions\{|Streams\.URI' -- '*.go'`
-    lists the hand-built doors under any import alias or a dot import (keep the `NewManager` hits
-    whose import is `messaging/streams`) and a stream URI set in code, and C74.2's hand-built config and
-    `BrokerURL` method greps list the rest; judge the URLs each can receive.
+  - Go: ``git grep -lE 'NewAMQPClient|(^|[^[:alnum:]_])NewManager([^[:alnum:]_]|$)|ManagerOptions|StreamsConfig|(^|[^[:alnum:]_])Streams[[:space:]]*:|\.Streams([^[:alnum:]_]|$)|LoadFromMap|["`]([[:alnum:]_.-]+\.)?uri["`]' -- '*.go'``
+    lists the hand-built doors under any import alias or a dot import, called or taken as a
+    function value (`newClient := messaging.NewAMQPClient`; keep the `NewManager` hits whose
+    import is `messaging/streams`), and a stream URI set in code, and C74.2's hand-built config and
+    `BrokerURL` method greps list the rest; judge the URLs each can receive. A stream URI need not
+    be spelled `Streams.URI`: a keyed literal (`Streams: sc`, `Streams: config.StreamsConfig{URI: v}`),
+    a `config.StreamsConfig` or `streams.ManagerOptions` variable filled field by field, a
+    whole-field assignment (`cfg.Messaging.Streams = sc`) and a Go map handed to
+    `config.LoadFromMap` set it as well. So the pattern names the two types, the `Streams` field,
+    `LoadFromMap` as a call or as a function value, and a `uri` map key, nested (`"uri"`) or
+    dotted (`"messaging.streams.uri"`), in double quotes or as a raw string. It over-matches on purpose (any other `Streams` field
+    or selector, or `"uri"` key, hits): review each listed file by hand and keep the ones that
+    build a stream config or manager options, tracing each `LoadFromMap` argument, and each
+    call made through a function value, back to the file that fills it as in C74.2.
   - A hit locates the key, not the verdict. Judge each resolved value, in every environment, with
     a throwaway Go program that prints only a boolean, never the URL:
     `u, err := url.Parse(v); err == nil && (strings.Contains(u.EscapedPath(), "@") || strings.Contains(u.RawQuery, "@") || strings.Contains(u.EscapedFragment(), "@"))`.
