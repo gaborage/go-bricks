@@ -23,6 +23,7 @@ const (
 	sslModeAllow      = "allow"
 	sslModeRequire    = "require"
 	sslModeVerifyFull = "verify-full"
+	sslRootCertSystem = "system"
 )
 
 // UntokenizablePostgresDSNs are connection strings pgx v5 refuses to parse, so a scanner
@@ -103,7 +104,7 @@ var PostgresSSLEnvTLSCases = []PostgresSSLEnvTLSCase{
 	{Name: "socket_pgsslmode_verify_ca", DSN: socketUserDSN, Env: [][2]string{{envPGSSLMODE, "verify-ca"}}, Refuse: true},
 	{Name: "socket_pgsslrootcert", DSN: socketUserDSN, Env: [][2]string{{envPGSSLROOTCERT, "/etc/pg/ca.crt"}}, Refuse: true},
 	// Material is judged by presence, so the `system` trust-store sentinel claims like a path.
-	{Name: "socket_pgsslrootcert_system", DSN: socketUserDSN, Env: [][2]string{{envPGSSLROOTCERT, "system"}}, Refuse: true},
+	{Name: "socket_pgsslrootcert_system", DSN: socketUserDSN, Env: [][2]string{{envPGSSLROOTCERT, sslRootCertSystem}}, Refuse: true},
 	{Name: "socket_pgsslcert", DSN: socketUserDSN, Env: [][2]string{{envPGSSLCERT, "/etc/pg/client.crt"}}, Refuse: true},
 	{Name: "socket_pgsslkey", DSN: socketUserDSN, Env: [][2]string{{envPGSSLKEY, "/etc/pg/client.key"}}, Refuse: true},
 	{Name: "socket_pgsslnegotiation_direct", DSN: socketUserDSN, Env: [][2]string{{envPGSSLNEG, "direct"}}, Refuse: true},
@@ -203,6 +204,42 @@ var PostgresSSLCertModeCases = []PostgresSSLCertModeCase{
 	{Name: "uri_encoded_value_disable_with_cert", DSN: uriCertBase + uriCertModeKey + "dis%61ble", RefusedBy: certModeDSNKey},
 	{Name: "uri_encoded_key_disable_with_cert", DSN: uriCertBase + "&%73slcertmode=" + sslModeDisable, RefusedBy: certModeDSNKey},
 	{Name: "uri_encoded_space_padded", DSN: uriUserAtTCP + "/db?sslcertmode=%20allow", RefusedBy: certModeDSNKey, Invalid: true},
+}
+
+// PostgresTypedEnvCertCase is a typed-field section with no database.tls.cert/key beside
+// PGSSLCERT (Cert) and/or PGSSLKEY (Key), and PGSSLROOTCERT when RootCert is non-empty. Refused
+// is the config seam's verdict under PGSSLCERTMODE=disable, and true exactly when pgx builds a
+// TLS config that loads that material.
+type PostgresTypedEnvCertCase struct {
+	Name     string
+	Host     string
+	Mode     string
+	RootCert string
+	Cert     bool
+	Key      bool
+	Refused  bool
+}
+
+// PostgresTypedEnvCertCases is shared between config's typed-field sslcertmode tests and
+// database/postgresql's pgconn.ParseConfig oracle (#2376).
+var PostgresTypedEnvCertCases = []PostgresTypedEnvCertCase{
+	{Name: "unset_mode_cert_and_key", Host: tcpHost, Cert: true, Key: true, Refused: true},
+	{Name: "allow_cert_and_key", Host: tcpHost, Mode: sslModeAllow, Cert: true, Key: true, Refused: true},
+	{Name: "prefer_cert_and_key", Host: tcpHost, Mode: "prefer", Cert: true, Key: true, Refused: true},
+	{Name: "require_cert_and_key", Host: tcpHost, Mode: sslModeRequire, Cert: true, Key: true, Refused: true},
+	{Name: "verify_ca_cert_and_key", Host: tcpHost, Mode: "verify-ca", Cert: true, Key: true, Refused: true},
+	{Name: "verify_full_cert_and_key", Host: tcpHost, Mode: sslModeVerifyFull, Cert: true, Key: true, Refused: true},
+	{Name: "require_cert_only", Host: tcpHost, Mode: sslModeRequire, Cert: true, Refused: true},
+	{Name: "require_key_only", Host: tcpHost, Mode: sslModeRequire, Key: true, Refused: true},
+	{Name: "mixed_tcp_and_socket_hosts", Host: tcpHost + "," + socketHost, Cert: true, Key: true, Refused: true},
+	{Name: "disable_cert_and_key", Host: tcpHost, Mode: sslModeDisable, Cert: true, Key: true},
+	{Name: "socket_host_cert_and_key", Host: socketHost, Cert: true, Key: true},
+	{Name: "socket_host_disable_cert_and_key", Host: socketHost, Mode: sslModeDisable, Cert: true, Key: true},
+	{Name: "require_no_env_material", Host: tcpHost, Mode: sslModeRequire},
+	// pgx forces verify-full under an effective sslrootcert of system, over sslmode=disable.
+	{Name: "disable_pgsslrootcert_system", Host: tcpHost, Mode: sslModeDisable, RootCert: sslRootCertSystem, Cert: true, Key: true, Refused: true},
+	{Name: "socket_host_disable_pgsslrootcert_system", Host: socketHost, Mode: sslModeDisable, RootCert: sslRootCertSystem, Cert: true, Key: true},
+	{Name: "socket_host_pgsslrootcert_system", Host: socketHost, RootCert: sslRootCertSystem, Cert: true, Key: true},
 }
 
 const (

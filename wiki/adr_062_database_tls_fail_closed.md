@@ -1,7 +1,38 @@
 # ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)
 
-**Status:** Accepted (amended 2026-08-24, 2026-09-13, 2026-11-10)
+**Status:** Accepted (amended 2026-08-24, 2026-09-13, 2026-11-10, 2026-11-12)
 **Date:** 2026-08-14
+
+## Amendment (2026-11-12, #2376): the typed fields' client certificate includes `PGSSLCERT`/`PGSSLKEY`
+
+The 2026-11-10 amendment judged `disable` on the typed fields only beside
+`database.tls.cert`/`key`. The framework-built DSN writes `sslcert`/`sslkey` only when those
+keys are set, so with neither set pgx v5.13.0 takes `PGSSLCERT`/`PGSSLKEY` from the
+environment, and `PGSSLCERTMODE=disable` beside them passed validation and connected with no
+client certificate.
+
+The typed-field arm now counts the config keys when set, else a non-empty `PGSSLCERT` or
+`PGSSLKEY` (pgx ignores an empty one), the same precedence pgx gives those two sources. The
+coherence rule already pairs the two keys, so a set key shadows both variables. The variables
+count only where pgx builds TLS for them: not when every host entry is a unix socket, and not
+under `database.tls.mode: disable` unless the effective `sslrootcert` (`database.tls.ca`, else
+`PGSSLROOTCERT`) is exactly `system`, which pgx answers with `verify-full` over `disable`. `PGSSLMODE` is not read, so an unset mode counts as
+pgx's `prefer`, which loads them; under `PGSSLMODE=disable` that refuses a shape pgx would
+load nothing for, failing closed. The refusal is the existing `ConfigError` on `database.tls`,
+and its exit names the source that supplied the certificate (`database.tls.cert and
+database.tls.key`, or `PGSSLCERT/PGSSLKEY in the environment`), never a value. The
+connection-string arm's verdicts do not move. A shared fixture table pins the verdicts against
+`pgconn.ParseConfig`. Known limit: pgx's default `~/.postgresql/postgresql.crt`/`postgresql.key`
+pair is not counted by either arm, because reading files under `HOME` at validation is a wider
+change, tracked separately. A second limit: the typed-field arm does not read a `PGSERVICE`
+section, which pgx ranks above the environment for every key the built DSN does not state
+(`sslcertmode`, `sslcert`, `sslkey`), so the rule judges the environment's values where a
+service names others. The connection-string arm refuses a service outright; doing the same on
+the typed arm is its own breaking decision.
+
+Considered and rejected: refusing every env-supplied client certificate on the typed fields.
+It is wider than the defect and breaks deployments that mount a certificate through the
+environment under `allow` or `require`. See `[C74.9]`.
 
 ## Amendment (2026-11-10, #2310): the effective `sslcertmode` is judged on both doors
 

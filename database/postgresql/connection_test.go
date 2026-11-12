@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
 	"github.com/gaborage/go-bricks/database/internal/wrapper"
 	"github.com/gaborage/go-bricks/internal/testutil"
+	gbtesting "github.com/gaborage/go-bricks/testing"
 )
 
 const (
@@ -387,12 +390,27 @@ func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
 
 // TestPgxAgreesWithConfigSSLCertModeFixtures uses pgx as the oracle for
 // testutil.PostgresSSLCertModeCases: every invalid value the config seam refuses fails pgx's
-// parse, every refused disable parses with a TLS config holding no client certificate, and no
-// accepted row fails on sslcertmode (gaborage/go-bricks#2310).
+// parse, every refused disable parses although its certificate files do not exist, so pgx skips
+// the pair, and an accepted row fails on those files exactly where it names a certificate
+// (gaborage/go-bricks#2310). pgx v5.13.0 keeps a file-backed certificate out of
+// TLSConfig.Certificates, so the parse is the observation.
 func TestPgxAgreesWithConfigSSLCertModeFixtures(t *testing.T) {
 	hermeticPgxEnv(t)
 
+	// Accepted rows that name a client certificate: pgx reads the pair, and the files are absent.
+	loadsCert := map[string]bool{
+		"dsn_allow_shadows_pgsslcertmode_disable": true,
+		"dsn_require_with_cert":                   true,
+		"pgsslcertmode_allow_with_cert":           true,
+		"unset_with_cert":                         true,
+		"keyword_repeated_last_allow_with_cert":   true,
+		"uri_repeated_last_allow_with_cert":       true,
+	}
+	seen := 0
 	for _, c := range testutil.PostgresSSLCertModeCases {
+		if loadsCert[c.Name] {
+			seen++
+		}
 		t.Run(c.Name, func(t *testing.T) {
 			testutil.SetEnv(t, c.Env)
 			pc, err := pgconn.ParseConfig(c.DSN)
@@ -400,20 +418,17 @@ func TestPgxAgreesWithConfigSSLCertModeFixtures(t *testing.T) {
 			case c.Invalid:
 				require.ErrorContains(t, err, "invalid sslcertmode")
 			case c.RefusedBy != "":
-				require.NoError(t, err)
+				require.NoError(t, err, "pgx must skip the absent certificate pair under disable")
 				assert.Equal(t, "disable", pc.SSLCertMode)
 				require.NotNil(t, pc.TLSConfig)
-				assert.Empty(t, pc.TLSConfig.Certificates)
-				for _, fb := range pc.Fallbacks {
-					if fb.TLSConfig != nil {
-						assert.Empty(t, fb.TLSConfig.Certificates)
-					}
-				}
-			case err != nil:
-				assert.NotContains(t, err.Error(), "invalid sslcertmode")
+			case loadsCert[c.Name]:
+				require.ErrorIs(t, err, fs.ErrNotExist, "pgx must read the certificate pair")
+			default:
+				require.NoError(t, err)
 			}
 		})
 	}
+	assert.Equal(t, len(loadsCert), seen, "every loadsCert name must be a table row")
 }
 
 // TestPgxSkipsTypedFieldClientCertUnderPGSSLCertModeDisable is the typed-field arm's oracle:
@@ -437,6 +452,91 @@ func TestPgxSkipsTypedFieldClientCertUnderPGSSLCertModeDisable(t *testing.T) {
 	t.Setenv(testutil.EnvPGSSLCertMode, "allow")
 	_, err = pgconn.ParseConfig(dsn)
 	require.ErrorContains(t, err, "unable to read")
+}
+
+// TestPgxLoadsEnvClientCertForTypedFieldDSN uses pgx as the oracle for
+// testutil.PostgresTypedEnvCertCases (#2376): the typed-field DSN with no database.tls.cert/key
+// leaves PGSSLCERT/PGSSLKEY to pgx, which reads them exactly on the rows config refuses under
+// PGSSLCERTMODE=disable (a lone one fails the parse), and skips them under disable.
+func TestPgxLoadsEnvClientCertForTypedFieldDSN(t *testing.T) {
+	certFile, keyFile := writeClientCertPair(t)
+	for _, c := range testutil.PostgresTypedEnvCertCases {
+		t.Run(c.Name, func(t *testing.T) { assertPgxTypedEnvCertCase(t, c, certFile, keyFile) })
+	}
+	// Config does not read PGSSLMODE, so it refuses this shape although pgx loads nothing here.
+	t.Run("unset_mode_under_pgsslmode_disable_loads_nothing", func(t *testing.T) {
+		hermeticPgxEnv(t)
+		t.Setenv("PGSSLMODE", "disable")
+		t.Setenv(testutil.EnvPGSSLCertMode, "allow")
+		dsn := buildPostgresDSN(&config.DatabaseConfig{Host: "db.example.com", Port: 5432, Username: "u", Database: "d"})
+		assert.False(t, pgxReadsEnvClientCert(t, dsn))
+	})
+}
+
+func assertPgxTypedEnvCertCase(t *testing.T, c testutil.PostgresTypedEnvCertCase, certFile, keyFile string) {
+	t.Helper()
+	hermeticPgxEnv(t)
+	if c.Cert {
+		t.Setenv(envPGSSLCert, certFile)
+	}
+	if c.Key {
+		t.Setenv(envPGSSLKey, keyFile)
+	}
+	if c.RootCert != "" {
+		t.Setenv("PGSSLROOTCERT", c.RootCert)
+	}
+	dsn := buildPostgresDSN(&config.DatabaseConfig{
+		Host: c.Host, Port: 5432, Username: "u", Database: "d", TLS: config.TLSConfig{Mode: c.Mode},
+	})
+	require.NotContains(t, dsn, "sslcert")
+	require.NotContains(t, dsn, "sslrootcert")
+
+	t.Setenv(testutil.EnvPGSSLCertMode, "allow")
+	_, err := pgconn.ParseConfig(dsn)
+	if c.Refused && c.Cert != c.Key {
+		require.ErrorContains(t, err, `both "sslcert" and "sslkey" are required`)
+	} else {
+		require.NoError(t, err)
+	}
+	t.Setenv(testutil.EnvPGSSLCertMode, "disable")
+	_, err = pgconn.ParseConfig(dsn)
+	require.NoError(t, err)
+
+	if c.Cert && c.Key {
+		t.Setenv(testutil.EnvPGSSLCertMode, "allow")
+		assert.Equal(t, c.Refused, pgxReadsEnvClientCert(t, dsn), "allow")
+		t.Setenv(testutil.EnvPGSSLCertMode, "disable")
+		assert.False(t, pgxReadsEnvClientCert(t, dsn), "disable")
+	}
+}
+
+const (
+	envPGSSLCert = "PGSSLCERT"
+	envPGSSLKey  = "PGSSLKEY"
+)
+
+// pgxReadsEnvClientCert reports whether pgx reads PGSSLCERT/PGSSLKEY for dsn: it points both at
+// a file that is not a certificate, which fails the parse exactly where pgx loads the pair. pgx
+// v5.13.0 keeps a file-backed certificate out of TLSConfig.Certificates, so the parse is the oracle.
+func pgxReadsEnvClientCert(t *testing.T, dsn string) bool {
+	t.Helper()
+	notACert := filepath.Join(t.TempDir(), "not-a-cert.pem")
+	require.NoError(t, os.WriteFile(notACert, []byte("not a certificate"), 0o600))
+	t.Setenv(envPGSSLCert, notACert)
+	t.Setenv(envPGSSLKey, notACert)
+	_, err := pgconn.ParseConfig(dsn)
+	return err != nil
+}
+
+// writeClientCertPair writes a throwaway self-signed certificate and its key to t.TempDir().
+func writeClientCertPair(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+	certPEM, keyPEM := gbtesting.SelfSignedCertKeyPEM(t)
+	dir := t.TempDir()
+	certFile, keyFile = filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key")
+	require.NoError(t, os.WriteFile(certFile, certPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, keyPEM, 0o600))
+	return certFile, keyFile
 }
 
 // TestPgxResolvesServiceHostOverPGHOST uses pgx as the oracle for

@@ -667,15 +667,22 @@ env-sourced one — or shadow that variable with a non-claiming DSN key, which i
 rule reached past — or point the DSN at a TCP host, which clears them all. A DSN the
 scanner cannot tokenize passes through unjudged, same as it always has.
 
-**`sslcertmode` is judged on both doors (ADR-062 amendment 2026-11-10, `[C74.9]`).** The
+**`sslcertmode` is judged on both doors (ADR-062 amendments 2026-11-10 and 2026-11-12, `[C74.9]`).** The
 effective value is the `connectionstring`'s `sslcertmode` key when present, empty included,
 else `PGSSLCERTMODE` when set — set but empty counts, unlike the other `PGSSL*` variables —
 and the typed fields, whose built DSN carries no such key, read the variable alone. A value
 other than exactly `disable`, `allow` or `require` is refused for every PostgreSQL section,
-because pgx would fail to parse it at connect; `disable` is refused beside
-`database.tls.cert`/`key`, or beside an effective non-empty `sslcert`/`sslkey` in a
-`connectionstring` (`PGSSLCERT`/`PGSSLKEY` included), because pgx would then send no client
-certificate. Unset the variable or shadow it with `sslcertmode=allow` in the DSN. No
+because pgx would fail to parse it at connect; `disable` is refused beside a client
+certificate pgx would load, because pgx would then send none. On the typed fields that is
+`database.tls.cert`/`key`, else a non-empty `PGSSLCERT`/`PGSSLKEY` unless every host is a unix
+socket, or `database.tls.mode` is `disable` and the effective `sslrootcert` (`database.tls.ca`,
+else `PGSSLROOTCERT`) is not `system`, which pgx answers with `verify-full` (`PGSSLMODE` is not
+read, so an unset mode counts as `prefer`); in a `connectionstring`, an effective non-empty `sslcert`/`sslkey`
+(`PGSSLCERT`/`PGSSLKEY` included). The refusal names which source supplied the certificate.
+Neither arm reads pgx's default `~/.postgresql/postgresql.crt`/`postgresql.key` pair, and
+the typed-field arm does not read a `PGSERVICE` section, which pgx ranks above the environment
+for the keys the built DSN does not state.
+Unset the variable or shadow it with `sslcertmode=allow` in the DSN. No
 `sslcertmode` value is a TLS claim, so it never trips the unix-socket rule.
 
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
