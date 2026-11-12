@@ -668,7 +668,8 @@ type QueryBuilderInterface interface {
 	// A RawExpression value in insertColumns or updateColumns is spliced, as Set and
 	// Values splice one: no placeholder and no argument, the remaining placeholders
 	// numbered contiguously across insert and update. An aliased one is refused with
-	// ErrAliasInValue.
+	// ErrAliasInValue. It is the only spliceable value; any other squirrel.Sqlizer
+	// is refused with ErrSqlizerOperand on every vendor (ADR-178).
 	//
 	// Precondition failures match the ErrUpsert* sentinels in this package via errors.Is.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
