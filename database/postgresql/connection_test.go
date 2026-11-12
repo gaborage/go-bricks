@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -389,12 +390,27 @@ func TestPgxTLSConfigAgreesWithConfigTLSEnvFixtures(t *testing.T) {
 
 // TestPgxAgreesWithConfigSSLCertModeFixtures uses pgx as the oracle for
 // testutil.PostgresSSLCertModeCases: every invalid value the config seam refuses fails pgx's
-// parse, every refused disable parses with a TLS config holding no client certificate, and no
-// accepted row fails on sslcertmode (gaborage/go-bricks#2310).
+// parse, every refused disable parses although its certificate files do not exist, so pgx skips
+// the pair, and an accepted row fails on those files exactly where it names a certificate
+// (gaborage/go-bricks#2310). pgx v5.13.0 keeps a file-backed certificate out of
+// TLSConfig.Certificates, so the parse is the observation.
 func TestPgxAgreesWithConfigSSLCertModeFixtures(t *testing.T) {
 	hermeticPgxEnv(t)
 
+	// Accepted rows that name a client certificate: pgx reads the pair, and the files are absent.
+	loadsCert := map[string]bool{
+		"dsn_allow_shadows_pgsslcertmode_disable": true,
+		"dsn_require_with_cert":                   true,
+		"pgsslcertmode_allow_with_cert":           true,
+		"unset_with_cert":                         true,
+		"keyword_repeated_last_allow_with_cert":   true,
+		"uri_repeated_last_allow_with_cert":       true,
+	}
+	seen := 0
 	for _, c := range testutil.PostgresSSLCertModeCases {
+		if loadsCert[c.Name] {
+			seen++
+		}
 		t.Run(c.Name, func(t *testing.T) {
 			testutil.SetEnv(t, c.Env)
 			pc, err := pgconn.ParseConfig(c.DSN)
@@ -402,20 +418,17 @@ func TestPgxAgreesWithConfigSSLCertModeFixtures(t *testing.T) {
 			case c.Invalid:
 				require.ErrorContains(t, err, "invalid sslcertmode")
 			case c.RefusedBy != "":
-				require.NoError(t, err)
+				require.NoError(t, err, "pgx must skip the absent certificate pair under disable")
 				assert.Equal(t, "disable", pc.SSLCertMode)
 				require.NotNil(t, pc.TLSConfig)
-				assert.Empty(t, pc.TLSConfig.Certificates)
-				for _, fb := range pc.Fallbacks {
-					if fb.TLSConfig != nil {
-						assert.Empty(t, fb.TLSConfig.Certificates)
-					}
-				}
-			case err != nil:
-				assert.NotContains(t, err.Error(), "invalid sslcertmode")
+			case loadsCert[c.Name]:
+				require.ErrorIs(t, err, fs.ErrNotExist, "pgx must read the certificate pair")
+			default:
+				require.NoError(t, err)
 			}
 		})
 	}
+	assert.Equal(t, len(loadsCert), seen, "every loadsCert name must be a table row")
 }
 
 // TestPgxSkipsTypedFieldClientCertUnderPGSSLCertModeDisable is the typed-field arm's oracle:
