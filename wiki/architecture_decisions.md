@@ -1307,7 +1307,7 @@ normalization agree.
 
 ### [ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)](adr_062_database_tls_fail_closed.md)
 
-**Date:** 2026-08-14 (amended 2026-11-10, #2310) | **Status:** Accepted
+**Date:** 2026-08-14 (amended 2026-11-10, #2310; 2026-11-12, #2376) | **Status:** Accepted
 
 `database.tls` reached pgx unvalidated apart from the cert/key pairing check, so five shapes booted
 green while doing something other than what was configured: `disable`/`allow`/`prefer`/unset plus

@@ -33,7 +33,7 @@ const (
 // past the scrub.
 var pgSSLEnvKeys = []pgSSLEnvKey{
 	{env: "PGSSLMODE", dsn: pgDSNSSLMode},
-	{env: "PGSSLROOTCERT", dsn: pgDSNSSLRootCert},
+	{env: pgEnvSSLRootCert, dsn: pgDSNSSLRootCert},
 	{env: pgEnvSSLCert, dsn: pgDSNSSLCert},
 	{env: pgEnvSSLKey, dsn: pgDSNSSLKey},
 	{env: "PGSSLNEGOTIATION", dsn: pgDSNSSLNegotiation},
@@ -41,8 +41,11 @@ var pgSSLEnvKeys = []pgSSLEnvKey{
 }
 
 const (
-	pgEnvSSLCert = "PGSSLCERT"
-	pgEnvSSLKey  = "PGSSLKEY"
+	pgEnvSSLRootCert = "PGSSLROOTCERT"
+	pgEnvSSLCert     = "PGSSLCERT"
+	pgEnvSSLKey      = "PGSSLKEY"
+	// pgSSLRootCertSystem is the sslrootcert sentinel pgx answers with verify-full over any sslmode.
+	pgSSLRootCertSystem = "system"
 	// pgEnvSSLCertMode is the one PGSSL* variable pgx keeps when set but empty, to reject it.
 	pgEnvSSLCertMode = "PGSSLCERTMODE"
 )

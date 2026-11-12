@@ -2,12 +2,15 @@ package postgresql
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,6 +24,7 @@ import (
 	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
 	"github.com/gaborage/go-bricks/database/internal/wrapper"
 	"github.com/gaborage/go-bricks/internal/testutil"
+	gbtesting "github.com/gaborage/go-bricks/testing"
 )
 
 const (
@@ -403,12 +407,7 @@ func TestPgxAgreesWithConfigSSLCertModeFixtures(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, "disable", pc.SSLCertMode)
 				require.NotNil(t, pc.TLSConfig)
-				assert.Empty(t, pc.TLSConfig.Certificates)
-				for _, fb := range pc.Fallbacks {
-					if fb.TLSConfig != nil {
-						assert.Empty(t, fb.TLSConfig.Certificates)
-					}
-				}
+				assert.False(t, pgxLoadedClientCert(pc))
 			case err != nil:
 				assert.NotContains(t, err.Error(), "invalid sslcertmode")
 			}
@@ -437,6 +436,75 @@ func TestPgxSkipsTypedFieldClientCertUnderPGSSLCertModeDisable(t *testing.T) {
 	t.Setenv(testutil.EnvPGSSLCertMode, "allow")
 	_, err = pgconn.ParseConfig(dsn)
 	require.ErrorContains(t, err, "unable to read")
+}
+
+// TestPgxLoadsEnvClientCertForTypedFieldDSN uses pgx as the oracle for
+// testutil.PostgresTypedEnvCertCases (#2376): the typed-field DSN with no database.tls.cert/key
+// leaves PGSSLCERT/PGSSLKEY to pgx, which reads them exactly on the rows config refuses under
+// PGSSLCERTMODE=disable (a lone one fails the parse), and skips them under disable.
+func TestPgxLoadsEnvClientCertForTypedFieldDSN(t *testing.T) {
+	certFile, keyFile := writeClientCertPair(t)
+	for _, c := range testutil.PostgresTypedEnvCertCases {
+		t.Run(c.Name, func(t *testing.T) {
+			hermeticPgxEnv(t)
+			if c.Cert {
+				t.Setenv("PGSSLCERT", certFile)
+			}
+			if c.Key {
+				t.Setenv("PGSSLKEY", keyFile)
+			}
+			if c.RootCert != "" {
+				t.Setenv("PGSSLROOTCERT", c.RootCert)
+			}
+			dsn := buildPostgresDSN(&config.DatabaseConfig{
+				Host: c.Host, Port: 5432, Username: "u", Database: "d", TLS: config.TLSConfig{Mode: c.Mode},
+			})
+			require.NotContains(t, dsn, "sslcert")
+			require.NotContains(t, dsn, "sslrootcert")
+
+			t.Setenv(testutil.EnvPGSSLCertMode, "allow")
+			pc, err := pgconn.ParseConfig(dsn)
+			if c.Refused && c.Cert != c.Key {
+				require.ErrorContains(t, err, `both "sslcert" and "sslkey" are required`)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, c.Refused, pgxLoadedClientCert(pc), "allow")
+			}
+
+			t.Setenv(testutil.EnvPGSSLCertMode, "disable")
+			pc, err = pgconn.ParseConfig(dsn)
+			require.NoError(t, err)
+			assert.False(t, pgxLoadedClientCert(pc), "disable")
+		})
+	}
+	// Config does not read PGSSLMODE, so it refuses this shape although pgx loads nothing here.
+	t.Run("unset_mode_under_pgsslmode_disable_loads_nothing", func(t *testing.T) {
+		hermeticPgxEnv(t)
+		t.Setenv("PGSSLCERT", certFile)
+		t.Setenv("PGSSLKEY", keyFile)
+		t.Setenv("PGSSLMODE", "disable")
+		t.Setenv(testutil.EnvPGSSLCertMode, "allow")
+		pc, err := pgconn.ParseConfig(buildPostgresDSN(&config.DatabaseConfig{Host: "db.example.com", Port: 5432, Username: "u", Database: "d"}))
+		require.NoError(t, err)
+		assert.False(t, pgxLoadedClientCert(pc))
+	})
+}
+
+// pgxLoadedClientCert reports whether any of pc's dial attempts presents a client certificate.
+func pgxLoadedClientCert(pc *pgconn.Config) bool {
+	has := func(c *tls.Config) bool { return c != nil && len(c.Certificates) > 0 }
+	return has(pc.TLSConfig) || slices.ContainsFunc(pc.Fallbacks, func(fb *pgconn.FallbackConfig) bool { return has(fb.TLSConfig) })
+}
+
+// writeClientCertPair writes a throwaway self-signed certificate and its key to t.TempDir().
+func writeClientCertPair(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+	certPEM, keyPEM := gbtesting.SelfSignedCertKeyPEM(t)
+	dir := t.TempDir()
+	certFile, keyFile = filepath.Join(dir, "client.crt"), filepath.Join(dir, "client.key")
+	require.NoError(t, os.WriteFile(certFile, certPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, keyPEM, 0o600))
+	return certFile, keyFile
 }
 
 // TestPgxResolvesServiceHostOverPGHOST uses pgx as the oracle for

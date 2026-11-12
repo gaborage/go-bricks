@@ -23,7 +23,8 @@ const (
 )
 
 // TestMain unsets the judged PGSSL* variables for the whole package: the typed-field arm reads
-// PGSSLCERTMODE, so an ambient value would otherwise flip any PostgreSQL section's verdict.
+// PGSSLCERTMODE, PGSSLCERT and PGSSLKEY, so an ambient value would otherwise flip any PostgreSQL
+// section's verdict.
 func TestMain(m *testing.M) {
 	testutil.UnsetPostgresSSLEnv()
 	os.Exit(m.Run())
@@ -3822,7 +3823,8 @@ func TestApplyDatabasePoolDefaultsSSLCertModeKeepsEarlierConnectionStringRules(t
 
 // TestApplyDatabasePoolDefaultsJudgesTypedFieldSSLCertMode pins #2310 on the typed fields,
 // whose framework-built DSN carries no sslcertmode, so only PGSSLCERTMODE applies: when set
-// (empty included) it must be a value pgx parses, and not disable beside database.tls.cert/key.
+// (empty included) it must be a value pgx parses, and not disable beside database.tls.cert/key
+// (PGSSLCERT/PGSSLKEY behind them: TestValidatePostgreSQLFieldsEnvClientCert).
 func TestApplyDatabasePoolDefaultsJudgesTypedFieldSSLCertMode(t *testing.T) {
 	const tcpHost = "db.internal"
 	mtls := TLSConfig{Mode: sslModeRequire, CertFile: testTLSCertFile, KeyFile: testTLSKeyFile}
@@ -3874,6 +3876,97 @@ func TestApplyDatabasePoolDefaultsJudgesTypedFieldSSLCertMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidatePostgreSQLFieldsEnvClientCert pins #2376 against testutil.PostgresTypedEnvCertCases:
+// with no database.tls.cert/key, the typed fields' client certificate in effect is
+// PGSSLCERT/PGSSLKEY wherever pgx would load them, so PGSSLCERTMODE=disable beside them is
+// refused naming the variables, and allow, require or an unset PGSSLCERTMODE is accepted.
+func TestValidatePostgreSQLFieldsEnvClientCert(t *testing.T) {
+	for _, c := range testutil.PostgresTypedEnvCertCases {
+		t.Run(c.Name, func(t *testing.T) { assertTypedEnvCertCase(t, c) })
+	}
+
+	t.Run("empty_env_material_accepted", func(t *testing.T) {
+		hermeticPGEnv(t)
+		t.Setenv(pgEnvSSLCert, "")
+		t.Setenv(pgEnvSSLKey, "")
+		t.Setenv(pgEnvSSLCertMode, sslCertModeDisable)
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: "db.internal", Database: "d", Username: "u", TLS: TLSConfig{Mode: sslModeRequire}}
+		require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+	})
+	t.Run("config_keys_shadow_env_material", func(t *testing.T) {
+		hermeticPGEnv(t)
+		t.Setenv(pgEnvSSLCert, "/env/client.crt")
+		t.Setenv(pgEnvSSLKey, "/env/client.key")
+		t.Setenv(pgEnvSSLCertMode, sslCertModeDisable)
+		cfg := DatabaseConfig{
+			Type: PostgreSQL, Host: "db.internal", Database: "d", Username: "u",
+			TLS: TLSConfig{Mode: sslModeRequire, CertFile: testTLSCertFile, KeyFile: testTLSKeyFile},
+		}
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
+		assert.Contains(t, cfgErr.Action, "remove the client certificate and key (database.tls.cert and database.tls.key)")
+		assert.NotContains(t, cfgErr.Action, "PGSSLCERT/PGSSLKEY")
+		assertNoSSLCertModeEcho(t, cfgErr, "/env/client.crt", "/env/client.key", testTLSCertFile)
+	})
+	// Config does not read PGSSLMODE: an unset mode counts as pgx's prefer default even where
+	// PGSSLMODE=disable makes pgx load nothing, a refusal that fails closed.
+	t.Run("unset_mode_refused_under_pgsslmode_disable", func(t *testing.T) {
+		hermeticPGEnv(t)
+		t.Setenv(pgEnvSSLCert, testTLSCertFile)
+		t.Setenv(pgEnvSSLKey, testTLSKeyFile)
+		t.Setenv("PGSSLMODE", sslModeDisable)
+		t.Setenv(pgEnvSSLCertMode, sslCertModeDisable)
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: "db.internal", Database: "d", Username: "u"}
+		var cfgErr *ConfigError
+		require.ErrorAs(t, ApplyDatabasePoolDefaults(&cfg), &cfgErr)
+		assert.Contains(t, cfgErr.Action, typedEnvCertAction)
+	})
+}
+
+// TestPgTypedSSLRootCertShadowsEnv pins pgx's precedence for the typed fields' sslrootcert:
+// database.tls.ca is written into the built DSN and shadows PGSSLROOTCERT (#2376).
+func TestPgTypedSSLRootCertShadowsEnv(t *testing.T) {
+	t.Setenv(pgEnvSSLRootCert, pgSSLRootCertSystem)
+	assert.Equal(t, pgSSLRootCertSystem, pgTypedSSLRootCert(&DatabaseConfig{}))
+	assert.Equal(t, testTLSCAFile, pgTypedSSLRootCert(&DatabaseConfig{TLS: TLSConfig{CAFile: testTLSCAFile}}))
+}
+
+const typedEnvCertAction = "remove the client certificate and key (PGSSLCERT/PGSSLKEY in the environment)"
+
+func assertTypedEnvCertCase(t *testing.T, c testutil.PostgresTypedEnvCertCase) {
+	t.Helper()
+	hermeticPGEnv(t)
+	if c.Cert {
+		t.Setenv(pgEnvSSLCert, testTLSCertFile)
+	}
+	if c.Key {
+		t.Setenv(pgEnvSSLKey, testTLSKeyFile)
+	}
+	if c.RootCert != "" {
+		t.Setenv(pgEnvSSLRootCert, c.RootCert)
+	}
+	cfg := DatabaseConfig{Type: PostgreSQL, Host: c.Host, Database: "d", Username: "u", TLS: TLSConfig{Mode: c.Mode}}
+	require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+	for _, mode := range []string{sslCertModeAllow, sslCertModeRequire} {
+		t.Setenv(pgEnvSSLCertMode, mode)
+		require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+	}
+
+	t.Setenv(pgEnvSSLCertMode, sslCertModeDisable)
+	err := ApplyDatabasePoolDefaults(&cfg)
+	if !c.Refused {
+		require.NoError(t, err)
+		return
+	}
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, fieldDatabaseTLS, cfgErr.Field)
+	assertSSLCertModeRefusal(t, cfgErr, pgEnvSSLCertMode, false)
+	assert.Contains(t, cfgErr.Action, typedEnvCertAction)
+	assert.NotContains(t, cfgErr.Action, "database.tls.cert")
+	assertNoSSLCertModeEcho(t, cfgErr, testTLSCertFile, testTLSKeyFile)
 }
 
 // TestApplyDatabasePoolDefaultsSSLCertModeRefusalRendersNoValue pins that an sslcertmode
