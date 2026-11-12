@@ -695,7 +695,8 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 // pgTypedClientCertSource names the source of the typed fields' client certificate, or "" when
 // the rule counts none (#2376). It counts database.tls.cert/key, paired by the coherence rule and
 // shadowing PGSSLCERT/PGSSLKEY, else a non-empty PGSSLCERT/PGSSLKEY where pgx builds TLS for them.
-// pgx's default ~/.postgresql pair is not read, nor is PGSSLMODE: an unset mode counts as prefer.
+// pgx's default ~/.postgresql pair and a PGSERVICE section are not read, nor is PGSSLMODE: an
+// unset mode counts as prefer.
 func pgTypedClientCertSource(cfg *DatabaseConfig) string {
 	if cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" {
 		return "database.tls.cert and database.tls.key"
@@ -789,6 +790,9 @@ func validatePostgreSQLConnectionString(cs string) error {
 const (
 	pgCertSourceDSN = "sslcert/sslkey in the connection string"
 	pgCertSourceEnv = "PGSSLCERT/PGSSLKEY in the environment"
+	// One of the pair from each source: each is named with its own source.
+	pgCertSourceDSNCertEnvKey = "sslcert in the connection string and PGSSLKEY in the environment"
+	pgCertSourceDSNKeyEnvCert = "sslkey in the connection string and PGSSLCERT in the environment"
 )
 
 // pgConnStringCertSource names what supplies the connection string's effective non-empty
@@ -799,8 +803,10 @@ func pgConnStringCertSource(scan *pgDSNScan) string {
 	fromDSN := (cert != "" && !certFromEnv) || (key != "" && !keyFromEnv)
 	fromEnv := (cert != "" && certFromEnv) || (key != "" && keyFromEnv)
 	switch {
+	case fromDSN && fromEnv && certFromEnv:
+		return pgCertSourceDSNKeyEnvCert
 	case fromDSN && fromEnv:
-		return pgCertSourceDSN + " and " + pgCertSourceEnv
+		return pgCertSourceDSNCertEnvKey
 	case fromDSN:
 		return pgCertSourceDSN
 	case fromEnv:

@@ -679,7 +679,9 @@ socket, or `database.tls.mode` is `disable` and the effective `sslrootcert` (`da
 else `PGSSLROOTCERT`) is not `system`, which pgx answers with `verify-full` (`PGSSLMODE` is not
 read, so an unset mode counts as `prefer`); in a `connectionstring`, an effective non-empty `sslcert`/`sslkey`
 (`PGSSLCERT`/`PGSSLKEY` included). The refusal names which source supplied the certificate.
-Neither arm reads pgx's default `~/.postgresql/postgresql.crt`/`postgresql.key` pair.
+Neither arm reads pgx's default `~/.postgresql/postgresql.crt`/`postgresql.key` pair, and
+the typed-field arm does not read a `PGSERVICE` section, which pgx ranks above the environment
+for the keys the built DSN does not state.
 Unset the variable or shadow it with `sslcertmode=allow` in the DSN. No
 `sslcertmode` value is a TLS claim, so it never trips the unix-socket rule.
 

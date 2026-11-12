@@ -3808,14 +3808,15 @@ func TestApplyDatabasePoolDefaultsJudgesConnectionStringSSLCertMode(t *testing.T
 // PGSSLCERT/PGSSLKEY variables, or both, never a path (#2376).
 func TestValidatePostgreSQLConnectionStringCertSource(t *testing.T) {
 	const (
-		base      = "host=db.internal user=u sslmode=require sslcertmode=disable"
-		dsnSource = "(sslcert/sslkey in the connection string)"
-		envSource = "(PGSSLCERT/PGSSLKEY in the environment)"
-		both      = "(sslcert/sslkey in the connection string and PGSSLCERT/PGSSLKEY in the environment)"
-		dsnCert   = "/dsn/client.crt"
-		dsnKey    = "/dsn/client.key"
-		envCert   = "/env/client.crt"
-		envKey    = "/env/client.key"
+		base          = "host=db.internal user=u sslmode=require sslcertmode=disable"
+		dsnSource     = "(sslcert/sslkey in the connection string)"
+		envSource     = "(PGSSLCERT/PGSSLKEY in the environment)"
+		dsnCertEnvKey = "(sslcert in the connection string and PGSSLKEY in the environment)"
+		dsnKeyEnvCert = "(sslkey in the connection string and PGSSLCERT in the environment)"
+		dsnCert       = "/dsn/client.crt"
+		dsnKey        = "/dsn/client.key"
+		envCert       = "/env/client.crt"
+		envKey        = "/env/client.key"
 	)
 	tests := []struct {
 		name string
@@ -3828,8 +3829,8 @@ func TestValidatePostgreSQLConnectionStringCertSource(t *testing.T) {
 		{name: "dsn_cert_empty_dsn_key_shadows_env_key", dsn: base + " sslcert=" + dsnCert + " sslkey=''", env: [][2]string{{pgEnvSSLKey, envKey}}, want: dsnSource},
 		{name: "env_pair_only", dsn: base, env: [][2]string{{pgEnvSSLCert, envCert}, {pgEnvSSLKey, envKey}}, want: envSource},
 		{name: "env_key_only", dsn: base, env: [][2]string{{pgEnvSSLKey, envKey}}, want: envSource},
-		{name: "dsn_cert_env_key", dsn: base + " sslcert=" + dsnCert, env: [][2]string{{pgEnvSSLKey, envKey}}, want: both},
-		{name: "env_cert_dsn_key", dsn: base + " sslkey=" + dsnKey, env: [][2]string{{pgEnvSSLCert, envCert}}, want: both},
+		{name: "dsn_cert_env_key", dsn: base + " sslcert=" + dsnCert, env: [][2]string{{pgEnvSSLKey, envKey}}, want: dsnCertEnvKey},
+		{name: "env_cert_dsn_key", dsn: base + " sslkey=" + dsnKey, env: [][2]string{{pgEnvSSLCert, envCert}}, want: dsnKeyEnvCert},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3837,7 +3838,7 @@ func TestValidatePostgreSQLConnectionStringCertSource(t *testing.T) {
 			testutil.SetEnv(t, tt.env)
 			cfgErr := requireConnStringRefusal(t, tt.dsn)
 			assert.Contains(t, cfgErr.Action, tt.want)
-			for _, other := range []string{dsnSource, envSource, both} {
+			for _, other := range []string{dsnSource, envSource, dsnCertEnvKey, dsnKeyEnvCert} {
 				if other != tt.want {
 					assert.NotContains(t, cfgErr.Action, other)
 				}

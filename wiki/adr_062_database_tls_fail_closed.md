@@ -24,7 +24,11 @@ database.tls.key`, or `PGSSLCERT/PGSSLKEY in the environment`), never a value. T
 connection-string arm's verdicts do not move. A shared fixture table pins the verdicts against
 `pgconn.ParseConfig`. Known limit: pgx's default `~/.postgresql/postgresql.crt`/`postgresql.key`
 pair is not counted by either arm, because reading files under `HOME` at validation is a wider
-change, tracked separately.
+change, tracked separately. A second limit: the typed-field arm does not read a `PGSERVICE`
+section, which pgx ranks above the environment for every key the built DSN does not state
+(`sslcertmode`, `sslcert`, `sslkey`), so the rule judges the environment's values where a
+service names others. The connection-string arm refuses a service outright; doing the same on
+the typed arm is its own breaking decision.
 
 Considered and rejected: refusing every env-supplied client certificate on the typed fields.
 It is wider than the defect and breaks deployments that mount a certificate through the
