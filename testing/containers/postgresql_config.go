@@ -26,7 +26,7 @@ type PostgreSQLContainerConfig struct {
 func DefaultPostgreSQLConfig() *PostgreSQLContainerConfig {
 	return &PostgreSQLContainerConfig{
 		// renovate: datasource=docker depName=postgres
-		ImageTag:       "18.6-alpine",
+		ImageTag:       "18.7-alpine",
 		Username:       "testuser",
 		Password:       "testpass",
 		Database:       "testdb",
