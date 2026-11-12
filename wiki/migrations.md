@@ -16549,8 +16549,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`env | grep -E '^PGSSL(CERTMODE|CERT|KEY)='`), which the repository does not show. A set but
   empty `PGSSLCERTMODE` counts; an empty `PGSSLCERT` or `PGSSLKEY` does not. Read `PGSERVICE`
   there too (`env | grep -E '^PGSERVICE(FILE)?='`): in typed-field mode the rule does not read
-  a service section, so where it is set, read that section's `sslcertmode`, `sslcert` and
-  `sslkey` by hand, since pgx takes them over the environment's.
+  a service section, so where it is set, read that section's `sslmode`, `sslrootcert`,
+  `sslcertmode`, `sslcert` and `sslkey` by hand, since pgx takes them over the environment's
+  for every key the built DSN does not state.
 - gate: match = a PostgreSQL section whose effective value (the `connectionstring` key when
   present, empty included, else `PGSSLCERTMODE` when set, empty included) is not exactly
   `disable`, `allow` or `require`; or is `disable` with `database.tls.cert`/`key` set; or, in a
