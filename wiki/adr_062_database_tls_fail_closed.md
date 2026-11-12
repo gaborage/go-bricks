@@ -7,7 +7,7 @@
 
 The 2026-11-10 amendment judged `disable` on the typed fields only beside
 `database.tls.cert`/`key`. The framework-built DSN writes `sslcert`/`sslkey` only when those
-keys are set, so with neither set pgx v5.12.0 takes `PGSSLCERT`/`PGSSLKEY` from the
+keys are set, so with neither set pgx v5.13.0 takes `PGSSLCERT`/`PGSSLKEY` from the
 environment, and `PGSSLCERTMODE=disable` beside them passed validation and connected with no
 client certificate.
 
