@@ -435,6 +435,8 @@ Alternative — pre-built connection string (useful when a secret manager inject
 database:
   type: postgresql
   connectionstring: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
+  # sslcertmode (the DSN key, else a set PGSSLCERTMODE, empty included) must be disable, allow or require, and
+  # disable beside a client certificate is refused: either fails startup with a ConfigError (ADR-062).
 ```
 
 Per ADR-003 and ADR-047, the `database:` block is all-or-nothing: omit it entirely for a database-free service (the database probe then reports `not_configured`, visible on `/_sys/health-debug`, and `/ready` returns 200), or complete it. Setting *any* identity field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid` — marks the section as intended, and an intended section that is incomplete fails startup. A module that cannot work without a database should implement `app.DatabaseRequirer` so absence aborts startup rather than going green. Pool defaults are production-safe — override only when you have a measured reason (see wiki/database.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
@@ -1114,6 +1116,8 @@ func LoggingMiddleware(log logger.Logger) server.MiddlewareFunc {
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
 	// Group-scoped middleware — applies to routes registered on this registrar
 	// (NOT app-wide; for that see GlobalMiddlewareRegisterer below)
+	// Register every route, Group and Use here: after Server.Start each panics with an error
+	// matching server.ErrRegistrationAfterStart (ADR-179).
 	r.Use(LoggingMiddleware(m.logger))
 
 	// Group with auth middleware - all routes inherit it
@@ -1375,6 +1379,9 @@ Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) 
 - **Refused beside a tenant-owned family**: startup aborts with
   `server.ErrTenantFamilyWithGlobalMiddleware`; attach the gate per group instead
   ([ADR-164](wiki/adr_164_tenant_owned_route_family.md#global-middleware-beside-a-family)).
+- **Sealed at Start**: an installing `Server.RegisterGlobalMiddleware` after `Server.Start` panics with
+  an error matching `server.ErrRegistrationAfterStart`
+  ([ADR-179](wiki/adr_179_registration_sealed_at_start.md)).
 - **Ordering**: across modules, middleware composes in module-registration order.
 
 ### Route Template & Path Parameters (v0.46.0+)
@@ -3219,6 +3226,7 @@ messaging:
                                            # as the x-tenant-id stamp (see wiki/messaging.md)
   broker:
     # The vhost is the URL path: amqps://host:port/<vhost>, each / in the name as %2F (an empty path is "/").
+    # Write a literal @ in the vhost or a query value as %40: an unencoded @ after the authority fails startup (ADR-176).
     url: amqp://guest:guest@localhost:5672/
   # Exchange, routing key and default headers are set per publisher, in the messaging.PublisherOptions a module declares it with.
   reconnect:
@@ -3235,7 +3243,7 @@ messaging:
     idlettl: 1h                           # Explicit override; unset default is 1h (single-tenant or tenancy: shared) / 10m (multi-tenant per-tenant)
 ```
 
-Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured — but only once some module actually declared something. For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`.
+Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured — but only once some module actually declared something. For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`. A `messaging.broker.url` or static tenant URL that `amqp.ParseURI` refuses, or that writes a port outside 1-65535, fails `config.Validate` before anything is dialed; a `BrokerURLProvider`'s is refused for its key from `EnsureConsumers` or `Publisher`, and no client is built (ADR-175).
 
 ### Step 2: Declare the Topology (`MessagingDeclarer`)
 
@@ -5610,7 +5618,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name`, `error.type` (consumed only, on failure), `messaging.rabbitmq.{exchange,routing_key,queue}` when set |
 | Messaging | `messaging.client.publish.retries` | Counter | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.{exchange,routing_key}` when set, `retry.reason` (`publish_error`/`nack`/`returned`/`timeout`); an exhausted publish counts `maxpublishattempts − 1` (the last attempt is not a retry) |
 | Messaging | `messaging.connection.create` / `.close` | Counter | `messaging.system`; `error.type` (`*amqp091.Error`) on `.close` when the close carried a reason (a broker or network close) |
-| Messaging | `messaging.connection.dial.failures` | Counter | `messaging.system`, `failure.reason`: the AMQP reply code (`100`–`599`, e.g. `530` for a refused vhost or a connection limit) when the dial returned an `*amqp091.Error`, else `unknown` (DNS, TCP, TLS, a URL the client cannot parse). One per failed dial, retries included; no tenant or URL attribute |
+| Messaging | `messaging.connection.dial.failures` | Counter | `messaging.system`, `failure.reason`: the AMQP reply code (`100`–`599`, e.g. `530` for a refused vhost or a connection limit) when the dial returned an `*amqp091.Error`, else `unknown` (DNS, TCP, TLS, or a URL a hand-built `messaging.NewAMQPClient` cannot parse: a configured or provider-resolved one is refused before any dial, ADR-175). One per failed dial, retries included; no tenant or URL attribute |
 | Messaging | `messaging.channel.create` / `.close` | Counter | `messaging.system`; `error.type` (`*amqp091.Error`) on `.close` when the close carried a reason (a broker or network close) |
 | Messaging | `messaging.settlement.total` | Counter | `lane` (`classic`/`streams`), `outcome` (`acked`/`nacked`/`committed`/`failed`) |
 | Cache | `cache.hit` / `cache.miss` | Counter | `cache.operation` |
