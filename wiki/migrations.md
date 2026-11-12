@@ -16567,9 +16567,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   unix-socket TLS rules' verdicts (`[C65.6]`, `[C66.1]`), for which no `sslcertmode` value is a
   TLS claim;
   `sslcertmode=require` where TLS is not guaranteed, still failed by pgx at connect; the Flyway
-  JDBC path; every source the rule does not read: `PGSSLMODE`, and pgx's default
-  `~/.postgresql/postgresql.crt`/`postgresql.key` pair, which neither arm counts as a client
-  certificate.
+  JDBC path; every source the rule does not read: `PGSSLMODE`, a `PGSERVICE` section in
+  typed-field mode (pgx ranks its `sslcertmode`, `sslcert` and `sslkey` above the environment's),
+  and pgx's default `~/.postgresql/postgresql.crt`/`postgresql.key` pair, which neither arm
+  counts as a client certificate.
 - before: on v0.73.0 neither was judged. An invalid value, `PGSSLCERTMODE=` or `sslcertmode=`
   included, booted and failed every connection with `failed to parse PostgreSQL config`;
   `disable` beside a client certificate, from config keys or `PGSSLCERT`/`PGSSLKEY`, booted and
@@ -16593,10 +16594,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   only under sslmode `require`, `verify-ca` or `verify-full`: pgx fails `sslcertmode=require`
   whenever it authenticates without TLS, which is always under `disable` or `allow` (a plaintext
   attempt first, and the failure ends the dial) and on the plaintext fallback of `prefer` or an
-  unset mode. Or remove the certificate and key (unset the variables) if it was never meant to
-  be sent. A typed-field section with `database.tls.mode` unset under `PGSSLMODE=disable` dials
-  no TLS and sends no certificate whatever `sslcertmode` says, so changing `sslcertmode` alone
-  passes validation and still sends none: set `database.tls.mode` to a TLS mode first.
+  unset mode. Under `prefer` or an unset mode `allow` does not guarantee the certificate is
+  sent either: a failed TLS attempt falls back to plaintext, which carries none, so where the
+  certificate must be sent set sslmode `require`, `verify-ca` or `verify-full` first. Or remove
+  the certificate and key (unset the variables) if it was never meant to be sent. A typed-field
+  section with `database.tls.mode` unset under `PGSSLMODE=disable` dials no TLS and sends no
+  certificate whatever `sslcertmode` says, so changing `sslcertmode` alone passes validation and
+  still sends none: set `database.tls.mode` to a TLS mode first.
 - verify: `config.Load()` succeeds, then open one connection.
 - ref: gaborage/go-bricks#2310, gaborage/go-bricks#2376 · [ADR-062](adr_062_database_tls_fail_closed.md)
   (2026-11-10 and 2026-11-12 amendments) · `config/database_section.go`
