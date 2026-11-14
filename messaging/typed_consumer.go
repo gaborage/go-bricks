@@ -74,6 +74,12 @@ func (m Metadata) Redelivered() bool {
 	return m.delivery.Redelivered
 }
 
+// DeathCount is the package-level DeathCount over this delivery's headers; a
+// zero Metadata answers (0, false).
+func (m Metadata) DeathCount(queue, reason string) (int64, bool) {
+	return DeathCount(m.Headers(), queue, reason)
+}
+
 // typedHandler adapts a typed function to MessageHandler. Every field is set
 // once at construction and read-only afterwards: one instance is shared by every
 // worker goroutine of a consumer AND by every tenant replaying the same

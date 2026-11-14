@@ -305,7 +305,7 @@ messaging: decode failed for event "LimitsUpdated": json: type mismatch (want in
 messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
 ```
 
-**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool`, `DedupKey() (messaging.DedupKey, error)`, `MessageID() string` and `Sealed() (SealedEnvelope, bool)` — so a typed consumer can take the ledger key and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer. `MessageID` returns the AMQP `message_id` property for a handler's own policy about an unstamped delivery; it is not a `DedupKey` replacement, and only `DedupKey`'s answer belongs at the ledger door. A `messaging.DedupKey` is a value carrying which door produced it — `String()` is its persisted spelling, `Sealed()` says whether the sealed typed door composed it — and the zero value is invalid. On a plain typed consumer `DedupKey` returns a WIRE key holding the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`; when the delivery carries no such header at all it falls back to the AMQP `message_id` property under that same grammar, so a producer that follows the standard without being go-bricks is still dedupable. A header that is PRESENT but malformed is an error rather than a fall-through — the stamp is framework-written and the property caller-written, so a caller must not be able to shadow the stamp by spoiling it — and an error wrapping `messaging.ErrInvalidEventID` is returned when both sources are absent or the chosen one is malformed. `inbox.ProcessOnce` takes the `messaging.DedupKey` itself, not a string, and judges it by PROVENANCE and then by VALUE: it refuses the zero key, admits every wire key unbound, and admits a sealed key only when it EQUALS the bound key the sealed door stored on the current delivery's context. That is an equality on the key's `<SignFamily>:<jti>`, never a comparison of delivery identity — a redelivery of the same sealed message composes the same key and is admitted, while a sealed key whose value differs from the bound key is not. The grammar is not re-run there — a wire key passed it at construction, in `DedupKey` or in `messaging.WireDedupKey(id)`, the exported door for an id you source or compose yourself (it applies the grammar, wraps `ErrInvalidEventID` on refusal, and never yields a sealed key). `Sealed` answers per-consumer type: a plain typed consumer gets `(zero, false)` for every delivery, whatever the publisher wrote.
+**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool`, `DedupKey() (messaging.DedupKey, error)`, `MessageID() string`, `DeathCount(queue, reason string) (int64, bool)` and `Sealed() (SealedEnvelope, bool)` — so a typed consumer can take the ledger key and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer. `MessageID` returns the AMQP `message_id` property for a handler's own policy about an unstamped delivery; it is not a `DedupKey` replacement, and only `DedupKey`'s answer belongs at the ledger door. A `messaging.DedupKey` is a value carrying which door produced it — `String()` is its persisted spelling, `Sealed()` says whether the sealed typed door composed it — and the zero value is invalid. On a plain typed consumer `DedupKey` returns a WIRE key holding the `x-outbox-event-id` header once it passes the ledger grammar `^[A-Za-z0-9_-]{1,128}$`; when the delivery carries no such header at all it falls back to the AMQP `message_id` property under that same grammar, so a producer that follows the standard without being go-bricks is still dedupable. A header that is PRESENT but malformed is an error rather than a fall-through — the stamp is framework-written and the property caller-written, so a caller must not be able to shadow the stamp by spoiling it — and an error wrapping `messaging.ErrInvalidEventID` is returned when both sources are absent or the chosen one is malformed. `inbox.ProcessOnce` takes the `messaging.DedupKey` itself, not a string, and judges it by PROVENANCE and then by VALUE: it refuses the zero key, admits every wire key unbound, and admits a sealed key only when it EQUALS the bound key the sealed door stored on the current delivery's context. That is an equality on the key's `<SignFamily>:<jti>`, never a comparison of delivery identity — a redelivery of the same sealed message composes the same key and is admitted, while a sealed key whose value differs from the bound key is not. The grammar is not re-run there — a wire key passed it at construction, in `DedupKey` or in `messaging.WireDedupKey(id)`, the exported door for an id you source or compose yourself (it applies the grammar, wraps `ErrInvalidEventID` on refusal, and never yields a sealed key). `Sealed` answers per-consumer type: a plain typed consumer gets `(zero, false)` for every delivery, whatever the publisher wrote.
 
 ```go
 // Same DeclareMessaging body as above, with this call REPLACING the
@@ -401,7 +401,8 @@ routing keys entirely, so the parking queue always receives it. Override the
 derived names or set `x-dead-letter-routing-key` via `&messaging.DeadLetterSpec{
 Exchange: "...", ParkingQueue: "...", RoutingKey: "..."}` as the second
 argument. Inspect a parked message's `x-death` header (queue, exchange,
-reason, count) for triage.
+reason, count) for triage; `messaging.DeathCount` reads one entry's count (see
+[Reading the x-death count](#reading-the-x-death-count)).
 
 **Queue type — quorum by default, on both queues (ADR-106).** `DeadLetterSpec`
 carries `QueueType`, applied as the `x-queue-type` argument to BOTH queues the
@@ -535,9 +536,38 @@ existing queue with different args fails the channel with 406
 PRECONDITION_FAILED. Values must be amqp091-supported types (string,
 int/int64, bool, float64, nested `amqp.Table`, ...).
 
-Both forms only shape topology (Tier 1). Bounded redelivery — capping retries
-via `x-death` count before parking permanently — remains future work; see
-[#721](https://github.com/gaborage/go-bricks/issues/721).
+Both forms only shape topology (Tier 1).
+
+### Reading the x-death count
+
+`messaging.DeathCount(headers, queue, reason) (int64, bool)` returns the `count`
+of the `x-death` entry whose `queue` and `reason` both match, so a handler on a
+hand-built retry route can bound redelivery itself; a typed consumer calls
+`meta.DeathCount(queue, reason)` on its `Metadata`. It returns `(0, false)` when
+the header is absent or not an array, no entry matches, or the first matching
+entry's count is missing, negative or not an integer, and it never panics. The
+reasons RabbitMQ writes are `messaging.DeathReasonRejected` (a nack without
+requeue, which is what a handler error sends), `DeathReasonExpired`,
+`DeathReasonMaxLen` and `DeathReasonDeliveryLimit`.
+
+```go
+if n, ok := meta.DeathCount("orders.work", messaging.DeathReasonRejected); ok && n >= 5 {
+    // park or drop instead of cycling again
+}
+```
+
+Observed on RabbitMQ 4.4 (the integration suite's broker), classic and quorum
+work queues alike: `x-death` decodes as `[]any` of `amqp.Table`, most recent
+entry first, one entry per (queue, reason) with `queue`, `reason`, `exchange`,
+`routing-keys`, `time` and an `int64` `count` that grows 1, 2, 3 across
+nack → retry-queue TTL → work-queue cycles. The header is publisher-writable: a
+message published with a forged `x-death` reaches its first consumer untouched,
+though the broker drops every forged entry once it dead-letters the message
+from a classic or quorum queue. A
+cap built on it bounds honest redelivery and is not a security control. Classic
+AMQP lane only; stream messages carry no `x-death`. The framework builds no
+retry topology and enforces no cap — the retry-queue helper is tracked in
+[#1549](https://github.com/gaborage/go-bricks/issues/1549).
 
 ## Stream Queues (AMQP lane)
 
