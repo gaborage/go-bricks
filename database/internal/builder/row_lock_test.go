@@ -99,8 +99,18 @@ func TestRowLockLastCallWins(t *testing.T) {
 	}
 	u, n, s := forUpdate, forUpdateNoWait, forUpdateSkipLocked
 	sequences := [][]string{
-		{u, n}, {u, s}, {n, u}, {n, s}, {s, u}, {s, n},
-		{u, n, s}, {u, s, n}, {n, u, s}, {n, s, u}, {s, u, n}, {s, n, u},
+		{u, n},
+		{u, s},
+		{n, u},
+		{n, s},
+		{s, u},
+		{s, n},
+		{u, n, s},
+		{u, s, n},
+		{n, u, s},
+		{n, s, u},
+		{s, u, n},
+		{s, n, u},
 	}
 	for _, seq := range sequences {
 		t.Run(strings.Join(seq, "_then_"), func(t *testing.T) {
