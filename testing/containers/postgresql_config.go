@@ -2,14 +2,14 @@ package containers
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
 )
 
-// postgreSQLDataMount is the image's declared volume. It holds PGDATA on every
-// tag: /var/lib/postgresql/data before 18, /var/lib/postgresql/<major>/docker from 18.
+// postgreSQLDataMount is the image's declared volume, the parent of PGDATA on every tag.
 const postgreSQLDataMount = "/var/lib/postgresql"
 
 // PostgreSQLContainerConfig holds configuration for PostgreSQL test container
@@ -56,29 +56,26 @@ func postgreSQLStartLogText(cfg *PostgreSQLContainerConfig, host string, port in
 		host, port, cfg.Database, cfg.Username)
 }
 
-// postgreSQLSettingArgs renders Settings as `-c key=value` server arguments,
-// sorted by key.
-func postgreSQLSettingArgs(settings map[string]string) ([]string, error) {
-	if len(settings) == 0 {
-		return nil, nil
-	}
-	keys := make([]string, 0, len(settings))
+// validatePostgreSQLSettings refuses a key PostgreSQL would misparse as a
+// `-c key=value` argument.
+func validatePostgreSQLSettings(settings map[string]string) error {
 	for key := range settings {
 		if key == "" || strings.ContainsFunc(key, func(r rune) bool { return r == '=' || unicode.IsSpace(r) }) {
-			return nil, fmt.Errorf("postgresql container: setting key %q must be non-empty and hold no whitespace or '='", key)
+			return fmt.Errorf("postgresql container: setting key %q must be non-empty and hold no whitespace or '='", key)
 		}
-		keys = append(keys, key)
 	}
-	slices.Sort(keys)
-	args := make([]string, 0, 2*len(keys))
-	for _, key := range keys {
-		args = append(args, "-c", key+"="+settings[key])
-	}
-	return args, nil
+	return nil
 }
 
-// postgreSQLDataTmpfs maps the data mount to a tmpfs of the given size, or
-// returns nil when size is empty.
+// postgreSQLSettingArgs renders settings as `-c key=value` arguments sorted by key.
+func postgreSQLSettingArgs(settings map[string]string) []string {
+	var args []string
+	for _, key := range slices.Sorted(maps.Keys(settings)) {
+		args = append(args, "-c", key+"="+settings[key])
+	}
+	return args
+}
+
 func postgreSQLDataTmpfs(size string) map[string]string {
 	if size == "" {
 		return nil

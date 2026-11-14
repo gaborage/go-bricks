@@ -76,14 +76,12 @@ func TestPostgreSQLSettingArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := postgreSQLSettingArgs(tt.settings)
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, postgreSQLSettingArgs(tt.settings))
 		})
 	}
 }
 
-func TestPostgreSQLSettingArgsRejectsInvalidKey(t *testing.T) {
+func TestValidatePostgreSQLSettingsRejectsInvalidKey(t *testing.T) {
 	tests := []struct {
 		name string
 		key  string
@@ -97,15 +95,19 @@ func TestPostgreSQLSettingArgsRejectsInvalidKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := postgreSQLSettingArgs(map[string]string{
+			err := validatePostgreSQLSettings(map[string]string{
 				"fsync": "off",
 				tt.key:  "1",
 			})
 			require.Error(t, err)
-			assert.Nil(t, got)
 			assert.Contains(t, err.Error(), fmt.Sprintf("%q", tt.key))
 		})
 	}
+}
+
+func TestValidatePostgreSQLSettingsAcceptsValidKeys(t *testing.T) {
+	assert.NoError(t, validatePostgreSQLSettings(nil))
+	assert.NoError(t, validatePostgreSQLSettings(map[string]string{"work_mem": "7MB", "search_path": "a, b=c"}))
 }
 
 func TestPostgreSQLDataTmpfs(t *testing.T) {

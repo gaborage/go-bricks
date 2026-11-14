@@ -106,17 +106,11 @@ func StartPostgreSQLContainerForTestMain(ctx context.Context, cfg *PostgreSQLCon
 }
 
 // postgreSQLOptions builds the container customizers, wait strategy included.
-// Settings append to the module's own `postgres -c fsync=off` command, and the
-// tmpfs replaces the image volume; zero values add neither.
 //
 // Composite wait strategy: log message (fast early signal) + port listening (network
 // verification) prevents a race where the log appears but PostgreSQL is not ready to
 // accept connections.
-func postgreSQLOptions(cfg *PostgreSQLContainerConfig) ([]testcontainers.ContainerCustomizer, error) {
-	settingArgs, err := postgreSQLSettingArgs(cfg.Settings)
-	if err != nil {
-		return nil, err
-	}
+func postgreSQLOptions(cfg *PostgreSQLContainerConfig) []testcontainers.ContainerCustomizer {
 	opts := []testcontainers.ContainerCustomizer{
 		postgres.WithDatabase(cfg.Database),
 		postgres.WithUsername(cfg.Username),
@@ -127,13 +121,13 @@ func postgreSQLOptions(cfg *PostgreSQLContainerConfig) ([]testcontainers.Contain
 			wait.ForListeningPort(postgreSQLPort),
 		),
 	}
-	if settingArgs != nil {
+	if settingArgs := postgreSQLSettingArgs(cfg.Settings); settingArgs != nil {
 		opts = append(opts, testcontainers.WithCmdArgs(settingArgs...))
 	}
 	if tmpfs := postgreSQLDataTmpfs(cfg.DataTmpfs); tmpfs != nil {
 		opts = append(opts, testcontainers.WithTmpfs(tmpfs))
 	}
-	return opts, nil
+	return opts
 }
 
 // startPostgreSQLContainerInternal does the actual testcontainer setup without
@@ -144,14 +138,13 @@ func startPostgreSQLContainerInternal(ctx context.Context, cfg *PostgreSQLContai
 		cfg = DefaultPostgreSQLConfig()
 	}
 
-	opts, err := postgreSQLOptions(cfg)
-	if err != nil {
+	if err := validatePostgreSQLSettings(cfg.Settings); err != nil {
 		return nil, err
 	}
 
 	pgContainer, err := postgres.Run(ctx,
 		fmt.Sprintf("postgres:%s", cfg.ImageTag),
-		opts...,
+		postgreSQLOptions(cfg)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start PostgreSQL container: %w", err)
