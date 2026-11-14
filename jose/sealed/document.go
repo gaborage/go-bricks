@@ -52,3 +52,10 @@ func SealDocument(doc []byte, spec *Spec, opts *Options) (data []byte, jti strin
 	}
 	return sealCore(doc, spec, opts)
 }
+
+// Wipe zeroes Subject in place; it is nil-safe, idempotent, and leaves Render working.
+func (d *OpenedDocument) Wipe() {
+	if d != nil {
+		clear(d.Subject)
+	}
+}

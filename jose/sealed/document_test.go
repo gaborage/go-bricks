@@ -501,3 +501,52 @@ func TestOpenDocumentAcceptsWhatOpenRefusesOnlyForItsType(t *testing.T) {
 	assert.NotContains(t, topLevelKeys(t, opened.Document), docSubjectPath)
 	assert.JSONEq(t, `"not-an-object"`, string(opened.Subject))
 }
+
+// openSample seals sampleDocument and opens it through OpenDocument.
+func openSample(t *testing.T) *sealed.OpenedDocument {
+	t.Helper()
+	k := testKeys(t)
+	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
+	wire, _, err := sealed.SealDocument(sampleDocument(), documentSpec(t), testOptions(t))
+	require.NoError(t, err)
+	opened, err := sealed.OpenDocument(wire, documentSpec(t), &sealed.OpenOptions{EventType: eventType, Keys: consumer})
+	require.NoError(t, err)
+	return opened
+}
+
+func TestOpenedDocumentWipeZeroesTheSubject(t *testing.T) {
+	opened := openSample(t)
+	subject := opened.Subject
+	require.JSONEq(t, cardPlaintext, string(subject))
+
+	opened.Wipe()
+	assert.Equal(t, make([]byte, len(subject)), subject, "every byte the caller received is zero")
+	assert.NotPanics(t, opened.Wipe, "a second Wipe is a no-op")
+}
+
+func TestOpenedDocumentWipeToleratesNilAndClearedDocuments(t *testing.T) {
+	var none *sealed.OpenedDocument
+	assert.NotPanics(t, none.Wipe)
+
+	empty := &sealed.OpenedDocument{}
+	assert.NotPanics(t, empty.Wipe)
+	assert.NotPanics(t, empty.Wipe, "a second Wipe is a no-op")
+}
+
+func TestOpenedDocumentRenderIsUnchangedByWipe(t *testing.T) {
+	opened := openSample(t)
+	subjects := []string{cardPlaintext, `"<redacted>"`}
+	before := make([][]byte, len(subjects))
+	for i, subject := range subjects {
+		rendered, err := opened.Render(json.RawMessage(subject))
+		require.NoError(t, err)
+		before[i] = rendered
+	}
+
+	opened.Wipe()
+	for i, subject := range subjects {
+		after, err := opened.Render(json.RawMessage(subject))
+		require.NoError(t, err)
+		assert.Equal(t, before[i], after)
+	}
+}

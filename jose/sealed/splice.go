@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -136,12 +137,10 @@ func splice(doc []byte, span subjectSpan, compact string) ([]byte, error) {
 
 // spliceRaw returns doc with the span replaced by replacement verbatim — the opener's
 // reverse step (decrypted plaintext back over the JWE string) uses it with raw JSON. The
-// three slices are copied into a fresh buffer grown by append (no precomputed size, so no
-// length arithmetic on caller-sized inputs); doc is not mutated.
+// three slices are copied into one fresh buffer sized by slices.Concat, so no outgrown copy
+// of the plaintext is left behind; doc is not mutated.
 func spliceRaw(doc []byte, span subjectSpan, replacement []byte) []byte {
-	out := append([]byte(nil), doc[:span.start]...)
-	out = append(out, replacement...)
-	return append(out, doc[span.end:]...)
+	return slices.Concat(doc[:span.start], replacement, doc[span.end:])
 }
 
 // removeMember returns doc with the member that span identifies deleted along with exactly
@@ -157,6 +156,31 @@ func removeMember(doc []byte, span subjectSpan) []byte {
 	}
 	out := append([]byte(nil), doc[:span.memberStart]...)
 	return append(out, doc[end:]...)
+}
+
+// newOpenedDocument applies OpenDocument's rule-11 floor (the plaintext must be valid JSON),
+// zeroing a refused plaintext, and keeps the payload and span privately for Render.
+func newOpenedDocument(core *openedCore) (*OpenedDocument, error) {
+	if !json.Valid(core.plaintext) {
+		clear(core.plaintext)
+		return nil, openError(11, ErrOpenFailed, CodePayloadUndecodable, "subject plaintext is not a valid JSON value", nil)
+	}
+	return &OpenedDocument{
+		Document:  removeMember(core.payload, core.span),
+		Subject:   core.plaintext,
+		SubjectAt: core.span.memberStart,
+		Envelope:  core.env,
+		payload:   core.payload,
+		span:      core.span,
+	}, nil
+}
+
+// decodeSpliced is Open's rule 11: splice the plaintext back and decode into dst, zeroing both plaintext buffers on every path.
+func decodeSpliced(core *openedCore, dst any) error {
+	defer clear(core.plaintext)
+	doc := spliceRaw(core.payload, core.span, core.plaintext)
+	defer clear(doc)
+	return json.Unmarshal(doc, dst)
 }
 
 // Render returns the verified document with subject as the Subject member's value and every

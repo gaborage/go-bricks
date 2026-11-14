@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/racedetect"
 )
 
 func TestLocateSubjectFindsSpanExactly(t *testing.T) {
@@ -143,6 +145,18 @@ func TestSpliceRawInsertsReplacementVerbatim(t *testing.T) {
 	out := spliceRaw(doc, span, []byte(`{"pan":"4111"}`))
 	assert.Equal(t, `{"a":1,"card":{"pan":"4111"},"z":true}`, string(out)) //nolint:testifylint // verbatim insertion is a byte-level property
 	assert.Equal(t, `{"a":1,"card":"eyJ.x.y","z":true}`, string(doc))      //nolint:testifylint // asserts the input buffer is byte-identical
+}
+
+func TestSpliceRawAllocatesOnceSoNoStalePlaintextCopyIsLeft(t *testing.T) {
+	if racedetect.Enabled {
+		t.Skip("testing.AllocsPerRun is unreliable under -race; enforced in the non-race matrix")
+	}
+	doc := append(append([]byte(`{"pad":"`), bytes.Repeat([]byte("x"), 300)...), []byte(`","card":"old","z":1}`)...)
+	span, err := locateSubject(doc, "card")
+	require.NoError(t, err)
+	replacement := []byte(`{"pan":"4111111111111111","name":"` + strings.Repeat("n", 200) + `"}`)
+	allocs := testing.AllocsPerRun(10, func() { _ = spliceRaw(doc, span, replacement) })
+	assert.InDelta(t, 1, allocs, 0)
 }
 
 func TestSpliceRawHandlesLargeInputs(t *testing.T) {
@@ -282,7 +296,92 @@ func openedFrom(t *testing.T, doc string) *OpenedDocument {
 	payload := []byte(doc)
 	span, err := locateSubject(payload, "card")
 	require.NoError(t, err)
-	return newOpenedDocument(&openedCore{verifiedCore: verifiedCore{payload: payload, span: span}, plaintext: span.value})
+	opened, err := newOpenedDocument(&openedCore{verifiedCore: verifiedCore{payload: payload, span: span}, plaintext: span.value})
+	require.NoError(t, err)
+	return opened
+}
+
+// coreFrom is what rules 1-10 hand over for doc, its "card" member decrypting to plaintext.
+func coreFrom(t *testing.T, doc, plaintext string) *openedCore {
+	t.Helper()
+	payload := []byte(doc)
+	span, err := locateSubject(payload, "card")
+	require.NoError(t, err)
+	return &openedCore{verifiedCore: verifiedCore{payload: payload, span: span}, plaintext: []byte(plaintext)}
+}
+
+func TestNewOpenedDocumentZeroesTheSubjectItRefuses(t *testing.T) {
+	core := coreFrom(t, `{"a":1,"card":"x"}`, `1,"injected":2`)
+	plaintext := core.plaintext
+
+	opened, err := newOpenedDocument(core)
+	assert.Nil(t, opened)
+	var oe *OpenError
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, CodePayloadUndecodable, oe.Err.Code)
+	assert.Equal(t, 11, oe.Rule)
+	assert.Equal(t, make([]byte, len(plaintext)), plaintext, "a refused subject leaves no plaintext behind")
+}
+
+// spliceProbe keeps the bytes encoding/json hands it, which the json.Unmarshaler contract
+// forbids, so a test can watch the buffer decodeSpliced decodes from.
+type spliceProbe struct {
+	seen []byte
+	err  error
+}
+
+func (p *spliceProbe) UnmarshalJSON(b []byte) error {
+	p.seen = b
+	return p.err
+}
+
+func TestDecodeSplicedZeroesBothPlaintextBuffers(t *testing.T) {
+	const doc, plaintext = `{"a":1,"card":"x","z":true}`, `{"pan":"4111"}`
+	refused := errors.New("refused")
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "decode_succeeds"},
+		{name: "decode_fails", err: refused},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			core := coreFrom(t, doc, plaintext)
+			decrypted := core.plaintext
+			probe := &spliceProbe{err: tc.err}
+
+			err := decodeSpliced(core, probe)
+			require.ErrorIs(t, err, tc.err)
+			require.Len(t, probe.seen, len(doc)-len(`"x"`)+len(plaintext), "the probe saw the whole spliced document")
+			assert.Equal(t, make([]byte, len(probe.seen)), probe.seen, "the spliced document is zeroed")
+			assert.Equal(t, make([]byte, len(decrypted)), decrypted, "the decrypted subject is zeroed")
+		})
+	}
+}
+
+// TestDecodeSplicedLeavesNoAliasInTheDecodedValue pins that zeroing the buffers cannot reach the decoded value.
+func TestDecodeSplicedLeavesNoAliasInTheDecodedValue(t *testing.T) {
+	type subject struct {
+		Raw  json.RawMessage            `json:"raw"`
+		B    []byte                     `json:"b"`
+		S    string                     `json:"s"`
+		Any  any                        `json:"any"`
+		Map  map[string]json.RawMessage `json:"map"`
+		List []json.RawMessage          `json:"list"`
+	}
+	type event struct {
+		A    int     `json:"a"`
+		Card subject `json:"card"`
+	}
+	const plaintext = `{"raw":{"pan":"4111"},"b":"NDExMQ==","s":"4111","any":{"pan":"4111"},"map":{"pan":"4111"},"list":["4111"]}`
+	doc := `{"a":1,"card":` + plaintext + `}`
+
+	var want event
+	require.NoError(t, json.Unmarshal([]byte(doc), &want))
+	var got event
+	require.NoError(t, decodeSpliced(coreFrom(t, `{"a":1,"card":"x"}`, plaintext), &got))
+	assert.Equal(t, want, got)
 }
 
 func TestNextMemberReadsOneMember(t *testing.T) {
