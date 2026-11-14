@@ -142,18 +142,15 @@ func (o *opener) Open(ctx context.Context, body []byte, want sealruntime.TenantR
 	return sealruntime.Envelope(*env), nil
 }
 
-// refuse maps an opener error onto the seam's error: a key resolver fault
-// (jose.ErrKeyResolution) keeps its own code whatever its cause wraps; otherwise the
-// code and details of the *jose/sealed.OpenError (every rule and pre-flight failure),
-// else the bare *jose.Error code. Recoverable is derived from the code: the
-// unknown-generation class only.
+// refuse maps an opener error onto the seam's error: the code and details of the
+// *jose/sealed.OpenError (every rule and pre-flight failure), else the bare *jose.Error
+// code (a key resolver fault, SEAL_KEY_RESOLUTION). Recoverable is derived from the
+// code: the unknown-generation class only.
 func refuse(err error) *sealruntime.OpenRefusedError {
 	refused := &sealruntime.OpenRefusedError{Cause: err}
 	var oe *josesealed.OpenError
 	var je *jose.Error
 	switch {
-	case errors.Is(err, jose.ErrKeyResolution) && errors.As(err, &je):
-		refused.Code = je.Code
 	case errors.As(err, &oe):
 		refused.Code, refused.Details = oe.Err.Code, oe.Details
 	case errors.As(err, &je):
