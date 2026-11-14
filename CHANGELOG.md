@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.74.0](https://github.com/gaborage/go-bricks/compare/v0.73.0...v0.74.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** judge a PGSSLCERT client certificate in typed-field mode ([#2391](https://github.com/gaborage/go-bricks/issues/2391))
+* **database:** on Oracle, BuildUpsert returns an error matching dbtypes.ErrSqlizerOperand for a squirrel.Sqlizer insert or update value, where v0.73.0 built a MERGE binding it as an argument. Pass the plain value, or qb.Expr()/qb.MustExpr() with its SECURITY annotation for an intended expression.
+* **messaging:** a broker URL or stream URI with an unencoded '@' in its path, query or fragment no longer starts or dials, including a valid vhost or query value; write it %40. See ADR-176 and wiki/migrations.md [C74.3].
+* **database:** a squirrel.Sqlizer, or a pointer to one, at a JoinFilterFactory Eq/NotEq/Lt/Lte/Gt/Gte operand or Between bound, or as an UPDATE Set/SetMap/SetStruct, INSERT SetMap/Values, InsertStruct/InsertFields or PostgreSQL BuildUpsert value, fails ToSQL() with dbtypes.ErrSqlizerOperand where its SQL was spliced into the statement. Use qb.Expr()/qb.MustExpr() for an intended expression.
+* **server:** refuse every registration after Start ([#2380](https://github.com/gaborage/go-bricks/issues/2380))
+* **database:** Having refuses every predicate that is not a string, a RawExpression (or a non-nil pointer to one) or a dbtypes.Filter, and a Filter followed by trailing arguments, with ErrUnsupportedHavingPredicate at ToSQL().
+* **messaging:** a deployment whose broker URL, or one static tenant's URL, fails amqp.ParseURI or writes a port outside 1-65535 no longer starts. See ADR-175 and wiki/migrations.md [C74.2].
+* **config:** judge the postgresql sslcertmode key and PGSSLCERTMODE ([#2378](https://github.com/gaborage/go-bricks/issues/2378))
+
+### Added
+
+* **messaging:** count failed AMQP dials ([#2371](https://github.com/gaborage/go-bricks/issues/2371)) ([e094758](https://github.com/gaborage/go-bricks/commit/e094758207c29f713355930b5dfc23fe7a6fda88)), closes [#2194](https://github.com/gaborage/go-bricks/issues/2194)
+* **messaging:** fail startup on a malformed AMQP broker URL ([#2369](https://github.com/gaborage/go-bricks/issues/2369)) ([9d0e8cf](https://github.com/gaborage/go-bricks/commit/9d0e8cf36b8c4d8300af6cca5064225a17f59fe1)), closes [#2194](https://github.com/gaborage/go-bricks/issues/2194)
+
+
+### Fixed
+
+* **config:** judge a PGSSLCERT client certificate in typed-field mode ([#2391](https://github.com/gaborage/go-bricks/issues/2391)) ([6fcf6fc](https://github.com/gaborage/go-bricks/commit/6fcf6fc0dd5185e8ff894327c64d09217c79be2d))
+* **config:** judge the postgresql sslcertmode key and PGSSLCERTMODE ([#2378](https://github.com/gaborage/go-bricks/issues/2378)) ([fb1b620](https://github.com/gaborage/go-bricks/commit/fb1b6205d908b08d0a52a56d58c57ae0e063ca1e))
+* **credurl:** mask a normalized port, decoded text and a rebuilt URI ([#2367](https://github.com/gaborage/go-bricks/issues/2367)) ([72dc8ff](https://github.com/gaborage/go-bricks/commit/72dc8ff96d4cea87a73c4748e54e1c43338b0c5a))
+* **credurl:** render a rejected or hostless URL as xxxxx at every door ([#2360](https://github.com/gaborage/go-bricks/issues/2360)) ([d9cae13](https://github.com/gaborage/go-bricks/commit/d9cae1322743876091fbed2ef78da4dc19fe64e4)), closes [#2274](https://github.com/gaborage/go-bricks/issues/2274)
+* **database:** number insert-select placeholders once per statement ([#2368](https://github.com/gaborage/go-bricks/issues/2368)) ([846dc71](https://github.com/gaborage/go-bricks/commit/846dc71aba9cb5ea3b0e586fc761476c28838f8f))
+* **database:** refuse a Sqlizer in an Oracle upsert value ([#2386](https://github.com/gaborage/go-bricks/issues/2386)) ([cfa14d6](https://github.com/gaborage/go-bricks/commit/cfa14d62071a517fd5f1c6c5b5e6efc5467823ad))
+* **database:** refuse a Sqlizer operand where the builder spliced it ([#2382](https://github.com/gaborage/go-bricks/issues/2382)) ([c3ee052](https://github.com/gaborage/go-bricks/commit/c3ee052fd3c64173829410e85b5bbdd3e513c968))
+* **database:** refuse Having predicates other than string/expr/filter ([#2377](https://github.com/gaborage/go-bricks/issues/2377)) ([26b97ab](https://github.com/gaborage/go-bricks/commit/26b97ab8443133546dcba7c740343621dd9dd775))
+* **deps:** update aws-sdk-go-v2 monorepo ([#2348](https://github.com/gaborage/go-bricks/issues/2348)) ([98b5fbf](https://github.com/gaborage/go-bricks/commit/98b5fbfa8f865948475b87f000ed638065bbe5f1))
+* **deps:** update module github.com/jackc/pgx/v5 to v5.13.0 ([#2384](https://github.com/gaborage/go-bricks/issues/2384)) ([3029cfb](https://github.com/gaborage/go-bricks/commit/3029cfb7686e6e817ff3eddfd4acfffbebd49b4e))
+* **deps:** update module github.com/labstack/echo/v5 to v5.4.5 ([#2388](https://github.com/gaborage/go-bricks/issues/2388)) ([c2709af](https://github.com/gaborage/go-bricks/commit/c2709af2685302433c333060ee93e6db2477b415))
+* **deps:** update module golang.org/x/sync to v0.25.0 ([#2345](https://github.com/gaborage/go-bricks/issues/2345)) ([6162c5e](https://github.com/gaborage/go-bricks/commit/6162c5e120582f7a98f99a68071784fd85658d79))
+* **messaging:** refuse a broker URL misread past its authority ([#2370](https://github.com/gaborage/go-bricks/issues/2370)) ([fbc333b](https://github.com/gaborage/go-bricks/commit/fbc333b765352846fd42be20ec849552d713639f))
+* **migration:** fixed message for unparseable quiesce connection string ([#2362](https://github.com/gaborage/go-bricks/issues/2362)) ([75f8bf6](https://github.com/gaborage/go-bricks/commit/75f8bf69c22af01fbc2f19e210d12e1cbabecd05))
+* **outbox:** charge a mid-batch drop only to the dropped lane's rows ([#2361](https://github.com/gaborage/go-bricks/issues/2361)) ([43a8474](https://github.com/gaborage/go-bricks/commit/43a847401d6b6bb0af232369593527f1da449c20))
+* **server:** make registration atomic with Start's seal ([#2379](https://github.com/gaborage/go-bricks/issues/2379)) ([92e403a](https://github.com/gaborage/go-bricks/commit/92e403a197fdebda0b9bd8192d43b36686d3e95f))
+* **server:** refuse every registration after Start ([#2380](https://github.com/gaborage/go-bricks/issues/2380)) ([8ad561f](https://github.com/gaborage/go-bricks/commit/8ad561f97e92687d534d34ce9f2dbddb688e794f))
+* **testing:** stop rendering the dsn in the postgresql start log ([#2363](https://github.com/gaborage/go-bricks/issues/2363)) ([1f8f04e](https://github.com/gaborage/go-bricks/commit/1f8f04e9047d79e1a1c0dd5c0b7c3bda79611975))
+
+
+### Changed
+
+* drop dead code and stale comments in messaging, db and jobs ([#2354](https://github.com/gaborage/go-bricks/issues/2354)) ([0679a77](https://github.com/gaborage/go-bricks/commit/0679a771764822256e807149fddb5314d76bbdb9))
+* drop dead code and stale comments in server, app and jose ([#2353](https://github.com/gaborage/go-bricks/issues/2353)) ([f1dd59e](https://github.com/gaborage/go-bricks/commit/f1dd59e0587beb1e065ac1aa39fe6548f651f4fc))
+
 ## [0.73.0](https://github.com/gaborage/go-bricks/compare/v0.72.0...v0.73.0) (2026-11-09)
 
 
