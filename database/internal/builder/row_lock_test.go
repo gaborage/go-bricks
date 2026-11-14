@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,13 +25,13 @@ func TestForUpdateRendersAfterPaginationPerVendor(t *testing.T) {
 		{
 			name:    "postgres_for_update",
 			vendor:  dbtypes.PostgreSQL,
-			build:   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdate() },
+			build:   dbtypes.SelectQueryBuilder.ForUpdate,
 			wantSQL: `SELECT id FROM users WHERE id = $1 FOR UPDATE`,
 		},
 		{
 			name:    "postgres_for_update_nowait",
 			vendor:  dbtypes.PostgreSQL,
-			build:   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateNoWait() },
+			build:   dbtypes.SelectQueryBuilder.ForUpdateNoWait,
 			wantSQL: `SELECT id FROM users WHERE id = $1 FOR UPDATE NOWAIT`,
 		},
 		{
@@ -44,22 +45,34 @@ func TestForUpdateRendersAfterPaginationPerVendor(t *testing.T) {
 		{
 			name:    "oracle_for_update",
 			vendor:  dbtypes.Oracle,
-			build:   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdate() },
+			build:   dbtypes.SelectQueryBuilder.ForUpdate,
 			wantSQL: `SELECT id FROM users WHERE id = :1 FOR UPDATE`,
 		},
 		{
 			name:    "oracle_for_update_nowait",
 			vendor:  dbtypes.Oracle,
-			build:   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateNoWait() },
+			build:   dbtypes.SelectQueryBuilder.ForUpdateNoWait,
 			wantSQL: `SELECT id FROM users WHERE id = :1 FOR UPDATE NOWAIT`,
 		},
 		{
-			name:   "last_call_wins",
+			name:    "postgres_for_update_skip_locked",
+			vendor:  dbtypes.PostgreSQL,
+			build:   dbtypes.SelectQueryBuilder.ForUpdateSkipLocked,
+			wantSQL: `SELECT id FROM users WHERE id = $1 FOR UPDATE SKIP LOCKED`,
+		},
+		{
+			name:   "postgres_skip_locked_after_limit",
 			vendor: dbtypes.PostgreSQL,
 			build: func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder {
-				return q.ForUpdateNoWait().ForUpdate()
+				return q.OrderBy("id").Limit(1).ForUpdateSkipLocked()
 			},
-			wantSQL: `SELECT id FROM users WHERE id = $1 FOR UPDATE`,
+			wantSQL: `SELECT id FROM users WHERE id = $1 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`,
+		},
+		{
+			name:    "oracle_for_update_skip_locked",
+			vendor:  dbtypes.Oracle,
+			build:   dbtypes.SelectQueryBuilder.ForUpdateSkipLocked,
+			wantSQL: `SELECT id FROM users WHERE id = :1 FOR UPDATE SKIP LOCKED`,
 		},
 	}
 	for _, tc := range cases {
@@ -76,6 +89,42 @@ func TestForUpdateRendersAfterPaginationPerVendor(t *testing.T) {
 	}
 }
 
+// TestRowLockLastCallWins pins that the three lock calls share one slot:
+// every ordered combination of two and three calls renders only the last.
+func TestRowLockLastCallWins(t *testing.T) {
+	locks := map[string]func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder{
+		forUpdate:           dbtypes.SelectQueryBuilder.ForUpdate,
+		forUpdateNoWait:     dbtypes.SelectQueryBuilder.ForUpdateNoWait,
+		forUpdateSkipLocked: dbtypes.SelectQueryBuilder.ForUpdateSkipLocked,
+	}
+	u, n, s := forUpdate, forUpdateNoWait, forUpdateSkipLocked
+	sequences := [][]string{
+		{u, n},
+		{u, s},
+		{n, u},
+		{n, s},
+		{s, u},
+		{s, n},
+		{u, n, s},
+		{u, s, n},
+		{n, u, s},
+		{n, s, u},
+		{s, u, n},
+		{s, n, u},
+	}
+	for _, seq := range sequences {
+		t.Run(strings.Join(seq, "_then_"), func(t *testing.T) {
+			query := NewQueryBuilder(dbtypes.PostgreSQL).Select("id").From(tableUsers)
+			for _, lock := range seq {
+				query = locks[lock](query)
+			}
+			sql, _, err := query.ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, "SELECT id FROM users "+seq[len(seq)-1], sql)
+		})
+	}
+}
+
 // TestOracleRefusesARowLockWithPagination pins the vendor restriction from the
 // Oracle SQL Language Reference ("Restrictions on the row_limiting_clause: You
 // cannot specify this clause with the for_update_clause"): Limit, Offset and
@@ -88,12 +137,19 @@ func TestOracleRefusesARowLockWithPagination(t *testing.T) {
 		"offset":   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.Offset(10) },
 		"paginate": func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.Paginate(5, 10) },
 	}
+	locks := map[string]func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder{
+		"for_update":             dbtypes.SelectQueryBuilder.ForUpdate,
+		"for_update_nowait":      dbtypes.SelectQueryBuilder.ForUpdateNoWait,
+		"for_update_skip_locked": dbtypes.SelectQueryBuilder.ForUpdateSkipLocked,
+	}
 	for name, paginate := range paginations {
-		t.Run("oracle_"+name, func(t *testing.T) {
-			qb := NewQueryBuilder(dbtypes.Oracle)
-			_, _, err := paginate(qb.Select("id").From(tableUsers)).ForUpdateNoWait().ToSQL()
-			require.ErrorIs(t, err, dbtypes.ErrRowLockWithPagination)
-		})
+		for lockName, lock := range locks {
+			t.Run("oracle_"+name+"_"+lockName, func(t *testing.T) {
+				qb := NewQueryBuilder(dbtypes.Oracle)
+				_, _, err := lock(paginate(qb.Select("id").From(tableUsers))).ToSQL()
+				require.ErrorIs(t, err, dbtypes.ErrRowLockWithPagination)
+			})
+		}
 		t.Run("postgres_"+name+"_is_fine", func(t *testing.T) {
 			qb := NewQueryBuilder(dbtypes.PostgreSQL)
 			sql, _, err := paginate(qb.Select("id").From(tableUsers)).ForUpdateNoWait().ToSQL()
@@ -128,18 +184,27 @@ func TestSelectWithoutLockRendersNoClause(t *testing.T) {
 }
 
 // TestLockedSelectIsRefusedAsASubquery pins that the lock stays on the outer
-// statement: a builder carrying ForUpdate is rejected by every subquery door
+// statement: a builder carrying any row lock is rejected by every subquery door
 // before it can render FOR UPDATE inside EXISTS.
 func TestLockedSelectIsRefusedAsASubquery(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	f := qb.Filter()
 
-	locked := qb.Select("id").From(tableUsers).ForUpdateNoWait()
-	require.Error(t, locked.(*SelectQueryBuilder).ValidateForSubquery())
+	locks := []func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder{
+		dbtypes.SelectQueryBuilder.ForUpdate,
+		dbtypes.SelectQueryBuilder.ForUpdateNoWait,
+		dbtypes.SelectQueryBuilder.ForUpdateSkipLocked,
+	}
+	for _, lock := range locks {
+		locked := lock(qb.Select("id").From(tableUsers))
+		err := locked.(*SelectQueryBuilder).ValidateForSubquery()
+		require.Error(t, err)
+		assert.Equal(t, "subquery cannot carry a row lock", err.Error())
 
-	_, _, err := qb.Select("id").From("orders").Where(f.Exists(locked)).ToSQL()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "row lock")
+		_, _, err = qb.Select("id").From("orders").Where(f.Exists(locked)).ToSQL()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "row lock")
+	}
 
 	unlocked := qb.Select("id").From(tableUsers)
 	sql, _, err := qb.Select("id").From("orders").Where(f.Exists(unlocked)).ToSQL()

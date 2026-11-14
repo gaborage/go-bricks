@@ -1291,7 +1291,7 @@ func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 		// A row lock belongs to the statement that holds the transaction, never
 		// to a nested SELECT: inside EXISTS/IN it is invalid on PostgreSQL and
 		// meaningless on Oracle, and buildSelectBuilder would render it.
-		return errors.New("subquery cannot carry a row lock (ForUpdate/ForUpdateNoWait)")
+		return errors.New("subquery cannot carry a row lock")
 	}
 
 	return sqb.Err()
