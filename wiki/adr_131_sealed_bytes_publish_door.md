@@ -10,6 +10,11 @@
 > `messaging/sealed` is the only codec.
 > `SealOpenRefusedError` stays. The body below keeps the old names as history.
 
+> **Note (2026-11-14, #2400):** ADR-097's amendment of that date narrows the recoverable class to a
+> kid the resolver reports unknown and makes any other lookup failure the non-recoverable resolver
+> fault `SEAL_KEY_RESOLUTION`. This door's refusal of a sign generation held without its private
+> key is unchanged: `ErrKidUnknownGeneration`, `Recoverable` true.
+
 ## Amendment (2026-10-03, #1898): the door republishes only what this producer could have signed
 
 `Verify` resolves the wire sign kid through `PublicKey` by entry name, so the door admitted

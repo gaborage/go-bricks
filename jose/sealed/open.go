@@ -19,13 +19,15 @@ import (
 	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
-// Opener sentinels. Every Open failure is an *OpenError whose embedded *bricksjose.Error carries
+// Opener sentinels. Every Open refusal is an *OpenError whose embedded *bricksjose.Error carries
 // one of these as Sentinel, so errors.Is picks the disposition class and Code names the rule.
+// A key resolver fault is not a refusal: a bare *bricksjose.Error matching bricksjose.ErrKeyResolution
+// with Code CodeKeyResolution, the resolver's own error still in its chain.
 var (
 	// ErrNotSealed is the structural sentinel: the body is not a compact JWS carrying TypV1.
 	ErrNotSealed = errors.New("sealed: body is not a sealed message")
 	// ErrKidUnknownGeneration is the recoverable class: the wire kid is a well-formed
-	// Generation of the declared family that this consumer has not provisioned yet.
+	// Generation of the declared family that the resolver reports unknown (bricksjose.ErrKidUnknown).
 	ErrKidUnknownGeneration = errors.New("sealed: kid generation not provisioned")
 	// ErrOpenFailed covers every other opener rule: poison, never recoverable by provisioning.
 	ErrOpenFailed = errors.New("sealed: open failed")
@@ -38,6 +40,7 @@ const (
 	CodeCtyInvalid           = "SEAL_CTY_INVALID"
 	CodeCritPresent          = "SEAL_CRIT_PRESENT"
 	CodeKidUnknownGeneration = "SEAL_KID_UNKNOWN_GENERATION"
+	CodeKeyResolution        = "SEAL_KEY_RESOLUTION"
 	CodeSignatureInvalid     = "SEAL_SIGNATURE_INVALID"
 	CodeHeaderSlotInvalid    = "SEAL_HEADER_SLOT_INVALID"
 	CodeEventTypeMismatch    = "SEAL_EVENT_TYPE_MISMATCH"
@@ -166,7 +169,7 @@ func (e *OpenError) Unwrap() error {
 //	 1 compact JWS with typ TypV1                       NOT_SEALED
 //	 2 alg ∈ {PS256,RS256}, cty json, no crit           SEAL_ALG_NOT_ALLOWED / SEAL_CTY_INVALID / SEAL_CRIT_PRESENT
 //	 3 kid is a Generation of the sign family           SEAL_KID_FAMILY_MISMATCH
-//	 4 kid resolves to a PUBLIC key                     SEAL_KID_UNKNOWN_GENERATION (recoverable)
+//	 4 kid resolves to a PUBLIC key                     SEAL_KID_UNKNOWN_GENERATION (recoverable; unknown kid only)
 //	 5 signature over the exact payload bytes           SEAL_SIGNATURE_INVALID
 //	 6 jti / iat / etyp / sp present and well-formed    SEAL_HEADER_SLOT_INVALID
 //	 7 etyp == declared EventType                       SEAL_EVENT_TYPE_MISMATCH
@@ -180,7 +183,9 @@ func (e *OpenError) Unwrap() error {
 //
 // Rules 1–4 run on the peeked, still unauthenticated protected header, before any
 // signature parsing; nothing in rules 1–9 touches the inner JWE. Keys resolve per message
-// through opts.Keys. No clock is read: iat is surfaced, never judged.
+// through opts.Keys; a lookup failing for any reason but bricksjose.ErrKidUnknown, or returning a
+// nil key, is a resolver fault (SEAL_KEY_RESOLUTION, not an *OpenError), never a refusal.
+// No clock is read: iat is surfaced, never judged.
 //
 // Rules 1–10 live in openCore, shared with OpenDocument (#1409), the type-free door that
 // returns the plaintext and the document apart instead of decoding into out.
@@ -247,7 +252,7 @@ func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
 		return nil, err
 	}
 	if key, keyErr := opts.Keys.PublicKey(core.env.EncKid); keyErr != nil || key == nil {
-		return nil, unknownGenerationError(10, core.env.EncKid, tagKeyEncrypt, provisionedInKeySet, keyErr, layerJWE)
+		return nil, lookupError(10, core.env.EncKid, tagKeyEncrypt, provisionedInKeySet, keyErr, layerJWE)
 	}
 	return core.env, nil
 }
@@ -388,7 +393,7 @@ func peekOuter(compact string, spec *Spec, keys bricksjose.KeyResolver, where st
 	}
 	key, keyErr := keys.PublicKey(peek.Kid)
 	if keyErr != nil || key == nil {
-		return "", "", nil, unknownGenerationError(4, peek.Kid, tagKeySign, where, keyErr, "")
+		return "", "", nil, lookupError(4, peek.Kid, tagKeySign, where, keyErr, "")
 	}
 	return peek.Kid, family, key, nil
 }
@@ -568,7 +573,7 @@ func checkSubjectHeader(compact, outerKid string, spec *Spec) (cryptoadapter.Hea
 func decryptSubject(compact, kid string, keys bricksjose.KeyResolver) ([]byte, error) {
 	encKey, keyErr := keys.PrivateKey(kid)
 	if keyErr != nil || encKey == nil {
-		return nil, unknownGenerationError(10, kid, tagKeyEncrypt, provisionedOnConsumer, keyErr, layerJWE)
+		return nil, lookupError(10, kid, tagKeyEncrypt, provisionedOnConsumer, keyErr, layerJWE)
 	}
 	plaintext, _, err := cryptoadapter.Decrypt(compact, encKey, &cryptoadapter.DecryptOptions{
 		ExpectedKid: kid, AllowedKeyAlgs: openKeyAlgs, AllowedContentEnc: openContents,
@@ -592,6 +597,31 @@ const (
 	provisionedOnConsumer = "on this consumer"
 	provisionedInKeySet   = "in this key set"
 )
+
+// lookupError classifies a failed key lookup: only an unknown kid is an unknown generation; any other
+// resolver error, and a (nil, nil) hand-back, is a resolver fault.
+func lookupError(rule int, kid, role, where string, cause error, layer string) error {
+	if errors.Is(cause, bricksjose.ErrKidUnknown) {
+		return unknownGenerationError(rule, kid, role, where, cause, layer)
+	}
+	return resolverFaultError(kid, role, cause)
+}
+
+// resolverFaultError is not a refusal: a *bricksjose.Error matching ErrKeyResolution whose chain also
+// reaches the resolver's own error, so neither Recoverable nor a rule applies.
+func resolverFaultError(kid, role string, cause error) error {
+	sentinel := bricksjose.ErrKeyResolution
+	if cause != nil {
+		sentinel = fmt.Errorf("%w: %w", bricksjose.ErrKeyResolution, cause)
+	}
+	return &bricksjose.Error{
+		Sentinel: sentinel,
+		Code:     CodeKeyResolution,
+		Message:  role + " kid lookup failed in the key resolver",
+		Kid:      kid,
+		Cause:    cause,
+	}
+}
 
 // unknownGenerationError is the recoverable class: a well-formed Generation the resolver has not provisioned.
 func unknownGenerationError(rule int, kid, role, where string, cause error, layer string) error {

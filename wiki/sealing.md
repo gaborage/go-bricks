@@ -135,7 +135,7 @@ type PaymentAuthorized struct {
 | Generation | keystore entry `<logical>.v<N>` when the family contains `.`, `<logical>-v<N>` when it does not (ADR-144) | `N` a positive integer without leading zeros (`v1`, not `v0`/`v01`); ordering is integer comparison; the family fixes the marker for life; `keystore.Generation.Kid()` is the wire kid and the inner `iss` |
 | Accept set | the consumer's keystore | exactly the provisioned generations of the family in the inherited role (`keystore.FamilyEnumerator`); provisioning is the sole trust act — no accept-list config exists |
 | Activation | `messaging.seal.active.<logical>: v<N>` on the producer | resolved by `keystore.ActiveGeneration` at startup for every Logical kid the producer resolves, sign and encrypt alike: one generation auto-activates, several with no selector refuse startup, a selector naming an unprovisioned generation refuses startup |
-| Family pin | the opener | the wire `kid` must be a Generation of the declared family (`SEAL_KID_FAMILY_MISMATCH`) AND resolve locally (`SEAL_KID_UNKNOWN_GENERATION`, recoverable) |
+| Family pin | the opener | the wire `kid` must be a Generation of the declared family (`SEAL_KID_FAMILY_MISMATCH`) AND resolve locally (`SEAL_KID_UNKNOWN_GENERATION`, recoverable, only when the resolver reports the kid unknown; any other lookup failure is the resolver fault `SEAL_KEY_RESOLUTION`) |
 
 Granularity: one sign family per producing service, one encrypt family per audience.
 Per-queue keys are forbidden; per-tenant keys are forbidden in v1 (a tag is a compile-time
@@ -273,6 +273,7 @@ no clock is read.
 | 2 | `alg` ∈ {PS256, RS256}; `cty: application/json`; no `crit`; unknown params ignored | `SEAL_ALG_NOT_ALLOWED` / `SEAL_CTY_INVALID` / `SEAL_CRIT_PRESENT` |
 | 3 | `kid` is a Generation of the declared sign family | `SEAL_KID_FAMILY_MISMATCH` |
 | 4 | `kid` resolves to a PUBLIC key in the local keystore | `SEAL_KID_UNKNOWN_GENERATION` (recoverable — the rotation-lag signature) |
+| — | any key lookup (rules 4 and 10, and `Verify`'s encrypt PUBLIC) fails with an error not matching `jose.ErrKidUnknown`, or returns a nil key | `SEAL_KEY_RESOLUTION` (resolver fault, not a refusal; never recoverable) |
 | 5 | signature verifies over the exact payload bytes | `SEAL_SIGNATURE_INVALID` |
 | 6 | `jti` / `iat` / `etyp` / `sp` present and well-formed | `SEAL_HEADER_SLOT_INVALID` (detail `slot`: presence and length only) |
 | 7 | `etyp` equals the declared `EventType` | `SEAL_EVENT_TYPE_MISMATCH` |
@@ -296,10 +297,21 @@ per-message poison class. The sealer's own codes are `SEAL_TAG_INVALID`,
 `SEAL_OPTIONS_INVALID`, `SEAL_TYPE_MISMATCH`, `SEAL_DOCUMENT_INVALID`, `SEAL_FAILED`
 (`jose/sealed/errors.go`).
 
-Every failure is one `*sealed.OpenError`: `errors.Is` reaches the sentinel
+**Recoverable** means one thing: a well-formed Generation of the declared family whose key the
+resolver reports unknown (its error matches `jose.ErrKidUnknown`) — the rotation-lag signature,
+`SEAL_KID_UNKNOWN_GENERATION`, plus the producer door's sign generation held without its
+private key. A key lookup that fails any other way (no keystore, a failing custom resolver)
+or returns `(nil, nil)` is a resolver fault: a bare `*jose.Error` with code
+`SEAL_KEY_RESOLUTION`, never an `*OpenError` and never recoverable. It matches
+`jose.ErrKeyResolution` (use `errors.Is`, never compare `Sentinel`), names the kid, and keeps the
+resolver's own error reachable through `errors.Is`/`errors.As`. A custom `KeyResolver` must
+report a missing kid with an error matching `jose.ErrKidUnknown`, or every unprovisioned
+generation reads as a fault. Every lookup runs before the decrypt, so no fault follows plaintext.
+
+Every refusal is one `*sealed.OpenError`: `errors.Is` reaches the sentinel
 (`ErrNotSealed` vs `ErrOpenFailed`), `Code` names the rule, and details carry presence,
 length and layer only — a signed value is not a log-safe value (ADR-081). On the consume
-door an open failure is a nack without requeue into the standard DLQ path as a
+door an open failure (a resolver fault included, counted under its own code) is a nack without requeue into the standard DLQ path as a
 `*messaging.PayloadError` at payloaderr stage `open` (`messaging.PayloadStageOpen`,
 sentinel `messaging.ErrPayloadOpenRefused` — match with `errors.Is`), so ops can tell a
 signature-invalid spike from JSON garbage; the `*sealruntime.OpenRefusedError` wrapping the
@@ -398,7 +410,7 @@ err = h.PublishSealed(ctx, client, data)
 | the handle's seal setup failed at declaration | that startup error (for example `messaging.ErrSealingNotLinked`) |
 | the registered codec has no producer verification | `messaging.ErrSealingNotLinked`, wrapped; `Publish` and `Seal` still work |
 | the context's tenant disagrees with the client's pool key | `messaging.ErrTenantStampConflict`, as `Publish` |
-| the bytes fail verification | `messaging.ErrSealedBytesRejected`; the chain carries a `*messaging.SealOpenRefusedError` whose `Code` is the rule's `SEAL_*` code, and `errors.As` reaches the `*jose/sealed.OpenError` |
+| the bytes fail verification | `messaging.ErrSealedBytesRejected`; the chain carries a `*messaging.SealOpenRefusedError` whose `Code` is the rule's `SEAL_*` code, and `errors.As` reaches the `*jose/sealed.OpenError` (a resolver fault instead carries `SEAL_KEY_RESOLUTION`, `Recoverable` false, and no `OpenError`) |
 | the signed `tid` is not the tenant this publish would stamp | `messaging.ErrSealedTenantMismatch` |
 
 **Checks.** Verification is `jose/sealed.Verify`, the

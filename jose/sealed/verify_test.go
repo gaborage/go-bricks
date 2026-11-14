@@ -28,26 +28,32 @@ func (r publicOnlyResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 	return nil, errors.New("private key requested")
 }
 
-// nilKeyResolver answers (nil, nil) for one kid's public or private lookup and delegates every other lookup.
-type nilKeyResolver struct {
-	keys       bricksjose.KeyResolver
-	nilPublic  string
-	nilPrivate string
+// faultyResolver answers (nil, err) for one kid's public or private lookup and delegates every other lookup; a nil err is the (nil, nil) hand-back.
+type faultyResolver struct {
+	keys         bricksjose.KeyResolver
+	faultPublic  string
+	faultPrivate string
+	err          error
 }
 
-func (r nilKeyResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
-	if kid == r.nilPublic {
-		return nil, nil
+func (r faultyResolver) PublicKey(kid string) (*rsa.PublicKey, error) {
+	if kid == r.faultPublic {
+		return nil, r.err
 	}
 	return r.keys.PublicKey(kid)
 }
 
-func (r nilKeyResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
-	if kid == r.nilPrivate {
-		return nil, nil
+func (r faultyResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
+	if kid == r.faultPrivate {
+		return nil, r.err
 	}
 	return r.keys.PrivateKey(kid)
 }
+
+// lookupTimeout stands in for a custom resolver's own failure.
+type lookupTimeout struct{}
+
+func (*lookupTimeout) Error() string { return "key lookup timed out" }
 
 // producerOptions is the producer's view: both generations as public keys, no tid rule.
 func producerOptions(t *testing.T) *sealed.OpenOptions {
@@ -86,14 +92,21 @@ func TestVerifyResolvesTheEncryptKidAsPublic(t *testing.T) {
 	requireUnprovisionedEncryptRefusal(t, env, err)
 }
 
-func TestVerifyRefusesANilEncryptKey(t *testing.T) {
+func TestVerifyFaultsOnANilEncryptKey(t *testing.T) {
 	spec := testSpec(t)
 	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	require.NoError(t, err)
-	opts := &sealed.OpenOptions{EventType: eventType, Keys: nilKeyResolver{keys: publicOnlyResolver{t: t, keys: testKeys(t).resolver}, nilPublic: encKid}}
+	opts := &sealed.OpenOptions{EventType: eventType, Keys: faultyResolver{keys: publicOnlyResolver{t: t, keys: testKeys(t).resolver}, faultPublic: encKid}}
 
 	env, err := sealed.Verify(wire, spec, opts)
-	requireUnprovisionedEncryptRefusal(t, env, err)
+	assert.Nil(t, env)
+	var oe *sealed.OpenError
+	assert.False(t, errors.As(err, &oe), "a nil key is a resolver fault, not a refusal")
+	var je *bricksjose.Error
+	require.ErrorAs(t, err, &je)
+	assert.Equal(t, sealed.CodeKeyResolution, je.Code)
+	assert.Equal(t, encKid, je.Kid)
+	assert.ErrorIs(t, err, bricksjose.ErrKeyResolution)
 }
 
 func TestOpenKeepsTheConsumerWordingForAnUnprovisionedEncryptKey(t *testing.T) {
@@ -117,14 +130,77 @@ func TestOpenKeepsTheConsumerWordingForAnUnprovisionedEncryptKey(t *testing.T) {
 	assert.Equal(t, want, oe.Err.Message)
 }
 
-// TestEveryKeyLookupRefusesANilKeyLikeAMissingOne pins, per door reaching each lookup, one refusal for a failed and a (nil, nil) lookup.
-func TestEveryKeyLookupRefusesANilKeyLikeAMissingOne(t *testing.T) {
+// keyLookup is one of the three resolver calls a door can reach, with the doors that reach it.
+type keyLookup struct {
+	name    string
+	missing bricksjose.KeyResolver
+	fault   func(err error) bricksjose.KeyResolver
+	rule    int
+	kid     string
+	role    string
+	details map[string]string
+	doors   map[string]string // door -> its unknown-generation message
+}
+
+func keyLookups(t *testing.T) []keyLookup {
+	t.Helper()
+	k := testKeys(t)
+	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
+	return []keyLookup{
+		{
+			name:    "sign_public",
+			missing: jositest.NewTestResolver(map[string]any{encKid: k.encPriv}),
+			fault: func(err error) bricksjose.KeyResolver {
+				return faultyResolver{keys: consumer, faultPublic: signKid, err: err}
+			},
+			rule: 4,
+			kid:  signKid,
+			role: "sign",
+			doors: map[string]string{
+				"open":          "sign kid generation is not provisioned on this consumer",
+				"open_document": "sign kid generation is not provisioned on this consumer",
+				"verify":        "sign kid generation is not provisioned in this key set",
+			},
+		},
+		{
+			name:    "encrypt_private",
+			missing: jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey}),
+			fault: func(err error) bricksjose.KeyResolver {
+				return faultyResolver{keys: consumer, faultPrivate: encKid, err: err}
+			},
+			rule:    10,
+			kid:     encKid,
+			role:    "encrypt",
+			details: map[string]string{sealed.DetailLayer: "jwe"},
+			doors: map[string]string{
+				"open":          "encrypt kid generation is not provisioned on this consumer",
+				"open_document": "encrypt kid generation is not provisioned on this consumer",
+			},
+		},
+		{
+			name:    "encrypt_public",
+			missing: jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey}),
+			fault: func(err error) bricksjose.KeyResolver {
+				return faultyResolver{keys: consumer, faultPublic: encKid, err: err}
+			},
+			rule:    10,
+			kid:     encKid,
+			role:    "encrypt",
+			details: map[string]string{sealed.DetailLayer: "jwe"},
+			doors: map[string]string{
+				"verify": "encrypt kid generation is not provisioned in this key set",
+			},
+		},
+	}
+}
+
+// lookupDoors runs one sealed body through each door that resolves keys.
+func lookupDoors(t *testing.T) map[string]func(opts *sealed.OpenOptions) error {
+	t.Helper()
 	spec := testSpec(t)
 	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
 	require.NoError(t, err)
-	k := testKeys(t)
-	consumer := jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey, encKid: k.encPriv})
-	doors := map[string]func(opts *sealed.OpenOptions) error{
+	return map[string]func(opts *sealed.OpenOptions) error{
 		"open": func(opts *sealed.OpenOptions) error {
 			var out paymentAuthorized
 			_, err := sealed.Open(wire, spec, opts, &out)
@@ -139,54 +215,61 @@ func TestEveryKeyLookupRefusesANilKeyLikeAMissingOne(t *testing.T) {
 			return err
 		},
 	}
-	lookups := []struct {
-		name     string
-		missing  bricksjose.KeyResolver
-		nilKey   bricksjose.KeyResolver
-		rule     int
-		kid      string
-		details  map[string]string
-		messages map[string]string // keyed by every door that reaches this lookup
-	}{
-		{
-			name:    "sign_public",
-			missing: jositest.NewTestResolver(map[string]any{encKid: k.encPriv}),
-			nilKey:  nilKeyResolver{keys: consumer, nilPublic: signKid},
-			rule:    4,
-			kid:     signKid,
-			messages: map[string]string{
-				"open":          "sign kid generation is not provisioned on this consumer",
-				"open_document": "sign kid generation is not provisioned on this consumer",
-				"verify":        "sign kid generation is not provisioned in this key set",
-			},
-		},
-		{
-			name:    "encrypt_private",
-			missing: jositest.NewTestResolver(map[string]any{signKid: &k.signPriv.PublicKey}),
-			nilKey:  nilKeyResolver{keys: consumer, nilPrivate: encKid},
-			rule:    10,
-			kid:     encKid,
-			details: map[string]string{sealed.DetailLayer: "jwe"},
-			messages: map[string]string{
-				"open":          "encrypt kid generation is not provisioned on this consumer",
-				"open_document": "encrypt kid generation is not provisioned on this consumer",
-			},
-		},
+}
+
+func TestEveryKeyLookupRefusesAnUnknownKidAsAnUnknownGeneration(t *testing.T) {
+	doors := lookupDoors(t)
+	for _, lk := range keyLookups(t) {
+		for door, msg := range lk.doors {
+			t.Run(lk.name+"/"+door, func(t *testing.T) {
+				err := doors[door](&sealed.OpenOptions{EventType: eventType, Keys: lk.missing})
+				var oe *sealed.OpenError
+				require.ErrorAs(t, err, &oe)
+				assert.Equal(t, sealed.CodeKidUnknownGeneration, oe.Err.Code)
+				assert.Equal(t, lk.rule, oe.Rule)
+				assert.Equal(t, lk.details, oe.Details)
+				assert.Equal(t, lk.kid, oe.Err.Kid)
+				assert.Equal(t, msg, oe.Err.Message)
+				assert.ErrorIs(t, err, sealed.ErrKidUnknownGeneration)
+			})
+		}
 	}
-	for _, lk := range lookups {
-		shapes := map[string]bricksjose.KeyResolver{"missing": lk.missing, "nil": lk.nilKey}
-		for shape, keys := range shapes {
-			for door, msg := range lk.messages {
+}
+
+// TestEveryKeyLookupReportsAResolverFault pins that a lookup failing for any reason but an unknown kid,
+// including a (nil, nil) hand-back (#1893), is a resolver fault: never a refusal, never a crypto call on a nil key.
+func TestEveryKeyLookupReportsAResolverFault(t *testing.T) {
+	doors := lookupDoors(t)
+	_, noKeystore := bricksjose.NewKeyStoreResolver(nil).PublicKey(signKid)
+	require.Error(t, noKeystore)
+	faults := map[string]error{
+		"nil_key":              nil,
+		"keystore_unavailable": noKeystore,
+		"resolver_timeout":     &lookupTimeout{},
+	}
+	for _, lk := range keyLookups(t) {
+		for shape, cause := range faults {
+			for door := range lk.doors {
 				t.Run(lk.name+"/"+shape+"/"+door, func(t *testing.T) {
-					err := doors[door](&sealed.OpenOptions{EventType: eventType, Keys: keys})
+					err := doors[door](&sealed.OpenOptions{EventType: eventType, Keys: lk.fault(cause)})
+					require.Error(t, err)
 					var oe *sealed.OpenError
-					require.ErrorAs(t, err, &oe)
-					assert.Equal(t, sealed.CodeKidUnknownGeneration, oe.Err.Code)
-					assert.Equal(t, lk.rule, oe.Rule)
-					assert.Equal(t, lk.details, oe.Details)
-					assert.Equal(t, lk.kid, oe.Err.Kid)
-					assert.Equal(t, msg, oe.Err.Message)
-					assert.ErrorIs(t, err, sealed.ErrKidUnknownGeneration)
+					assert.False(t, errors.As(err, &oe), "a resolver fault is not a refusal")
+					assert.NotErrorIs(t, err, sealed.ErrKidUnknownGeneration)
+					assert.ErrorIs(t, err, bricksjose.ErrKeyResolution)
+					var je *bricksjose.Error
+					require.ErrorAs(t, err, &je)
+					assert.Equal(t, sealed.CodeKeyResolution, je.Code)
+					assert.Equal(t, lk.kid, je.Kid)
+					assert.Equal(t, lk.role+" kid lookup failed in the key resolver", je.Message)
+					if cause != nil {
+						assert.ErrorIs(t, err, cause)
+						assert.Equal(t, cause, je.Cause)
+					}
+					if shape == "resolver_timeout" {
+						var timeout *lookupTimeout
+						assert.ErrorAs(t, err, &timeout)
+					}
 				})
 			}
 		}

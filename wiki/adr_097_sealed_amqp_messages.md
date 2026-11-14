@@ -15,6 +15,20 @@
   branches `research/amqp-envelope-standards`, `research/amqp-seal-seams`; prototype
   `prototype/amqp-seal-open`. Deep dive: [sealing.md](sealing.md).
 
+> **Amended (2026-11-14, #2400):** the recoverable class is narrowed. A key lookup — the sign
+> PUBLIC key at rule 4, the encrypt PRIVATE key at rule 10, and `Verify`'s encrypt PUBLIC key —
+> is an unknown generation (`ErrKidUnknownGeneration`, `SEAL_KID_UNKNOWN_GENERATION`, same rule
+> number, `Recoverable` true) only when the resolver's error matches `jose.ErrKidUnknown`. Any
+> other resolver error, and a `(nil, nil)` return, is a **resolver fault**: not an `*OpenError`
+> and not a refusal, but a bare `*jose.Error` matching `jose.ErrKeyResolution` with code
+> `SEAL_KEY_RESOLUTION`, the kid, and the resolver's own error reachable through
+> `errors.Is`/`errors.As`. A missing keystore and a failing custom resolver used to read as
+> "generation not rolled out yet"; a fault is never `Recoverable`, and the consume door counts
+> it on the open-failure instrument under its own code, settling the delivery as before. A nil key
+> still never reaches a crypto call, and every lookup precedes the decrypt. `KeyStoreResolver`
+> still maps a keystore lookup error to `jose.ErrKidUnknown`. ADR-131's not-signable refusal is
+> unchanged. This amendment's change is `[C74.11]`, breaking.
+>
 > **Amended (2026-10-04, [ADR-144](adr_144_dotted_keystore_entry_names.md)):** in §3's
 > generation grammar and Env door, Logical kids may contain interior dots; a dotted family names
 > its generations `<family>.v<N>`, a family without one keeps `-v<N>`, so the marker is a function
