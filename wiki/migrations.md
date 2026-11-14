@@ -16655,7 +16655,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the resolver error kept only as `Err.Cause`, and `messaging/sealed` marked it `Recoverable`.
 - after: only an error matching `jose.ErrKidUnknown` keeps that refusal. Any other resolver error
   and a `(nil, nil)` return are a resolver fault: a `*jose.Error`, not an `*OpenError`, matching
-  `jose.ErrKeyResolution` (and not `ErrKidUnknownGeneration`), `Code` `SEAL_KEY_RESOLUTION`
+  `jose.ErrKeyResolution` (and, unless the resolver's own error wraps it, not
+  `ErrKidUnknownGeneration`), `Code` `SEAL_KEY_RESOLUTION`
   (`sealed.CodeKeyResolution`), `Kid` the wire kid, `Message` `<sign|encrypt> kid lookup failed in
   the key resolver`, the resolver's own error reachable through `errors.Is`/`errors.As` and kept as
   `Cause`. On the consume door and `PublishSealed` it is a `SealOpenRefusedError` with that code
@@ -16665,13 +16666,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `*jose.Error` whose `Sentinel` is it), and never `(nil, nil)`. Match a fault with
   `errors.Is(err, jose.ErrKeyResolution)` or the `SEAL_KEY_RESOLUTION` code, never by comparing
   `Sentinel`, and handle it apart from a refusal: an `errors.As(err, &openErr)` arm no longer sees
-  it. Test `errors.Is(err, jose.ErrKeyResolution)` BEFORE any `errors.As(err, &openErr)` arm: the
-  fault keeps a custom resolver's own error in its chain, and that error could itself be an
-  `*OpenError`. An alert or dashboard keyed on `SEAL_KID_UNKNOWN_GENERATION` to catch a broken resolver
+  it. Test `errors.Is(err, jose.ErrKeyResolution)` BEFORE any `errors.As(err, &openErr)` arm or
+  `ErrKidUnknownGeneration` check, or read the code: the fault keeps a custom resolver's own error
+  in its chain, and that error could itself be an `*OpenError` or wrap `ErrKidUnknownGeneration`.
+  An alert or dashboard keyed on `SEAL_KID_UNKNOWN_GENERATION` to catch a broken resolver
   adds `SEAL_KEY_RESOLUTION`.
 - verify: open a body sealed under a generation the resolver does not hold: `errors.Is(err,
-  sealed.ErrKidUnknownGeneration)` is true. With a resolver that returns any other error, it is
-  false and `errors.Is(err, jose.ErrKeyResolution)` is true.
+  sealed.ErrKidUnknownGeneration)` is true. With a resolver that returns any other error,
+  `errors.Is(err, jose.ErrKeyResolution)` is true and the code is `SEAL_KEY_RESOLUTION`.
 - ref: gaborage/go-bricks#2400 · [ADR-097](adr_097_sealed_amqp_messages.md) (2026-11-14
   amendment) · `jose/sealed/open.go` (`lookupError`, `resolverFaultError`, `CodeKeyResolution`) ·
   `messaging/sealed/opener.go` (`refuse`)
