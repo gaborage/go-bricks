@@ -16660,7 +16660,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`sealed.CodeKeyResolution`), `Kid` the wire kid, `Message` `<sign|encrypt> kid lookup failed in
   the key resolver`, the resolver's own error reachable through `errors.Is`/`errors.As` and kept as
   `Cause`. On the consume door and `PublishSealed` it is a `SealOpenRefusedError` with that code
-  and `Recoverable` false, counted on the open-failure instrument under `SEAL_KEY_RESOLUTION`.
+  and `Recoverable` false. The consume door counts it on the open-failure instrument under
+  `SEAL_KEY_RESOLUTION`; `PublishSealed` returns it wrapped in `ErrSealedBytesRejected` and counts
+  nothing.
 - apply: make a resolver report a kid it does not hold with an error matching
   `jose.ErrKidUnknown` (wrap it: `fmt.Errorf("…: %w", jose.ErrKidUnknown)`, or return a
   `*jose.Error` whose `Sentinel` is it), and never `(nil, nil)`. Match a fault with
