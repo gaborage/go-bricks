@@ -50,10 +50,10 @@ func (r faultyResolver) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 	return r.keys.PrivateKey(kid)
 }
 
-// lookupTimeout stands in for a custom resolver's own failure.
-type lookupTimeout struct{}
+// lookupTimeoutError stands in for a custom resolver's own failure.
+type lookupTimeoutError struct{}
 
-func (*lookupTimeout) Error() string { return "key lookup timed out" }
+func (*lookupTimeoutError) Error() string { return "key lookup timed out" }
 
 // producerOptions is the producer's view: both generations as public keys, no tid rule.
 func producerOptions(t *testing.T) *sealed.OpenOptions {
@@ -100,13 +100,7 @@ func TestVerifyFaultsOnANilEncryptKey(t *testing.T) {
 
 	env, err := sealed.Verify(wire, spec, opts)
 	assert.Nil(t, env)
-	var oe *sealed.OpenError
-	assert.False(t, errors.As(err, &oe), "a nil key is a resolver fault, not a refusal")
-	var je *bricksjose.Error
-	require.ErrorAs(t, err, &je)
-	assert.Equal(t, sealed.CodeKeyResolution, je.Code)
-	assert.Equal(t, encKid, je.Kid)
-	assert.ErrorIs(t, err, bricksjose.ErrKeyResolution)
+	requireResolverFault(t, err, encKid, "encrypt", nil)
 }
 
 func TestOpenKeepsTheConsumerWordingForAnUnprovisionedEncryptKey(t *testing.T) {
@@ -245,34 +239,42 @@ func TestEveryKeyLookupReportsAResolverFault(t *testing.T) {
 	faults := map[string]error{
 		"nil_key":              nil,
 		"keystore_unavailable": noKeystore,
-		"resolver_timeout":     &lookupTimeout{},
+		"resolver_timeout":     &lookupTimeoutError{},
 	}
 	for _, lk := range keyLookups(t) {
 		for shape, cause := range faults {
 			for door := range lk.doors {
 				t.Run(lk.name+"/"+shape+"/"+door, func(t *testing.T) {
 					err := doors[door](&sealed.OpenOptions{EventType: eventType, Keys: lk.fault(cause)})
-					require.Error(t, err)
-					var oe *sealed.OpenError
-					assert.False(t, errors.As(err, &oe), "a resolver fault is not a refusal")
-					assert.NotErrorIs(t, err, sealed.ErrKidUnknownGeneration)
-					assert.ErrorIs(t, err, bricksjose.ErrKeyResolution)
-					var je *bricksjose.Error
-					require.ErrorAs(t, err, &je)
-					assert.Equal(t, sealed.CodeKeyResolution, je.Code)
-					assert.Equal(t, lk.kid, je.Kid)
-					assert.Equal(t, lk.role+" kid lookup failed in the key resolver", je.Message)
-					if cause != nil {
-						assert.ErrorIs(t, err, cause)
-						assert.Equal(t, cause, je.Cause)
-					}
-					if shape == "resolver_timeout" {
-						var timeout *lookupTimeout
-						assert.ErrorAs(t, err, &timeout)
-					}
+					requireResolverFault(t, err, lk.kid, lk.role, cause)
 				})
 			}
 		}
+	}
+}
+
+// requireResolverFault pins a resolver fault: not a refusal, ErrKeyResolution and SEAL_KEY_RESOLUTION,
+// the kid named, and a non-nil cause reachable by identity and, for lookupTimeoutError, by type.
+func requireResolverFault(t *testing.T, err error, kid, role string, cause error) {
+	t.Helper()
+	require.Error(t, err)
+	var oe *sealed.OpenError
+	require.NotErrorAs(t, err, &oe, "a resolver fault is not a refusal")
+	require.NotErrorIs(t, err, sealed.ErrKidUnknownGeneration)
+	require.ErrorIs(t, err, bricksjose.ErrKeyResolution)
+	var je *bricksjose.Error
+	require.ErrorAs(t, err, &je)
+	assert.Equal(t, sealed.CodeKeyResolution, je.Code)
+	assert.Equal(t, kid, je.Kid)
+	assert.Equal(t, role+" kid lookup failed in the key resolver", je.Message)
+	if cause == nil {
+		return
+	}
+	require.ErrorIs(t, err, cause)
+	assert.Equal(t, cause, je.Cause)
+	var timeout *lookupTimeoutError
+	if errors.As(cause, &timeout) {
+		require.ErrorAs(t, err, &timeout)
 	}
 }
 
