@@ -90,7 +90,9 @@ func TestContainerWaitStrategiesBindConfiguredStartupTimeout(t *testing.T) {
 			build: func(t *testing.T, timeout time.Duration) wait.Strategy {
 				cfg := DefaultPostgreSQLConfig()
 				cfg.StartupTimeout = timeout
-				return waitFromOptions(t, postgreSQLOptions(cfg))
+				opts, err := postgreSQLOptions(cfg)
+				require.NoError(t, err)
+				return waitFromOptions(t, opts)
 			},
 		},
 		{

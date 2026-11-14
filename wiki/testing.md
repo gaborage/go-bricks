@@ -541,6 +541,39 @@ Two behaviors to know before extending this fixture:
 
 One node owning every slot is not a sharded topology: MOVED redirects, per-shard version skew and partial-shard outages stay uncovered. MOVED is the one worth naming, because it is not merely absent from the fixture — the real target actively produces it. [ADR-117](adr_117_cache_key_namespace_and_cluster_mode.md) records both halves: ElastiCache Serverless shards (a hash tag would pin every key of a deployment to one slot and defeat that sharding), and a standalone client dialling its configuration endpoint fails on the first `MOVED`. A one-container fixture can stage neither. `--tls-cluster yes` is in the same bucket — a single node never dials a peer over the bus, so the flag is required for a real cluster and unexercised by this suite; `redisOptions` records what it changes.
 
+### PostgreSQL server settings and a tmpfs data directory
+
+Two typed fields on `containers.PostgreSQLContainerConfig` tune the server without reaching for testcontainers types:
+
+- `Settings map[string]string` passes each entry as a `-c key=value` server argument, in sorted key order, after the module's own `-c fsync=off`. A key that is empty or holds whitespace or `=` fails the start with an error naming the key, before any container is created. Values go through unchanged.
+- `DataTmpfs string` takes a size such as `512m` and mounts a tmpfs of that size at `/var/lib/postgresql`, the image's declared volume. That path holds the data directory on every tag: `/var/lib/postgresql/data` before PostgreSQL 18 and `/var/lib/postgresql/18/docker` from 18 on.
+
+Zero values (a nil map, an empty string) leave the container exactly as before. The config type stays in the default build; only the integration-tagged fixture turns these fields into container options.
+
+```go
+cfg := containers.DefaultPostgreSQLConfig()
+cfg.Settings = map[string]string{"max_connections": "300", "log_statement": "all"}
+cfg.DataTmpfs = "512m"
+pg := containers.MustStartPostgreSQLContainer(ctx, t, cfg).WithCleanup(t)
+```
+
+**Post-start setup** (roles, schemas, migrations) is not a config field. Wrap the start function you hand `containers.NewShared`: start the container, run the setup over its connection string, and terminate it if the setup fails. The framework's own suites compose the shared container the same way. The reasons a hook field was turned down are in `.out-of-scope/postgres-container-hook-and-external-dsn.md`.
+
+```go
+var pkgPG = containers.NewShared("PostgreSQL", 3*time.Minute,
+    func(ctx context.Context) (*containers.PostgreSQLContainer, bool, error) {
+        pg, dockerAvailable, err := containers.StartPostgreSQLContainerForTestMain(ctx, nil)
+        if err != nil || !dockerAvailable {
+            return pg, dockerAvailable, err
+        }
+        if err := setUpRolesAndSchema(ctx, pg.ConnectionString()); err != nil {
+            _ = pg.Terminate(ctx)
+            return nil, true, err
+        }
+        return pg, true, nil
+    })
+```
+
 ### Oracle: shared container + per-test schema (ADR-020)
 
 The `database/oracle` integration suite provisions exactly one Oracle container per test-binary execution (via package-level `TestMain`) and isolates each test in its own randomly-named schema. This avoids the ~18.5s per-test cold-start that previously pushed the package against the 10-minute Go test timeout.
