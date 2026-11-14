@@ -69,7 +69,10 @@ func validatePostgreSQLSettings(settings map[string]string) error {
 
 // postgreSQLSettingArgs renders settings as `-c key=value` arguments sorted by key.
 func postgreSQLSettingArgs(settings map[string]string) []string {
-	var args []string
+	if len(settings) == 0 {
+		return nil
+	}
+	args := make([]string, 0, 2*len(settings))
 	for _, key := range slices.Sorted(maps.Keys(settings)) {
 		args = append(args, "-c", key+"="+settings[key])
 	}
