@@ -3977,7 +3977,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 |---|---|
 | Handler returns `error` | nack-WITHOUT-requeue — message is **dropped** (prevents poison-message loops) |
 | Handler panics | Recovered with stack trace, treated as error (drop) — service stays up |
-| Built-in retry | **None.** Use the Transactional Outbox for at-least-once delivery, or implement idempotent retry inside the handler (e.g. via a retry queue with TTL); bound such a retry route with `messaging.DeathCount(headers, queue, messaging.DeathReasonRejected)` / `meta.DeathCount(queue, reason)`, which reads the broker's `x-death` count (publisher-writable, so not a security control) |
+| Built-in retry | **None.** Use the Transactional Outbox for at-least-once delivery, or implement idempotent retry inside the handler (e.g. via a retry queue with TTL); bound a hand-built retry route with `messaging.DeathCount` / `meta.DeathCount` (x-death count; publisher-writable, not a security control) |
 | Observability | Every failure emits a structured ERROR log + OTEL `messaging.client.operation.duration` histogram tagged with `error.type` |
 
 **Sizing guidance:** if your handlers hit a database, ensure `database.pool.max.connections >= NumCPU * 4 × number_of_consumers` to avoid pool starvation under load. Test handlers with `go test -race`.
