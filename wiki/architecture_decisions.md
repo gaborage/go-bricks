@@ -3247,7 +3247,7 @@ and list operands were already aligned by #1167. See [migrations.md](migrations.
 
 ### [ADR-098: Builder Clauses for the Ledger Stores](adr_098_builder_clauses_for_ledger_stores.md)
 
-**Date:** 2026-09-04 | **Status:** Accepted | **Breaking:** `SelectQueryBuilder` gains `ForUpdate`, `ForUpdateNoWait` and `SubqueryColumn`; `UpdateQueryBuilder` gains `SetExpr` — a consumer type implementing either stops compiling until it grows them
+**Date:** 2026-09-04 | **Status:** Accepted | **Breaking:** `SelectQueryBuilder` gains `ForUpdate`, `ForUpdateNoWait` and `SubqueryColumn`; `UpdateQueryBuilder` gains `SetExpr` — a consumer type implementing either stops compiling until it grows them; amended 2026-11-14 (#2403), BREAKING: `SelectQueryBuilder` gains `ForUpdateSkipLocked` (`FOR UPDATE SKIP LOCKED`; the `Limit(n)` batch claim renders on PostgreSQL only), `[C74.10]`
 
 The outbox and inbox ledger stores hand-write their SQL because four recurring shapes had
 no builder form: a row lock (`FOR UPDATE [NOWAIT]`), a SET assigning an expression with a

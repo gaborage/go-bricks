@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,12 +55,24 @@ func TestForUpdateRendersAfterPaginationPerVendor(t *testing.T) {
 			wantSQL: `SELECT id FROM users WHERE id = :1 FOR UPDATE NOWAIT`,
 		},
 		{
-			name:   "last_call_wins",
+			name:    "postgres_for_update_skip_locked",
+			vendor:  dbtypes.PostgreSQL,
+			build:   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateSkipLocked() },
+			wantSQL: `SELECT id FROM users WHERE id = $1 FOR UPDATE SKIP LOCKED`,
+		},
+		{
+			name:   "postgres_skip_locked_after_limit",
 			vendor: dbtypes.PostgreSQL,
 			build: func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder {
-				return q.ForUpdateNoWait().ForUpdate()
+				return q.OrderBy("id").Limit(1).ForUpdateSkipLocked()
 			},
-			wantSQL: `SELECT id FROM users WHERE id = $1 FOR UPDATE`,
+			wantSQL: `SELECT id FROM users WHERE id = $1 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`,
+		},
+		{
+			name:    "oracle_for_update_skip_locked",
+			vendor:  dbtypes.Oracle,
+			build:   func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateSkipLocked() },
+			wantSQL: `SELECT id FROM users WHERE id = :1 FOR UPDATE SKIP LOCKED`,
 		},
 	}
 	for _, tc := range cases {
@@ -72,6 +85,42 @@ func TestForUpdateRendersAfterPaginationPerVendor(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantSQL, sql)
 			assert.Equal(t, []any{1}, args, "the lock clause binds nothing")
+		})
+	}
+}
+
+// TestRowLockLastCallWins pins that the three lock calls share one slot:
+// every ordered combination of two and three calls renders only the last.
+func TestRowLockLastCallWins(t *testing.T) {
+	locks := map[string]func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder{
+		forUpdate:           func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdate() },
+		forUpdateNoWait:     func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateNoWait() },
+		forUpdateSkipLocked: func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateSkipLocked() },
+	}
+	var sequences [][]string
+	for a := range locks {
+		for b := range locks {
+			if a == b {
+				continue
+			}
+			sequences = append(sequences, []string{a, b})
+			for c := range locks {
+				if c != a && c != b {
+					sequences = append(sequences, []string{a, b, c})
+				}
+			}
+		}
+	}
+	require.Len(t, sequences, 12)
+	for _, seq := range sequences {
+		t.Run(strings.Join(seq, "_then_"), func(t *testing.T) {
+			query := NewQueryBuilder(dbtypes.PostgreSQL).Select("id").From(tableUsers)
+			for _, lock := range seq {
+				query = locks[lock](query)
+			}
+			sql, _, err := query.ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, "SELECT id FROM users "+seq[len(seq)-1], sql)
 		})
 	}
 }
@@ -92,6 +141,11 @@ func TestOracleRefusesARowLockWithPagination(t *testing.T) {
 		t.Run("oracle_"+name, func(t *testing.T) {
 			qb := NewQueryBuilder(dbtypes.Oracle)
 			_, _, err := paginate(qb.Select("id").From(tableUsers)).ForUpdateNoWait().ToSQL()
+			require.ErrorIs(t, err, dbtypes.ErrRowLockWithPagination)
+		})
+		t.Run("oracle_"+name+"_skip_locked", func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.Oracle)
+			_, _, err := paginate(qb.Select("id").From(tableUsers)).ForUpdateSkipLocked().ToSQL()
 			require.ErrorIs(t, err, dbtypes.ErrRowLockWithPagination)
 		})
 		t.Run("postgres_"+name+"_is_fine", func(t *testing.T) {
@@ -138,6 +192,15 @@ func TestLockedSelectIsRefusedAsASubquery(t *testing.T) {
 	require.Error(t, locked.(*SelectQueryBuilder).ValidateForSubquery())
 
 	_, _, err := qb.Select("id").From("orders").Where(f.Exists(locked)).ToSQL()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "row lock")
+
+	skipLocked := qb.Select("id").From(tableUsers).ForUpdateSkipLocked()
+	err = skipLocked.(*SelectQueryBuilder).ValidateForSubquery()
+	require.Error(t, err)
+	assert.Equal(t, "subquery cannot carry a row lock (ForUpdate/ForUpdateNoWait/ForUpdateSkipLocked)", err.Error())
+
+	_, _, err = qb.Select("id").From("orders").Where(f.Exists(skipLocked)).ToSQL()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "row lock")
 

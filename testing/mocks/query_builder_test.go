@@ -396,6 +396,11 @@ func (m *MockSelectQueryBuilder) ForUpdateNoWait() types.SelectQueryBuilder {
 	return args.Get(0).(types.SelectQueryBuilder)
 }
 
+func (m *MockSelectQueryBuilder) ForUpdateSkipLocked() types.SelectQueryBuilder {
+	args := m.MethodCalled("ForUpdateSkipLocked")
+	return args.Get(0).(types.SelectQueryBuilder)
+}
+
 func (m *MockSelectQueryBuilder) Limit(limit uint64) types.SelectQueryBuilder {
 	args := m.MethodCalled("Limit", limit)
 	return args.Get(0).(types.SelectQueryBuilder)
@@ -544,6 +549,16 @@ func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	assert.Equal(t, "gen_random_uuid()", mockQB.BuildUUIDGeneration())
 	assert.Equal(t, true, mockQB.BuildBooleanValue(true))
 	assert.Equal(t, `"table_name"`, mockQB.EscapeIdentifier("table_name"))
+}
+
+func TestMockQueryBuilderForUpdateSkipLocked(t *testing.T) {
+	mockQB := &MockQueryBuilder{}
+	mockSelectBuilder := &MockSelectQueryBuilder{}
+	defer mockQB.AssertExpectations(t)
+
+	mockQB.On("ForUpdateSkipLocked").Return(mockSelectBuilder)
+
+	assert.Equal(t, mockSelectBuilder, mockQB.ForUpdateSkipLocked())
 }
 
 func TestMockQueryBuilderVendorSpecificBehavior(t *testing.T) {

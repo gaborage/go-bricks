@@ -215,12 +215,17 @@ type SelectQueryBuilder interface {
 	Paginate(limit, offset uint64) SelectQueryBuilder
 
 	// ForUpdate appends `FOR UPDATE`, rendered after pagination; ForUpdateNoWait
-	// appends `FOR UPDATE NOWAIT` instead; the last call wins. On Oracle a lock
-	// combined with Limit/Offset fails ToSQL with ErrRowLockWithPagination
-	// (row_limiting_clause restriction). When to use which, the transaction
-	// requirement and the error to match are in wiki/database.md ("Row locks").
+	// appends `FOR UPDATE NOWAIT` and ForUpdateSkipLocked `FOR UPDATE SKIP
+	// LOCKED` instead; the last call wins. On Oracle a lock combined with
+	// Limit/Offset fails ToSQL with ErrRowLockWithPagination (row_limiting_clause
+	// restriction). When to use which, the transaction requirement and the error
+	// to match are in wiki/database.md ("Row locks").
 	ForUpdate() SelectQueryBuilder
 	ForUpdateNoWait() SelectQueryBuilder
+	// ForUpdateSkipLocked appends `FOR UPDATE SKIP LOCKED`: rows another
+	// transaction holds locked are skipped rather than waited on, the queue-claim
+	// shape. The batch claim (Limit(n) beside it) renders on PostgreSQL only.
+	ForUpdateSkipLocked() SelectQueryBuilder
 
 	// SubqueryColumn appends `(sub) AS alias` to the projection — one scalar
 	// subquery per result column, the shape a stats snapshot takes in one round
