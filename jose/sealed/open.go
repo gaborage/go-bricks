@@ -253,9 +253,7 @@ type OpenedDocument struct {
 	// Document is the signed payload document with the Subject member absent — the member and
 	// exactly one adjacent separator are gone, so it is still a valid JSON object.
 	Document []byte
-	// Subject is the decrypted Subject plaintext: PAN-class data by construction, and the only
-	// plaintext field. Never log, echo or otherwise emit it — rendering it is the caller's
-	// deliberate decision. Wipe zeroes it in place once the caller is done with it.
+	// Subject is the only plaintext field (PAN-class; never log it); Wipe zeroes it in place.
 	Subject []byte
 	// SubjectAt is the byte offset IN Document where the removed member sat. To put a member
 	// back, call Render, which restores the original layout. Splicing at SubjectAt directly

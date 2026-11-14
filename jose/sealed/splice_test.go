@@ -279,9 +279,10 @@ func TestOpenedDocumentRenderRefusesInvalidInput(t *testing.T) {
 // openedFrom opens doc as a verified payload without the crypto; the Subject is "card".
 func openedFrom(t *testing.T, doc string) *OpenedDocument {
 	t.Helper()
-	core := coreFrom(t, doc, "")
-	core.plaintext = core.span.value
-	opened, err := newOpenedDocument(core)
+	payload := []byte(doc)
+	span, err := locateSubject(payload, "card")
+	require.NoError(t, err)
+	opened, err := newOpenedDocument(&openedCore{verifiedCore: verifiedCore{payload: payload, span: span}, plaintext: span.value})
 	require.NoError(t, err)
 	return opened
 }
@@ -337,11 +338,7 @@ func TestDecodeSplicedZeroesBothPlaintextBuffers(t *testing.T) {
 			probe := &spliceProbe{err: tc.err}
 
 			err := decodeSpliced(core, probe)
-			if tc.err == nil {
-				require.NoError(t, err)
-			} else {
-				require.ErrorIs(t, err, refused)
-			}
+			require.ErrorIs(t, err, tc.err)
 			require.Len(t, probe.seen, len(doc)-len(`"x"`)+len(plaintext), "the probe saw the whole spliced document")
 			assert.Equal(t, make([]byte, len(probe.seen)), probe.seen, "the spliced document is zeroed")
 			assert.Equal(t, make([]byte, len(decrypted)), decrypted, "the decrypted subject is zeroed")
@@ -349,8 +346,7 @@ func TestDecodeSplicedZeroesBothPlaintextBuffers(t *testing.T) {
 	}
 }
 
-// TestDecodeSplicedLeavesNoAliasInTheDecodedValue pins the premise of the wipe: encoding/json
-// copies every value it keeps, so zeroing the spliced buffer cannot reach into out.
+// TestDecodeSplicedLeavesNoAliasInTheDecodedValue pins that zeroing the buffers cannot reach the decoded value.
 func TestDecodeSplicedLeavesNoAliasInTheDecodedValue(t *testing.T) {
 	type subject struct {
 		Raw  json.RawMessage            `json:"raw"`

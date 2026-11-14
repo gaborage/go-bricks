@@ -159,10 +159,8 @@ func removeMember(doc []byte, span subjectSpan) []byte {
 	return append(out, doc[end:]...)
 }
 
-// newOpenedDocument applies OpenDocument's rule-11 floor and keeps the verified payload and
-// Subject span privately for Render. Rule 10 proved payload is a complete JSON object and
-// spliceRaw only substitutes the Subject value, so the spliced document is an object iff the
-// plaintext is valid JSON. A refused plaintext is zeroed before the refusal returns.
+// newOpenedDocument applies OpenDocument's rule-11 floor (the plaintext must be valid JSON),
+// zeroing a refused plaintext, and keeps the payload and span privately for Render.
 func newOpenedDocument(core *openedCore) (*OpenedDocument, error) {
 	if !json.Valid(core.plaintext) {
 		clear(core.plaintext)
@@ -178,11 +176,7 @@ func newOpenedDocument(core *openedCore) (*OpenedDocument, error) {
 	}, nil
 }
 
-// decodeSpliced is Open's rule 11: the plaintext spliced back over the Subject span, decoded
-// into dst. Both plaintext buffers, the decrypted Subject and the spliced document, are
-// zeroed on every path. encoding/json copies every value it keeps, so dst aliases neither;
-// only a json.Unmarshaler or encoding.TextUnmarshaler that retains its input, which their
-// contracts forbid, would see zeros.
+// decodeSpliced is Open's rule 11: splice the plaintext back and decode into dst, zeroing both plaintext buffers on every path.
 func decodeSpliced(core *openedCore, dst any) error {
 	doc := spliceRaw(core.payload, core.span, core.plaintext)
 	defer clear(core.plaintext)
