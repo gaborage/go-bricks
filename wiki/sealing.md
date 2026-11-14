@@ -273,7 +273,7 @@ no clock is read.
 | 2 | `alg` ∈ {PS256, RS256}; `cty: application/json`; no `crit`; unknown params ignored | `SEAL_ALG_NOT_ALLOWED` / `SEAL_CTY_INVALID` / `SEAL_CRIT_PRESENT` |
 | 3 | `kid` is a Generation of the declared sign family | `SEAL_KID_FAMILY_MISMATCH` |
 | 4 | `kid` resolves to a PUBLIC key in the local keystore | `SEAL_KID_UNKNOWN_GENERATION` (recoverable — the rotation-lag signature) |
-| — | any key lookup (rules 4 and 10, and `Verify`'s encrypt PUBLIC) fails with an error not matching `jose.ErrKidUnknown`, or returns a nil key | `SEAL_KEY_RESOLUTION` (resolver fault, not a refusal; never recoverable) |
+| — | any key lookup (rules 4 and 10, and `Verify`'s encrypt PUBLIC) fails with an error not matching `jose.ErrKidUnknown`, or returns `(nil, nil)` | `SEAL_KEY_RESOLUTION` (resolver fault, not a refusal; never recoverable) |
 | 5 | signature verifies over the exact payload bytes | `SEAL_SIGNATURE_INVALID` |
 | 6 | `jti` / `iat` / `etyp` / `sp` present and well-formed | `SEAL_HEADER_SLOT_INVALID` (detail `slot`: presence and length only) |
 | 7 | `etyp` equals the declared `EventType` | `SEAL_EVENT_TYPE_MISMATCH` |
@@ -297,8 +297,8 @@ per-message poison class. The sealer's own codes are `SEAL_TAG_INVALID`,
 `SEAL_OPTIONS_INVALID`, `SEAL_TYPE_MISMATCH`, `SEAL_DOCUMENT_INVALID`, `SEAL_FAILED`
 (`jose/sealed/errors.go`).
 
-**Recoverable** is true only for an unknown generation (a well-formed Generation of the declared
-family whose lookup error matches `jose.ErrKidUnknown`, `SEAL_KID_UNKNOWN_GENERATION`) and for
+**Recoverable** is derived from the refusal code: true only for `SEAL_KID_UNKNOWN_GENERATION`, an unknown generation (a well-formed Generation of the declared
+family whose lookup error matches `jose.ErrKidUnknown`) and for
 the producer door's sign generation held without its private key (ADR-131). A resolver fault
 (`SEAL_KEY_RESOLUTION`, table above) is not recoverable: a bare `*jose.Error` matching
 `jose.ErrKeyResolution` (use `errors.Is`, never compare `Sentinel`) that names the kid and keeps
@@ -309,7 +309,7 @@ generation reads as a fault. Every lookup runs before the decrypt, so no fault f
 Every refusal is one `*sealed.OpenError`: `errors.Is` reaches the sentinel
 (`ErrNotSealed` vs `ErrOpenFailed`), `Code` names the rule, and details carry presence,
 length and layer only — a signed value is not a log-safe value (ADR-081). On the consume
-door an open failure (a resolver fault included, counted under its own code) is a nack without requeue into the standard DLQ path as a
+door an open failure (a resolver fault included, counted under its own code) is a nack without requeue, retained only when the queue has the full dead-letter route (DLX, parking queue and binding, e.g. `DeclareQueueWithDLQ`), as a
 `*messaging.PayloadError` at payloaderr stage `open` (`messaging.PayloadStageOpen`,
 sentinel `messaging.ErrPayloadOpenRefused` — match with `errors.Is`), so ops can tell a
 signature-invalid spike from JSON garbage; the `*sealruntime.OpenRefusedError` wrapping the
