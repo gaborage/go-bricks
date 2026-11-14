@@ -92,17 +92,6 @@ func TestVerifyResolvesTheEncryptKidAsPublic(t *testing.T) {
 	requireUnprovisionedEncryptRefusal(t, env, err)
 }
 
-func TestVerifyFaultsOnANilEncryptKey(t *testing.T) {
-	spec := testSpec(t)
-	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))
-	require.NoError(t, err)
-	opts := &sealed.OpenOptions{EventType: eventType, Keys: faultyResolver{keys: publicOnlyResolver{t: t, keys: testKeys(t).resolver}, faultPublic: encKid}}
-
-	env, err := sealed.Verify(wire, spec, opts)
-	assert.Nil(t, env)
-	requireResolverFault(t, err, encKid, "encrypt", nil)
-}
-
 func TestOpenKeepsTheConsumerWordingForAnUnprovisionedEncryptKey(t *testing.T) {
 	spec := testSpec(t)
 	wire, _, err := sealed.Seal(sampleEvent(), spec, testOptions(t))

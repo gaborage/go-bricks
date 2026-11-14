@@ -135,7 +135,7 @@ type PaymentAuthorized struct {
 | Generation | keystore entry `<logical>.v<N>` when the family contains `.`, `<logical>-v<N>` when it does not (ADR-144) | `N` a positive integer without leading zeros (`v1`, not `v0`/`v01`); ordering is integer comparison; the family fixes the marker for life; `keystore.Generation.Kid()` is the wire kid and the inner `iss` |
 | Accept set | the consumer's keystore | exactly the provisioned generations of the family in the inherited role (`keystore.FamilyEnumerator`); provisioning is the sole trust act — no accept-list config exists |
 | Activation | `messaging.seal.active.<logical>: v<N>` on the producer | resolved by `keystore.ActiveGeneration` at startup for every Logical kid the producer resolves, sign and encrypt alike: one generation auto-activates, several with no selector refuse startup, a selector naming an unprovisioned generation refuses startup |
-| Family pin | the opener | the wire `kid` must be a Generation of the declared family (`SEAL_KID_FAMILY_MISMATCH`) AND resolve locally (`SEAL_KID_UNKNOWN_GENERATION`, recoverable, only when the resolver reports the kid unknown; any other lookup failure is the resolver fault `SEAL_KEY_RESOLUTION`) |
+| Family pin | the opener | the wire `kid` must be a Generation of the declared family (`SEAL_KID_FAMILY_MISMATCH`) AND resolve locally (`SEAL_KID_UNKNOWN_GENERATION`, recoverable) |
 
 Granularity: one sign family per producing service, one encrypt family per audience.
 Per-queue keys are forbidden; per-tenant keys are forbidden in v1 (a tag is a compile-time
@@ -297,14 +297,12 @@ per-message poison class. The sealer's own codes are `SEAL_TAG_INVALID`,
 `SEAL_OPTIONS_INVALID`, `SEAL_TYPE_MISMATCH`, `SEAL_DOCUMENT_INVALID`, `SEAL_FAILED`
 (`jose/sealed/errors.go`).
 
-**Recoverable** means one thing: a well-formed Generation of the declared family whose key the
-resolver reports unknown (its error matches `jose.ErrKidUnknown`) — the rotation-lag signature,
-`SEAL_KID_UNKNOWN_GENERATION`, plus the producer door's sign generation held without its
-private key. A key lookup that fails any other way (no keystore, a failing custom resolver)
-or returns `(nil, nil)` is a resolver fault: a bare `*jose.Error` with code
-`SEAL_KEY_RESOLUTION`, never an `*OpenError` and never recoverable. It matches
-`jose.ErrKeyResolution` (use `errors.Is`, never compare `Sentinel`), names the kid, and keeps the
-resolver's own error reachable through `errors.Is`/`errors.As`. A custom `KeyResolver` must
+**Recoverable** is true only for an unknown generation (a well-formed Generation of the declared
+family whose lookup error matches `jose.ErrKidUnknown`, `SEAL_KID_UNKNOWN_GENERATION`) and for
+the producer door's sign generation held without its private key (ADR-131). A resolver fault
+(`SEAL_KEY_RESOLUTION`, table above) is not recoverable: a bare `*jose.Error` matching
+`jose.ErrKeyResolution` (use `errors.Is`, never compare `Sentinel`) that names the kid and keeps
+the resolver's own error reachable through `errors.Is`/`errors.As`. A custom `KeyResolver` must
 report a missing kid with an error matching `jose.ErrKidUnknown`, or every unprovisioned
 generation reads as a fault. Every lookup runs before the decrypt, so no fault follows plaintext.
 

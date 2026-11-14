@@ -125,7 +125,7 @@ type Envelope struct {
 
 // OpenRefusedError is a sealed delivery the opener refused: Code is the rule that fired,
 // Details carries presence/length facts only (never a wire value), Recoverable marks the
-// provisioning-recoverable unknown-generation case (a resolver fault never is), and Cause keeps the codec's own error
+// provisioning-recoverable unknown-generation case, and Cause keeps the codec's own error
 // for errors.As downstream. Returned by messaging/sealed.
 type OpenRefusedError struct {
 	Code        string

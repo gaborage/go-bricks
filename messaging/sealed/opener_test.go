@@ -357,9 +357,7 @@ func TestOpenerMapsEveryPublishedVector(t *testing.T) {
 	}
 }
 
-func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
-	// An *OpenError keeps its code and is a refusal of the message; the bare *jose.Error
-	// branch is the resolver fault, pinned by TestOpenerCountsAResolverFaultUnderItsOwnCode.
+func TestOpenerKeepsTheOpenErrorCode(t *testing.T) {
 	opener, _ := newVectorOpener(t)
 	var out paymentAuthorized
 	_, err := opener.Open(t.Context(), []byte("not.a.jws"), sealruntime.TenantRule{}, &out)

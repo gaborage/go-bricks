@@ -21,8 +21,7 @@ import (
 
 // Opener sentinels. Every Open refusal is an *OpenError whose embedded *bricksjose.Error carries
 // one of these as Sentinel, so errors.Is picks the disposition class and Code names the rule.
-// A key resolver fault is not a refusal: a bare *bricksjose.Error matching bricksjose.ErrKeyResolution
-// with Code CodeKeyResolution, the resolver's own error still in its chain.
+// A key resolver fault (Code CodeKeyResolution) is not a refusal.
 var (
 	// ErrNotSealed is the structural sentinel: the body is not a compact JWS carrying TypV1.
 	ErrNotSealed = errors.New("sealed: body is not a sealed message")
@@ -183,8 +182,7 @@ func (e *OpenError) Unwrap() error {
 //
 // Rules 1–4 run on the peeked, still unauthenticated protected header, before any
 // signature parsing; nothing in rules 1–9 touches the inner JWE. Keys resolve per message
-// through opts.Keys; a lookup failing for any reason but bricksjose.ErrKidUnknown, or returning a
-// nil key, is a resolver fault (SEAL_KEY_RESOLUTION, not an *OpenError), never a refusal.
+// through opts.Keys; any other lookup failure than bricksjose.ErrKidUnknown is a resolver fault (SEAL_KEY_RESOLUTION).
 // No clock is read: iat is surfaced, never judged.
 //
 // Rules 1–10 live in openCore, shared with OpenDocument (#1409), the type-free door that
@@ -598,8 +596,7 @@ const (
 	provisionedInKeySet   = "in this key set"
 )
 
-// lookupError classifies a failed key lookup: only an unknown kid is an unknown generation; any other
-// resolver error, and a (nil, nil) hand-back, is a resolver fault.
+// lookupError routes a failed key lookup: an unknown kid to unknownGenerationError, anything else to resolverFaultError.
 func lookupError(rule int, kid, role, where string, cause error, layer string) error {
 	if errors.Is(cause, bricksjose.ErrKidUnknown) {
 		return unknownGenerationError(rule, kid, role, where, cause, layer)
@@ -607,8 +604,10 @@ func lookupError(rule int, kid, role, where string, cause error, layer string) e
 	return resolverFaultError(kid, role, cause)
 }
 
-// resolverFaultError is not a refusal: a *bricksjose.Error matching ErrKeyResolution whose chain also
-// reaches the resolver's own error, so neither Recoverable nor a rule applies.
+// resolverFaultError reports a lookup failing for any reason but bricksjose.ErrKidUnknown, or a (nil, nil)
+// hand-back. It is not a refusal (not an *OpenError): a *bricksjose.Error with Code CodeKeyResolution
+// matching ErrKeyResolution whose chain also reaches the resolver's own error, so neither Recoverable
+// nor a rule applies.
 func resolverFaultError(kid, role string, cause error) error {
 	sentinel := bricksjose.ErrKeyResolution
 	if cause != nil {
