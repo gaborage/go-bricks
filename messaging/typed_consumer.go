@@ -74,6 +74,13 @@ func (m Metadata) Redelivered() bool {
 	return m.delivery.Redelivered
 }
 
+// DeathCount is DeathCount over this delivery's headers: the count of the
+// x-death entry for queue and reason, or (0, false). Publisher-writable, so it
+// bounds honest redelivery and is not a security control.
+func (m Metadata) DeathCount(queue, reason string) (int64, bool) {
+	return DeathCount(m.Headers(), queue, reason)
+}
+
 // typedHandler adapts a typed function to MessageHandler. Every field is set
 // once at construction and read-only afterwards: one instance is shared by every
 // worker goroutine of a consumer AND by every tenant replaying the same
