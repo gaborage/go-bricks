@@ -112,17 +112,25 @@ func TestValidatePostgreSQLSettingsAcceptsValidKeys(t *testing.T) {
 
 func TestPostgreSQLDataTmpfs(t *testing.T) {
 	tests := []struct {
-		name string
-		size string
-		want map[string]string
+		name      string
+		size      string
+		wantTmpfs map[string]string
+		wantEnv   map[string]string
 	}{
-		{name: "empty_size", size: "", want: nil},
-		{name: "sized", size: "512m", want: map[string]string{"/var/lib/postgresql": "rw,size=512m"}},
+		{name: "empty_size", size: ""},
+		{
+			name:      "sized",
+			size:      "512m",
+			wantTmpfs: map[string]string{"/var/lib/postgresql": "rw,size=512m"},
+			wantEnv:   map[string]string{"PGDATA": "/var/lib/postgresql/tmpfs"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, postgreSQLDataTmpfs(tt.size))
+			tmpfs, env := postgreSQLDataTmpfs(tt.size)
+			assert.Equal(t, tt.wantTmpfs, tmpfs)
+			assert.Equal(t, tt.wantEnv, env)
 		})
 	}
 }

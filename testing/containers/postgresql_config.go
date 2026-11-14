@@ -9,9 +9,7 @@ import (
 	"unicode"
 )
 
-// postgreSQLDataMount is where the DataTmpfs tmpfs is mounted. PGDATA moves to
-// postgreSQLTmpfsDataDir beneath it, because before PostgreSQL 18 the image's
-// /var/lib/postgresql/data volume would mask a tmpfs mounted at the parent.
+// postgreSQLDataMount is the DataTmpfs mount point; PGDATA moves to postgreSQLTmpfsDataDir under it.
 const (
 	postgreSQLDataMount    = "/var/lib/postgresql"
 	postgreSQLTmpfsDataDir = postgreSQLDataMount + "/tmpfs"
@@ -91,9 +89,11 @@ func postgreSQLSettingArgs(settings map[string]string) []string {
 	return args
 }
 
-func postgreSQLDataTmpfs(size string) map[string]string {
+// postgreSQLDataTmpfs returns the tmpfs mount and the PGDATA env that must go with it, or nils when size is empty.
+func postgreSQLDataTmpfs(size string) (tmpfs, env map[string]string) {
 	if size == "" {
-		return nil
+		return nil, nil
 	}
-	return map[string]string{postgreSQLDataMount: "rw,size=" + size}
+	return map[string]string{postgreSQLDataMount: "rw,size=" + size},
+		map[string]string{"PGDATA": postgreSQLTmpfsDataDir}
 }
