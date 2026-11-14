@@ -125,7 +125,10 @@ func postgreSQLOptions(cfg *PostgreSQLContainerConfig) []testcontainers.Containe
 		opts = append(opts, testcontainers.WithCmdArgs(settingArgs...))
 	}
 	if tmpfs := postgreSQLDataTmpfs(cfg.DataTmpfs); tmpfs != nil {
-		opts = append(opts, testcontainers.WithTmpfs(tmpfs))
+		opts = append(opts,
+			testcontainers.WithTmpfs(tmpfs),
+			testcontainers.WithEnv(map[string]string{"PGDATA": postgreSQLTmpfsDataDir}),
+		)
 	}
 	return opts
 }

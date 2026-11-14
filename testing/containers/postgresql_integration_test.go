@@ -18,6 +18,7 @@ func TestPostgreSQLOptionsZeroValueAddsNoCmdOrTmpfs(t *testing.T) {
 
 	assert.Empty(t, req.Cmd)
 	assert.Empty(t, req.Tmpfs)
+	assert.NotContains(t, req.Env, "PGDATA")
 }
 
 func TestPostgreSQLOptionsRenderSettingsAndTmpfs(t *testing.T) {
@@ -29,6 +30,7 @@ func TestPostgreSQLOptionsRenderSettingsAndTmpfs(t *testing.T) {
 
 	assert.Equal(t, []string{"-c", "max_connections=42", "-c", "work_mem=7MB"}, req.Cmd)
 	assert.Equal(t, map[string]string{"/var/lib/postgresql": "rw,size=256m"}, req.Tmpfs)
+	assert.Equal(t, "/var/lib/postgresql/tmpfs", req.Env["PGDATA"])
 }
 
 func TestStartPostgreSQLContainerRejectsInvalidSettingBeforeStart(t *testing.T) {
@@ -58,21 +60,35 @@ func TestStartPostgreSQLContainerAppliesSettings(t *testing.T) {
 }
 
 func TestStartPostgreSQLContainerBacksDataDirectoryWithTmpfs(t *testing.T) {
-	ctx := context.Background()
-	cfg := DefaultPostgreSQLConfig()
-	cfg.DataTmpfs = "256m"
+	tests := []struct {
+		name     string
+		imageTag string
+	}{
+		{name: "default_image", imageTag: DefaultPostgreSQLConfig().ImageTag},
+		{name: "pre_18_image", imageTag: "17-alpine"},
+	}
 
-	pg := MustStartPostgreSQLContainer(ctx, t, cfg).WithCleanup(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg := DefaultPostgreSQLConfig()
+			cfg.ImageTag = tt.imageTag
+			cfg.DataTmpfs = "256m"
 
-	db, err := pg.admin()
-	require.NoError(t, err)
-	var dataDir string
-	require.NoError(t, db.QueryRowContext(ctx, "SHOW data_directory").Scan(&dataDir))
+			pg := MustStartPostgreSQLContainer(ctx, t, cfg).WithCleanup(t)
 
-	code, out, err := pg.container.Exec(ctx, []string{"stat", "-f", "-c", "%T", dataDir}, tcexec.Multiplexed())
-	require.NoError(t, err)
-	fsType, err := io.ReadAll(out)
-	require.NoError(t, err)
-	require.Equal(t, 0, code, "stat output: %s", fsType)
-	assert.Equal(t, "tmpfs", strings.TrimSpace(string(fsType)))
+			db, err := pg.admin()
+			require.NoError(t, err)
+			var dataDir string
+			require.NoError(t, db.QueryRowContext(ctx, "SHOW data_directory").Scan(&dataDir))
+			assert.Equal(t, "/var/lib/postgresql/tmpfs", dataDir)
+
+			code, out, err := pg.container.Exec(ctx, []string{"stat", "-f", "-c", "%T", dataDir}, tcexec.Multiplexed())
+			require.NoError(t, err)
+			fsType, err := io.ReadAll(out)
+			require.NoError(t, err)
+			require.Equal(t, 0, code, "stat output: %s", fsType)
+			assert.Equal(t, "tmpfs", strings.TrimSpace(string(fsType)))
+		})
+	}
 }

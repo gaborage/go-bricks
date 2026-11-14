@@ -9,8 +9,13 @@ import (
 	"unicode"
 )
 
-// postgreSQLDataMount is the image's declared volume, the parent of PGDATA on every tag.
-const postgreSQLDataMount = "/var/lib/postgresql"
+// postgreSQLDataMount is where the DataTmpfs tmpfs is mounted. PGDATA moves to
+// postgreSQLTmpfsDataDir beneath it, because before PostgreSQL 18 the image's
+// /var/lib/postgresql/data volume would mask a tmpfs mounted at the parent.
+const (
+	postgreSQLDataMount    = "/var/lib/postgresql"
+	postgreSQLTmpfsDataDir = postgreSQLDataMount + "/tmpfs"
+)
 
 // PostgreSQLContainerConfig holds configuration for PostgreSQL test container
 type PostgreSQLContainerConfig struct {
@@ -27,9 +32,16 @@ type PostgreSQLContainerConfig struct {
 	// Settings are server parameters, each passed as a `-c key=value` argument in
 	// sorted key order. A key that is empty or holds whitespace or '=' fails the
 	// start before any container is created. Nil or empty changes nothing.
+	//
+	// The fixture waits for the server's ready line on the container log and
+	// connects on the default port, so a setting that moves or silences the server
+	// log (logging_collector, log_destination, log_min_messages) or changes the
+	// listen address or port makes the start time out.
 	Settings map[string]string
-	// DataTmpfs, when set to a size such as "512m", backs the data directory with
-	// a tmpfs of that size. Empty keeps the image's volume.
+	// DataTmpfs, when set to a size such as "512m", mounts a tmpfs of that size at
+	// /var/lib/postgresql and moves the data directory (PGDATA) to
+	// /var/lib/postgresql/tmpfs on it, on every image tag. Empty leaves PGDATA and
+	// the image's volume as they are.
 	DataTmpfs string
 }
 

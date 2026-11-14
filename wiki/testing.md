@@ -545,10 +545,10 @@ One node owning every slot is not a sharded topology: MOVED redirects, per-shard
 
 Two typed fields on `containers.PostgreSQLContainerConfig` tune the server without reaching for testcontainers types:
 
-- `Settings map[string]string` passes each entry as a `-c key=value` server argument, in sorted key order, after the module's own `-c fsync=off`. A key that is empty or holds whitespace or `=` fails the start with an error naming the key, before any container is created. Values go through unchanged.
-- `DataTmpfs string` takes a size such as `512m` and mounts a tmpfs of that size at `/var/lib/postgresql`, the image's declared volume. That path holds the data directory on every tag: `/var/lib/postgresql/data` before PostgreSQL 18 and `/var/lib/postgresql/18/docker` from 18 on.
+- `Settings map[string]string` passes each entry as a `-c key=value` server argument, in sorted key order, after the module's own `-c fsync=off`. A key that is empty or holds whitespace or `=` fails the start with an error naming the key, before any container is created. Values go through unchanged. The fixture waits for the server's ready line on the container log and connects on the default port, so a setting that moves or silences the server log (`logging_collector`, `log_destination`, `log_min_messages`) or changes the listen address or port makes the start time out.
+- `DataTmpfs string` takes a size such as `512m`, mounts a tmpfs of that size at `/var/lib/postgresql`, and moves the data directory (`PGDATA`) to `/var/lib/postgresql/tmpfs` on it. The move is what makes it work on every tag: before PostgreSQL 18 the image declares `/var/lib/postgresql/data` as its own volume, which would mask a tmpfs at the parent and leave the data on disk.
 
-Zero values (a nil map, an empty string) leave the container exactly as before. The config type stays in the default build; only the integration-tagged fixture turns these fields into container options.
+Zero values (a nil map, an empty string) leave the container, `PGDATA` included, exactly as before. The config type stays in the default build; only the integration-tagged fixture turns these fields into container options.
 
 ```go
 cfg := containers.DefaultPostgreSQLConfig()
@@ -567,7 +567,9 @@ var pkgPG = containers.NewShared("PostgreSQL", 3*time.Minute,
             return pg, dockerAvailable, err
         }
         if err := setUpRolesAndSchema(ctx, pg.ConnectionString()); err != nil {
-            _ = pg.Terminate(ctx)
+            cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+            defer cancel()
+            _ = pg.Terminate(cleanupCtx)
             return nil, true, err
         }
         return pg, true, nil
