@@ -91,11 +91,10 @@ var (
 	ErrExpressionInFilter = errors.New("a RawExpression is not allowed as a Filter operand")
 
 	// ErrRowLockWithPagination is returned by ToSQL on Oracle when a SELECT
-	// carries both a row lock (ForUpdate/ForUpdateNoWait/ForUpdateSkipLocked)
-	// and a Limit/Offset: the Oracle SQL Language Reference, "Restrictions on
-	// the row_limiting_clause", states "You cannot specify this clause with the
-	// for_update_clause". The statement is refused here rather than rejected by
-	// the database at run time.
+	// carries both a row lock (any ForUpdate* call) and a Limit/Offset: the
+	// Oracle SQL Language Reference, "Restrictions on the row_limiting_clause",
+	// states "You cannot specify this clause with the for_update_clause". The
+	// statement is refused here rather than rejected by the database at run time.
 	ErrRowLockWithPagination = errors.New("a row lock cannot be combined with Limit/Offset on Oracle (row_limiting_clause restriction)")
 
 	// ErrUpsertConflictColumnsRequired is returned when BuildUpsert gets no conflict columns.

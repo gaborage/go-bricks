@@ -551,14 +551,27 @@ func TestMockQueryBuilderHelperMethods(t *testing.T) {
 	assert.Equal(t, `"table_name"`, mockQB.EscapeIdentifier("table_name"))
 }
 
-func TestMockQueryBuilderForUpdateSkipLocked(t *testing.T) {
-	mockQB := &MockQueryBuilder{}
-	mockSelectBuilder := &MockSelectQueryBuilder{}
-	defer mockQB.AssertExpectations(t)
+func TestMockQueryBuilderRowLocks(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		call   func(*MockQueryBuilder) types.SelectQueryBuilder
+	}{
+		{name: "for_update", method: "ForUpdate", call: (*MockQueryBuilder).ForUpdate},
+		{name: "for_update_nowait", method: "ForUpdateNoWait", call: (*MockQueryBuilder).ForUpdateNoWait},
+		{name: "for_update_skip_locked", method: "ForUpdateSkipLocked", call: (*MockQueryBuilder).ForUpdateSkipLocked},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockQB := &MockQueryBuilder{}
+			mockSelectBuilder := &MockSelectQueryBuilder{}
+			defer mockQB.AssertExpectations(t)
 
-	mockQB.On("ForUpdateSkipLocked").Return(mockSelectBuilder)
+			mockQB.On(tc.method).Return(mockSelectBuilder)
 
-	assert.Equal(t, mockSelectBuilder, mockQB.ForUpdateSkipLocked())
+			assert.Equal(t, mockSelectBuilder, tc.call(mockQB))
+		})
+	}
 }
 
 func TestMockQueryBuilderVendorSpecificBehavior(t *testing.T) {
