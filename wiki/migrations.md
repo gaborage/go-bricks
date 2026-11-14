@@ -16625,14 +16625,14 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 
   ```bash
   # KeyResolver implementations of your own (any PublicKey/PrivateKey pair returning an error)
-  git grep -nE 'func \([^)]*\) (PublicKey|PrivateKey)\([a-z]+ string\) \(\*rsa\.(PublicKey|PrivateKey), error\)' -- '*.go'
+  git grep -nE 'func \([^)]*\) (PublicKey|PrivateKey)\([A-Za-z_][A-Za-z0-9_]* string\) \(\*rsa\.(PublicKey|PrivateKey), error\)' -- '*.go'
   # the imperative doors and the resolver each one is handed
   git grep -nE 'sealed\.(Open|OpenDocument|Verify)\(|OpenOptions\{' -- '*.go'
   # readers of the class, its code, Recoverable, or OpenError
   git grep -nE 'ErrKidUnknownGeneration|CodeKidUnknownGeneration|SEAL_KID_UNKNOWN_GENERATION|\.Recoverable|sealed\.OpenError' -- '*.go' '*.yaml' '*.yml' '*.json'
   ```
 
-  Trace each `Keys:` value to its type. `jose.NewKeyStoreResolver` and `jose/testing.NewTestResolver`
+  Inspect each hit's signature: a pattern match is not a `jose.KeyResolver`. Trace each `Keys:` value to its type. `jose.NewKeyStoreResolver` and `jose/testing.NewTestResolver`
   already report a missing kid as `jose.ErrKidUnknown`; a keystore passed as `Keys` directly, or a
   resolver of yours, may not.
 - gate: match = a resolver reaching `Open`, `OpenDocument` or `Verify` whose missing-kid error does
@@ -16665,7 +16665,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `*jose.Error` whose `Sentinel` is it), and never `(nil, nil)`. Match a fault with
   `errors.Is(err, jose.ErrKeyResolution)` or the `SEAL_KEY_RESOLUTION` code, never by comparing
   `Sentinel`, and handle it apart from a refusal: an `errors.As(err, &openErr)` arm no longer sees
-  it. An alert or dashboard keyed on `SEAL_KID_UNKNOWN_GENERATION` to catch a broken resolver
+  it. Test `errors.Is(err, jose.ErrKeyResolution)` BEFORE any `errors.As(err, &openErr)` arm: the
+  fault keeps a custom resolver's own error in its chain, and that error could itself be an
+  `*OpenError`. An alert or dashboard keyed on `SEAL_KID_UNKNOWN_GENERATION` to catch a broken resolver
   adds `SEAL_KEY_RESOLUTION`.
 - verify: open a body sealed under a generation the resolver does not hold: `errors.Is(err,
   sealed.ErrKidUnknownGeneration)` is true. With a resolver that returns any other error, it is
