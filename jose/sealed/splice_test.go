@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/racedetect"
 )
 
 func TestLocateSubjectFindsSpanExactly(t *testing.T) {
@@ -143,6 +145,18 @@ func TestSpliceRawInsertsReplacementVerbatim(t *testing.T) {
 	out := spliceRaw(doc, span, []byte(`{"pan":"4111"}`))
 	assert.Equal(t, `{"a":1,"card":{"pan":"4111"},"z":true}`, string(out)) //nolint:testifylint // verbatim insertion is a byte-level property
 	assert.Equal(t, `{"a":1,"card":"eyJ.x.y","z":true}`, string(doc))      //nolint:testifylint // asserts the input buffer is byte-identical
+}
+
+func TestSpliceRawAllocatesOnceSoNoStalePlaintextCopyIsLeft(t *testing.T) {
+	if racedetect.Enabled {
+		t.Skip("testing.AllocsPerRun is unreliable under -race; enforced in the non-race matrix")
+	}
+	doc := append(append([]byte(`{"pad":"`), bytes.Repeat([]byte("x"), 300)...), []byte(`","card":"old","z":1}`)...)
+	span, err := locateSubject(doc, "card")
+	require.NoError(t, err)
+	replacement := []byte(`{"pan":"4111111111111111","name":"` + strings.Repeat("n", 200) + `"}`)
+	allocs := testing.AllocsPerRun(10, func() { _ = spliceRaw(doc, span, replacement) })
+	assert.InDelta(t, 1, allocs, 0)
 }
 
 func TestSpliceRawHandlesLargeInputs(t *testing.T) {
