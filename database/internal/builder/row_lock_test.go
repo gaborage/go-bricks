@@ -97,21 +97,11 @@ func TestRowLockLastCallWins(t *testing.T) {
 		forUpdateNoWait:     func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateNoWait() },
 		forUpdateSkipLocked: func(q dbtypes.SelectQueryBuilder) dbtypes.SelectQueryBuilder { return q.ForUpdateSkipLocked() },
 	}
-	var sequences [][]string
-	for a := range locks {
-		for b := range locks {
-			if a == b {
-				continue
-			}
-			sequences = append(sequences, []string{a, b})
-			for c := range locks {
-				if c != a && c != b {
-					sequences = append(sequences, []string{a, b, c})
-				}
-			}
-		}
+	u, n, s := forUpdate, forUpdateNoWait, forUpdateSkipLocked
+	sequences := [][]string{
+		{u, n}, {u, s}, {n, u}, {n, s}, {s, u}, {s, n},
+		{u, n, s}, {u, s, n}, {n, u, s}, {n, s, u}, {s, u, n}, {s, n, u},
 	}
-	require.Len(t, sequences, 12)
 	for _, seq := range sequences {
 		t.Run(strings.Join(seq, "_then_"), func(t *testing.T) {
 			query := NewQueryBuilder(dbtypes.PostgreSQL).Select("id").From(tableUsers)
