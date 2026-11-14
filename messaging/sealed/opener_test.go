@@ -357,11 +357,7 @@ func TestOpenerMapsEveryPublishedVector(t *testing.T) {
 	}
 }
 
-func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
-	// A bare *jose.Error (no OpenError around it) keeps its code; anything else is
-	// the generic open failure. Reached through the exported seam by opening with a
-	// resolver-less runtime is impossible, so the mapping is pinned on the error path
-	// of an opener whose Open is handed foreign errors via a wrapping opener.
+func TestOpenerKeepsTheOpenErrorCode(t *testing.T) {
 	opener, _ := newVectorOpener(t)
 	var out paymentAuthorized
 	_, err := opener.Open(t.Context(), []byte("not.a.jws"), sealruntime.TenantRule{}, &out)
@@ -373,6 +369,29 @@ func TestOpenerRefusalCodeFallsBackToTheJoseCode(t *testing.T) {
 	var je *jose.Error
 	assert.ErrorAs(t, err, &je) //nolint:testifylint // peer sentinel probe; the negative claim follows
 	require.NotErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
+}
+
+// TestOpenerCountsAResolverFaultUnderItsOwnCode pins that a key lookup failing for any reason but an
+// unknown kid (here a (nil, nil) hand-back) is not the recoverable unknown-generation class.
+func TestOpenerCountsAResolverFaultUnderItsOwnCode(t *testing.T) {
+	store := withPrivate(withPublic(vectorSignStore(t), signFamily, "v2", nil), encFamily, "v1", vectorKey(t, vecEncKid))
+	rt, reader := consumerRuntime(store)
+	factory, ok := sealruntime.Registered().(sealruntime.OpenerProvider)
+	require.True(t, ok)
+	opener, err := factory.NewOpener(spec(t), eventType, rt)
+	require.NoError(t, err)
+	faults, unknown := failureCount(t, reader, josesealed.CodeKeyResolution), failureCount(t, reader, josesealed.CodeKidUnknownGeneration)
+
+	var out paymentAuthorized
+	_, err = opener.Open(t.Context(), []byte(loadVectors(t).Positive), sealruntime.TenantRule{Expected: vecTenant}, &out)
+	var refused *sealruntime.OpenRefusedError
+	require.ErrorAs(t, err, &refused)
+	assert.Equal(t, josesealed.CodeKeyResolution, refused.Code)
+	assert.False(t, refused.Recoverable)
+	require.ErrorIs(t, err, jose.ErrKeyResolution)
+	require.NotErrorIs(t, err, josesealed.ErrKidUnknownGeneration)
+	assert.Equal(t, faults+1, failureCount(t, reader, josesealed.CodeKeyResolution), "counted once under the fault code")
+	assert.Equal(t, unknown, failureCount(t, reader, josesealed.CodeKidUnknownGeneration), "never under the unknown-generation code")
 }
 
 // TestNewOpenerTagsEveryProvisionedGenerationAsSeal pins the consumer half of the

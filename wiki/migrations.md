@@ -15910,7 +15910,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (`PathResolver.ResolveTenant`) · `multitenant/resolver_test.go`
   (`TestPathResolverAgreesWithRouterParam`)
 
-## E74 · v0.73.0 → v0.74.0 — a credential URL that url.Parse rejects, or reads with no host, renders whole as `xxxxx` at every error door, and three more vendor echoes of URL text are masked + a broker URL the AMQP client cannot parse fails startup instead of failing at the dial + a broker URL or stream URI with an unencoded `@` after its authority is refused before dialing + after a mid-batch AMQP drop, other lanes' outbox rows are held back instead of charged + `go-bricks-migrate quiesce` reports an unparseable control-plane connection string with a fixed message + a `Having` predicate that is not a string, a `RawExpression` or a `Filter` fails `ToSQL()` + a `squirrel.Sqlizer` operand is refused where the builder spliced it + a route, `Group`, `Use` or global middleware registered after `Server.Start` panics + an invalid `sslcertmode`, or `disable` beside a client certificate, fails startup
+## E74 · v0.73.0 → v0.74.0 — a credential URL that url.Parse rejects, or reads with no host, renders whole as `xxxxx` at every error door, and three more vendor echoes of URL text are masked + a broker URL the AMQP client cannot parse fails startup instead of failing at the dial + a broker URL or stream URI with an unencoded `@` after its authority is refused before dialing + after a mid-batch AMQP drop, other lanes' outbox rows are held back instead of charged + `go-bricks-migrate quiesce` reports an unparseable control-plane connection string with a fixed message + a `Having` predicate that is not a string, a `RawExpression` or a `Filter` fails `ToSQL()` + a `squirrel.Sqlizer` operand is refused where the builder spliced it + a route, `Group`, `Use` or global middleware registered after `Server.Start` panics + an invalid `sslcertmode`, or `disable` beside a client certificate, fails startup + a sealed key resolver fault is no longer the recoverable unknown generation
 
 - gist: at the error doors a URL url.Parse rejects, or reads with no host, kept its scheme and
   whatever followed the first `/` or the last `@`, so password text could show as a path, a host
@@ -15978,6 +15978,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   answers with `verify-full`; pgx's default `~/.postgresql` pair is not read.
   `sslcertmode` is never a TLS claim for the unix-socket rule (C74.9). ADR-062 amendments
   (#2310, #2376).
+
+- gist: `jose/sealed` reported every failed key lookup as the recoverable unknown generation,
+  whether the resolver said the kid was unknown, failed for another reason or returned
+  `(nil, nil)`. Only an error matching `jose.ErrKidUnknown` is an unknown generation now; any
+  other lookup failure is the non-recoverable resolver fault `SEAL_KEY_RESOLUTION`, a bare
+  `*jose.Error` matching `jose.ErrKeyResolution`, not an `*OpenError` (C74.11). ADR-097
+  amendment.
 
 ### [C74.1] a credential URL that url.Parse rejects, or reads with no host, renders whole as `xxxxx` at every error door, and three more vendor echoes of URL text are masked · silent-behavior · when: match
 
@@ -16610,6 +16617,68 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   (2026-11-10 and 2026-11-12 amendments) · `config/database_section.go`
   (`validatePostgreSQLCertMode`, `pgEffectiveCertMode`, `pgTypedClientCertSource`) · supersedes
   `[C73.25]`'s "does not refuse either yet"
+
+### [C74.11] a sealed key resolver fault is no longer the recoverable unknown generation · breaking · when: match
+
+- detect: a custom `jose.KeyResolver` handed to a `jose/sealed` door, and code reading the
+  unknown-generation class or assuming every refusal is an `*OpenError`.
+
+  ```bash
+  # KeyResolver implementations of your own (any PublicKey/PrivateKey pair returning an error)
+  git grep -nE 'func \([^)]*\) (PublicKey|PrivateKey)\([A-Za-z_][A-Za-z0-9_]* string\) \(\*rsa\.(PublicKey|PrivateKey), error\)' -- '*.go'
+  # the imperative doors and the resolver each one is handed
+  git grep -nE 'sealed\.(Open|OpenDocument|Verify)\(|OpenOptions\{' -- '*.go'
+  # readers of the class, its code, Recoverable, or OpenError
+  git grep -nE 'ErrKidUnknownGeneration|CodeKidUnknownGeneration|SEAL_KID_UNKNOWN_GENERATION|\.Recoverable|sealed\.OpenError' -- '*.go' '*.yaml' '*.yml' '*.json'
+  ```
+
+  Inspect each hit's signature: a pattern match is not a `jose.KeyResolver`. Trace each `Keys:` value to its type. `jose.NewKeyStoreResolver` and `jose/testing.NewTestResolver`
+  already report a missing kid as `jose.ErrKidUnknown`; a keystore passed as `Keys` directly, or a
+  resolver of yours, may not.
+- gate: match = a resolver reaching `Open`, `OpenDocument` or `Verify` whose missing-kid error does
+  not match `jose.ErrKidUnknown` under `errors.Is`, or that returns `(nil, nil)` for a kid it does
+  not hold; or code that treats every failure of those doors as an `*OpenError`, or reads
+  `ErrKidUnknownGeneration`, `SEAL_KID_UNKNOWN_GENERATION` or `Recoverable` as "a key lookup
+  failed". no-match = only `messaging/sealed`'s doors over the keystore and the built-in resolvers,
+  and no such reader.
+- scope: the three lookups in `jose/sealed` — the sign PUBLIC key at rule 4 (`Open`,
+  `OpenDocument`, `Verify`), the encrypt PRIVATE key at rule 10 (`Open`, `OpenDocument`), and
+  `Verify`'s encrypt PUBLIC key — and through them the sealed consume door and
+  `Publisher[T].PublishSealed`. **Unchanged**: every signature; an unknown kid's `*OpenError`,
+  sentinel, code, rule number and `Recoverable` true; `PublishSealed`'s refusal of a sign
+  generation held without its private key (`ErrKidUnknownGeneration`, recoverable, ADR-131);
+  `KeyStoreResolver` mapping a keystore lookup error to `jose.ErrKidUnknown`; how the consume door
+  settles the delivery.
+- before (v0.73.0): every failed lookup — `jose.ErrKidUnknown`, any other resolver error (a
+  `KeyStoreResolver` with no keystore reports `jose.ErrKeyResolution`) or a `(nil, nil)` return —
+  was an `*OpenError` matching `ErrKidUnknownGeneration` with code `SEAL_KID_UNKNOWN_GENERATION`,
+  the resolver error kept only as `Err.Cause`, and `messaging/sealed` marked it `Recoverable`.
+- after: only an error matching `jose.ErrKidUnknown` keeps that refusal. Any other resolver error
+  and a `(nil, nil)` return are a resolver fault: a `*jose.Error`, not an `*OpenError`, matching
+  `jose.ErrKeyResolution` (and, unless the resolver's own error wraps it, not
+  `ErrKidUnknownGeneration`), `Code` `SEAL_KEY_RESOLUTION`
+  (`sealed.CodeKeyResolution`), `Kid` the wire kid, `Message` `<sign|encrypt> kid lookup failed in
+  the key resolver`, the resolver's own error reachable through `errors.Is`/`errors.As` and kept as
+  `Cause`. On the consume door and `PublishSealed` it is a `SealOpenRefusedError` with that code
+  and `Recoverable` false. The consume door counts it on the open-failure instrument under
+  `SEAL_KEY_RESOLUTION`; `PublishSealed` returns it wrapped in `ErrSealedBytesRejected` and counts
+  nothing.
+- apply: make a resolver report a kid it does not hold with an error matching
+  `jose.ErrKidUnknown` (wrap it: `fmt.Errorf("…: %w", jose.ErrKidUnknown)`, or return a
+  `*jose.Error` whose `Sentinel` is it), and never `(nil, nil)`. Match a fault with
+  `errors.Is(err, jose.ErrKeyResolution)` or the `SEAL_KEY_RESOLUTION` code, never by comparing
+  `Sentinel`, and handle it apart from a refusal: an `errors.As(err, &openErr)` arm no longer sees
+  it. Test `errors.Is(err, jose.ErrKeyResolution)` BEFORE any `errors.As(err, &openErr)` arm or
+  `ErrKidUnknownGeneration` check, or read the code: the fault keeps a custom resolver's own error
+  in its chain, and that error could itself be an `*OpenError` or wrap `ErrKidUnknownGeneration`.
+  An alert or dashboard keyed on `SEAL_KID_UNKNOWN_GENERATION` to catch a broken resolver
+  adds `SEAL_KEY_RESOLUTION`.
+- verify: open a body sealed under a generation the resolver does not hold: `errors.Is(err,
+  sealed.ErrKidUnknownGeneration)` is true. With a resolver that returns any other error,
+  `errors.Is(err, jose.ErrKeyResolution)` is true and the code is `SEAL_KEY_RESOLUTION`.
+- ref: gaborage/go-bricks#2400 · [ADR-097](adr_097_sealed_amqp_messages.md) (2026-11-14
+  amendment) · `jose/sealed/open.go` (`lookupError`, `resolverFaultError`, `CodeKeyResolution`) ·
+  `messaging/sealed/opener.go` (`refuse`)
 
 ---
 
