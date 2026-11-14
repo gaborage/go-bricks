@@ -52,3 +52,13 @@ func SealDocument(doc []byte, spec *Spec, opts *Options) (data []byte, jti strin
 	}
 	return sealCore(doc, spec, opts)
 }
+
+// Wipe zeroes Subject in place, so a caller can defer it right after a successful open.
+// It is safe on a nil receiver, when called again and when Subject was already cleared.
+// Render keeps working, since it never reads Subject. Copies the caller derived from
+// Subject are the caller's to clear.
+func (d *OpenedDocument) Wipe() {
+	if d != nil {
+		clear(d.Subject)
+	}
+}

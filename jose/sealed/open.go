@@ -197,7 +197,7 @@ func Open(body []byte, spec *Spec, opts *OpenOptions, out any) (*Envelope, error
 	// T into a fresh value: out is written only once every rule has passed, so a refused
 	// message leaves the caller's value untouched.
 	opened := reflect.New(spec.Type)
-	if err := json.Unmarshal(spliceRaw(core.payload, core.span, core.plaintext), opened.Interface()); err != nil {
+	if err := decodeSpliced(core, opened.Interface()); err != nil {
 		return nil, openCause(11, CodePayloadUndecodable, "opened document does not decode into the event type", fmt.Errorf("%T", err))
 	}
 	reflect.ValueOf(out).Elem().Set(opened.Elem())
@@ -227,12 +227,7 @@ func OpenDocument(body []byte, spec *Spec, opts *OpenOptions) (*OpenedDocument, 
 	if err != nil {
 		return nil, err
 	}
-	// Rule 10 proved payload is a complete JSON object and spliceRaw only substitutes the
-	// Subject value, so the spliced document is an object iff the plaintext is valid JSON.
-	if !json.Valid(core.plaintext) {
-		return nil, openError(11, ErrOpenFailed, CodePayloadUndecodable, "subject plaintext is not a valid JSON value", nil)
-	}
-	return newOpenedDocument(core), nil
+	return newOpenedDocument(core)
 }
 
 // Verify checks body as Open does, resolving both wire kids as PUBLIC keys, and stops before the decrypt.
@@ -252,26 +247,15 @@ func Verify(body []byte, spec *Spec, opts *OpenOptions) (*Envelope, error) {
 	return core.env, nil
 }
 
-// newOpenedDocument keeps the verified payload and Subject span privately for Render.
-func newOpenedDocument(core *openedCore) *OpenedDocument {
-	return &OpenedDocument{
-		Document:  removeMember(core.payload, core.span),
-		Subject:   core.plaintext,
-		SubjectAt: core.span.memberStart,
-		Envelope:  core.env,
-		payload:   core.payload,
-		span:      core.span,
-	}
-}
-
 // OpenedDocument is what OpenDocument proved and recovered: the verified document with the
 // Subject member removed, that member's plaintext apart from it, and where it sat.
 type OpenedDocument struct {
 	// Document is the signed payload document with the Subject member absent — the member and
 	// exactly one adjacent separator are gone, so it is still a valid JSON object.
 	Document []byte
-	// Subject is the decrypted Subject plaintext: PAN-class data by construction. Never log,
-	// echo or otherwise emit it — rendering it is the caller's deliberate decision.
+	// Subject is the decrypted Subject plaintext: PAN-class data by construction, and the only
+	// plaintext field. Never log, echo or otherwise emit it — rendering it is the caller's
+	// deliberate decision. Wipe zeroes it in place once the caller is done with it.
 	Subject []byte
 	// SubjectAt is the byte offset IN Document where the removed member sat. To put a member
 	// back, call Render, which restores the original layout. Splicing at SubjectAt directly

@@ -279,10 +279,99 @@ func TestOpenedDocumentRenderRefusesInvalidInput(t *testing.T) {
 // openedFrom opens doc as a verified payload without the crypto; the Subject is "card".
 func openedFrom(t *testing.T, doc string) *OpenedDocument {
 	t.Helper()
+	core := coreFrom(t, doc, "")
+	core.plaintext = core.span.value
+	opened, err := newOpenedDocument(core)
+	require.NoError(t, err)
+	return opened
+}
+
+// coreFrom is what rules 1-10 hand over for doc, its "card" member decrypting to plaintext.
+func coreFrom(t *testing.T, doc, plaintext string) *openedCore {
+	t.Helper()
 	payload := []byte(doc)
 	span, err := locateSubject(payload, "card")
 	require.NoError(t, err)
-	return newOpenedDocument(&openedCore{verifiedCore: verifiedCore{payload: payload, span: span}, plaintext: span.value})
+	return &openedCore{verifiedCore: verifiedCore{payload: payload, span: span}, plaintext: []byte(plaintext)}
+}
+
+func TestNewOpenedDocumentZeroesTheSubjectItRefuses(t *testing.T) {
+	core := coreFrom(t, `{"a":1,"card":"x"}`, `1,"injected":2`)
+	plaintext := core.plaintext
+
+	opened, err := newOpenedDocument(core)
+	assert.Nil(t, opened)
+	var oe *OpenError
+	require.ErrorAs(t, err, &oe)
+	assert.Equal(t, CodePayloadUndecodable, oe.Err.Code)
+	assert.Equal(t, 11, oe.Rule)
+	assert.Equal(t, make([]byte, len(plaintext)), plaintext, "a refused subject leaves no plaintext behind")
+}
+
+// spliceProbe keeps the bytes encoding/json hands it, which the json.Unmarshaler contract
+// forbids, so a test can watch the buffer decodeSpliced decodes from.
+type spliceProbe struct {
+	seen []byte
+	err  error
+}
+
+func (p *spliceProbe) UnmarshalJSON(b []byte) error {
+	p.seen = b
+	return p.err
+}
+
+func TestDecodeSplicedZeroesBothPlaintextBuffers(t *testing.T) {
+	const doc, plaintext = `{"a":1,"card":"x","z":true}`, `{"pan":"4111"}`
+	refused := errors.New("refused")
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "decode_succeeds"},
+		{name: "decode_fails", err: refused},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			core := coreFrom(t, doc, plaintext)
+			decrypted := core.plaintext
+			probe := &spliceProbe{err: tc.err}
+
+			err := decodeSpliced(core, probe)
+			if tc.err == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, refused)
+			}
+			require.Len(t, probe.seen, len(doc)-len(`"x"`)+len(plaintext), "the probe saw the whole spliced document")
+			assert.Equal(t, make([]byte, len(probe.seen)), probe.seen, "the spliced document is zeroed")
+			assert.Equal(t, make([]byte, len(decrypted)), decrypted, "the decrypted subject is zeroed")
+		})
+	}
+}
+
+// TestDecodeSplicedLeavesNoAliasInTheDecodedValue pins the premise of the wipe: encoding/json
+// copies every value it keeps, so zeroing the spliced buffer cannot reach into out.
+func TestDecodeSplicedLeavesNoAliasInTheDecodedValue(t *testing.T) {
+	type subject struct {
+		Raw  json.RawMessage            `json:"raw"`
+		B    []byte                     `json:"b"`
+		S    string                     `json:"s"`
+		Any  any                        `json:"any"`
+		Map  map[string]json.RawMessage `json:"map"`
+		List []json.RawMessage          `json:"list"`
+	}
+	type event struct {
+		A    int     `json:"a"`
+		Card subject `json:"card"`
+	}
+	const plaintext = `{"raw":{"pan":"4111"},"b":"NDExMQ==","s":"4111","any":{"pan":"4111"},"map":{"pan":"4111"},"list":["4111"]}`
+	doc := `{"a":1,"card":` + plaintext + `}`
+
+	var want event
+	require.NoError(t, json.Unmarshal([]byte(doc), &want))
+	var got event
+	require.NoError(t, decodeSpliced(coreFrom(t, `{"a":1,"card":"x"}`, plaintext), &got))
+	assert.Equal(t, want, got)
 }
 
 func TestNextMemberReadsOneMember(t *testing.T) {

@@ -159,6 +159,37 @@ func removeMember(doc []byte, span subjectSpan) []byte {
 	return append(out, doc[end:]...)
 }
 
+// newOpenedDocument applies OpenDocument's rule-11 floor and keeps the verified payload and
+// Subject span privately for Render. Rule 10 proved payload is a complete JSON object and
+// spliceRaw only substitutes the Subject value, so the spliced document is an object iff the
+// plaintext is valid JSON. A refused plaintext is zeroed before the refusal returns.
+func newOpenedDocument(core *openedCore) (*OpenedDocument, error) {
+	if !json.Valid(core.plaintext) {
+		clear(core.plaintext)
+		return nil, openError(11, ErrOpenFailed, CodePayloadUndecodable, "subject plaintext is not a valid JSON value", nil)
+	}
+	return &OpenedDocument{
+		Document:  removeMember(core.payload, core.span),
+		Subject:   core.plaintext,
+		SubjectAt: core.span.memberStart,
+		Envelope:  core.env,
+		payload:   core.payload,
+		span:      core.span,
+	}, nil
+}
+
+// decodeSpliced is Open's rule 11: the plaintext spliced back over the Subject span, decoded
+// into dst. Both plaintext buffers, the decrypted Subject and the spliced document, are
+// zeroed on every path. encoding/json copies every value it keeps, so dst aliases neither;
+// only a json.Unmarshaler or encoding.TextUnmarshaler that retains its input, which their
+// contracts forbid, would see zeros.
+func decodeSpliced(core *openedCore, dst any) error {
+	doc := spliceRaw(core.payload, core.span, core.plaintext)
+	defer clear(core.plaintext)
+	defer clear(doc)
+	return json.Unmarshal(doc, dst)
+}
+
 // Render returns the verified document with subject as the Subject member's value and every
 // other byte as the producer sealed it; it reads the retained payload, not Document. subject
 // must be a valid JSON value. An OpenedDocument not returned by OpenDocument is refused.
