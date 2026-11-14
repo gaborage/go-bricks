@@ -17,24 +17,15 @@ const (
 
 const headerXDeath = "x-death"
 
-// DeathCount returns the count of the x-death entry whose queue and reason both
-// match, so a handler can bound how often a message cycles through a
-// dead-letter retry route. It reports (0, false) when the header is absent or
-// not an array, when no entry matches, or when the first matching entry has no
-// usable count (missing, negative, or not an integer). It never panics,
-// whatever the header holds.
+// DeathCount returns the count of the first x-death entry whose queue and
+// reason both match, so a handler can bound how often a message cycles through
+// a dead-letter retry route. Entries may be amqp.Table or map[string]any, queue
+// and reason string or []byte, and count any integer kind; an unsigned count
+// above math.MaxInt64 clamps to it. It reports (0, false) when the header is
+// absent or not an array, when no entry matches, or when the first matching
+// entry's count is missing, negative, or not an integer. It never panics.
 //
-// RabbitMQ keeps one entry per (queue, reason) and increments its count each
-// time it dead-letters the message from that queue for that reason, so the
-// count accumulates across retry cycles, on classic and quorum queues alike.
-// The broker writes the count as a signed 64-bit integer; this reader accepts
-// any integer kind, and an unsigned value above math.MaxInt64 clamps to it.
-//
-// The header is publisher-writable: a message published with an x-death entry
-// reaches its first consumer with that entry untouched, at any count. RabbitMQ
-// 4.4, the version the integration suite runs, drops every publisher-written
-// x-death entry when it dead-letters the message from a classic or quorum
-// queue, so counts seen after a broker dead-letter are the broker's own. A cap built on DeathCount bounds honest
+// The header is publisher-writable, so a cap built on DeathCount bounds honest
 // redelivery; it is not a security control. Classic AMQP lane only: a stream
 // message carries no x-death.
 func DeathCount(headers amqp.Table, queue, reason string) (int64, bool) {

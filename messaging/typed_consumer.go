@@ -74,9 +74,8 @@ func (m Metadata) Redelivered() bool {
 	return m.delivery.Redelivered
 }
 
-// DeathCount is DeathCount over this delivery's headers: the count of the
-// x-death entry for queue and reason, or (0, false). Publisher-writable, so it
-// bounds honest redelivery and is not a security control.
+// DeathCount is the package-level DeathCount over this delivery's headers; a
+// zero Metadata answers (0, false).
 func (m Metadata) DeathCount(queue, reason string) (int64, bool) {
 	return DeathCount(m.Headers(), queue, reason)
 }

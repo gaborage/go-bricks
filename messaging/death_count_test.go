@@ -23,11 +23,10 @@ func deathEntry(queue, reason, count any) amqp.Table {
 
 func TestDeathCountMatchesQueueAndReason(t *testing.T) {
 	tests := []struct {
-		name       string
-		headers    amqp.Table
-		emptyQueue bool
-		wantCount  int64
-		wantOK     bool
+		name      string
+		headers   amqp.Table
+		wantCount int64
+		wantOK    bool
 	}{
 		{name: "nil_headers", headers: nil},
 		{name: "no_x_death_header", headers: amqp.Table{"other": "value"}},
@@ -87,11 +86,6 @@ func TestDeathCountMatchesQueueAndReason(t *testing.T) {
 			wantCount: 7, wantOK: true,
 		},
 		{
-			name:       "missing_queue_does_not_match_empty_queue",
-			headers:    deathHeaders(amqp.Table{"reason": DeathReasonRejected, "count": int64(1)}),
-			emptyQueue: true,
-		},
-		{
 			name:    "wrong_typed_queue",
 			headers: deathHeaders(deathEntry(int64(1), DeathReasonRejected, int64(1))),
 		},
@@ -107,15 +101,18 @@ func TestDeathCountMatchesQueueAndReason(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			queue := deathTestQueue
-			if tc.emptyQueue {
-				queue = ""
-			}
-			count, ok := DeathCount(tc.headers, queue, DeathReasonRejected)
+			count, ok := DeathCount(tc.headers, deathTestQueue, DeathReasonRejected)
 			assert.Equal(t, tc.wantCount, count)
 			assert.Equal(t, tc.wantOK, ok)
 		})
 	}
+}
+
+func TestDeathCountMissingQueueDoesNotMatchEmptyQueue(t *testing.T) {
+	headers := deathHeaders(amqp.Table{"reason": DeathReasonRejected, "count": int64(1)})
+	count, ok := DeathCount(headers, "", DeathReasonRejected)
+	assert.Zero(t, count)
+	assert.False(t, ok)
 }
 
 func TestDeathCountAcceptsEveryIntegerKind(t *testing.T) {

@@ -565,11 +565,10 @@ func TestMetadataDeathCountMatchesFreeFunction(t *testing.T) {
 	tests := []struct {
 		name      string
 		meta      Metadata
-		headers   amqp.Table
 		wantCount int64
 		wantOK    bool
 	}{
-		{name: "populated_delivery", meta: Metadata{delivery: &amqp.Delivery{Headers: headers}}, headers: headers, wantCount: 3, wantOK: true},
+		{name: "populated_delivery", meta: Metadata{delivery: &amqp.Delivery{Headers: headers}}, wantCount: 3, wantOK: true},
 		{name: "delivery_without_headers", meta: Metadata{delivery: &amqp.Delivery{}}},
 		{name: "zero_value_is_inert", meta: Metadata{}},
 	}
@@ -579,7 +578,7 @@ func TestMetadataDeathCountMatchesFreeFunction(t *testing.T) {
 			count, ok := tc.meta.DeathCount("orders.work", DeathReasonRejected)
 			assert.Equal(t, tc.wantCount, count)
 			assert.Equal(t, tc.wantOK, ok)
-			freeCount, freeOK := DeathCount(tc.headers, "orders.work", DeathReasonRejected)
+			freeCount, freeOK := DeathCount(tc.meta.Headers(), "orders.work", DeathReasonRejected)
 			assert.Equal(t, freeCount, count)
 			assert.Equal(t, freeOK, ok)
 		})
