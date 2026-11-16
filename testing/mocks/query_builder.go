@@ -286,6 +286,12 @@ func (m *MockQueryBuilder) ForUpdateNoWait() types.SelectQueryBuilder {
 	return arg[types.SelectQueryBuilder](arguments, "ForUpdateNoWait", 0)
 }
 
+// ForUpdateSkipLocked mocks the FOR UPDATE SKIP LOCKED row-lock clause.
+func (m *MockQueryBuilder) ForUpdateSkipLocked() types.SelectQueryBuilder {
+	arguments := m.MethodCalled("ForUpdateSkipLocked")
+	return arg[types.SelectQueryBuilder](arguments, "ForUpdateSkipLocked", 0)
+}
+
 func (m *MockQueryBuilder) Limit(limit uint64) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("Limit", limit)
 	return arg[types.SelectQueryBuilder](arguments, "Limit", 0)

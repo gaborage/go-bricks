@@ -867,7 +867,7 @@ if errors.Is(err, database.ErrNoRows) {
 }
 ```
 
-**Row locks.** `ForUpdate()` and `ForUpdateNoWait()` append the lock clause after pagination on both vendors, so a builder SELECT no longer needs `database.Raw` for it. `NOWAIT` fails immediately when another session holds the row — match `database.IsLockNotAvailable(err)` — which is the leader-election shape; plain `FOR UPDATE` blocks. Run either inside `database.WithTx`: the lock lives as long as the transaction. On Oracle a lock cannot be combined with `Limit`/`Offset` — the SQL Language Reference's row_limiting_clause restriction — and `ToSQL` fails with `ErrRowLockWithPagination`; PostgreSQL accepts `LIMIT … FOR UPDATE`.
+**Row locks.** `ForUpdate()`, `ForUpdateNoWait()` and `ForUpdateSkipLocked()` append the lock clause after pagination on both vendors, so a builder SELECT no longer needs `database.Raw` for it; the last of the three calls wins. `NOWAIT` fails immediately when another session holds the row — match `database.IsLockNotAvailable(err)` — which is the leader-election shape; `SKIP LOCKED` leaves such rows out of the result instead, which is the queue-claim shape (each worker takes rows no other worker holds); plain `FOR UPDATE` blocks. Run any of them inside `database.WithTx`: the lock lives as long as the transaction. On Oracle a lock cannot be combined with `Limit`/`Offset` — the SQL Language Reference's row_limiting_clause restriction — and `ToSQL` fails with `ErrRowLockWithPagination`; PostgreSQL accepts `LIMIT … FOR UPDATE`. So the usual batch claim, `Limit(n)` beside `ForUpdateSkipLocked()`, renders on PostgreSQL only.
 
 ```go
 // One relay instance leads this ledger: the loser gets 55P03 / ORA-00054, not a wait.
@@ -878,6 +878,12 @@ err := database.ExecuteQuerySingle(lockCtx, tx, lead, "lead", &id)
 if database.IsLockNotAvailable(err) {
     return errAnotherInstanceLeads
 }
+```
+
+```go
+// PostgreSQL only: claim the next unclaimed job, skipping rows other workers hold.
+claim := qb.Select("id").From("jobs").OrderBy("id").Limit(1).ForUpdateSkipLocked()
+err := database.ExecuteQuerySingle(ctx, tx, claim, "claim_job", &id) // none free -> ErrNoRows
 ```
 
 "Lock the row if it exists, insert it otherwise" has no single-statement builder form: PostgreSQL's `ON CONFLICT … DO UPDATE SET c = EXCLUDED.c` idiom updates a conflict column, which `BuildUpsert` refuses on every vendor for Oracle MERGE parity (ORA-38104), and Oracle has no equivalent. Write it as two statements under the transaction — `Select(...).ForUpdate()` then `Insert` on `ErrNoRows` — or keep the PostgreSQL idiom as annotated raw SQL. The two-statement form is safe only when the lookup key carries a unique or primary-key constraint: two transactions can both see `ErrNoRows` before either inserts, so the loser's `Insert` fails with a unique violation (`database.IsUniqueViolation`) and must re-read or retry rather than treat it as an error. Where that re-read runs depends on the vendor: PostgreSQL aborts the whole transaction on SQLSTATE 23505 (every later statement fails with "current transaction is aborted"), so either run the `Insert` under a savepoint and `ROLLBACK TO SAVEPOINT` before re-reading, or roll back and restart the transaction; Oracle's ORA-00001 is statement-level, the transaction stays usable and the re-read can follow on it directly.

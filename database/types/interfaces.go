@@ -221,6 +221,10 @@ type SelectQueryBuilder interface {
 	// requirement and the error to match are in wiki/database.md ("Row locks").
 	ForUpdate() SelectQueryBuilder
 	ForUpdateNoWait() SelectQueryBuilder
+	// ForUpdateSkipLocked appends `FOR UPDATE SKIP LOCKED` under the same rules:
+	// rows another transaction holds are skipped rather than waited on, the
+	// queue-claim shape, so its Limit(n) batch claim renders on PostgreSQL only.
+	ForUpdateSkipLocked() SelectQueryBuilder
 
 	// SubqueryColumn appends `(sub) AS alias` to the projection — one scalar
 	// subquery per result column, the shape a stats snapshot takes in one round
