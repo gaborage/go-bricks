@@ -557,6 +557,34 @@ func TestMetadataAccessors(t *testing.T) {
 	}
 }
 
+func TestMetadataDeathCountMatchesFreeFunction(t *testing.T) {
+	headers := amqp.Table{"x-death": []any{
+		amqp.Table{"queue": "orders.retry", "reason": DeathReasonExpired, "count": int64(2)},
+		amqp.Table{"queue": "orders.work", "reason": DeathReasonRejected, "count": int64(3)},
+	}}
+	tests := []struct {
+		name      string
+		meta      Metadata
+		wantCount int64
+		wantOK    bool
+	}{
+		{name: "populated_delivery", meta: Metadata{delivery: &amqp.Delivery{Headers: headers}}, wantCount: 3, wantOK: true},
+		{name: "delivery_without_headers", meta: Metadata{delivery: &amqp.Delivery{}}},
+		{name: "zero_value_is_inert", meta: Metadata{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			count, ok := tc.meta.DeathCount("orders.work", DeathReasonRejected)
+			assert.Equal(t, tc.wantCount, count)
+			assert.Equal(t, tc.wantOK, ok)
+			freeCount, freeOK := DeathCount(tc.meta.Headers(), "orders.work", DeathReasonRejected)
+			assert.Equal(t, freeCount, count)
+			assert.Equal(t, freeOK, ok)
+		})
+	}
+}
+
 func TestNewTypedHandlerWithMeta(t *testing.T) {
 	var got orderPayload
 	var gotMeta Metadata
