@@ -8,7 +8,7 @@ Provide a PR number or URL as argument. If omitted, uses the current branch's PR
 
 ## Workflow
 
-1. **Gather context**: Run `gh pr view` to get PR details, `gh api repos/{owner}/{repo}/pulls/{number}/comments` to fetch all inline review comments, and `gh api repos/{owner}/{repo}/pulls/{number}/reviews` to fetch the review summaries. Then collect the findings of every automated reviewer, as root `CLAUDE.md` PR Review Workflow requires, following its SonarCloud procedure.
+1. **Gather context**: Run `gh pr view` to get PR details, `gh api --paginate repos/{owner}/{repo}/pulls/{number}/comments` to fetch all inline review comments, and `gh api --paginate repos/{owner}/{repo}/pulls/{number}/reviews` to fetch the review summaries. Then collect the findings of every automated reviewer, as root `CLAUDE.md` PR Review Workflow requires, following its SonarCloud procedure.
 2. **Analyze**: Read every finding before making any changes. Group them by file and identify dependencies between findings.
 3. **Implement**: Fix all findings in one pass. For each finding:
    - Read the referenced file and surrounding context
