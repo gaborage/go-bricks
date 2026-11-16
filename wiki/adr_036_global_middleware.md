@@ -138,4 +138,3 @@ unsafe, so the app refuses to start rather than serve unguarded traffic.
 
 - [ADR-034](adr_034_echo_boundary_types.md) — the echo-free `MiddlewareFunc` / `HandlerContext` this builds on
 - [ADR-026](adr_026_zero_overhead_request_path.md) — typed handlers register via `addEcho`; global middleware uses the raw root chain
-- Design spec: `docs/superpowers/specs/2026-07-05-global-middleware-registerer-design.md`

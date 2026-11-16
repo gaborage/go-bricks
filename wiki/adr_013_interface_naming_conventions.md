@@ -64,4 +64,4 @@ Applications referencing old interface names must update:
 ## Related ADRs
 
 - [ADR-007: Struct-Based Column Extraction](adr_007_struct_based_columns.md) — previous breaking change for type safety
-- S8179 getter rename (documented in CLAUDE.md) — previous naming convention cleanup
+- S8179 getter rename (rename table in [migrations.md](migrations.md#go-naming-conventions-s8179--getter-methods)) — previous naming convention cleanup
