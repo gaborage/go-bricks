@@ -317,6 +317,30 @@ signature-invalid spike from JSON garbage; the `*sealruntime.OpenRefusedError` w
 `tid` upgrades tenant routing from producer-claimed (a rewritable header) to
 producer-signed; the ACL remains the authorization boundary.
 
+### Opening imperatively: wiping the plaintext
+
+`OpenDocument` returns an `*OpenedDocument` whose `Subject` is the only plaintext field:
+`Document` has the Subject member removed, and the payload kept for `Render` carries it as
+the compact JWE. Zero it with `Wipe` once you are done; `Render` keeps working after a wipe,
+since it never reads `Subject`.
+
+```go
+doc, err := sealed.OpenDocument(body, spec, opts)
+if err != nil {
+	return err
+}
+defer doc.Wipe()
+```
+
+`jose/sealed` clears the plaintext copies it makes for itself: `Open` zeroes the decrypted
+Subject and the spliced document it decodes into `out` on every path, and `OpenDocument`
+zeroes the decrypted Subject before returning a refusal raised after the decrypt. Three
+kinds of copy stay out of its reach: copies the caller derives from `Subject` (the caller's
+to clear), the value decoded into `out`, and buffers internal to the JOSE library.
+`encoding/json` copies every value it decodes, so `out` never aliases the zeroed buffer; a
+custom `UnmarshalJSON` or `UnmarshalText` that keeps its input breaks its contract and sees
+zeros.
+
 ## Replay stance
 
 Redelivery (a crash before ack, a DLQ drain, a shovel, an outbox row driven again) and
