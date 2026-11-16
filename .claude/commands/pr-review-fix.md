@@ -1,6 +1,6 @@
 # PR Review Fix
 
-Fix all review comments on a pull request in a single pass.
+Fix all review findings on a pull request in a single pass.
 
 ## Usage
 
@@ -8,18 +8,17 @@ Provide a PR number or URL as argument. If omitted, uses the current branch's PR
 
 ## Workflow
 
-1. **Gather context**: Run `gh pr view` to get PR details and `gh api repos/{owner}/{repo}/pulls/{number}/comments` to fetch all review comments.
-2. **Analyze**: Read ALL review comments before making any changes. Group them by file and identify dependencies between comments.
-3. **Implement**: Fix all comments in one pass. For each comment:
+1. **Gather context**: Run `gh pr view` to get PR details, `gh api repos/{owner}/{repo}/pulls/{number}/comments` to fetch all inline review comments, and `gh api repos/{owner}/{repo}/pulls/{number}/reviews` to fetch the review summaries. Then collect the findings of every automated reviewer, as root `CLAUDE.md` PR Review Workflow requires, following its SonarCloud procedure.
+2. **Analyze**: Read every finding before making any changes. Group them by file and identify dependencies between findings.
+3. **Implement**: Fix all findings in one pass. For each finding:
    - Read the referenced file and surrounding context
-   - Apply the requested change
-   - If a comment is unclear, use your best judgment based on the codebase patterns
-4. **Verify**: Run `make check` to ensure all fixes pass fmt, lint, and tests.
-5. **Commit and push**: Create a single commit with a message summarizing all fixes, then push.
+   - Apply the requested change, or document the skip and its reason in the commit message
+   - If a finding is unclear, use your best judgment based on the codebase patterns
+4. **Verify**: Run `make check`, then the pre-push gates and `make mutate` exactly as root `CLAUDE.md` Workflow Rules define them.
+5. **Commit and push**: Create a single commit with a message summarizing all fixes and any documented skips, then push once.
 
 ## Rules
 
-- NEVER push incremental fixes. All comments must be addressed in a single commit.
-- If `make check` fails after fixes, fix the issues and re-run until it passes.
-- If a review comment conflicts with another, flag it to the user before proceeding.
+- If `make check` or a pre-push gate fails after fixes, fix the issues and re-run until it passes.
+- If a finding conflicts with another, flag it to the user before proceeding.
 - Respect existing code patterns and conventions in the codebase.

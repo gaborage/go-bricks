@@ -23,7 +23,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 1. Create a new branch for your feature/fix:
 
    ```bash
-   git checkout -b feature/your-feature-name
+   git checkout -b <type>/<descriptive-name>
    ```
 
 2. Make your changes following the project conventions

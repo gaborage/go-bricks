@@ -47,8 +47,8 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    itself lives in root CLAUDE.md Security Guidelines.
 
 2. **S8179 getter naming.** New exported getters must be `X()` not `GetX()`.
-   Legacy `Get*` names listed in `.claude/skills/breaking-changes/SKILL.md` are
-   intentional; flag only new code.
+   Existing `Get*` names in the tree (for example `multitenant.GetTenant`,
+   `logger.GetAMQPCounter`) are out of scope; flag only code the diff adds.
 
 3. **S8196 interface naming.** New interfaces follow the precedent
    (`Executor`, `DBConfigProvider`, `SignalHandler`, …) — agentive `-er`, not
@@ -61,8 +61,8 @@ If that yields nothing, fall back to `git diff HEAD` and `git diff --staged`.
    the shared-helper exception).
 
 5. **ADR index sync.** If the diff adds/renames any `wiki/adr_NNN_*.md`,
-   verify `wiki/architecture_decisions.md` has a matching index entry. This
-   pair fell out of sync historically — flag any mismatch.
+   verify `wiki/architecture_decisions.md` has a matching index entry and
+   flag any mismatch.
 
 6. **Version / doc drift.** If `go.mod`'s Go version changed, check that BOTH
    `llms.txt` and README.md `### Requirements` still state it. If a new package directory was
