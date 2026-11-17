@@ -13,7 +13,7 @@ git diff --merge-base origin/main
 git ls-files --others --exclude-standard
 ```
 
-No diff shows an untracked file, so the last command lists them: read each one in full and treat every line as added. If the diffs and that list are all empty, fall back to `git diff HEAD` and `git diff --staged`. The repository-wide commands below still run over the whole tree, but in this scope each step reports only findings the diff introduces or exposes, cross-checking every hit against the diff. Such a finding can sit on an added or modified line, at a deletion (a removed check or guard), or in unchanged code that the change makes newly reachable. When the user asks for a full audit, report every finding in the codebase.
+No diff shows an untracked file, so the last command lists them: read each one in full and treat every line as added. These commands read the working tree, while a push sends commits, so run `git status --short` too: when it lists a change that will not be part of the push, also audit the committed state, with `git diff --merge-base origin/main HEAD` for the diff and `git show HEAD:<path>` for a file's content. If the diffs and that list are all empty, fall back to `git diff HEAD` and `git diff --staged`. The repository-wide commands below still run over the whole tree, but in this scope each step reports only findings the diff introduces or exposes, cross-checking every hit against the diff. Such a finding can sit on an added or modified line, at a deletion (a removed check or guard), or in unchanged code that the change makes newly reachable. When the user asks for a full audit, report every finding in the codebase.
 
 ## Workflow
 
