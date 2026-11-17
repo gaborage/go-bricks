@@ -19,6 +19,8 @@ Provide a PR number or URL as argument. If omitted, uses the current branch's PR
 
 ## Rules
 
+- If the PR URL names a repository other than the current checkout, stop before collecting findings and tell the user: `gh api` fills `{owner}` and `{repo}` from the checkout, and the edit and push steps apply to the checked-out branch.
+- Before the first edit, confirm the checked-out branch is the PR's head branch: with `NUMBER` as in step 1, `gh pr view NUMBER --json headRefName` reports it. If it is not, check that branch out with `gh pr checkout NUMBER`; if uncommitted changes prevent the switch, stop and tell the user.
 - If `make check` or a pre-push gate fails after fixes, fix the issues and re-run until it passes.
 - If a finding conflicts with another, flag it to the user before proceeding.
 - Respect existing code patterns and conventions in the codebase.
