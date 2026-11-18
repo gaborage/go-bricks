@@ -15,7 +15,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **ToSQL standardization (ADR-017):** Insert builders return `types.InsertQueryBuilder` with `ToSQL()`.
 - **Session timezone (ADR-016):** default `UTC`; opt out with `database.timezone: "-"`.
 - **Consumer concurrency (v0.17.0):** default workers `1` → `NumCPU * 4`; set `Workers: 1` when ordering matters.
-- **Message error handling (v2.X):** handler errors and panics nack messages without requeue.
+- **Message error handling:** handler errors and panics nack messages without requeue.
 - **MongoDB removed (ADR-012):** PostgreSQL and Oracle only.
 - **Bounded publish + outbox dead-lettering (ADR-033):** publish returns `ErrPublishRetriesExhausted` after the new `messaging.reconnect.maxpublishattempts` — match with `errors.Is`, not `==`. `outbox.Store.FetchPending` drops `maxRetries`, gains `MarkDeadLettered`. New key: `outbox.publishtimeout`.
 - **Env policy (ADR-022):** `app.env` accepts any conforming string; behavior switches go through `config.IsDevelopment()` / `config.IsProduction()` alias sets, never equality.

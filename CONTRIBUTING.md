@@ -20,10 +20,10 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 
 ### Making Changes
 
-1. Create a new branch for your feature/fix:
+1. Create a new branch named `<type>/<descriptive-name>`, where the type matches the change (`fix/`, `feat/`, `docs/`, `test/`, `refactor/`, `chore/`):
 
    ```bash
-   git checkout -b feature/your-feature-name
+   git checkout -b fix/descriptive-name
    ```
 
 2. Make your changes following the project conventions

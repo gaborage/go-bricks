@@ -376,7 +376,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 
 **Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay.
 
-**Breaking Change (v2.X):** Previous behavior auto-requeued errors (infinite retry risk). New behavior drops failed messages with rich logging. Review handler error handling and set up monitoring.
+**Breaking Change:** Previous behavior auto-requeued errors (infinite retry risk). New behavior drops failed messages with rich logging. Review handler error handling and set up monitoring.
 
 ### Dead-Lettering
 

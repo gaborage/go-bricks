@@ -32,7 +32,7 @@ Three of the four mutation entry points on `QueryBuilder` returned a go-bricks-o
 | `qb.InsertStruct(...)` | `squirrel.InsertBuilder` | `ToSql()` ❌ |
 | `qb.InsertFields(...)` | `squirrel.InsertBuilder` | `ToSql()` ❌ |
 
-End users had to remember a different casing depending on the mutation — a small but persistent paper-cut that contradicts the project's "Explicit > Implicit" principle and the same S8179 rationale that drove the recent `Get*` → `*` rename across the framework (see CLAUDE.md "Breaking Change: Go Naming Conventions").
+End users had to remember a different casing depending on the mutation — a small but persistent paper-cut that contradicts the project's "Explicit > Implicit" principle and the same S8179 rationale that drove the recent `Get*` → `*` rename across the framework (see "Go Naming Conventions (S8179) — Getter Methods" in [migrations.md](migrations.md#go-naming-conventions-s8179--getter-methods)).
 
 The inconsistency had already started leaking into the codebase:
 

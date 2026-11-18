@@ -35,7 +35,7 @@ Use when reviewing or fixing a PR. The argument is the PR number (e.g.
 3. Triage every finding. Apply the CLAUDE.md standard: this is **all-or-nothing**
    — fix each MAJOR/MINOR/BLOCKER or document the skip in the commit message.
    For framework-precedent rules (S8179 getter naming, S8196 interface naming,
-   etc.) the precedent is **rename/refactor, never nolint** (see ADR-013).
+   etc.) the precedent is **rename/refactor, never nolint** (S8179: the rename table in wiki/migrations.md; S8196: ADR-013).
    Note known false positives already dispositioned in SonarCloud (e.g. the 6
    S8168 Begin/BeginTx transaction-factory issues) and do not re-flag them.
 
