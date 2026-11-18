@@ -530,7 +530,7 @@ jobs:
           pids="$pids $!"
           fi
           # renovate: datasource=docker depName=rabbitmq
-          docker pull rabbitmq:4.4.0-management-alpine &
+          docker pull rabbitmq:4.4.1-management-alpine &
           pids="$pids $!"
           if [ "$INTEG_LEG" != db ]; then
           # renovate: datasource=docker depName=redis
