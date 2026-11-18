@@ -20,7 +20,7 @@ Provide a PR number or URL as argument. If omitted, uses the current branch's PR
 ## Rules
 
 - If the PR URL names a repository other than the current checkout, stop before collecting findings and tell the user: `gh api` fills `{owner}` and `{repo}` from the checkout, and the edit and push steps apply to the checked-out branch.
-- Before the first edit, confirm the checked-out branch is the PR's head branch: with `NUMBER` as in step 1, `gh pr view NUMBER --json headRefName` reports it. If it is not, check that branch out with `gh pr checkout NUMBER`; if uncommitted changes prevent the switch, stop and tell the user.
+- Before the first edit, put the checkout on the PR head, with `NUMBER` as in step 1. Stop and tell the user when `gh pr view NUMBER --json isCrossRepository` reports a fork PR (the push step targets this repository), or when `git status --porcelain --untracked-files=no` lists any staged or unstaged change. Otherwise run `gh pr checkout NUMBER`, even when the branch name already matches: it switches to the PR's head branch and fast-forwards it to the PR head. If it fails, as it does when the local branch has diverged, stop and tell the user.
 - If `make check` or a pre-push gate fails after fixes, fix the issues and re-run until it passes.
 - If a finding conflicts with another, flag it to the user before proceeding.
 - Respect existing code patterns and conventions in the codebase.
