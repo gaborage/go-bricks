@@ -526,7 +526,7 @@ jobs:
           # pulls any other image on demand.
           if [ "$INTEG_LEG" = db ]; then
           # renovate: datasource=docker depName=gvenzl/oracle-free
-          docker pull gvenzl/oracle-free:23.26.3-slim &
+          docker pull gvenzl/oracle-free:23.26.4-slim &
           pids="$pids $!"
           fi
           # renovate: datasource=docker depName=rabbitmq
