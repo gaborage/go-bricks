@@ -10,7 +10,7 @@ PKGS = $(shell go list ./...)
 INTEGRATION_PKGS = $(shell go list -tags=integration ./...)
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=golang.org/x/vuln
-GOVULNCHECK_VERSION := v1.9.0
+GOVULNCHECK_VERSION := v1.10.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
 GOSEC_VERSION := v2.30.0
