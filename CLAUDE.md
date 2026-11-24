@@ -4,16 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Delegation policy (read first)
 
-The session model (Opus 5.5) is the orchestrator, not the worker. Its context is the scarcest resource in the session; spend it only on decomposition, judgment calls, synthesis, and talking to the user. Delegate everything else to subagents via the Agent tool, picking the cheapest model that can do the job well:
+The session model is the orchestrator, not the worker. Its context is the scarcest resource in the session; spend it on decomposition, judgment calls, synthesis, and talking to the user. Delegate the rest to subagents via the Agent tool when the work is big enough to repay the handoff (a subagent starts with none of this context and returns only a summary), picking the cheapest model that can do the job well:
 
 - `model: "opus"` — the default worker tier. Anything requiring real judgment: implementation, debugging, architecture-aware exploration, adversarial review.
 - `model: "sonnet"` — cheap tier for mechanical or low-stakes work: running tests and reporting output, simple greps/lookups with a known target, rote refactors from an exact spec, formatting, screenshot capture, admin chores. If getting it slightly wrong is cheap to catch, use sonnet.
 
-- **Exploration/research**: never read broadly yourself. Spawn `Explore` agents (model: opus) with tightly scoped questions; consume their synthesized reports, not raw files. Trivial "find the file that defines X" lookups can go to sonnet.
+- **Exploration/research**: when an answer means reading across many files, spawn `Explore` agents (model: opus) with tightly scoped questions and consume their synthesized reports, because raw file dumps crowd out the orchestrator's context. Read directly when the target is already known. Trivial "find the file that defines X" lookups can go to sonnet.
 - **Implementation**: for any multi-file change, spawn `general-purpose` agents (model: opus) with exact file paths, the relevant doctrine from this file, and a definition of done (tests to run). Independent changes get parallel agents in one message.
 - **Verification/review**: adversarial review and blast-radius checks go to opus agents. Plain test runs and lint passes go to sonnet agents.
 - The orchestrator itself only edits directly when the change is small (one or two files, already-known locations).
-- **Tripwire (added after the orchestrator did a 5-file change inline, 2026-08-26): before the first Edit/Write, count the files the change will touch. Three or more, or any screenshot/browser-proof chore: stop and spawn agents instead. Inline orchestrator work is only sequential diagnosis (each command depends on the previous answer) and 1-2 file edits.**
+- **Tripwire:** before the first Edit/Write, count the files the change will touch. Three or more, or any screenshot/browser-proof chore: spawn agents instead. Inline orchestrator work is sequential diagnosis (each command depends on the previous answer) and 1-2 file edits.
 
 Token rules:
 
@@ -31,12 +31,12 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 - Always run `make check` before committing and pushing. Never commit or push without a passing build.
 - When fixing lint/build errors, run `make check` after each fix cycle. Common issues: import ordering, trailing newlines, type narrowing errors.
-- **Before pushing code, run the three pre-push gates IN ORDER: `/simplify` → `/security-audit` → `/code-review` (CodeRabbit).** **This is mandatory.** The order is load-bearing: `/simplify` applies reuse/simplification/efficiency cleanups first (it *mutates* the diff, so it must run before anything that judges the diff); `/security-audit` then audits the refactored result (credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about); `/code-review` (CodeRabbit) renders the final independent verdict on the end state. After the agent gates settle, run `make mutate` once as the final machine gate before pushing (surviving mutants on changed lines block the push; see wiki/testing.md#mutation-gate); if any later fix changes code after it ran, re-run it — the same rule as `make check`. Any gate that changes code requires `make check` again before the next gate; if findings are applied after CodeRabbit's pass, re-run `/code-review` — CodeRabbit must always see the final diff; if a third pass still returns findings, push and note the open ones in the PR body. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment/doc-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need all three gates. When in doubt, run them.
+- **Before pushing code, run the three pre-push gates IN ORDER: `/simplify` → `/security-audit` → `/code-review`.** **This is mandatory.** The order is load-bearing: `/simplify` applies reuse/simplification/efficiency cleanups first (it *mutates* the diff, so it must run before anything that judges the diff); `/security-audit` then audits the refactored result (credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about); `/code-review` (the built-in review skill, not a plugin skill of the same name) renders the final independent verdict on the end state; CodeRabbit reviews the pushed PR, and its findings are handled under PR Review Workflow. After the agent gates settle, run `make mutate` once as the final machine gate before pushing (surviving mutants on changed lines block the push; see wiki/testing.md#mutation-gate); if any later fix changes code after it ran, re-run it — the same rule as `make check`. Any gate that changes code requires `make check` again before the next gate; if findings are applied after the `/code-review` pass, re-run it — the review must always see the final diff; if a third pass still returns findings, push and note the open ones in the PR body. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment/doc-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need all three gates. When in doubt, run them.
 - **Run `make mutate` and `make check` in the background (`run_in_background`), not the foreground.** A real `make mutate` run is ~440s median and the foreground command ceiling is 600s. Backgrounding also lets reading, editing, and review work overlap the gate instead of queueing behind it, and keeps the deliberate `MUTATE_CPU`/`MUTATE_COOLDOWN` thermal throttle free in wall-clock terms. Foreground is fine only when the gate is expected to no-op in seconds.
-- Once `make check` and the pre-push gates pass, commit and push to the feature branch automatically — no need to wait for the user to ask.
+- Once `make check` and the pre-push gates pass, commit and push to the work branch automatically — no need to wait for the user to ask.
 - **Wait for CI with one backgrounded watcher, never a burst of foreground polls.** Run `scripts/ci-wait.sh "$(git rev-parse HEAD)"` as a single `run_in_background` command and keep working — the harness re-invokes you when it exits. It finds the pushed commit's ci-v2 run by full sha (retrying every 30s until it is listed), watches it every 30s, follows a same-commit replacement (a stack-push twin), and exits 0 on success, 1 on failure, or 3 when the run was cancelled with no replacement for that commit (a newer head superseded it: watch that head instead). Never call `gh run view`/`gh run watch` without a run ID — they need a TTY and die with `run or job ID required when not running interactively` under `run_in_background`. Poll remote state no faster than every 30s; `gh pr checks --watch` defaults to 10s, which polls far harder than waiting on CI needs.
 - **Never re-run a superseded ci-v2 or CodeQL PR run.** Both keep one live run per PR: a run cancelled because a newer run of the same PR started (a newer head, or a same-sha twin from a stack push) was superseded, not failed, and a re-run re-enters the PR's concurrency group and cancels the live run. The newest `ci-ok` on the commit governs the merge; only when it is red or missing (for example after a manual or timeout cancel with no newer run), re-run the newest run.
-- **Stacked PRs for large features (mandatory above ~400 LoC):** a diff over ~400 changed LoC ships as a stack via `/gh-stack`, never one big PR. Decompose by dependency + logical unit; each PR is self-contained: builds, passes `make check`, the gates and `make mutate` alone, reviewable without later PRs. `ci-v2.yml` runs `pull_request` for any base, so each link (base = the branch below, as `gh stack submit` chains them) carries its own checks — judge by check count, not `mergeStateStatus`. Merge bottom-up, maintainer-only; after each, `gh stack sync --prune`. Independent changes get separate branches, not a stack.
+- **Stacked PRs for large features (mandatory above ~400 LoC):** a diff over ~400 changed LoC ships as a stack via the `gh stack` CLI extension (the `/gh-stack` skill wraps it where installed), never one big PR. Decompose by dependency + logical unit; each PR is self-contained: builds, passes `make check`, the gates and `make mutate` alone, reviewable without later PRs. `ci-v2.yml` runs `pull_request` for any base, so each link (base = the branch below, as `gh stack submit` chains them) carries its own checks — judge by check count, not `mergeStateStatus`. Merge bottom-up, maintainer-only; after each, `gh stack sync --prune`. Independent changes get separate branches, not a stack.
 - Keep responses and Claude-authored artifacts (plans, reports, summaries) proportional to the task: cover the substance, and skip filler sections, redundant summaries, and boilerplate.
 - **A blocking question costs a fixed minute before its content matters.** Measured locally, a one-question `AskUserQuestion` stalls ~59s at the median and a three-or-four-question one ~114s. So decide routine calls yourself and carry on, and when you genuinely must ask, batch the open decisions into one call (the tool takes four) rather than draining them one at a time across the session.
 
@@ -46,8 +46,8 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 ## PR Review Workflow
 
-- For PR review fix sessions: read every review comment first, implement all fixes, run `make check` plus the pre-push gates, then push once — one coherent diff instead of a CI cycle per comment.
-- **Address findings from every automated reviewer, not just CodeRabbit.** SonarCloud's "Quality Gate passed" banner hides the per-PR NEW-issue list — run `/sonar-pr <N>` (`.claude/skills/sonar-pr`) to fetch and triage it; same all-or-nothing standard as CodeRabbit nitpicks: fix or document the skip in the commit message.
+- For PR review fix sessions: read every review finding first (inline comments, review summaries, and each automated reviewer's report), implement all fixes, run `make check` plus the pre-push gates, then push once — one coherent diff instead of a CI cycle per comment.
+- **Address findings from every automated reviewer, not just CodeRabbit.** SonarCloud's "Quality Gate passed" banner hides the per-PR NEW-issue list — fetch and triage it by following `.claude/skills/sonar-pr/SKILL.md` for the PR (agents cannot invoke `/sonar-pr` themselves); same all-or-nothing standard as CodeRabbit nitpicks: fix or document the skip in the commit message.
 
 ## Quick Reference
 
@@ -111,7 +111,7 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 
 ## Architecture
 
-The eight packages whose rules had their own section here — `database/`, `cache/`, `httpclient/`, `messaging/`, `scheduler/`, `observability/`, `outbox/`, `jose/` — now keep them in `<pkg>/CLAUDE.md`, loaded automatically when you work under that directory. Every other package's rules are its Core Components bullet plus the linked wiki page.
+Eight packages — `database/`, `cache/`, `httpclient/`, `messaging/`, `scheduler/`, `observability/`, `outbox/`, `jose/` — keep their rules in `<pkg>/CLAUDE.md`, loaded automatically when you work under that directory. Every other package's rules are its Core Components bullet plus the linked wiki page.
 
 ### Core Components
 
@@ -186,7 +186,7 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 ### Branch Model
 
 - Main branch: `main` (stable releases).
-- Feature branches: `feature/*`.
+- Work branches: `<type>/<descriptive-name>`, where the type matches the change (`fix/`, `feat/` or `feature/`, `docs/`, `test/`, `refactor/`, `chore/`).
 
 ### CI/CD Pipeline
 
@@ -196,7 +196,7 @@ For Windows-specific test patterns, CI workflow internals, and operational issue
 
 ## OpenAPI Tool
 
-The OpenAPI generator now lives in its own repository: [**gaborage/go-bricks-openapi**](https://github.com/gaborage/go-bricks-openapi) — static-analysis spec generation, automatic route discovery, typed request/response models. Install with `go install github.com/gaborage/go-bricks-openapi/cmd/go-bricks-openapi@latest`.
+The OpenAPI generator lives in its own repository: [**gaborage/go-bricks-openapi**](https://github.com/gaborage/go-bricks-openapi) — static-analysis spec generation, automatic route discovery, typed request/response models. Install with `go install github.com/gaborage/go-bricks-openapi/cmd/go-bricks-openapi@latest`.
 
 ## Breaking Changes
 

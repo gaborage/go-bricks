@@ -111,7 +111,7 @@ func StartPostgreSQLContainerForTestMain(ctx context.Context, cfg *PostgreSQLCon
 // verification) prevents a race where the log appears but PostgreSQL is not ready to
 // accept connections.
 func postgreSQLOptions(cfg *PostgreSQLContainerConfig) []testcontainers.ContainerCustomizer {
-	return []testcontainers.ContainerCustomizer{
+	opts := []testcontainers.ContainerCustomizer{
 		postgres.WithDatabase(cfg.Database),
 		postgres.WithUsername(cfg.Username),
 		postgres.WithPassword(cfg.Password),
@@ -121,6 +121,13 @@ func postgreSQLOptions(cfg *PostgreSQLContainerConfig) []testcontainers.Containe
 			wait.ForListeningPort(postgreSQLPort),
 		),
 	}
+	if settingArgs := postgreSQLSettingArgs(cfg.Settings); settingArgs != nil {
+		opts = append(opts, testcontainers.WithCmdArgs(settingArgs...))
+	}
+	if tmpfs, env := postgreSQLDataTmpfs(cfg.DataTmpfs); tmpfs != nil {
+		opts = append(opts, testcontainers.WithTmpfs(tmpfs), testcontainers.WithEnv(env))
+	}
+	return opts
 }
 
 // startPostgreSQLContainerInternal does the actual testcontainer setup without
@@ -129,6 +136,10 @@ func postgreSQLOptions(cfg *PostgreSQLContainerConfig) []testcontainers.Containe
 func startPostgreSQLContainerInternal(ctx context.Context, cfg *PostgreSQLContainerConfig) (*PostgreSQLContainer, error) {
 	if cfg == nil {
 		cfg = DefaultPostgreSQLConfig()
+	}
+
+	if err := validatePostgreSQLSettings(cfg.Settings); err != nil {
+		return nil, err
 	}
 
 	pgContainer, err := postgres.Run(ctx,

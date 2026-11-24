@@ -78,3 +78,20 @@ and annotated and the two-statement idiom is documented next to the row lock.
   `outbox/store_*.go`, `inbox/store_*.go` and `inbox/hold_store_*.go`; DDL, the
   Oracle `MERGE … USING dual` leader seed and function-based indexes stay raw
   with the annotation.
+
+## Amendment (2026-11-14, #2403): `ForUpdateSkipLocked`
+
+`SelectQueryBuilder` gains `ForUpdateSkipLocked()`, rendering
+`FOR UPDATE SKIP LOCKED` where its siblings render their clause: after
+pagination on PostgreSQL, at the end of the statement on Oracle. It shares the
+one lock slot, so the last of the three calls wins in any order; it is refused
+inside a subquery with the siblings' error; and on Oracle beside `Limit`/`Offset`
+it fails `ToSQL` with `ErrRowLockWithPagination`. The queue-claim shape — skip
+rows another worker holds instead of waiting on them — therefore has a builder
+form, but the batch claim (`Limit(n)` + `SKIP LOCKED`) renders on PostgreSQL
+only. No Oracle batch-claim recipe is offered, and the outbox relay keeps its
+`NOWAIT` claim.
+
+Compile-break, as at adoption: a consumer type implementing
+`SelectQueryBuilder` stops compiling until it grows the method; callers are
+unaffected. See [migrations.md](migrations.md) `[C74.10]`.

@@ -6,14 +6,15 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// The row-lock clause. Both vendors spell FOR UPDATE [NOWAIT] identically, so
-// it is a builder constant rather than a vendorRenderer method; what IS
-// vendor-specific — the clause must follow Oracle's OFFSET/FETCH and
-// PostgreSQL's LIMIT/OFFSET — withRowLock settles by rendering it as the last
-// suffix, after applyPagination.
+// The row-lock clause. Both vendors spell FOR UPDATE [NOWAIT | SKIP LOCKED]
+// identically, so it is a builder constant rather than a vendorRenderer
+// method; what IS vendor-specific — the clause must follow Oracle's
+// OFFSET/FETCH and PostgreSQL's LIMIT/OFFSET — withRowLock settles by
+// rendering it as the last suffix, after applyPagination.
 const (
-	forUpdate       = "FOR UPDATE"
-	forUpdateNoWait = "FOR UPDATE NOWAIT"
+	forUpdate           = "FOR UPDATE"
+	forUpdateNoWait     = "FOR UPDATE NOWAIT"
+	forUpdateSkipLocked = "FOR UPDATE SKIP LOCKED"
 )
 
 // ForUpdate appends FOR UPDATE; see dbtypes.SelectQueryBuilder.
@@ -25,6 +26,12 @@ func (sqb *SelectQueryBuilder) ForUpdate() dbtypes.SelectQueryBuilder {
 // ForUpdateNoWait appends FOR UPDATE NOWAIT; see dbtypes.SelectQueryBuilder.
 func (sqb *SelectQueryBuilder) ForUpdateNoWait() dbtypes.SelectQueryBuilder {
 	sqb.lock = forUpdateNoWait
+	return sqb
+}
+
+// ForUpdateSkipLocked appends FOR UPDATE SKIP LOCKED; see dbtypes.SelectQueryBuilder.
+func (sqb *SelectQueryBuilder) ForUpdateSkipLocked() dbtypes.SelectQueryBuilder {
+	sqb.lock = forUpdateSkipLocked
 	return sqb
 }
 

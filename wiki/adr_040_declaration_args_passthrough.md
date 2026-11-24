@@ -25,7 +25,7 @@ takes them seriously everywhere except the one place that talks to the broker:
 This produced three concrete problems:
 
 1. **Permanent message loss with no escape hatch.** The consumer runtime nacks
-   failed deliveries with `requeue=false` by design (v2.X breaking change: no
+   failed deliveries with `requeue=false` by design (breaking change: no
    infinite retry loops). In RabbitMQ that signal triggers broker-side
    dead-lettering *if* the queue has `x-dead-letter-exchange` set — but users
    had no way to set it, because `Args` never reached the broker. Every

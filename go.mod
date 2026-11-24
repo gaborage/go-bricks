@@ -9,7 +9,7 @@ require (
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/fxamacker/cbor/v2 v2.10.0
-	github.com/go-co-op/gocron/v2 v2.23.1
+	github.com/go-co-op/gocron/v2 v2.23.2
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/go-playground/validator/v10 v10.30.6
 	github.com/go-viper/mapstructure/v2 v2.5.0
@@ -23,14 +23,14 @@ require (
 	github.com/knadh/koanf/providers/rawbytes v1.0.1
 	github.com/knadh/koanf/v2 v2.4.1
 	github.com/labstack/echo-otel/v5 v5.0.0
-	github.com/labstack/echo/v5 v5.4.5
-	github.com/rabbitmq/amqp091-go v1.16.0
+	github.com/labstack/echo/v5 v5.4.7
+	github.com/rabbitmq/amqp091-go v1.17.0
 	// Version-bump canary: re-verify ConnectPartition still constructs
 	// partition producers with default SubEntrySize. Super-stream pointer-
 	// identity confirmation correlation (ADR-063) depends on that vendor-
 	// internal NewProducerOptions(); a change there breaks silently.
 	// See gaborage/go-bricks#1014.
-	github.com/rabbitmq/rabbitmq-stream-go-client v1.9.0
+	github.com/rabbitmq/rabbitmq-stream-go-client v1.10.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/rs/zerolog v1.35.1
 	github.com/sijms/go-ora/v2 v2.9.0
