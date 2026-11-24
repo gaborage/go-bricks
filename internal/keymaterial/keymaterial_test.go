@@ -252,8 +252,7 @@ func TestParseRSAPrivateKey(t *testing.T) {
 	})
 }
 
-// ProducerKeys carries jose's resolver method set without importing jose from
-// the package itself; this assertion is where that structural claim is pinned.
+// ProducerKeys carries jose's resolver method set; this assertion pins it.
 var _ jose.KeyResolver = (*ProducerKeys)(nil)
 
 func TestLoadRSAPrivateKey(t *testing.T) {
@@ -474,12 +473,14 @@ func TestConsumerKeys(t *testing.T) {
 		_, err := keys.PublicKey("nope-v9")
 		require.Error(t, err)
 		assert.Equal(t, `no public key registered for kid "nope-v9"`, err.Error())
+		assert.ErrorIs(t, err, jose.ErrKidUnknown, "an unknown kid is jose's unknown-kid class")
 	})
 
 	t.Run("unknown_private_kid_errors", func(t *testing.T) {
 		_, err := keys.PrivateKey("nope-v9")
 		require.Error(t, err)
 		assert.Equal(t, `no private key registered for kid "nope-v9"`, err.Error())
+		assert.ErrorIs(t, err, jose.ErrKidUnknown, "an unknown kid is jose's unknown-kid class")
 	})
 
 	// The inverse of ProducerKeys' cross-role case: here the ENCRYPT kid is not a

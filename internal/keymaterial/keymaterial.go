@@ -16,6 +16,7 @@ import (
 	"os"
 
 	"github.com/gaborage/go-bricks/internal/secretfile"
+	"github.com/gaborage/go-bricks/jose"
 )
 
 // LoadBytes resolves file-or-value key material to raw bytes (DER for RSA).
@@ -140,9 +141,7 @@ func LoadRSAPublicKey(file, value string) (*rsa.PublicKey, error) {
 // the kid and nothing else.
 //
 // The method set is exactly jose.KeyResolver's (and jose.KeyStoreLike's), so a
-// *ProducerKeys satisfies both structurally — this package deliberately does
-// not import jose: keystore imports keymaterial, and the dependency would drag
-// go-jose into the keystore module for no gain.
+// *ProducerKeys satisfies both structurally.
 type ProducerKeys struct {
 	SignKid    string
 	SignPriv   *rsa.PrivateKey
@@ -170,10 +169,8 @@ func (k *ProducerKeys) PublicKey(kid string) (*rsa.PublicKey, error) {
 // ConsumerKeys resolves the two kids a consumer holds: the producer's sign
 // PUBLIC key and its own encrypt PRIVATE key — the exact inverse of
 // ProducerKeys, and the shape the open-event CLI hands to jose. Any other kid
-// is an error naming the kid and nothing else.
-//
-// The method set is the same jose.KeyResolver one ProducerKeys carries, and
-// satisfied the same structural way, without importing jose here.
+// is an error naming the kid and nothing else, matching jose.ErrKidUnknown so
+// jose/sealed refuses it as an unknown generation rather than a resolver fault.
 type ConsumerKeys struct {
 	SignKid    string
 	SignPub    *rsa.PublicKey
@@ -188,7 +185,7 @@ func (k *ConsumerKeys) PublicKey(kid string) (*rsa.PublicKey, error) {
 	if kid == k.SignKid && k.SignPub != nil {
 		return k.SignPub, nil
 	}
-	return nil, fmt.Errorf("no public key registered for kid %q", kid)
+	return nil, kidUnknownError{half: "public", kid: kid}
 }
 
 // PrivateKey returns the decrypt key for EncryptKid; every other kid is unknown, and an
@@ -197,5 +194,16 @@ func (k *ConsumerKeys) PrivateKey(kid string) (*rsa.PrivateKey, error) {
 	if kid == k.EncryptKid && k.EncPriv != nil {
 		return k.EncPriv, nil
 	}
-	return nil, fmt.Errorf("no private key registered for kid %q", kid)
+	return nil, kidUnknownError{half: "private", kid: kid}
 }
+
+// kidUnknownError names the kid and the missing half, and unwraps to jose.ErrKidUnknown.
+type kidUnknownError struct {
+	half, kid string
+}
+
+func (e kidUnknownError) Error() string {
+	return fmt.Sprintf("no %s key registered for kid %q", e.half, e.kid)
+}
+
+func (kidUnknownError) Unwrap() error { return jose.ErrKidUnknown }
