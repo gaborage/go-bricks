@@ -494,8 +494,8 @@ func newRedisServed(cfg *RedisContainerConfig) (redisServed, error) {
 // from 8.12 it checks that dialed address against the SANs unless --sni names
 // another identity; a caller's leaf need not cover 127.0.0.1 (cache/redis's
 // cluster-TLS leaf deliberately covers only localhost), so the name comes from
-// the leaf itself, in order: its first DNS SAN without a wildcard that is not
-// an IP literal (8.12 checks an IP-shaped --sni against IP SANs only, so
+// the leaf itself, in order: its first non-empty, wildcard-free DNS SAN that
+// is not an IP literal (8.12 checks an IP-shaped --sni against IP SANs only, so
 // `DNS:127.0.0.1` does not cover it), its first IP SAN (8.12 verifies an IPv4
 // or IPv6 literal given as --sni), or a concrete name under its first `*.`
 // wildcard whose suffix holds a dot — the one the wildcard covers, rather than
@@ -514,7 +514,7 @@ func redisTLSServerName(material *RedisTLSMaterial) (string, error) {
 		return "", err
 	}
 	for _, name := range leaf.DNSNames {
-		if !strings.Contains(name, "*") && net.ParseIP(name) == nil {
+		if name != "" && !strings.Contains(name, "*") && net.ParseIP(name) == nil {
 			return name, nil
 		}
 	}

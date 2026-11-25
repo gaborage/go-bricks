@@ -613,6 +613,11 @@ func TestRedisTLSServerNameComesFromTheLeafSAN(t *testing.T) {
 			want: "localhost",
 		},
 		{
+			name: "empty_dns_san_is_skipped_for_a_later_concrete_one",
+			cert: dnsSANLeaf("", "localhost"),
+			want: "localhost",
+		},
+		{
 			name: "certificate_after_a_leading_key_block_is_found",
 			cert: func(t *testing.T) []byte {
 				return append(junkPEM("PRIVATE KEY")(t), leafFor("redis.test")(t)...)
