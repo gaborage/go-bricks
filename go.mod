@@ -7,7 +7,7 @@ toolchain go1.27.4
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
-	github.com/alicebob/miniredis/v2 v2.40.0
+	github.com/alicebob/miniredis/v2 v2.41.0
 	github.com/fxamacker/cbor/v2 v2.10.0
 	github.com/go-co-op/gocron/v2 v2.23.2
 	github.com/go-jose/go-jose/v4 v4.1.9
