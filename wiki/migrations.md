@@ -17259,9 +17259,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   # a test, alert, probe or timeout sized to how long a refused Redis connection takes to fail
   git grep --untracked --no-exclude-standard -niE 'maxretries|ConnectionError|connection refused' -- .
   # an own type that implements a go-redis command interface, under any import alias
-  git grep -nwE 'Cmdable|UniversalClient|Pipeliner|StatefulCmdable' -- '*.go'
+  git grep --untracked --no-exclude-standard -nwE 'Cmdable|UniversalClient|Pipeliner|StatefulCmdable' -- '*.go'
   # a test that sends COMMAND through a testing/containers ACL user
-  git grep -nE 'RedisACL\{|\.Command(Info|Count|List|Docs|GetKeys)?\(' -- '*_test.go'
+  git grep --untracked --no-exclude-standard -nE 'RedisACL\{|\.Command(Info|Count|List|Docs|GetKeys)?\(' -- '*_test.go'
   ```
 
   The default writes no `cache.redis.maxretries` key, so read the tests and probes that start the
@@ -17328,11 +17328,16 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   connection to take longer than about 0.4s to fail. Give a `testing/containers` user that sends
   `COMMAND` its own `Rules`, including `+command`. Add the new methods to an own implementation,
   or embed the interface.
-- verify: for an ACL match, note the time, run the service in cluster mode with cache traffic for
-  more than 60s, so a reload runs, then as an administrative user `redis-cli ACL LOG 128` shows no
+- verify: for an ACL match, on every node of the cluster (a node keeps its own users and its own
+  ACL log, and go-redis may load the map from any of them), as an administrative user `redis-cli
+  ACL DRYRUN <user> CLUSTER SHARDS` answers `OK`; it writes no log entry (measured on Redis 7.0
+  and 8.12). To confirm under traffic, note the time, run the service in cluster mode with cache
+  traffic for more than 60s, so a reload runs, then on every node `redis-cli ACL LOG 128` shows no
   entry for the cache user whose `object` is `cluster|shards` or `command` and whose `age-seconds`
-  is smaller than the time since the note. A repeat denial resets `age-seconds` (measured on Redis
-  7.0 and 8.12), so nothing needs `ACL LOG RESET`, which would erase every user's audit entries.
+  is smaller than the time since the note. A repeat denial resets `age-seconds` (measured on the
+  same two versions), so nothing needs `ACL LOG RESET`, which would erase every user's audit
+  entries. A node whose log is full of entries younger than the note may have evicted one, so
+  that reading is inconclusive and the dry run decides.
   For a timing match, run the tests, alerts and startup checks that expect a refused Redis
   connection, in standalone or cluster mode: each passes with its resized budget. For a `COMMAND`
   match, run each test that sends `COMMAND` as a `testing/containers` user: it passes with its own
