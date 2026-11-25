@@ -17336,8 +17336,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   entry for the cache user whose `object` is `cluster|shards` or `command` and whose `age-seconds`
   is smaller than the time since the note. A repeat denial resets `age-seconds` (measured on the
   same two versions), so nothing needs `ACL LOG RESET`, which would erase every user's audit
-  entries. A node whose log is full of entries younger than the note may have evicted one, so
-  that reading is inconclusive and the dry run decides.
+  entries. A node whose log is full of entries younger than the note may have evicted one. The
+  dry run still settles the `cluster|shards` grant; for `command` that reading is inconclusive,
+  so repeat the traffic check until the node's log reaches back past the note.
   For a timing match, run the tests, alerts and startup checks that expect a refused Redis
   connection, in standalone or cluster mode: each passes with its resized budget. For a `COMMAND`
   match, run each test that sends `COMMAND` as a `testing/containers` user: it passes with its own
