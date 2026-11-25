@@ -17258,8 +17258,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep --untracked --no-exclude-standard -nE "mode:[[:space:]]*[\"']?cluster|CACHE_REDIS_MODE|ModeCluster" -- .
   # a test, alert, probe or timeout sized to how long a refused Redis connection takes to fail
   git grep --untracked --no-exclude-standard -niE 'maxretries|ConnectionError|connection refused' -- .
-  # an own type that implements a go-redis command interface
-  git grep -nE 'redis\.(Cmdable|UniversalClient|Pipeliner|StatefulCmdable)' -- '*.go'
+  # an own type that implements a go-redis command interface, under any import alias
+  git grep -nwE 'Cmdable|UniversalClient|Pipeliner|StatefulCmdable' -- '*.go'
   # a test that sends COMMAND through a testing/containers ACL user
   git grep -nE 'RedisACL\{|\.Command(Info|Count|List|Docs|GetKeys)?\(' -- '*_test.go'
   ```
@@ -17317,7 +17317,9 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     `COMMAND` (`COMMAND INFO`, `COMMAND COUNT`) as that user gets `NOPERM`.
   - own go-redis use: `Cmdable` gains 35 methods, among them `ACLGetUser`, `SAddEX` and `ZMove`,
     and `UniversalClient`, `Pipeliner` and `StatefulCmdable` inherit them, so an own type that
-    implements one with its own methods stops compiling; no method was removed or changed.
+    implements one with its own methods stops compiling; no method was removed or changed. Where
+    such a type reaches the interface only through a type assertion or type switch, the build
+    passes and the assertion stops matching at run time.
 - apply: for each ACL match, add `+cluster|shards` beside `+cluster|slots` in the cache user's ACL
   (`ACL SETUSER <user> +cluster|shards`, the `users.acl` file, or the managed access string) and
   keep `+cluster|slots`, the fallback; Redis accepts both from 7.0, the go-bricks floor. Drop
@@ -17326,9 +17328,16 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   connection to take longer than about 0.4s to fail. Give a `testing/containers` user that sends
   `COMMAND` its own `Rules`, including `+command`. Add the new methods to an own implementation,
   or embed the interface.
-- verify: as an administrative user, `redis-cli ACL LOG RESET`. Run the service in cluster mode
-  with cache traffic for more than 60s, so a reload runs, then `redis-cli ACL LOG 128` shows no
-  entry whose `object` is `cluster|shards` or `command` for the cache user.
+- verify: for an ACL match, note the time, run the service in cluster mode with cache traffic for
+  more than 60s, so a reload runs, then as an administrative user `redis-cli ACL LOG 128` shows no
+  entry for the cache user whose `object` is `cluster|shards` or `command` and whose `age-seconds`
+  is smaller than the time since the note. A repeat denial resets `age-seconds` (measured on Redis
+  7.0 and 8.12), so nothing needs `ACL LOG RESET`, which would erase every user's audit entries.
+  For a timing match, run the tests, alerts and startup checks that expect a refused Redis
+  connection, in standalone or cluster mode: each passes with its resized budget. For a `COMMAND`
+  match, run each test that sends `COMMAND` as a `testing/containers` user: it passes with its own
+  `Rules`. For an own implementation, `go build ./... && go vet ./...` passes, and each type
+  assertion or type switch on one of the four interfaces still takes its matching branch.
 - ref: gaborage/go-bricks#2429 · gaborage/go-bricks#2434 · go-redis RELEASE-NOTES 9.24.0
   (redis/go-redis#3960, #4093 topology loading prefers CLUSTER SHARDS and static command metadata
   does no lookup; #4304 retries no longer replay a failed dial sequence) · `osscluster.go`
