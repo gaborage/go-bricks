@@ -728,29 +728,46 @@ cache:
 - **Narrowing the command set needs grants the method list does not suggest.** Scoping keys
   with `~orders:*` is the easy half; replacing `+@all` is where a working deployment breaks in
   ways that do not look like ACL problems. The `cache.Cache` surface **requires**
-  `+ping +get +set +del +eval`, plus `+cluster|slots` under `mode: cluster`; deny any of those and
-  the client fails. Three further grants are **optional** — `+info`, `+command` and, on Redis 7.2
-  and later only, `+client|setinfo` — and what each one costs when denied is below. Grant
+  `+ping +get +set +del +eval`, plus, under `mode: cluster`, `+cluster|shards` or `+cluster|slots`;
+  deny any of the five and the client fails; deny both cluster subcommands and construction
+  fails, because the cluster client reads the slot map before its first `PING`. Grant **both**
+  cluster subcommands: go-redis reads the slot map with `CLUSTER SHARDS` and falls back to
+  `CLUSTER SLOTS` only when that is refused or its reply is unusable, so a user holding just
+  `+cluster|slots` still works but pays the denial cost below, while one holding just
+  `+cluster|shards` loses the fallback.
+  Both are accepted from the 7.0 floor up and both sit in `@slow`, so `+@slow` or `+@all` already
+  covers them. Two further grants are **optional** — `+info` and, on Redis 7.2 and
+  later only, `+client|setinfo` — and what each one costs when denied is below. Grant
   `+client|setinfo` only on 7.2+: it names a command that did not exist before, so on the 7.0 and
   7.1 servers this framework still supports, Redis rejects the whole rule with
-  `ERR ... Unknown command or category name in ACL` and the ACL never applies. The optional three
-  are the dangerous kind, because denying them breaks nothing visible: go-redis asks the server for a
-  command's key positions with `COMMAND`, and sends `CLIENT SETINFO` on every new connection
-  (`DisableIdentity` is never set in `cache/redis`), and it tolerates a `NOPERM` on either. What the
-  denial costs is an audit trail, not a log. The server does **not** log it — Redis routes every
-  denial to `ACL LOG`, a ring of 128 entries by default, so a steady stream of benign denials
-  evicts genuine ACL violations from the only record the server keeps of them. Separately and
-  client-side, go-redis's own logger emits one line per affected call
-  (`getting command info: NOPERM User … 'command'`), which is noise in the application's log and
-  nothing more. `+cluster|slots` is the one that fails loudly instead, which is why it sits in the
-  required set: the cluster client reads the slot map before its first `PING`, so leaving it out
-  fails construction outright. `+info` degrades quietly in the other direction: the Redis 7.0 floor
+  `ERR ... Unknown command or category name in ACL` and the ACL never applies. `+command` is not
+  needed: go-redis resolves key positions from its built-in command table, which
+  `cache/redis` never replaces, and sends no `COMMAND` for any cache operation in either mode.
+  A refused `CLUSTER SHARDS` and a refused `CLIENT SETINFO` are the dangerous kind, because
+  denying them breaks nothing visible: go-redis sends `CLIENT SETINFO` on every new connection
+  (the cache client never sets `DisableIdentity`), and the cluster client asks for
+  `CLUSTER SHARDS` on every slot-map load, falling back without remembering the refusal. Loads
+  happen, for example, at construction, on the reload a command triggers once the map is 60s old,
+  and after a `MOVED` or `ASK`; failure paths such as a node that cannot be dialed or a failover
+  schedule one too, so the denials arrive in bursts exactly then.
+  What the denial costs is an audit trail, not a log. The server does **not** log it — Redis routes
+  every denial to `ACL LOG`, a ring of 128 entries by default,
+  so a steady stream of benign denials evicts genuine ACL violations from the only record the
+  server keeps of them. `+info` degrades quietly in the other direction: the Redis 7.0 floor
   check fails open when `INFO` is denied, so leaving it out costs the version check rather than the
-  client — a deployment that narrows it away stops being told its server is too old for
-  `GetOrSet`'s `SET NX GET`.
+  cache operations — a deployment that narrows it away stops being told its server is too old for
+  `GetOrSet`'s `SET NX GET`, and `Client.Stats` returns the `NOPERM`.
   `cache/redis/client_acl_integration_test.go` drives the set against a real ACL-gated server with
   `+client|setinfo` deliberately withheld — that suite passing is the evidence that the denial costs
-  only the `ACL LOG` entry and the client-side log line, neither of which reaches a cache operation.
+  only the `ACL LOG` entry, which never reaches a cache operation — and fails when the server logs
+  any other denial for the app user, so a go-redis bump that starts asking for a new command
+  surfaces there, rather than in production's `ACL LOG`, whenever one of the operations the suite
+  exercises sends it. Two limits follow from the fixture. Redis rejects a command it does not
+  implement before the ACL check, so one the open-source server lacks never reaches `ACL LOG`:
+  go-redis's `CLIENT MAINT_NOTIFICATIONS` handshake is the standing case, refused and logged only
+  on a server that implements it. And the fixture is one node owning every slot, so it never
+  redirects: on a cluster that reshards, go-redis sends `ASKING` ahead of the command it retries
+  after an `ASK`, which needs `+asking` (read from go-redis, not measured here).
 - **A custom `Options.CacheConnector` gets the prefix, and nothing else.** The namespace decorator
   sits above whichever connector is in play, so a consumer-supplied connector's cache is namespaced
   exactly like the framework's own. It owns its own dial, so no field of the resolved cache config

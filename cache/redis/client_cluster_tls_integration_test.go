@@ -8,8 +8,10 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"net"
+	"sync"
 	"testing"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,8 +58,8 @@ func setupClusterTLSRedis(t *testing.T) (*Client, context.Context) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	require.NoError(t, client.client.FlushDB(ctx).Err(), "failed to flush the cluster keyspace")
-	requireSlotMapAvoidsPinnedName(ctx, t, client)
-	requireSlotMapAvoidsSeedAddress(ctx, t, client)
+	requireDialedNodesAvoidPinnedName(ctx, t, client)
+	requireDialedNodesAvoidSeedAddress(ctx, t, client)
 
 	return client, ctx
 }
@@ -72,9 +74,9 @@ func setupClusterTLSRedis(t *testing.T) (*Client, context.Context) {
 // the premise rather than a detail of the fixture, and it is asserted exactly —
 // adding one more host to the mint call has to fail here, not pass quietly.
 //
-// It pairs with requireSlotMapAvoidsPinnedName over the two halves of that
+// It pairs with requireDialedNodesAvoidPinnedName over the two halves of that
 // premise: this one that the certificate excludes the advertised address, that
-// one that the fixture still advertises an address the certificate excludes.
+// one that every node address the client dials is one the certificate excludes.
 func requireLeafCoversOnlyPinnedName(t *testing.T, certPEM []byte) {
 	t.Helper()
 
@@ -89,30 +91,31 @@ func requireLeafCoversOnlyPinnedName(t *testing.T, certPEM []byte) {
 		"an IP SAN would cover the advertised address, and the handshake would then pass whichever name was verified")
 }
 
-// requireSlotMapAvoidsPinnedName keeps the handshake assertion honest: if the
-// slot map ever advertised the pinned name itself, both derivations of a node's
-// expected name would agree and every test in this file would pass without
-// proving anything (see setupClusterTLSRedis).
-func requireSlotMapAvoidsPinnedName(ctx context.Context, t *testing.T, client *Client) {
+// requireDialedNodesAvoidPinnedName keeps the handshake assertion honest: it
+// judges the node addresses the client dials, and if one of them ever carried
+// the pinned name itself, both derivations of a node's expected name would agree
+// and every test in this file would pass without proving anything (see
+// setupClusterTLSRedis).
+func requireDialedNodesAvoidPinnedName(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
 
-	for _, addr := range clusterSlotNodeAddrs(ctx, t, client) {
+	for _, addr := range clusterRoutedNodeAddrs(ctx, t, client) {
 		host, _, splitErr := net.SplitHostPort(addr)
-		require.NoError(t, splitErr, "an advertised node address must split into host and port")
+		require.NoError(t, splitErr, "a node address the client dials must split into host and port")
 		require.NotEqual(t, clusterTLSServerName, host,
-			"pinned-name guard: the slot map must advertise a host the pinned SNI name does not cover")
+			"pinned-name guard: the client must dial a node host the pinned SNI name does not cover")
 	}
 }
 
-// requireSlotMapAvoidsSeedAddress holds the premise every discovered-node
+// requireDialedNodesAvoidSeedAddress holds the premise every discovered-node
 // re-dial claim rests on, and it is a DIFFERENT premise from the one
-// requireSlotMapAvoidsPinnedName holds.
+// requireDialedNodesAvoidPinnedName holds.
 //
-// That guard compares the advertised host against the pinned SNI NAME, which is
-// what makes the handshake evidence work. This one compares the advertised
-// address against the SEED ADDRESS the client was handed — and only that
+// That guard compares each dialed node's host against the pinned SNI NAME, which
+// is what makes the handshake evidence work. This one compares each node address
+// the client dials against the SEED ADDRESS the client was handed — and only that
 // comparison decides whether a second node client exists at all. go-redis keys
-// its node clients by address string: it dials the seed, reads CLUSTER SLOTS,
+// its node clients by address string: it dials the seed, reads the slot map,
 // and builds a client per advertised address. When the fixture announces the
 // address the client already seeded with, go-redis reuses the seed's connection
 // and no second dial happens, while every assertion around it still passes.
@@ -124,38 +127,60 @@ func requireSlotMapAvoidsPinnedName(ctx context.Context, t *testing.T, client *C
 //
 // The two guards are easy to conflate because both are true today for the same
 // underlying reason — the fixture seeds with whatever Docker reports as the host
-// and announces the IPv4 literal resolveAnnounceIP returns. But "the advertised
-// host is not the pinned name" stays true in exactly the case where the seed and
-// the advertised address have collapsed onto one string, so the pinned-name
+// and announces the IPv4 literal resolveAnnounceIP returns. But "a dialed host
+// is not the pinned name" stays true in exactly the case where the seed and a
+// dialed node address have collapsed onto one string, so the pinned-name
 // guard cannot notice it. This is a hard require rather than a skip: on a
 // configuration where they collide the test is not proving what it claims, and a
 // loud failure naming the collision is diagnosable where a silent pass is not.
-func requireSlotMapAvoidsSeedAddress(ctx context.Context, t *testing.T, client *Client) {
+func requireDialedNodesAvoidSeedAddress(ctx context.Context, t *testing.T, client *Client) {
 	t.Helper()
 
 	seedAddr := client.config.Address()
-	for _, addr := range clusterSlotNodeAddrs(ctx, t, client) {
+	for _, addr := range clusterRoutedNodeAddrs(ctx, t, client) {
 		require.NotEqual(t, seedAddr, addr,
-			"seed-address guard: the slot map must advertise an address the client did not already seed with, or go-redis reuses the seed connection and nothing dials a discovered node")
+			"seed-address guard: the client must dial a node address it did not already seed with, or go-redis reuses the seed connection and nothing dials a discovered node")
 	}
 }
 
-// clusterSlotNodeAddrs reads the slot map the two guards above judge and
-// flattens every node address in it, so each guard carries only its own
-// predicate.
-func clusterSlotNodeAddrs(ctx context.Context, t *testing.T, client *Client) []string {
+// clusterRoutedNodeAddrs returns the address of every node the client routes
+// to, so the two guards above judge the addresses the client dials.
+//
+// ForEachShard reloads the slot map but serves the cached one when that reload
+// fails, and ReloadState only schedules a background reload that reports no
+// error. A client built from the same options holds no cached map, so its first
+// load either succeeds or fails the test here; requiring client's node set to
+// match it keeps a stale list from being judged.
+func clusterRoutedNodeAddrs(ctx context.Context, t *testing.T, client *Client) []string {
 	t.Helper()
 
-	slots, err := client.client.ClusterSlots(ctx).Result()
-	require.NoError(t, err, "the slot map is what the client's per-node dials follow")
-	require.NotEmpty(t, slots, "a bootstrapped cluster serves at least one slot range")
+	cluster, ok := client.client.(*redis.ClusterClient)
+	require.True(t, ok, "a ModeCluster client wraps a *redis.ClusterClient, got %T", client.client)
 
-	addrs := make([]string, 0, len(slots))
-	for _, slot := range slots {
-		for _, node := range slot.Nodes {
-			addrs = append(addrs, node.Addr)
-		}
-	}
+	opt := *cluster.Options()
+	fresh := redis.NewClusterClient(&opt)
+	defer func() { _ = fresh.Close() }()
+
+	want := clusterShardAddrs(ctx, t, fresh)
+	require.NotEmpty(t, want, "a bootstrapped cluster serves at least one node")
+	got := clusterShardAddrs(ctx, t, cluster)
+	require.ElementsMatch(t, want, got, "the client under test must dial the nodes a fresh slot-map load names")
+	return got
+}
+
+// clusterShardAddrs returns the address of every node c routes to: the online
+// masters and replicas ForEachShard visits, which need not include the seed.
+func clusterShardAddrs(ctx context.Context, t *testing.T, c *redis.ClusterClient) []string {
+	t.Helper()
+
+	var mu sync.Mutex
+	var addrs []string
+	require.NoError(t, c.ForEachShard(ctx, func(_ context.Context, node *redis.Client) error {
+		mu.Lock()
+		defer mu.Unlock()
+		addrs = append(addrs, node.Options().Addr)
+		return nil
+	}), "the slot map is what the client's per-node dials follow")
 	return addrs
 }
 

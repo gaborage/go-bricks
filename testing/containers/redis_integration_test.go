@@ -197,7 +197,7 @@ func TestRedisOptionsDisableDefaultAndInstallBothUsers(t *testing.T) {
 			// An App naming no rules must land on the narrow default rather than on
 			// nothing: the lazy path is the one a careless caller takes.
 			name:    "absent_app_rules_fall_back_to_the_narrow_default",
-			wantApp: []string{"~*", "+ping", "+info", "+get", "+set", "+del", "+eval", "+command", "+cluster|slots"},
+			wantApp: []string{"~*", "+ping", "+info", "+get", "+set", "+del", "+eval", "+cluster|shards", "+cluster|slots"},
 		},
 	}
 

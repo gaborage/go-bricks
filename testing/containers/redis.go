@@ -121,9 +121,11 @@ var redisACLAdminRules = []string{"~*", "&*", "+@all"}
 // would be a superuser under another name and a test authenticating as it would
 // demonstrate less. The keyspace stays `~*` because this fixture proves credential
 // authentication, not key-pattern enforcement; the command list is what keeps the
-// user from being an admin alias, and it holds neither CONFIG nor FLUSHDB. The
-// per-grant derivation lives with the package that measured it, in
-// cache/redis/integration_main_test.go.
+// user from being an admin alias, and it holds neither CONFIG nor FLUSHDB. Why
+// each grant is there is measured in wiki/cache.md's "Narrowing the command set"
+// bullet. The cache/redis ACL integration tests audit their own copy of this
+// list; here only the expectation in redis_integration_test.go pins it, so the
+// two move together by hand.
 var redisACLDefaultAppRules = []string{
 	"~*",
 	"+ping",
@@ -132,7 +134,7 @@ var redisACLDefaultAppRules = []string{
 	"+set",
 	"+del",
 	"+eval",
-	"+command",
+	"+cluster|shards",
 	"+cluster|slots",
 }
 

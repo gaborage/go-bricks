@@ -48,13 +48,16 @@ func setupClusterTLSACLRedis(t *testing.T) (*Client, context.Context) {
 	container := pkgRedisClusterTLSACL.Get(t)
 	requireLeafCoversOnlyPinnedName(t, container.certPEM)
 
-	client, err := NewClient(clusterTLSACLConfig(container, aclAppUsername, aclAppPassword))
+	cfg := clusterTLSACLConfig(container, aclAppUsername, aclAppPassword)
+	auditCommandDenials(t, cfg)
+
+	client, err := NewClient(cfg)
 	require.NoError(t, err,
 		"the app user must complete a TLS handshake, AUTH, and read the slot map before the first PING")
 	t.Cleanup(func() { _ = client.Close() })
 
-	requireSlotMapAvoidsPinnedName(ctx, t, client)
-	requireSlotMapAvoidsSeedAddress(ctx, t, client)
+	requireDialedNodesAvoidPinnedName(ctx, t, client)
+	requireDialedNodesAvoidSeedAddress(ctx, t, client)
 
 	return client, ctx
 }

@@ -4,9 +4,12 @@ package redis
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -32,14 +35,17 @@ const aclKeyPrefix = "acl:"
 func setupACLRedis(t *testing.T, c *containers.RedisContainer, mode string) (*Client, context.Context) {
 	t.Helper()
 
-	client, err := NewClient(&Config{
+	cfg := &Config{
 		Host:     c.Host(),
 		Port:     c.Port(),
 		Mode:     mode,
 		PoolSize: 10,
 		Username: aclAppUsername,
 		Password: aclAppPassword,
-	})
+	}
+	auditCommandDenials(t, cfg)
+
+	client, err := NewClient(cfg)
 	require.NoError(t, err, "the ACL user must be able to connect, PING and read INFO server")
 	t.Cleanup(func() { _ = client.Close() })
 
@@ -55,12 +61,13 @@ func setupACLRedis(t *testing.T, c *containers.RedisContainer, mode string) (*Cl
 // (assertClusterRoundTrips and assertClusterGetOrSet, in
 // client_cluster_integration_test.go): what differs here is the credential the
 // client was built with, not what a cluster client is expected to do, so the
-// operations are not restated. CompareAndSet is exercised on the standalone arm
-// only — it is the one operation with an ACL command check of its own, and the
-// grant it needs (+eval) is the same on both.
+// operations are not restated. Both arms then run the script, health and stats
+// paths, and the audit setupACLRedis registers fails the test on any command
+// denial the server logged for the app user meanwhile, other than aclWithheldObject.
 func TestRealRedisACLUserRoundTrips(t *testing.T) {
 	t.Run("standalone", func(t *testing.T) {
-		client, ctx := setupACLRedis(t, pkgRedisACL.Get(t), ModeStandalone)
+		container := pkgRedisACL.Get(t)
+		client, ctx := setupACLRedis(t, container, ModeStandalone)
 
 		const key = aclKeyPrefix + "standalone"
 		value := []byte("authenticated-" + key)
@@ -71,35 +78,146 @@ func TestRealRedisACLUserRoundTrips(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, value, got)
 
-		// CompareAndSet runs as EVAL, where GetOrSet's SET NX GET is still the
-		// +set check the plain Set above already made.
-		swapped, err := client.CompareAndSet(ctx, key, value, []byte("rotated"), time.Minute)
-		require.NoError(t, err)
-		assert.True(t, swapped)
-
 		require.NoError(t, client.Delete(ctx, key))
 		_, err = client.Get(ctx, key)
 		require.ErrorIs(t, err, cache.ErrNotFound)
 
 		assertGetOrSetFromEmptyKey(ctx, t, client, aclKeyPrefix+"standalone:getorset")
+		assertScriptHealthAndStats(ctx, t, client, aclKeyPrefix+"standalone:lease")
 	})
 
 	t.Run("cluster", func(t *testing.T) {
 		// Not a repeat of the arm above: the credential travels a different copy
 		// path. ModeCluster makes NewClient set IsClusterMode, so go-redis reads
 		// the credential out of UniversalOptions.Cluster() rather than .Simple(),
-		// and cluster discovery runs on this user's connection — CLUSTER SLOTS
-		// precedes the first PING, so a credential that failed to reach the
-		// cluster path fails construction rather than a later operation.
+		// and cluster discovery runs on this user's connection — the client reads
+		// the slot map before the first PING, so a credential that failed to reach
+		// the cluster path fails construction rather than a later operation.
 		//
 		// What this arm does NOT prove is that a second dial to a slot-map-
 		// discovered node carries the credential: the fixture is one node owning
 		// every slot, so the round trip succeeds whether go-redis re-dials the
 		// announced address or reuses the seed connection. #1748 covers that.
-		client, ctx := setupACLRedis(t, pkgRedisACLCluster.Get(t), ModeCluster)
+		container := pkgRedisACLCluster.Get(t)
+		client, ctx := setupACLRedis(t, container, ModeCluster)
 
 		assertClusterRoundTrips(ctx, t, client)
 		assertGetOrSetFromEmptyKey(ctx, t, client, aclKeyPrefix+"cluster:getorset")
+		assertScriptHealthAndStats(ctx, t, client, aclKeyPrefix+"cluster:lease")
+	})
+}
+
+// assertScriptHealthAndStats drives the operations the round trips leave out:
+// CompareAndSet and CompareAndDelete (EVAL), Health (PING) and Stats (INFO).
+func assertScriptHealthAndStats(ctx context.Context, t *testing.T, client *Client, key string) {
+	t.Helper()
+
+	value := []byte("held-" + key)
+	require.NoError(t, client.Set(ctx, key, value, time.Minute))
+
+	swapped, err := client.CompareAndSet(ctx, key, value, []byte("renewed"), time.Minute)
+	require.NoError(t, err)
+	assert.True(t, swapped)
+
+	released, err := client.CompareAndDelete(ctx, key, []byte("renewed"))
+	require.NoError(t, err)
+	assert.True(t, released)
+
+	require.NoError(t, client.Health(ctx))
+
+	_, err = client.Stats()
+	require.NoError(t, err)
+}
+
+// aclWithheldObject is the one optional grant aclAppRules leaves out on purpose
+// (wiki/cache.md): go-redis tolerates its denial, so its ACL LOG entry is expected.
+const aclWithheldObject = "client|setinfo"
+
+// auditCommandDenials clears the ACL LOG of the server cfg reaches and, when the
+// test ends, fails on any command denial logged for the app user other than
+// aclWithheldObject. Call it before building the client under test, so the
+// commands construction sends are audited too. The log is read from the seed
+// node alone, which covers every command only on the single-node fixtures here,
+// and only for the paths the test exercises.
+func auditCommandDenials(t *testing.T, cfg *Config) {
+	t.Helper()
+
+	reader := resetACLLog(t, cfg)
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
+		defer cancel()
+
+		entries, err := readACLLog(ctx, reader)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		for _, e := range entries {
+			if e.Username != aclAppUsername || e.Reason != "command" || e.Object == aclWithheldObject {
+				continue
+			}
+			t.Errorf("ACL LOG denied %q to %s %d time(s): grant it in aclAppRules (integration_main_test.go), "+
+				"redisACLDefaultAppRules and its pinned expectation (testing/containers), wiki/cache.md and wiki/testing.md",
+				e.Object, e.Username, e.Count)
+		}
+	})
+}
+
+// aclLogControlObject is the one command the log reader is refused: issued right
+// after the reset, its denial is the entry readACLLog must find before an absence
+// of app-user entries can mean the app user was refused nothing. PING exists on
+// every server version the suite runs, unlike the withheld CLIENT SETINFO.
+const aclLogControlObject = "ping"
+
+// resetACLLog clears the ACL LOG of the node cfg seeds and then has the log
+// reader provoke the control denial readACLLog requires. The reset scopes each
+// verdict to its own test, which holds only while no ACL test runs in parallel.
+func resetACLLog(t *testing.T, cfg *Config) *redis.Client {
+	t.Helper()
+
+	reader := newACLLogReader(t, cfg)
+	t.Cleanup(func() { _ = reader.Close() })
+	require.NoError(t, reader.ACLLogReset(t.Context()).Err(), "the log reader must be able to reset the ACL LOG")
+	require.ErrorContains(t, reader.Ping(t.Context()).Err(), "NOPERM",
+		"the control denial rests on aclLogRules refusing %s", aclLogControlObject)
+	return reader
+}
+
+// readACLLog returns the ACL LOG entries recorded since resetACLLog, or an error
+// when the log does not hold the reader's control denial: a log that cannot
+// show that one cannot show the app user's either.
+func readACLLog(ctx context.Context, reader *redis.Client) ([]*redis.ACLLogEntry, error) {
+	entries, err := reader.ACLLog(ctx, 128).Result()
+	if err != nil {
+		return nil, fmt.Errorf("reading the ACL LOG: %w", err)
+	}
+	for _, e := range entries {
+		if e.Username == aclLogUsername && e.Reason == "command" && e.Object == aclLogControlObject {
+			return entries, nil
+		}
+	}
+	return nil, fmt.Errorf("the audit could not see the ACL LOG: the control denial of %q to %s is missing from %d entries",
+		aclLogControlObject, aclLogUsername, len(entries))
+}
+
+// newACLLogReader dials the node cfg seeds, through the same address and TLS
+// builders as the client under test, as the identity that may only read the ACL
+// LOG. DisableIdentity keeps it from sending the CLIENT SETINFO that one grant
+// would refuse.
+func newACLLogReader(t *testing.T, cfg *Config) *redis.Client {
+	t.Helper()
+
+	material := cfg.TLS.material()
+	opts, err := buildRedisOptions(cfg, &material)
+	require.NoError(t, err)
+
+	return redis.NewClient(&redis.Options{
+		Addr:            opts.Addrs[0],
+		TLSConfig:       opts.TLSConfig,
+		Username:        aclLogUsername,
+		Password:        aclLogPassword,
+		DisableIdentity: true,
 	})
 }
 
@@ -139,6 +257,46 @@ func TestRealRedisACLUserWithoutInfoStillConstructs(t *testing.T) {
 	// which is the floor being enforced rather than skipped.
 	_, err = client.client.Info(t.Context(), "server").Result()
 	require.ErrorContains(t, err, "NOPERM")
+}
+
+// TestRealRedisACLSlotsOnlyUserFallsBackToClusterSlots pins what wiki/cache.md says
+// of a cluster user holding +cluster|slots without +cluster|shards: it still works,
+// but pays the denial cost. Every other identity that builds a cluster client holds
+// both, so this is the one test that drives go-redis's CLUSTER SLOTS fallback, and with it the reason
+// aclAppRules keeps +cluster|slots.
+func TestRealRedisACLSlotsOnlyUserFallsBackToClusterSlots(t *testing.T) {
+	c := pkgRedisACLCluster.Get(t)
+
+	cfg := &Config{
+		Host:     c.Host(),
+		Port:     c.Port(),
+		Mode:     ModeCluster,
+		PoolSize: 10,
+		Username: aclSlotsOnlyUsername,
+		Password: aclSlotsOnlyPassword,
+	}
+	reader := resetACLLog(t, cfg)
+
+	client, err := NewClient(cfg)
+	require.NoError(t, err, "refused CLUSTER SHARDS, the cluster client must build its slot map from CLUSTER SLOTS")
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx := t.Context()
+	const key = aclKeyPrefix + "slots-only"
+	value := []byte("authenticated-" + key)
+	require.NoError(t, client.Set(ctx, key, value, time.Minute))
+	got, err := client.Get(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, value, got)
+	require.NoError(t, client.Delete(ctx, key))
+
+	// Without the denial on record the client could have read CLUSTER SHARDS after
+	// all, and the round trip above would say nothing about the fallback.
+	entries, err := readACLLog(ctx, reader)
+	require.NoError(t, err)
+	assert.True(t, slices.ContainsFunc(entries, func(e *redis.ACLLogEntry) bool {
+		return e.Username == aclSlotsOnlyUsername && e.Reason == "command" && e.Object == "cluster|shards"
+	}), "the server must have logged the refused CLUSTER SHARDS for %s", aclSlotsOnlyUsername)
 }
 
 // dialACLIdentity builds a client for one of the fixture's installed identities. The

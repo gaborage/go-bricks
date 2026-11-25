@@ -54,19 +54,23 @@ var pkgRedisCluster = containers.NewShared("Redis cluster", 3*time.Minute,
 // construction: they exist only inside a container this test binary starts and
 // terminates, and no deployment ever sees them.
 const (
-	aclAdminUsername   = "gb-fixture-admin"
-	aclAppUsername     = "gb-cache-app"
-	aclNoInfoUsername  = "gb-cache-no-info"
-	aclNopassUsername  = "gb-cache-nopass"
-	aclExtraPwUsername = "gb-cache-extra-password"
+	aclAdminUsername     = "gb-fixture-admin"
+	aclAppUsername       = "gb-cache-app"
+	aclNoInfoUsername    = "gb-cache-no-info"
+	aclSlotsOnlyUsername = "gb-cache-slots-only"
+	aclNopassUsername    = "gb-cache-nopass"
+	aclExtraPwUsername   = "gb-cache-extra-password"
+	aclLogUsername       = "gb-acl-log-reader"
 )
 
 var (
-	aclAdminPassword   = gbtesting.FakePassword("redis-acl-admin")
-	aclAppPassword     = gbtesting.FakePassword("redis-acl-app")
-	aclNoInfoPassword  = gbtesting.FakePassword("redis-acl-no-info")
-	aclNopassPassword  = gbtesting.FakePassword("redis-acl-nopass")
-	aclExtraPwPassword = gbtesting.FakePassword("redis-acl-extra-pw")
+	aclAdminPassword     = gbtesting.FakePassword("redis-acl-admin")
+	aclAppPassword       = gbtesting.FakePassword("redis-acl-app")
+	aclNoInfoPassword    = gbtesting.FakePassword("redis-acl-no-info")
+	aclSlotsOnlyPassword = gbtesting.FakePassword("redis-acl-slots-only")
+	aclNopassPassword    = gbtesting.FakePassword("redis-acl-nopass")
+	aclExtraPwPassword   = gbtesting.FakePassword("redis-acl-extra-pw")
+	aclLogPassword       = gbtesting.FakePassword("redis-acl-log-reader")
 	// aclInjectedPassword is never declared as an identity's Password: it reaches
 	// the server only through a caller RULE, which is the credential the fixture
 	// must not leave behind.
@@ -97,17 +101,19 @@ var aclBadCredentials = []struct{ name, username, password, wantErr string }{
 	},
 }
 
-// aclAppRules is the narrowest grant set that carries everything this package's
-// Client does, established by running the suite against each grant removed:
+// aclAppRules is the grant set wiki/cache.md's "Narrowing the command set" bullet
+// documents for this package's Client, plus the one test-only +cluster|keyslot.
+// The ACL integration tests enforce it from both sides: they drive construction,
+// Get, Set, Delete, GetOrSet, CompareAndSet, CompareAndDelete, Health and Stats as
+// this user, and auditCommandDenials fails on any command denial the server logs
+// for it beyond aclWithheldObject. What each grant carries:
 //
 //	+ping             NewClient's connectivity check, and Client.Health
 //	+info             readServerInfo's 7.0 version floor, and Client.Stats
 //	+get +set +del    Get/Set/Delete, plus the SET NX GET behind GetOrSet
 //	+eval             CompareAndSet and CompareAndDelete are Lua
-//	+command          go-redis asks for key positions once per call; denied, it
-//	                  still works, but each denial lands in the server's fixed-size
-//	                  ACL LOG ring and go-redis logs a line of its own
-//	+cluster|slots    the cluster client reads the slot map before its first PING
+//	+cluster|shards   the cluster client's slot-map read
+//	+cluster|slots    go-redis's fallback when SHARDS is refused
 //	+cluster|keyslot  no client operation needs it; the cluster round-trip's
 //	                  slot-spread assertion does
 var aclAppRules = []string{
@@ -118,7 +124,7 @@ var aclAppRules = []string{
 	"+set",
 	"+del",
 	"+eval",
-	"+command",
+	"+cluster|shards",
 	"+cluster|slots",
 	"+cluster|keyslot",
 }
@@ -127,6 +133,12 @@ var aclAppRules = []string{
 // or managed endpoint leaves the client in, and the only way to reach the version
 // floor's documented fail-open arm against a server that really refuses.
 var aclNoInfoRules = slices.DeleteFunc(slices.Clone(aclAppRules), func(rule string) bool { return rule == "+info" })
+
+// aclSlotsOnlyRules is aclAppRules with CLUSTER SHARDS taken away, so the cluster
+// client's slot-map read is refused and only go-redis's CLUSTER SLOTS fallback can
+// build it. Derived rather than listed, so +cluster|slots leaving aclAppRules
+// leaves this identity with neither and fails its construction.
+var aclSlotsOnlyRules = slices.DeleteFunc(slices.Clone(aclAppRules), func(rule string) bool { return rule == "+cluster|shards" })
 
 // aclNopassRules is aclAppRules with `nopass` in front of it — a caller rule that
 // makes the identity accept ANY password, and the one the container fixture must not
@@ -146,14 +158,23 @@ var aclNopassRules = slices.Concat([]string{"nopass"}, aclAppRules)
 // real round trip rather than stopping at AUTH.
 var aclExtraPwRules = slices.Concat([]string{">" + aclInjectedPassword}, aclAppRules)
 
+// aclLogRules lets one identity read and reset the server's ACL LOG and nothing
+// else, so auditCommandDenials can audit the app user without authenticating as admin.
+var aclLogRules = []string{"+acl|log"}
+
 // TestACLAppRulesStayNarrow keeps the credential under test from becoming an admin
 // alias: granted +@all it would authenticate and then pass every assertion in
 // client_acl_integration_test.go for a reason that has nothing to do with its own
 // grants.
 func TestACLAppRulesStayNarrow(t *testing.T) {
 	assert.NotContains(t, aclAppRules, "+@all")
+	assert.NotContains(t, aclAppRules, "+"+aclWithheldObject,
+		"wiki/cache.md documents the suite running with CLIENT SETINFO deliberately withheld")
+	assert.NotContains(t, aclAppRules, "+command", "wiki/cache.md's claim that no COMMAND is sent rests on it being withheld")
 	assert.NotContains(t, aclNoInfoRules, "+info", "the fail-open arm rests on INFO being denied")
 	assert.Len(t, aclNoInfoRules, len(aclAppRules)-1, "nothing but +info comes out")
+	assert.NotContains(t, aclSlotsOnlyRules, "+cluster|shards", "the fallback arm rests on CLUSTER SHARDS being denied")
+	assert.Len(t, aclSlotsOnlyRules, len(aclAppRules)-1, "nothing but +cluster|shards comes out")
 	// Without the rule that would disable authentication, the ordering guard
 	// degrades into an ordinary user rejecting an ordinary wrong password.
 	assert.Contains(t, aclNopassRules, "nopass", "the ordering guard rests on the caller rule being present")
@@ -221,8 +242,10 @@ func aclRedisConfig(cluster bool) *containers.RedisContainerConfig {
 		App:   containers.RedisACLUser{Username: aclAppUsername, Password: aclAppPassword, Rules: aclAppRules},
 		AdditionalUsers: []containers.RedisACLUser{
 			{Username: aclNoInfoUsername, Password: aclNoInfoPassword, Rules: aclNoInfoRules},
+			{Username: aclSlotsOnlyUsername, Password: aclSlotsOnlyPassword, Rules: aclSlotsOnlyRules},
 			{Username: aclNopassUsername, Password: aclNopassPassword, Rules: aclNopassRules},
 			{Username: aclExtraPwUsername, Password: aclExtraPwPassword, Rules: aclExtraPwRules},
+			{Username: aclLogUsername, Password: aclLogPassword, Rules: aclLogRules},
 		},
 	}
 	return cfg
