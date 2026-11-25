@@ -17297,11 +17297,13 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
     cache keeps working. Under a user without the grant, each refused load increments
     `acl_access_denied_cmd` in `INFO stats` (from Redis 7.2) and an `ACL LOG` entry (`reason
     command`, `object cluster|shards`, the cache user). A repeat less than 60s after that entry's
-    last update merges into it, from any connection, so a lone client's periodic reload adds about
-    one entry a minute while interleaved clients and failure-path bursts raise one entry's
-    `count`; unmerged entries still take slots in the 128-entry ring that holds genuine
-    violations. Measured on Redis 8.10.3: three denials over 80s from three connections made one
-    entry of count 3; a denial 62s after the last made a second entry.
+    last update merges into it, from any connection, while that entry is among the node's ten
+    newest, so a lone client's periodic reload adds about one entry a minute while interleaved
+    clients and failure-path bursts raise one entry's `count`; unmerged entries still take slots
+    in the 128-entry ring that holds genuine violations. Measured on Redis 8.10.3: three denials
+    over 80s from three connections made one entry of count 3; a denial 62s after the last made a
+    second entry. Measured on Redis 7.0 and 8.12: with nine other entries in between a repeat
+    merged, with ten it took a new slot.
   - the documented least-privilege rule list adds `+cluster|shards` beside `+cluster|slots`, kept
     as the fallback, and drops `+command`: go-redis v9.24.0 sends no `COMMAND` for the cache
     operations in either mode, where v9.23.0's cluster client logged a `command` denial and
@@ -17328,21 +17330,22 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   connection to take longer than about 0.4s to fail. Give a `testing/containers` user that sends
   `COMMAND` its own `Rules`, including `+command`. Add the new methods to an own implementation,
   or embed the interface.
-- verify: for an ACL match, on every node of the cluster (a node keeps its own users, counters
-  and ACL log, and go-redis may load the map from any of them), as an administrative user
-  `redis-cli ACL DRYRUN <user> CLUSTER SHARDS` answers `OK`; it writes no log entry (measured on
-  Redis 7.0 and 8.12). To confirm under traffic, read `acl_access_denied_cmd` from `redis-cli INFO
-  stats` on every node, run the service in cluster mode with cache traffic for more than 60s, so a
-  reload runs, and read it again: an unchanged counter means the node denied no command to any
-  user. The counter exists from Redis 7.2 and outlives `ACL LOG RESET`, `acllog-max-len 0` and
-  `CONFIG RESETSTAT` (measured on 7.2 and 8.12); a node restart zeroes it, and then the run
-  repeats. Where it rose, or on Redis 7.0, which has no such counter, `redis-cli ACL LOG 128`
-  names the user and the `object`: no entry for the cache user has `cluster|shards` or `command`
-  with an `age-seconds` smaller than the time since the first reading (a repeat denial resets
-  `age-seconds`, measured on 7.0 and 8.12). The log is a lossy witness: one that is disabled
-  (`acllog-max-len 0`), was reset or lost to a restart during the run, or is full of younger
-  entries proves nothing, so repeat the run with the log intact. Nothing here needs `ACL LOG
-  RESET`, which would erase every user's audit entries.
+- verify: for an ACL match, on every node of the cluster (a node keeps its own users, counters and
+  ACL log, and go-redis may load the map from any of them), as an administrative user `redis-cli
+  ACL DRYRUN <user> CLUSTER SHARDS` answers `OK`; it writes no log entry (measured on Redis 7.0
+  and 8.12). To confirm under traffic, read `acl_access_denied_cmd` from `redis-cli INFO stats` on
+  every node, then start the service in cluster mode, so its first slot-map load falls inside the
+  window, keep cache traffic running until 90s after it started, so the reload a command triggers
+  once the map is 60s old has also finished (it runs in the background), and read the counter
+  again: unchanged means the node denied no command to any user. The counter exists from Redis 7.2
+  and outlives `ACL LOG RESET`, `acllog-max-len 0` and `CONFIG RESETSTAT` (measured on 7.2 and
+  8.12); a node restart zeroes it, and then the run repeats. Where it rose, or on Redis 7.0, which
+  has no such counter, `redis-cli ACL LOG 128` names the user and the `object`: no entry for the
+  cache user has `cluster|shards` or `command` with an `age-seconds` smaller than the time since
+  the first reading (a repeat denial resets `age-seconds`, measured on 7.0 and 8.12). The log is a
+  lossy witness: one that is disabled (`acllog-max-len 0`), was reset or lost to a restart during
+  the run, or is full of younger entries proves nothing, so repeat the run with the log intact.
+  Nothing here needs `ACL LOG RESET`, which would erase every user's audit entries.
   For a timing match, run the tests, alerts and startup checks that expect a refused Redis
   connection, in standalone or cluster mode: each passes with its resized budget. For a `COMMAND`
   match, run each test that sends `COMMAND` as a `testing/containers` user: it passes with its own
