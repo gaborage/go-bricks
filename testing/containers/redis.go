@@ -7,7 +7,9 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +25,8 @@ import (
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	gbtesting "github.com/gaborage/go-bricks/testing"
 )
 
 // redisPort is the container-side port every Redis wait strategy and MappedPort lookup
@@ -53,14 +57,18 @@ const (
 	redisClusterBootstrapPoll = 250 * time.Millisecond
 )
 
+// redisWildcardLabel fills the wildcard of a `*.` SAN when a cluster leaf has
+// no concrete DNS or IP SAN, giving the bootstrap a host name the leaf covers.
+const redisWildcardLabel = "node"
+
 // redisTLSFileMode makes the copied PEM world-readable: redis-server drops to
 // an unprivileged user before opening them, so 0o600 owned by root would make
 // the server fail to start rather than fail to verify.
 const redisTLSFileMode = 0o644
 
-// RedisTLSMaterial is the PEM material a TLS-only Redis container serves: the
+// RedisTLSMaterial is PEM material a Redis container serves over TLS: the
 // certificate and key it presents, and the CA it is signed by (which is also
-// what a client must trust).
+// what a peer must trust).
 type RedisTLSMaterial struct {
 	CA   []byte
 	Cert []byte
@@ -147,16 +155,23 @@ type RedisContainerConfig struct {
 	// cluster-protocol client has a single endpoint to talk to — the CLIENT-side
 	// shape an Amazon ElastiCache Serverless deployment requires. It is not that
 	// service's topology: serverless shards and redirects (ADR-117), and neither
-	// is reproduced here. Composes with TLS: the two arms contribute separate
-	// flags to one command line, and the bootstrap then speaks TLS to the node
-	// it just started.
+	// is reproduced here. The cluster bus always runs over TLS: with TLS nil the
+	// fixture mints a throwaway certificate for the bus alone, and the client
+	// listener stays plaintext. That minted pair only has to let the single node
+	// start its bus: a server-auth leaf valid for an hour, never used to
+	// authenticate a peer, since one node owns every slot. Composes with TLS: the
+	// two arms contribute separate flags to one command line, and the bootstrap
+	// then speaks TLS to the node it just started.
 	Cluster bool
 	// TLS, when non-nil, makes the server TLS-only: the plaintext listener is
 	// disabled and TLS is bound to 6379 instead, so Host() and Port() address
 	// the TLS listener exactly as they address the plaintext one — a caller only
 	// has to turn TLS on client-side. Nil (the default) serves plaintext. Under
 	// Cluster the fixture's own bootstrap dials that same listener from inside
-	// the container, verifying it against the same CA.
+	// the container, verifying it against the same CA and, where the leaf
+	// offers one, against a name it carries (see redisTLSServerName). Redis
+	// 8.12's redis-cli verifies a name, so there a leaf offering none fails the
+	// bootstrap; older builds verify the chain only.
 	TLS *RedisTLSMaterial
 	// ACL, when non-nil, disables the implicit `default` user and installs the
 	// identities it names, so the server accepts nothing unauthenticated.
@@ -184,6 +199,7 @@ type RedisContainer struct {
 	container *redis.RedisContainer
 	host      string
 	port      int
+	served    redisServed
 }
 
 // StartRedisContainer starts a Redis testcontainer using the provided configuration.
@@ -253,12 +269,15 @@ func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConf
 // image's own command exactly as it was.
 //
 // Each arm owns every flag it is responsible for, so `--tls-cluster yes` sits in
-// the cluster arm: it configures the CLUSTER BUS, and without it the bus port
-// derives from the disabled plaintext port (measured: bus 10000 rather than
-// tls-port + 10000). Nothing here exercises that bus — one node owning every
-// slot never dials a peer — so removing the flag was measured NOT to fail a
-// test. It is correct for a real cluster and unproven by this fixture; treat it
-// as load-bearing anyway.
+// the cluster arm, and a cluster node gets it whenever served holds material —
+// the same condition that emits the certificate flags it cannot boot without,
+// and one newRedisServed always meets for a cluster. It configures the
+// CLUSTER BUS, and Redis 8.12 refuses to boot a cluster node without it unless
+// `cluster-bus-port-protected-mode no` is set — a directive every image older
+// than 8.2 refuses at boot (unknown on 7.x, an unresolved module configuration
+// on 8.0), so passing it would take those images down instead. With the flag
+// the bus listens on tls-port + 10000 (measured on 7.0, 8.10.3 and 8.12.0):
+// 16379 under TLS, and 10000 on a plain node, whose tls-port is 0.
 //
 // `--port 0` disables the plaintext listener while TLS binds the same 6379, so
 // the listening-port wait still holds. Client certificates are not required
@@ -272,7 +291,7 @@ func StartRedisContainerForTestMain(ctx context.Context, cfg *RedisContainerConf
 // open one sees the credential directives appended to an otherwise identical
 // line. redisACLArgs says why they are boot arguments rather than post-start
 // ACL SETUSER execs.
-func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomizer {
+func redisOptions(cfg *RedisContainerConfig, served redisServed) []testcontainers.ContainerCustomizer {
 	opts := make([]testcontainers.ContainerCustomizer, 0, 3)
 	opts = append(opts, waitOptionWithin(cfg.StartupTimeout,
 		wait.ForLog("Ready to accept connections"),
@@ -282,18 +301,22 @@ func redisOptions(cfg *RedisContainerConfig) []testcontainers.ContainerCustomize
 	args := make([]string, 0, 16)
 	if cfg.Cluster {
 		args = append(args, "--cluster-enabled", "yes")
-		if cfg.TLS != nil {
+		if served.material != nil {
 			args = append(args, "--tls-cluster", "yes")
 		}
 	}
-	if cfg.TLS != nil {
-		opts = append(opts, testcontainers.WithFiles(redisTLSFiles(cfg.TLS)...))
+	if served.material != nil {
+		opts = append(opts, testcontainers.WithFiles(redisTLSFiles(served.material)...))
 		args = append(args,
-			"--tls-port", strings.TrimSuffix(redisPort, "/tcp"),
-			"--port", "0",
 			"--tls-cert-file", redisTLSCertPath,
 			"--tls-key-file", redisTLSKeyPath,
 			"--tls-ca-cert-file", redisTLSCAPath,
+		)
+	}
+	if served.tlsClients {
+		args = append(args,
+			"--tls-port", strings.TrimSuffix(redisPort, "/tcp"),
+			"--port", "0",
 			"--tls-auth-clients", "no",
 		)
 	}
@@ -407,8 +430,8 @@ func redisACLUserArgs(u RedisACLUser, fallback []string) []string {
 	return append(args, "resetpass", "on", "#"+hex.EncodeToString(digest[:]))
 }
 
-// redisTLSFiles is the PEM material copied into a TLS-only container, each at
-// the path its own command flag names.
+// redisTLSFiles is the PEM material copied into a container that serves TLS,
+// each at the path its own command flag names.
 func redisTLSFiles(material *RedisTLSMaterial) []testcontainers.ContainerFile {
 	files := make([]testcontainers.ContainerFile, 0, 3)
 	for _, f := range []struct {
@@ -428,6 +451,104 @@ func redisTLSFiles(material *RedisTLSMaterial) []testcontainers.ContainerFile {
 	return files
 }
 
+// redisServed is what a node serves and how the fixture's own redis-cli
+// reaches it. The zero value is a standalone plaintext node.
+type redisServed struct {
+	// material is what the certificate flags name: the caller's TLS, or a pair
+	// minted for the cluster bus alone; nil when nothing is served over TLS.
+	material *RedisTLSMaterial
+	// tlsClients moves the client listener to TLS, and with it the fixture's
+	// own redis-cli.
+	tlsClients bool
+	// cliServerName is the identity the fixture's redis-cli verifies the leaf
+	// against. Set only for a TLS cluster node, the only node it is bootstrapped
+	// on, whose leaf offers a usable name; empty, redis-cli gets no --sni.
+	cliServerName string
+}
+
+// newRedisServed derives redisServed from cfg before any container exists, so
+// a cluster TLS.Cert that holds no parseable certificate is refused without
+// starting one.
+func newRedisServed(cfg *RedisContainerConfig) (redisServed, error) {
+	switch {
+	case cfg.TLS == nil && !cfg.Cluster:
+		return redisServed{}, nil
+	case cfg.TLS == nil:
+		ca, cert, key, err := gbtesting.NewCAAndServerCertPEM()
+		if err != nil {
+			return redisServed{}, fmt.Errorf("redis container: minting the cluster bus certificate: %w", err)
+		}
+		return redisServed{material: &RedisTLSMaterial{CA: ca, Cert: cert, Key: key}}, nil
+	case !cfg.Cluster:
+		return redisServed{material: cfg.TLS, tlsClients: true}, nil
+	}
+	name, err := redisTLSServerName(cfg.TLS)
+	if err != nil {
+		return redisServed{}, err
+	}
+	return redisServed{material: cfg.TLS, tlsClients: true, cliServerName: name}, nil
+}
+
+// redisTLSServerName is the identity the fixture's own redis-cli verifies the
+// served leaf against. redis-cli dials 127.0.0.1 from inside the container, and
+// from 8.12 it checks that dialed address against the SANs unless --sni names
+// another identity; a caller's leaf need not cover 127.0.0.1 (cache/redis's
+// cluster-TLS leaf deliberately covers only localhost), so the name comes from
+// the leaf itself, in order: its first DNS SAN without a wildcard that is not
+// an IP literal (8.12 checks an IP-shaped --sni against IP SANs only, so
+// `DNS:127.0.0.1` does not cover it), its first IP SAN (8.12 verifies an IPv4
+// or IPv6 literal given as --sni), or a concrete name under its first `*.`
+// wildcard whose suffix holds a dot — the one the wildcard covers, rather than
+// the pattern itself, which is not a host name. 8.12 honors a wildcard only
+// over such a suffix (measured: `*.test` does not cover node.test, nor
+// `*.localhost` node.localhost).
+//
+// A leaf offering none of those yields "" and no error: older redis-cli builds
+// verify the chain only and bootstrap it, while 8.12 checks the dialed
+// 127.0.0.1 and reports its own mismatch, which execRedisCLI follows with
+// redisCLIUnnamedLeafHint. Only a TLS.Cert holding no
+// parseable certificate is an error, since no image can serve it.
+func redisTLSServerName(material *RedisTLSMaterial) (string, error) {
+	leaf, err := redisTLSLeaf(material.Cert)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range leaf.DNSNames {
+		if !strings.Contains(name, "*") && net.ParseIP(name) == nil {
+			return name, nil
+		}
+	}
+	if len(leaf.IPAddresses) > 0 {
+		return leaf.IPAddresses[0].String(), nil
+	}
+	for _, name := range leaf.DNSNames {
+		if suffix, ok := strings.CutPrefix(name, "*."); ok && strings.Contains(suffix, ".") && !strings.Contains(suffix, "*") {
+			return redisWildcardLabel + "." + suffix, nil
+		}
+	}
+	return "", nil
+}
+
+// redisTLSLeaf parses the first CERTIFICATE block in certPEM, skipping any
+// other block ahead of it (a bundle may lead with its key).
+func redisTLSLeaf(certPEM []byte) (*x509.Certificate, error) {
+	for rest := certPEM; ; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return nil, errors.New("redis container: TLS.Cert holds no PEM CERTIFICATE block")
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		leaf, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("redis container: parsing TLS.Cert: %w", err)
+		}
+		return leaf, nil
+	}
+}
+
 // startRedisContainerInternal does the actual testcontainer setup without
 // any *testing.T interaction. Both StartRedisContainer (which adds *T-bound
 // Skip/Logf) and StartRedisContainerForTestMain wrap it.
@@ -442,12 +563,17 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 		}
 	}
 
+	served, err := newRedisServed(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	// redis.Run can hand back a started container together with an error (a
 	// wait-strategy timeout, say), so terminate it before returning — the same
 	// contract newRedisContainer honors for its own later failures.
 	redisContainer, err := redis.Run(ctx,
 		fmt.Sprintf("redis:%s", cfg.ImageTag),
-		redisOptions(cfg)...,
+		redisOptions(cfg, served)...,
 	)
 	if err != nil {
 		if redisContainer != nil {
@@ -460,6 +586,7 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 	if err != nil {
 		return nil, err
 	}
+	c.served = served
 	if !cfg.Cluster {
 		return c, nil
 	}
@@ -481,24 +608,23 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 // makes the node advertise where the test actually reaches it, so the client's
 // first redirect lands rather than hangs.
 //
-// WHICH port key carries it depends on the listener the client arrived on: a
-// node serves a TLS caller the TLS port and a plaintext caller the plaintext
-// one, from two separate settings, so the TLS arm sets cluster-announce-tls-port
-// and nothing else. wiki/testing.md records the ablation that established it.
+// The node reports the port for the listener the caller came in on, from two
+// separate settings, so both keys carry the mapped port; wiki/testing.md
+// records the ablation that established it.
 func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, cfg *RedisContainerConfig) error {
 	announceIP, err := resolveAnnounceIP(ctx, c.host)
 	if err != nil {
 		return err
 	}
 
-	announcePortKey := "cluster-announce-port"
-	if cfg.TLS != nil {
-		announcePortKey = "cluster-announce-tls-port"
-	}
-
+	port := strconv.Itoa(c.port)
 	for _, args := range [][]string{
-		{"config", "set", "cluster-announce-ip", announceIP},
-		{"config", "set", announcePortKey, strconv.Itoa(c.port)},
+		{
+			"config", "set",
+			"cluster-announce-ip", announceIP,
+			"cluster-announce-port", port,
+			"cluster-announce-tls-port", port,
+		},
 		{"cluster", "addslotsrange", "0", "16383"},
 	} {
 		if err := execRedisCLI(ctx, c, cfg, args...); err != nil {
@@ -518,12 +644,12 @@ func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, cfg *RedisCon
 // and wait.ForExec for free, since its default ExitCodeMatcher already
 // requires 0.
 //
-// A TLS-only node has no plaintext listener left for the bootstrap to arrive on,
-// so the admin path speaks TLS itself, and it verifies: --cacert pins the same
-// CA the client under test trusts, and nothing here weakens that — --insecure
-// and its kin never appear. Hostname verification is not part of what redis-cli
-// does here (measured: it validates the chain, not the name), so the fixture's
-// leaf need not cover the address redis-cli dials.
+// A TLS-only node has no plaintext listener left for an exec to arrive on, so
+// the admin path speaks TLS itself, keyed on the client listener, and it
+// verifies: --cacert pins the same CA the client under test trusts, --sni, where
+// a name is set (a TLS cluster node whose leaf offers one), names the identity
+// the leaf must carry (redisTLSServerName), and nothing here weakens that — --insecure,
+// --no-verify-hostname and their kin never appear.
 //
 // On an ACL-gated node the `default` user is off, so an unauthenticated bootstrap
 // or readiness exec is refused and the cluster never reaches cluster_state:ok —
@@ -534,11 +660,14 @@ func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, cfg *RedisCon
 // --no-auth-warning suppresses the stderr notice redis-cli prints for a
 // command-line password, which Multiplexed() folds into the same buffer as the
 // command's own output.
-func redisCLICommand(cfg *RedisContainerConfig, args ...string) []string {
-	cmd := make([]string, 0, len(args)+10)
+func redisCLICommand(cfg *RedisContainerConfig, served redisServed, args ...string) []string {
+	cmd := make([]string, 0, len(args)+12)
 	cmd = append(cmd, redisCLI, "-e")
-	if cfg.TLS != nil {
+	if served.tlsClients {
 		cmd = append(cmd, "--tls", "--cacert", redisTLSCAPath)
+	}
+	if served.cliServerName != "" {
+		cmd = append(cmd, "--sni", served.cliServerName)
 	}
 	if cfg.ACL != nil {
 		cmd = append(cmd, redisACLUserFlag, cfg.ACL.Admin.Username, "--pass", cfg.ACL.Admin.Password, "--no-auth-warning")
@@ -573,7 +702,7 @@ func withoutRedisCLICredential(cfg *RedisContainerConfig, text string) string {
 // output. %s rather than %w on the first of those: wrapping would re-embed the
 // unredacted original instead of the redacted rendering.
 func execRedisCLI(ctx context.Context, c *RedisContainer, cfg *RedisContainerConfig, args ...string) error {
-	code, reader, err := c.container.Exec(ctx, redisCLICommand(cfg, args...), tcexec.Multiplexed())
+	code, reader, err := c.container.Exec(ctx, redisCLICommand(cfg, c.served, args...), tcexec.Multiplexed())
 	if err != nil {
 		return fmt.Errorf("redis container: exec %v: %s", args, withoutRedisCLICredential(cfg, err.Error()))
 	}
@@ -582,10 +711,23 @@ func execRedisCLI(ctx context.Context, c *RedisContainer, cfg *RedisContainerCon
 		return fmt.Errorf("redis container: reading output of %v: %w", args, copyErr)
 	}
 	if code != 0 {
-		return fmt.Errorf("redis container: %v exited %d: %s", args, code,
-			withoutRedisCLICredential(cfg, strings.TrimSpace(out.String())))
+		return fmt.Errorf("redis container: %v exited %d: %s%s", args, code,
+			withoutRedisCLICredential(cfg, strings.TrimSpace(out.String())), redisCLIUnnamedLeafHint(c.served))
 	}
 	return nil
+}
+
+// redisCLIUnnamedLeafHint explains, on a failed exec over TLS with no --sni, which
+// identity redis-cli checked: its own message names only "the server
+// certificate" and 127.0.0.1, an address the caller never chose, and suggests
+// flags the caller cannot pass. It states the config, not a diagnosis, because
+// the exec can fail for other reasons too.
+func redisCLIUnnamedLeafHint(served redisServed) string {
+	if !served.tlsClients || served.cliServerName != "" {
+		return ""
+	}
+	return " (TLS.Cert's SANs offer no name to pass as --sni, so redis-cli checked the dialed 127.0.0.1; " +
+		"from Redis 8.12 the leaf needs a DNS SAN naming a host, an IP SAN or a `*.` wildcard over a suffix of two or more labels)"
 }
 
 // resolveAnnounceIP turns the host side of the mapped address into something
@@ -635,7 +777,7 @@ func waitForRedisClusterReady(ctx context.Context, c *RedisContainer, cfg *Redis
 	timeout := clusterReadyTimeout(cfg)
 
 	var last string
-	strategy := wait.ForExec(redisCLICommand(cfg, "cluster", "info")).
+	strategy := wait.ForExec(redisCLICommand(cfg, c.served, "cluster", "info")).
 		WithResponseMatcher(func(body io.Reader) bool {
 			out, err := io.ReadAll(body)
 			if err != nil {
