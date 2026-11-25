@@ -17260,8 +17260,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   git grep --untracked --no-exclude-standard -niE 'maxretries|ConnectionError|connection refused' -- .
   # an own type that implements a go-redis command interface, under any import alias
   git grep --untracked --no-exclude-standard -nwE 'Cmdable|UniversalClient|Pipeliner|StatefulCmdable' -- '*.go'
-  # a test that sends COMMAND through a testing/containers ACL user
-  git grep --untracked --no-exclude-standard -nE 'RedisACL\{|\.Command(Info|Count|List|Docs|GetKeys)?\(' -- '*_test.go'
+  # a test that sends COMMAND through a testing/containers ACL user, by method or as a raw argument
+  git grep --untracked --no-exclude-standard -nE 'RedisACL\{|\.Command(Info|Count|List|Docs|GetKeys)?\(|"(COMMAND|command)"' -- '*_test.go'
   ```
 
   The default writes no `cache.redis.maxretries` key, so read the tests and probes that start the
@@ -17330,22 +17330,17 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   connection to take longer than about 0.4s to fail. Give a `testing/containers` user that sends
   `COMMAND` its own `Rules`, including `+command`. Add the new methods to an own implementation,
   or embed the interface.
-- verify: for an ACL match, on every node of the cluster (a node keeps its own users, counters and
-  ACL log, and go-redis may load the map from any of them), as an administrative user `redis-cli
-  ACL DRYRUN <user> CLUSTER SHARDS` answers `OK`; it writes no log entry (measured on Redis 7.0
-  and 8.12). To confirm under traffic, read `acl_access_denied_cmd` from `redis-cli INFO stats` on
-  every node, then start the service in cluster mode, so its first slot-map load falls inside the
-  window, keep cache traffic running until 90s after it started, so the reload a command triggers
-  once the map is 60s old has also finished (it runs in the background), and read the counter
-  again: unchanged means the node denied no command to any user. The counter exists from Redis 7.2
-  and outlives `ACL LOG RESET`, `acllog-max-len 0` and `CONFIG RESETSTAT` (measured on 7.2 and
-  8.12); a node restart zeroes it, and then the run repeats. Where it rose, or on Redis 7.0, which
-  has no such counter, `redis-cli ACL LOG 128` names the user and the `object`: no entry for the
-  cache user has `cluster|shards` or `command` with an `age-seconds` smaller than the time since
-  the first reading (a repeat denial resets `age-seconds`, measured on 7.0 and 8.12). The log is a
-  lossy witness: one that is disabled (`acllog-max-len 0`), was reset or lost to a restart during
-  the run, or is full of younger entries proves nothing, so repeat the run with the log intact.
-  Nothing here needs `ACL LOG RESET`, which would erase every user's audit entries.
+- verify: for an ACL match, on every node of the cluster (a node keeps its own users and counters,
+  and go-redis may load the map from any of them), as an administrative user `redis-cli ACL DRYRUN
+  <user> CLUSTER SHARDS` answers `OK`. That reads the grant itself, so it decides. To confirm
+  under traffic, read the `cmdstat_cluster|shards` line and every `cmdstat_command` line of
+  `redis-cli INFO commandstats` on each node (a line is absent until its command is first sent),
+  start an instance of the service in cluster mode with cache traffic, and read them again:
+  `calls` of `cmdstat_cluster|shards` rose on at least one node, so a load ran and was served, and
+  `rejected_calls` rose on no node for either command. If `calls` rose nowhere, the readings saw
+  no load, so read again. An ACL denial raises `rejected_calls` and leaves `calls` alone, a served
+  call does the reverse, and the dry run moves neither (measured on Redis 7.0, 7.2 and 8.12).
+  `CONFIG RESETSTAT` and a restart clear these lines, and then the run repeats.
   For a timing match, run the tests, alerts and startup checks that expect a refused Redis
   connection, in standalone or cluster mode: each passes with its resized budget. For a `COMMAND`
   match, run each test that sends `COMMAND` as a `testing/containers` user: it passes with its own
