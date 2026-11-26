@@ -17365,9 +17365,10 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
 - detect:
 
   ```bash
-  # tests that start the PostgreSQL fixture, and every explicit image tag (ImageTag also
+  # tests that start the PostgreSQL fixture, by call or by function value (the first name also
+  # matches its ForTestMain and Must forms), and every explicit image tag (ImageTag also
   # matches the Oracle, Redis and RabbitMQ fixtures; read only the PostgreSQL ones)
-  git grep --untracked --no-exclude-standard -nE 'StartPostgreSQLContainer(ForTestMain)?\(|MustStartPostgreSQLContainer\(|DefaultPostgreSQLConfig\(|PostgreSQLContainerConfig\{|ImageTag' -- '*.go'
+  git grep --untracked --no-exclude-standard -nE 'StartPostgreSQLContainer|DefaultPostgreSQLConfig|PostgreSQLContainerConfig\{|ImageTag' -- '*.go'
   # SQL and server settings that PostgreSQL 19 answers differently
   git grep --untracked --no-exclude-standard -niE 'json_array\(|standard_conforming_strings|escape_string_warning|io_workers|max_locks_per_transaction|default_toast_compression|log_lock_waits|(^|[^a-z_])jit([^a-z_]|$)' -- .
   ```
