@@ -99,7 +99,7 @@ func TestContainerWaitStrategiesBindConfiguredStartupTimeout(t *testing.T) {
 			build: func(t *testing.T, timeout time.Duration) wait.Strategy {
 				cfg := DefaultRedisConfig()
 				cfg.StartupTimeout = timeout
-				return waitFromOptions(t, redisOptions(cfg))
+				return waitFromOptions(t, redisOptions(cfg, redisServed{}))
 			},
 		},
 		{
