@@ -16051,7 +16051,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   removed, and `jit` off, `max_locks_per_transaction` 128, `default_toast_compression` `lz4`
   and `log_lock_waits` on by default; a removed setting, or `standard_conforming_strings=off`,
   in the new `Settings` field keeps the server from starting. Set `ImageTag` to the production major to keep it (C74.18).
-  gaborage/go-bricks#2430 · gaborage/go-bricks#2435.
+  gaborage/go-bricks#2430 · gaborage/go-bricks#2436.
 
 ### [C74.1] a credential URL that url.Parse rejects, or reads with no host, renders whole as `xxxxx` at every error door, and three more vendor echoes of URL text are masked · silent-behavior · when: match
 
@@ -17413,7 +17413,7 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `io_max_workers` in place of `io_workers`).
 - verify: the integration suite passes, and `SHOW server_version` on the fixture's connection
   reports the intended major (`18.6` and `19.0` on the two images, measured).
-- ref: gaborage/go-bricks#2430 · gaborage/go-bricks#2435 ·
+- ref: gaborage/go-bricks#2430 · gaborage/go-bricks#2436 ·
   [PostgreSQL 19.0 release notes](https://www.postgresql.org/docs/release/19.0/), "Migration to
   Version 19" ·
   `testing/containers/postgresql_config.go` `DefaultPostgreSQLConfig`
