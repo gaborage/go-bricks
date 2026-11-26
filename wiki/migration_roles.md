@@ -246,7 +246,7 @@ for _, s := range stmts {
 
 `ProvisionPGRoles` runs as a **provisioner** — never as the migrator or the
 runtime role. What that connection needs depends on who it is and where the
-migrator comes from (PostgreSQL 16+; the integration tests run on 18):
+migrator comes from (PostgreSQL 16+; the integration tests run on 19):
 
 | Provisioner | Migrator | Spec options | One-time setup |
 | ----------- | -------- | ------------ | -------------- |
@@ -499,7 +499,7 @@ Run them with:
 go test -tags=integration -run TestPGRoles ./migration/
 ```
 
-Docker is required (testcontainers spins up a fresh PostgreSQL 18 instance
+Docker is required (testcontainers spins up a fresh PostgreSQL 19 instance
 per test). Flyway is **not** required for these tests — they exercise the
 role helpers directly against PostgreSQL.
 
