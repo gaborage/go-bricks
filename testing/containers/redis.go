@@ -191,7 +191,7 @@ type RedisContainerConfig struct {
 func DefaultRedisConfig() *RedisContainerConfig {
 	return &RedisContainerConfig{
 		// renovate: datasource=docker depName=redis
-		ImageTag:       "8.10.3-alpine",
+		ImageTag:       "8.12.0-alpine",
 		StartupTimeout: 60 * time.Second,
 	}
 }
