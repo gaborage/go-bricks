@@ -610,9 +610,10 @@ func startRedisContainerInternal(ctx context.Context, cfg *RedisContainerConfig)
 // makes the node advertise where the test actually reaches it, so the client's
 // first redirect lands rather than hangs.
 //
-// The node reports the port for the listener the caller came in on, from two
-// separate settings, so both keys carry the mapped port; wiki/testing.md
-// records the ablation that established it.
+// The node holds a plaintext port and a TLS port as two separate settings.
+// CLUSTER SHARDS returns both and the client picks one; CLUSTER SLOTS returns
+// the one for the listener the caller came in on. So both keys carry the
+// mapped port; wiki/testing.md records the ablation that established it.
 func bootstrapRedisCluster(ctx context.Context, c *RedisContainer, cfg *RedisContainerConfig) error {
 	announceIP, err := resolveAnnounceIP(ctx, c.host)
 	if err != nil {
