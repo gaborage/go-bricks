@@ -163,7 +163,10 @@ func parseQualifiedIdentifier(name string) ([]string, bool) {
 type identifierParser struct {
 	inQuotes bool
 	segments []string
-	current  strings.Builder
+	// segment is the input from the current segment's first byte on. Every
+	// segment is a contiguous run of the input — a doubled quote stays doubled —
+	// so each one is returned as a sub-slice of it, never copied (#1520).
+	segment string
 }
 
 // parse processes the input string and returns the parsed segments. It walks a
@@ -171,18 +174,18 @@ type identifierParser struct {
 // handing back a shorter rest, so no arithmetic on the loop variable can move the
 // cursor backwards and spin.
 func (p *identifierParser) parse(input string) ([]string, bool) {
+	p.segment = input
 	for rest := input; rest != ""; {
+		at := rest
 		c := rest[0]
 		rest = rest[1:]
 		switch c {
 		case '"':
 			rest = p.handleQuote(rest)
 		case '.':
-			if !p.handleDot() {
+			if !p.handleDot(at) {
 				return nil, false
 			}
-		default:
-			p.current.WriteByte(c)
 		}
 	}
 	return p.finalize()
@@ -194,32 +197,30 @@ func (p *identifierParser) parse(input string) ([]string, bool) {
 func (p *identifierParser) handleQuote(rest string) string {
 	// Handle escaped quotes: "" inside quoted string
 	if p.inQuotes && rest != "" && rest[0] == '"' {
-		p.current.WriteString(`""`)
 		return rest[1:]
 	}
 	p.inQuotes = !p.inQuotes
-	p.current.WriteByte('"')
 	return rest
 }
 
-// handleDot processes dot separators (only outside quotes)
-func (p *identifierParser) handleDot() bool {
+// handleDot processes dot separators (only outside quotes). at is the input
+// from the dot on: the segment ends where it begins, the next starts after it.
+func (p *identifierParser) handleDot(at string) bool {
 	if p.inQuotes {
-		p.current.WriteByte('.')
 		return true
 	}
-	s := strings.TrimSpace(p.current.String())
+	s := strings.TrimSpace(p.segment[:len(p.segment)-len(at)])
 	if s == "" {
 		return false
 	}
 	p.segments = append(p.segments, s)
-	p.current.Reset()
+	p.segment = at[1:]
 	return true
 }
 
 // finalize completes parsing and validates the result
 func (p *identifierParser) finalize() ([]string, bool) {
-	s := strings.TrimSpace(p.current.String())
+	s := strings.TrimSpace(p.segment)
 	if s == "" {
 		return nil, false
 	}

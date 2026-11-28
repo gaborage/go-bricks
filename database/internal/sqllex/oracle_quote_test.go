@@ -182,6 +182,7 @@ func TestParseQualifiedIdentifier(t *testing.T) {
 		{"segment_only_doubled_quotes", `""""`, []string{`""""`}, true},
 		{"only_doubled_quotes_non_leading_segment", `x.""""`, []string{"x", `""""`}, true},
 		{"empty_quoted_last_segment", `x.""`, []string{"x", `""`}, true},
+		{"padded_quoted_segments_trimmed", ` "a""b" . c . "d" `, []string{`"a""b"`, "c", `"d"`}, true},
 
 		// A dot inside quotes is data, not a separator, and an escaped quote does
 		// not close the segment that carries it -- so the dot after `""` is still
