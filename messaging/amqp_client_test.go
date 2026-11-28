@@ -3718,7 +3718,7 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			}
 			c := newClientWithFakeChannel(t, ch)
 			// Only the confirm-timeout case keeps the helper's 15ms wait: it is its subject.
-			if tt.wantCause != ErrPublishConfirmTimeout {
+			if !errors.Is(tt.wantCause, ErrPublishConfirmTimeout) {
 				c.connectionTimeout = 5 * time.Second
 			}
 			c.resendDelay = 5 * time.Millisecond
