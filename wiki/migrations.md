@@ -17507,8 +17507,8 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   over configuration, manifests and Go source, then every constant or variable such a call is
   handed, and a read of every secret or dynamic source.
   A comment or URL fragment after the value matches too: a candidate counts only once the table
-  NAME holds `#`. An Oracle store, and `migration/provisioning.NewPostgresStore`, are never
-  candidates.
+  NAME holds `#`. An Oracle store, `inbox.hold.tablename` and
+  `migration/provisioning.NewPostgresStore` are never candidates.
 - gate: match = a confirmed candidate. no-match = none: a name PostgreSQL's alphabet accepts
   constructs as before, Oracle accepts `#` as before, and no such name could ever run a
   statement on PostgreSQL.
