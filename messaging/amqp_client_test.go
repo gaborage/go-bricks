@@ -2600,7 +2600,7 @@ func TestWithMaxPublishAttemptsOption(t *testing.T) {
 // ErrNotConnected in microseconds and the helper's NoError fails — see this
 // task's pristine-main repro step for the captured behavioral failure.
 func TestPublishBytesWaitsForReadyClient(t *testing.T) {
-	publishThroughColdStart(t, callerContext(t, 5*time.Second))
+	publishThroughColdStart(callerContext(t, 5*time.Second), t)
 }
 
 // publishThroughColdStart publishes on ctx from a client that is not ready yet,
@@ -2608,7 +2608,7 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 // pre-flight wait is actually exercised, not a lucky first check), acks the
 // publish, and requires it to succeed. The 5s confirm window keeps a scheduler
 // stall from turning that ack into a confirm timeout.
-func publishThroughColdStart(t *testing.T, ctx context.Context) {
+func publishThroughColdStart(ctx context.Context, t *testing.T) {
 	t.Helper()
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
@@ -2672,7 +2672,7 @@ func publishThroughColdStart(t *testing.T, ctx context.Context) {
 // >=150ms and the assertion below fails.
 func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 	ctx := logger.WithRequestCounters(callerContext(t, 5*time.Second))
-	publishThroughColdStart(t, ctx)
+	publishThroughColdStart(ctx, t)
 
 	elapsed := time.Duration(logger.GetAMQPElapsed(ctx))
 	assert.Less(t, elapsed, 100*time.Millisecond,
