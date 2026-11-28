@@ -594,7 +594,7 @@ func awaitPublishAttempt(t *testing.T, sig <-chan struct{}) {
 
 func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
+	c, ctx := newClientAwaitingConfirm(t, ch)
 
 	// Coordinate via publishAttemptSignal so we know both publishes have
 	// registered their tags before we send confirmations.
@@ -608,14 +608,14 @@ func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 
 	// Publish A — will get DeliveryTag=1
 	go func() {
-		resultA <- c.publishBytes(context.Background(),
+		resultA <- c.publishBytes(ctx,
 			publishOptions{Exchange: "ex", RoutingKey: "a"}, []byte("A"))
 	}()
 	awaitPublishAttempt(t, sig) // A's PublishWithContext fired → tag 1 registered
 
 	// Publish B — will get DeliveryTag=2
 	go func() {
-		resultB <- c.publishBytes(context.Background(),
+		resultB <- c.publishBytes(ctx,
 			publishOptions{Exchange: "ex", RoutingKey: "b"}, []byte("B"))
 	}()
 	awaitPublishAttempt(t, sig) // B's PublishWithContext fired → tag 2 registered
@@ -2420,7 +2420,7 @@ func TestPublishBytesReturnsExhaustedOnPersistentPublishError(t *testing.T) {
 // cause (so the relay classifies it as poison).
 func TestPublishBytesReturnsExhaustedOnPersistentNack(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
+	c, ctx := newClientAwaitingConfirm(t, ch)
 	c.maxPublishAttempts = 3
 	c.nackBackoff = time.Millisecond
 
@@ -2430,7 +2430,7 @@ func TestPublishBytesReturnsExhaustedOnPersistentNack(t *testing.T) {
 		amqp.Confirmation{Ack: false, DeliveryTag: 3},
 	)
 
-	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if !errors.Is(err, ErrPublishRetriesExhausted) {
 		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
 	}
@@ -2597,13 +2597,23 @@ func TestWithMaxPublishAttemptsOption(t *testing.T) {
 // is not yet ready (cold start, or mid-reconnect) must NOT fail the publish
 // instantly. It must wait, bounded by readyTimeout, and succeed once the client
 // becomes ready. ON CURRENT MAIN (no pre-flight wait) this returns
-// ErrNotConnected in microseconds and the assertion below fails — see this
+// ErrNotConnected in microseconds and the helper's NoError fails — see this
 // task's pristine-main repro step for the captured behavioral failure.
 func TestPublishBytesWaitsForReadyClient(t *testing.T) {
+	publishThroughColdStart(callerContext(t, 5*time.Second), t)
+}
+
+// publishThroughColdStart publishes on ctx from a client that is not ready yet,
+// makes it ready only after outlasting one 100ms readiness poll tick (so the
+// pre-flight wait is actually exercised, not a lucky first check), acks the
+// publish, and requires it to succeed. The 5s confirm window keeps a scheduler
+// stall from turning that ack into a confirm timeout.
+func publishThroughColdStart(ctx context.Context, t *testing.T) {
+	t.Helper()
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
-		connectionTimeout: 15 * time.Millisecond,
+		connectionTimeout: 5 * time.Second,
 		resendDelay:       5 * time.Millisecond,
 		reInitDelay:       5 * time.Millisecond,
 		reconnectDelay:    5 * time.Millisecond,
@@ -2622,11 +2632,9 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+		resultCh <- c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	}()
 
-	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
-	// exercised (not a lucky first check).
 	time.Sleep(150 * time.Millisecond)
 
 	ch := &fakeChannel{}
@@ -2647,7 +2655,7 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 // TestPublishBytesExcludesReadyWaitFromLatencyMetrics reproduces the follow-up
 // finding to issue #655: the readiness pre-flight wait must NOT be reported as
 // publish/broker latency. Reuses TestPublishBytesWaitsForReadyClient's exact
-// choreography (client becomes ready only after outlasting one 100ms poll tick) and
+// choreography (publishThroughColdStart) and
 // asserts, via the logger.GetAMQPElapsed seam, that the elapsed time publishBytes
 // records on its ACK success path excludes the ~150ms wait.
 //
@@ -2663,51 +2671,8 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 // ON PRE-FIX CODE (elapsed measured from before the pre-flight wait) this reports
 // >=150ms and the assertion below fails.
 func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
-	c := &AMQPClientImpl{
-		m:                 &sync.RWMutex{},
-		log:               &stubLogger{},
-		connectionTimeout: 15 * time.Millisecond,
-		resendDelay:       5 * time.Millisecond,
-		reInitDelay:       5 * time.Millisecond,
-		reconnectDelay:    5 * time.Millisecond,
-		done:              make(chan bool),
-		isReady:           false, // cold: not ready yet
-		readyTimeout:      2 * time.Second,
-	}
-	t.Cleanup(func() {
-		select {
-		case <-c.done:
-			// already closed by the test itself
-		default:
-			_ = c.Close()
-		}
-	})
-
-	ctx := logger.WithRequestCounters(context.Background())
-
-	resultCh := make(chan error, 1)
-	go func() {
-		resultCh <- c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
-	}()
-
-	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
-	// exercised (not a lucky first check) — same choreography as
-	// TestPublishBytesWaitsForReadyClient.
-	time.Sleep(150 * time.Millisecond)
-
-	ch := &fakeChannel{}
-	c.m.Lock()
-	c.isReady = true
-	c.m.Unlock()
-	c.changeChannel(ch)
-	sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
-
-	select {
-	case err := <-resultCh:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("publishBytes did not return after the client became ready")
-	}
+	ctx := logger.WithRequestCounters(callerContext(t, 5*time.Second))
+	publishThroughColdStart(ctx, t)
 
 	elapsed := time.Duration(logger.GetAMQPElapsed(ctx))
 	assert.Less(t, elapsed, 100*time.Millisecond,
@@ -3716,6 +3681,10 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 				ch.unroutableRemaining = 1
 			}
 			c := newClientWithFakeChannel(t, ch)
+			// Only the confirm-timeout case keeps the helper's 15ms wait: it is its subject.
+			if !errors.Is(tt.wantCause, ErrPublishConfirmTimeout) {
+				c.connectionTimeout = 5 * time.Second
+			}
 			c.resendDelay = 5 * time.Millisecond
 			c.nackBackoff = 7 * time.Millisecond
 			if tt.confirm != nil {

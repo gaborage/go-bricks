@@ -54,20 +54,10 @@ func TestPublishCreatesSpan(t *testing.T) {
 	exporter, cleanup := setupTestTracing(t)
 	defer cleanup()
 
-	client, fakeConn, fakeCh := setupReadyClient(t)
+	client, fakeConn, fakeCh, ctx := setupReadyClientAwaitingAck(t)
 	defer func() { _ = client.Close() }()
-
-	// setupReadyClient leaves maxPublishAttempts at 0 (unbounded) and its 100ms
-	// confirmation timeout can be outrun by a loaded runner: the publish then
-	// abandons the wait and retries under a NEW tag, so a hardcoded tag-1
-	// confirmation matches nothing and a deadline-free publish waits forever.
-	// Ack whichever tag the publish actually used, under a deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	destination := testQueueOtel
 	data := []byte(testMessage)
-
-	ackNextSuccessfulPublish(ctx, t, client, fakeCh)
 
 	err := client.publishBytes(ctx, publishOptions{RoutingKey: destination}, data)
 	require.NoError(t, err)
@@ -97,19 +87,13 @@ func TestPublishBytesCreatesSpanWithExchangeAttributes(t *testing.T) {
 	exporter, cleanup := setupTestTracing(t)
 	defer cleanup()
 
-	client, fakeConn, fakeCh := setupReadyClient(t)
+	client, fakeConn, fakeCh, ctx := setupReadyClientAwaitingAck(t)
 	defer func() { _ = client.Close() }()
-
-	// Same hardcoded-tag hazard as TestPublishCreatesSpan — see the note there.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	options := publishOptions{
 		Exchange:   testExchange,
 		RoutingKey: testRoutingKey,
 	}
 	data := []byte("exchange message")
-
-	ackNextSuccessfulPublish(ctx, t, client, fakeCh)
 
 	err := client.publishBytes(ctx, options, data)
 	require.NoError(t, err)
@@ -346,6 +330,19 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 }
 
 // Helper functions
+
+// setupReadyClientAwaitingAck is setupReadyClient for a test whose publish rides on
+// one ack. The helper's 100ms confirm window can be outrun by a loaded runner, so
+// this widens it to 5s; the returned 5s ctx bounds a stall that still outlasts it.
+// The next successful publish is acked on whichever tag it used, under that ctx.
+func setupReadyClientAwaitingAck(t *testing.T) (*AMQPClientImpl, *fakeConnAdapter, *fakeChannel, context.Context) {
+	t.Helper()
+	client, fakeConn, fakeCh := setupReadyClient(t)
+	client.connectionTimeout = 5 * time.Second
+	ctx := callerContext(t, 5*time.Second)
+	ackNextSuccessfulPublish(ctx, t, client, fakeCh)
+	return client, fakeConn, fakeCh, ctx
+}
 
 func setupReadyClient(t *testing.T) (*AMQPClientImpl, *fakeConnAdapter, *fakeChannel) {
 	t.Helper()
