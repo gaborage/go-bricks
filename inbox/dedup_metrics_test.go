@@ -113,7 +113,7 @@ func TestProcessOnceDedupHitIsCountedAndLogged(t *testing.T) {
 // sumOfDedupHits reads the counter's total across every attribute set.
 func sumOfDedupHits(t *testing.T, mp *obtest.TestMeterProvider) int64 {
 	t.Helper()
-	m := obtest.FindMetric(mp.Collect(t), metricDedupHits)
+	m := obtest.FindMetric(mp.Collect(t), "inbox.dedup.hits")
 	require.NotNil(t, m, "the dedup-hit counter is exported")
 	sum, ok := m.Data.(metricdata.Sum[int64])
 	require.True(t, ok, "the dedup-hit instrument is an int64 sum")
@@ -128,16 +128,16 @@ func sumOfDedupHits(t *testing.T, mp *obtest.TestMeterProvider) int64 {
 // wrote: tenant presence and sealed, both as bools.
 func assertDedupHitAttributes(t *testing.T, mp *obtest.TestMeterProvider, tenantPresent, sealed bool) {
 	t.Helper()
-	m := obtest.FindMetric(mp.Collect(t), metricDedupHits)
+	m := obtest.FindMetric(mp.Collect(t), "inbox.dedup.hits")
 	require.NotNil(t, m)
 	sum := m.Data.(metricdata.Sum[int64])
 	for _, dp := range sum.DataPoints {
-		tenant, hasTenant := dp.Attributes.Value(attribute.Key(attrTenantPresent))
+		tenant, hasTenant := dp.Attributes.Value(attribute.Key("inbox.tenant.present"))
 		if !hasTenant {
 			continue // the priming Add carried no attributes
 		}
 		assert.Equal(t, tenantPresent, tenant.AsBool())
-		gotSealed, hasSealed := dp.Attributes.Value(attribute.Key(attrSealed))
+		gotSealed, hasSealed := dp.Attributes.Value(attribute.Key("inbox.sealed"))
 		require.True(t, hasSealed)
 		assert.Equal(t, sealed, gotSealed.AsBool())
 		assert.Equal(t, int64(1), dp.Value)

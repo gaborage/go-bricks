@@ -27,9 +27,9 @@ func TestHoldGaugesReportTheDrainsSnapshot(t *testing.T) {
 
 	rm := mp.Collect(t)
 
-	obtest.AssertMetricValue(t, rm, metricHoldTenants, int64(2))
-	obtest.AssertMetricValue(t, rm, metricHoldRows, int64(5))
-	age := obtest.FindMetric(rm, metricHoldOldestAge)
+	obtest.AssertMetricValue(t, rm, "inbox.hold.tenants", int64(2))
+	obtest.AssertMetricValue(t, rm, "inbox.hold.rows", int64(5))
+	age := obtest.FindMetric(rm, "inbox.hold.oldest_age")
 	require.NotNil(t, age, "the oldest-age gauge is reported")
 }
 
@@ -45,7 +45,7 @@ func TestHoldGaugesReportNothingBeforeAPass(t *testing.T) {
 
 	rm := mp.Collect(t)
 
-	assert.Nil(t, obtest.FindMetric(rm, metricHoldTenants),
+	assert.Nil(t, obtest.FindMetric(rm, "inbox.hold.tenants"),
 		"no pass, no reading")
 }
 
@@ -61,7 +61,7 @@ func TestHoldGaugesStopAfterUnregister(t *testing.T) {
 	require.NoError(t, unregister())
 	rm := mp.Collect(t)
 
-	assert.Nil(t, obtest.FindMetric(rm, metricHoldTenants),
+	assert.Nil(t, obtest.FindMetric(rm, "inbox.hold.tenants"),
 		"an unregistered callback reports nothing")
 }
 
