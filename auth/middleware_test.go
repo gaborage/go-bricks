@@ -23,6 +23,7 @@ import (
 
 	authtesting "github.com/gaborage/go-bricks/auth/testing"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -683,29 +684,6 @@ func okHandler(c server.HandlerContext) error {
 	return c.String(http.StatusOK, "ok")
 }
 
-// serveTestServer starts srv, waits until it serves, and returns its base URL
-// built from the OS-picked address, shutting the server down when the test ends.
-func serveTestServer(t *testing.T, srv *server.Server) string {
-	t.Helper()
-	startErr := make(chan error, 1)
-	go func() { startErr <- srv.Start() }()
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	})
-
-	select {
-	case <-srv.ReadyCh():
-	case err := <-startErr:
-		require.NoError(t, err, "test server failed to start")
-		require.FailNow(t, "test server stopped before it served")
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "test server not ready")
-	}
-	return "http://" + srv.BoundAddr().String()
-}
-
 // newLoopbackConfig returns a config that binds the loopback host on port 0,
 // so the OS picks the port at Start.
 func newLoopbackConfig() *config.Config {
@@ -755,7 +733,7 @@ func TestMiddlewareGuardsOnlyItsOwnRouteGroup(t *testing.T) {
 	root := srv.RootGroup()
 	root.Add(http.MethodGet, openPath, okHandler)
 	root.Group("/api", Middleware(v)).Add(http.MethodGet, "/thing", okHandler)
-	base := serveTestServer(t, srv)
+	base := testutil.StartListener(t, srv)
 
 	for _, path := range []string{healthPath, readyPath, openPath} {
 		t.Run("open"+strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
