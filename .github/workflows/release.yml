@@ -181,25 +181,17 @@ jobs:
             echo "::warning::could not ensure the $DRIFT_LABEL label (non-fatal)"
           fi
           # REST listing, not `gh issue list --label`: that goes through the search index, which can lag.
-          open_drift_issues() {
-            gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$DRIFT_LABEL&per_page=100" \
-              --jq '.[] | select(.pull_request == null) | .number'
-          }
-          if ! nums="$(open_drift_issues)"; then
+          if ! nums="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$DRIFT_LABEL&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | .number')"; then
             echo "::warning::could not look up an open $DRIFT_LABEL issue (non-fatal); this drift is tracked only in the step summary"; exit 0
           fi
           existing="$(printf '%s\n' "$nums" | sed -n 1p)"
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$msg" || echo "::warning::drift issue comment failed (non-fatal)"
-          elif ! gh issue create --title "$title" --body "$msg" --label "$DRIFT_LABEL"; then
-            if ! recheck="$(open_drift_issues)"; then
-              echo "::warning::the labeled drift issue create and the follow-up lookup both failed (non-fatal); this drift is tracked only in the step summary"
-            elif [ -n "$recheck" ]; then
-              echo "::warning::the labeled drift issue create reported an error, but a $DRIFT_LABEL issue is now open; not opening a duplicate"
-            else
-              echo "::warning::could not open the drift issue with the $DRIFT_LABEL label; opening it without (label it by hand so the lookups find it)"
-              gh issue create --title "$title" --body "$msg" || echo "::warning::drift issue create failed (non-fatal)"
-            fi
+          else
+            # Never open it unlabeled: migrate-cli-tag.yml finds and closes drift issues by the label alone.
+            gh issue create --title "$title" --body "$msg" --label "$DRIFT_LABEL" \
+              || echo "::warning::could not open the $DRIFT_LABEL drift issue (non-fatal); this drift is tracked only in the step summary"
           fi
 
   # Must follow publish: release-please opens nothing while the merged Release PR is labeled pending.
