@@ -192,7 +192,9 @@ jobs:
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$msg" || echo "::warning::drift issue comment failed (non-fatal)"
           elif ! gh issue create --title "$title" --body "$msg" --label "$DRIFT_LABEL"; then
-            if [ -n "$(open_drift_issues || true)" ]; then
+            if ! recheck="$(open_drift_issues)"; then
+              echo "::warning::the labeled drift issue create and the follow-up lookup both failed (non-fatal); this drift is tracked only in the step summary"
+            elif [ -n "$recheck" ]; then
               echo "::warning::the labeled drift issue create reported an error, but a $DRIFT_LABEL issue is now open; not opening a duplicate"
             else
               echo "::warning::could not open the drift issue with the $DRIFT_LABEL label; opening it without (label it by hand so the lookups find it)"
