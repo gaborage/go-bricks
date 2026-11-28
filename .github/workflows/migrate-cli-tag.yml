@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # needed to search for and close the drift-tracking issue once the CLI tag is fresh
+      # needed to list and close open cli-tag-drift issues once the CLI tag is fresh
       issues: write
     steps:
       - uses: actions/checkout@v7
