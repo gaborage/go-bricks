@@ -161,8 +161,8 @@ func TestValidateTableNameConfigBoundUnchanged(t *testing.T) {
 
 // TestStoreMarkProcessedBuildRefusalIsABuildStageExecError pins #1521's premise
 // for the ledger's one build site: a table name the builder refuses reports the
-// build stage, sentinel still reachable. The constructor refuses this name now,
-// so the store is built around it to reach the builder.
+// build stage, sentinel still reachable. Built as a literal: the constructor
+// refuses this name.
 func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
 	store := &postgresStore{tableName: "ev#ents", qb: database.NewQueryBuilder(dbtypes.PostgreSQL)}
 	ctx := context.Background()
@@ -178,11 +178,8 @@ func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
 	assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 }
 
-// TestValidateTableNameForVendorCharset pins the name against the STORE vendor's
-// alphabet at construction. The decisive pair is the `#` name: PostgreSQL refuses it
-// here, with the identifier sentinel, where it used to construct and fail at the first
-// query, while Oracle accepts it. An Oracle-invalid name never reaches this check: the
-// shared sqlid grammar is Oracle's and refuses it first, without the sentinel.
+// TestValidateTableNameForVendorCharset pins the name against the store vendor's
+// alphabet: `#` is refused on PostgreSQL and accepted on Oracle.
 func TestValidateTableNameForVendorCharset(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -190,9 +187,9 @@ func TestValidateTableNameForVendorCharset(t *testing.T) {
 		table    string
 		refused  bool
 	}{
-		{"postgres_refuses_hash", NewPostgresStore, "ev#ents", true},
-		{"postgres_accepts_dollar", NewPostgresStore, "ev$ents", false},
-		{"oracle_accepts_hash", NewOracleStore, "ev#ents", false},
+		{name: "postgresql_refuses_hash", newStore: NewPostgresStore, table: "ev#ents", refused: true},
+		{name: "postgresql_accepts_dollar", newStore: NewPostgresStore, table: "ev$ents"},
+		{name: "oracle_accepts_hash", newStore: NewOracleStore, table: "ev#ents"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -127,8 +127,8 @@ func TestStoreSQLGolden(t *testing.T) {
 // TestStoreLeadBuildRefusalIsABuildStageExecError pins #1521's premise for the
 // leader lock: a table name the builder refuses surfaces as a build-stage
 // ExecError with the identifier sentinel reachable through the wrap, so the
-// startup probe can classify it. The constructor refuses this name now, so the
-// store is built around it to reach the builder.
+// startup probe can classify it. Built as a literal: the constructor refuses
+// this name.
 func TestStoreLeadBuildRefusalIsABuildStageExecError(t *testing.T) {
 	store := &postgresStore{sqlStore: newSQLStore(dbtypes.PostgreSQL, "postgres", "ev#ents", "error", scanPostgresRecord)}
 	ctx := context.Background()

@@ -163,11 +163,8 @@ func TestStoreSchemaSegmentBound(t *testing.T) {
 	}
 }
 
-// TestStoreTableNameCharset pins every segment of the table name against the STORE
-// vendor's alphabet at construction. The decisive pair is the `#` name: PostgreSQL
-// refuses it here, with the identifier sentinel, where it used to construct and fail at
-// the first query, while Oracle accepts it. An Oracle-invalid name never reaches this
-// check: the shared sqlid grammar is Oracle's and refuses it first, without the sentinel.
+// TestStoreTableNameCharset pins every segment of the table name against the store
+// vendor's alphabet: `#` is refused on PostgreSQL and accepted on Oracle.
 func TestStoreTableNameCharset(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -546,9 +546,7 @@ func TestRegisterJobsWithoutAHoldAddsNoDrain(t *testing.T) {
 // TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521 for the
 // hold probe: a table name the builder refuses never reached the database, so
 // the failure must not tell the operator to run migrations or enable
-// auto-create, and must not also claim the table is unusable. The ledger table
-// no longer reaches its probe with such a name: see
-// TestModuleInitRefusesVendorInvalidLedgerTableNameAtConstruction.
+// auto-create, and must not also claim the table is unusable.
 func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
 	m := NewModule()
 	deps := testDeps()
