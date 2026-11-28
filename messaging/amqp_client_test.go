@@ -2597,9 +2597,19 @@ func TestWithMaxPublishAttemptsOption(t *testing.T) {
 // is not yet ready (cold start, or mid-reconnect) must NOT fail the publish
 // instantly. It must wait, bounded by readyTimeout, and succeed once the client
 // becomes ready. ON CURRENT MAIN (no pre-flight wait) this returns
-// ErrNotConnected in microseconds and the assertion below fails — see this
+// ErrNotConnected in microseconds and the helper's NoError fails — see this
 // task's pristine-main repro step for the captured behavioral failure.
 func TestPublishBytesWaitsForReadyClient(t *testing.T) {
+	publishThroughColdStart(t, callerContext(t, 5*time.Second))
+}
+
+// publishThroughColdStart publishes on ctx from a client that is not ready yet,
+// makes it ready only after outlasting one 100ms readiness poll tick (so the
+// pre-flight wait is actually exercised, not a lucky first check), acks the
+// publish, and requires it to succeed. The 5s confirm window keeps a scheduler
+// stall from turning that ack into a confirm timeout.
+func publishThroughColdStart(t *testing.T, ctx context.Context) {
+	t.Helper()
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
@@ -2620,14 +2630,11 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 		}
 	})
 
-	ctx := callerContext(t, 5*time.Second)
 	resultCh := make(chan error, 1)
 	go func() {
 		resultCh <- c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	}()
 
-	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
-	// exercised (not a lucky first check).
 	time.Sleep(150 * time.Millisecond)
 
 	ch := &fakeChannel{}
@@ -2648,7 +2655,7 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 // TestPublishBytesExcludesReadyWaitFromLatencyMetrics reproduces the follow-up
 // finding to issue #655: the readiness pre-flight wait must NOT be reported as
 // publish/broker latency. Reuses TestPublishBytesWaitsForReadyClient's exact
-// choreography (client becomes ready only after outlasting one 100ms poll tick) and
+// choreography (publishThroughColdStart) and
 // asserts, via the logger.GetAMQPElapsed seam, that the elapsed time publishBytes
 // records on its ACK success path excludes the ~150ms wait.
 //
@@ -2664,51 +2671,8 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 // ON PRE-FIX CODE (elapsed measured from before the pre-flight wait) this reports
 // >=150ms and the assertion below fails.
 func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
-	c := &AMQPClientImpl{
-		m:                 &sync.RWMutex{},
-		log:               &stubLogger{},
-		connectionTimeout: 5 * time.Second,
-		resendDelay:       5 * time.Millisecond,
-		reInitDelay:       5 * time.Millisecond,
-		reconnectDelay:    5 * time.Millisecond,
-		done:              make(chan bool),
-		isReady:           false, // cold: not ready yet
-		readyTimeout:      2 * time.Second,
-	}
-	t.Cleanup(func() {
-		select {
-		case <-c.done:
-			// already closed by the test itself
-		default:
-			_ = c.Close()
-		}
-	})
-
 	ctx := logger.WithRequestCounters(callerContext(t, 5*time.Second))
-
-	resultCh := make(chan error, 1)
-	go func() {
-		resultCh <- c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
-	}()
-
-	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
-	// exercised (not a lucky first check) — same choreography as
-	// TestPublishBytesWaitsForReadyClient.
-	time.Sleep(150 * time.Millisecond)
-
-	ch := &fakeChannel{}
-	c.m.Lock()
-	c.isReady = true
-	c.m.Unlock()
-	c.changeChannel(ch)
-	sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
-
-	select {
-	case err := <-resultCh:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("publishBytes did not return after the client became ready")
-	}
+	publishThroughColdStart(t, ctx)
 
 	elapsed := time.Duration(logger.GetAMQPElapsed(ctx))
 	assert.Less(t, elapsed, 100*time.Millisecond,
