@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.75.0](https://github.com/gaborage/go-bricks/compare/v0.74.0...v0.75.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **outbox:** refuse a table name outside the store vendor's charset ([#2452](https://github.com/gaborage/go-bricks/issues/2452))
+
+### Fixed
+
+* **outbox:** refuse a table name outside the store vendor's charset ([#2452](https://github.com/gaborage/go-bricks/issues/2452)) ([bf19c37](https://github.com/gaborage/go-bricks/commit/bf19c370d4f039f2bd66df6379d701712d187d8b))
+
+
+### Changed
+
+* **database:** return identifier segments as sub-slices of the input ([#2446](https://github.com/gaborage/go-bricks/issues/2446)) ([005af3d](https://github.com/gaborage/go-bricks/commit/005af3da52cd2f45cc6eca79cd57173c482c4584))
+
 ## [0.74.0](https://github.com/gaborage/go-bricks/compare/v0.73.0...v0.74.0) (2026-11-26)
 
 
