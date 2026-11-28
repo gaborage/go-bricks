@@ -58,11 +58,10 @@ func TestPublishCreatesSpan(t *testing.T) {
 	defer func() { _ = client.Close() }()
 	client.connectionTimeout = 5 * time.Second
 
-	// setupReadyClient leaves maxPublishAttempts at 0 (unbounded) and its 100ms
-	// confirmation timeout can be outrun by a loaded runner: the publish then
-	// abandons the wait and retries under a NEW tag, so a hardcoded tag-1
-	// confirmation matches nothing and a deadline-free publish waits forever.
-	// Ack whichever tag the publish actually used, under a deadline.
+	// setupReadyClient's 100ms confirm window can be outrun by a loaded runner, so
+	// this test widens it to 5s. As a backstop, should a stall still outlast it, the
+	// publish retries under a NEW tag (maxPublishAttempts is 0, unbounded): ack
+	// whichever tag it actually used, under a deadline.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	destination := testQueueOtel

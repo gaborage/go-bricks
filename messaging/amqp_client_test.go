@@ -3621,7 +3621,6 @@ type publishAttemptCase struct {
 	publishErr   error
 	confirm      *amqp.Confirmation
 	unroutable   bool // the broker returns the publish before acking it
-	shortConfirm bool // the case's subject is the confirm timeout, so it keeps the 15ms wait
 	wantCause    error
 	wantLogCause bool
 	wantTag      uint64 // 0 when the arm carries no delivery tag
@@ -3695,13 +3694,12 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			wantBackoff:  7 * time.Millisecond,
 		},
 		{
-			name:         "confirm_timeout_arm",
-			shortConfirm: true,
-			wantCause:    ErrPublishConfirmTimeout,
-			wantLogMsg:   "Publish confirmation timeout, retrying...",
-			wantMetric:   "timeout",
-			wantSpan:     "confirmation timeout",
-			wantBackoff:  0,
+			name:        "confirm_timeout_arm",
+			wantCause:   ErrPublishConfirmTimeout,
+			wantLogMsg:  "Publish confirmation timeout, retrying...",
+			wantMetric:  "timeout",
+			wantSpan:    "confirmation timeout",
+			wantBackoff: 0,
 		},
 		{
 			name:    "ack_produces_no_arm",
@@ -3719,7 +3717,8 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 				ch.unroutableRemaining = 1
 			}
 			c := newClientWithFakeChannel(t, ch)
-			if !tt.shortConfirm {
+			// Only the confirm-timeout case keeps the helper's 15ms wait: it is its subject.
+			if tt.wantCause != ErrPublishConfirmTimeout {
 				c.connectionTimeout = 5 * time.Second
 			}
 			c.resendDelay = 5 * time.Millisecond
