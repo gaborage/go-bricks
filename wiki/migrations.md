@@ -17503,12 +17503,18 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `#` while the store's database is PostgreSQL; a direct `outbox.NewPostgresStore` or
   `inbox.NewPostgresStore` call with such a name; and tests, log queries or alerts that pin the
   `table "<name>" cannot be queried: the query was refused before it reached the database` text
-  for one of those two keys. Candidates: `git grep -niE '(table_?name|(outbox|inbox)\.NewPostgresStore\()[^#]*#'`
-  over configuration, manifests and Go source, then every constant or variable such a call is
-  handed, and a read of every secret or dynamic source.
-  A comment or URL fragment after the value matches too: a candidate counts only once the table
-  NAME holds `#`. An Oracle store, `inbox.hold.tablename` and
-  `migration/provisioning.NewPostgresStore` are never candidates.
+  for one of those two keys. Candidates, three searches:
+  - `git grep -niE 'table_?name[^#]*#'` over configuration and manifests, plus a read of every
+    secret or dynamic source;
+  - `git grep -nE '(outbox|inbox)\.NewPostgresStore\(' -- '*.go'`, whatever the argument, then
+    trace each argument to its definition, a constant, a variable or a dynamic source;
+  - `git grep -nF 'cannot be queried: the query was refused before it reached the database'`
+    for tests, log queries and alert rules tracked in the repository, and the same text in the
+    alerting system for rules kept outside it.
+
+  A comment or URL fragment after a value matches the first search too: a candidate counts only
+  once the table NAME holds `#`. An Oracle store, `inbox.hold.tablename` (whose probe still
+  reports the old text) and `migration/provisioning.NewPostgresStore` are never candidates.
 - gate: match = a confirmed candidate. no-match = none: a name PostgreSQL's alphabet accepts
   constructs as before, Oracle accepts `#` as before, and no such name could ever run a
   statement on PostgreSQL.
@@ -17535,9 +17541,11 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   the probe; a dynamic-source or per-tenant service constructs on first use and fails there,
   before any statement is built and before the `autocreatetable` DDL runs.
 - apply: rename the table to a name without `#` in every configuration source that feeds the
-  service. Such a ledger never held a row on PostgreSQL (every statement was refused before it
-  reached the server), so nothing moves with it. Re-point any match on the old text at the new
-  one, or at `errors.Is(err, identifier.ErrIdentifierCharset)`.
+  service. The stores never wrote a row to such a ledger on PostgreSQL (every statement was
+  refused before it reached the server), but PostgreSQL accepts `#` in a quoted identifier, so
+  another tool may have inserted rows into it; the rename does not move them, so inspect the old
+  table first. Re-point any match on the old text at the new one, or at
+  `errors.Is(err, identifier.ErrIdentifierCharset)`.
 - verify: `go build ./... && go test ./...`  # then boot the service against PostgreSQL with
   the renamed table and confirm startup is green — and on a dynamic-source or per-tenant
   deployment, publish one event and confirm it lands
