@@ -56,6 +56,7 @@ func TestPublishCreatesSpan(t *testing.T) {
 
 	client, fakeConn, fakeCh := setupReadyClient(t)
 	defer func() { _ = client.Close() }()
+	client.connectionTimeout = 5 * time.Second
 
 	// setupReadyClient leaves maxPublishAttempts at 0 (unbounded) and its 100ms
 	// confirmation timeout can be outrun by a loaded runner: the publish then
@@ -99,6 +100,7 @@ func TestPublishBytesCreatesSpanWithExchangeAttributes(t *testing.T) {
 
 	client, fakeConn, fakeCh := setupReadyClient(t)
 	defer func() { _ = client.Close() }()
+	client.connectionTimeout = 5 * time.Second
 
 	// Same hardcoded-tag hazard as TestPublishCreatesSpan — see the note there.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

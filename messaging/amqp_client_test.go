@@ -594,7 +594,7 @@ func awaitPublishAttempt(t *testing.T, sig <-chan struct{}) {
 
 func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
+	c, ctx := newClientAwaitingConfirm(t, ch)
 
 	// Coordinate via publishAttemptSignal so we know both publishes have
 	// registered their tags before we send confirmations.
@@ -608,14 +608,14 @@ func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 
 	// Publish A — will get DeliveryTag=1
 	go func() {
-		resultA <- c.publishBytes(context.Background(),
+		resultA <- c.publishBytes(ctx,
 			publishOptions{Exchange: "ex", RoutingKey: "a"}, []byte("A"))
 	}()
 	awaitPublishAttempt(t, sig) // A's PublishWithContext fired → tag 1 registered
 
 	// Publish B — will get DeliveryTag=2
 	go func() {
-		resultB <- c.publishBytes(context.Background(),
+		resultB <- c.publishBytes(ctx,
 			publishOptions{Exchange: "ex", RoutingKey: "b"}, []byte("B"))
 	}()
 	awaitPublishAttempt(t, sig) // B's PublishWithContext fired → tag 2 registered
@@ -2420,7 +2420,7 @@ func TestPublishBytesReturnsExhaustedOnPersistentPublishError(t *testing.T) {
 // cause (so the relay classifies it as poison).
 func TestPublishBytesReturnsExhaustedOnPersistentNack(t *testing.T) {
 	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
+	c, ctx := newClientAwaitingConfirm(t, ch)
 	c.maxPublishAttempts = 3
 	c.nackBackoff = time.Millisecond
 
@@ -2430,7 +2430,7 @@ func TestPublishBytesReturnsExhaustedOnPersistentNack(t *testing.T) {
 		amqp.Confirmation{Ack: false, DeliveryTag: 3},
 	)
 
-	err := c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	err := c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	if !errors.Is(err, ErrPublishRetriesExhausted) {
 		t.Fatalf("expected ErrPublishRetriesExhausted, got %v", err)
 	}
@@ -2603,7 +2603,7 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
-		connectionTimeout: 15 * time.Millisecond,
+		connectionTimeout: 5 * time.Second,
 		resendDelay:       5 * time.Millisecond,
 		reInitDelay:       5 * time.Millisecond,
 		reconnectDelay:    5 * time.Millisecond,
@@ -2620,9 +2620,11 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 		}
 	})
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
 	resultCh := make(chan error, 1)
 	go func() {
-		resultCh <- c.publishBytes(context.Background(), publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+		resultCh <- c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
 	}()
 
 	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
@@ -2666,7 +2668,7 @@ func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
-		connectionTimeout: 15 * time.Millisecond,
+		connectionTimeout: 5 * time.Second,
 		resendDelay:       5 * time.Millisecond,
 		reInitDelay:       5 * time.Millisecond,
 		reconnectDelay:    5 * time.Millisecond,
@@ -2683,7 +2685,8 @@ func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 		}
 	})
 
-	ctx := logger.WithRequestCounters(context.Background())
+	ctx, cancel := context.WithTimeout(logger.WithRequestCounters(context.Background()), 5*time.Second)
+	t.Cleanup(cancel)
 
 	resultCh := make(chan error, 1)
 	go func() {
@@ -3620,6 +3623,7 @@ type publishAttemptCase struct {
 	publishErr   error
 	confirm      *amqp.Confirmation
 	unroutable   bool // the broker returns the publish before acking it
+	shortConfirm bool // the case's subject is the confirm timeout, so it keeps the 15ms wait
 	wantCause    error
 	wantLogCause bool
 	wantTag      uint64 // 0 when the arm carries no delivery tag
@@ -3693,12 +3697,13 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 			wantBackoff:  7 * time.Millisecond,
 		},
 		{
-			name:        "confirm_timeout_arm",
-			wantCause:   ErrPublishConfirmTimeout,
-			wantLogMsg:  "Publish confirmation timeout, retrying...",
-			wantMetric:  "timeout",
-			wantSpan:    "confirmation timeout",
-			wantBackoff: 0,
+			name:         "confirm_timeout_arm",
+			shortConfirm: true,
+			wantCause:    ErrPublishConfirmTimeout,
+			wantLogMsg:   "Publish confirmation timeout, retrying...",
+			wantMetric:   "timeout",
+			wantSpan:     "confirmation timeout",
+			wantBackoff:  0,
 		},
 		{
 			name:    "ack_produces_no_arm",
@@ -3716,6 +3721,9 @@ func TestPublishAttemptClassifiesTheOutcome(t *testing.T) {
 				ch.unroutableRemaining = 1
 			}
 			c := newClientWithFakeChannel(t, ch)
+			if !tt.shortConfirm {
+				c.connectionTimeout = 5 * time.Second
+			}
 			c.resendDelay = 5 * time.Millisecond
 			c.nackBackoff = 7 * time.Millisecond
 			if tt.confirm != nil {
