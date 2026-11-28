@@ -158,6 +158,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          DRIFT_LABEL: cli-tag-drift
         run: |
           set -euo pipefail
           # At vX publish time the CLI tag for vX legitimately doesn't exist yet
@@ -175,11 +176,22 @@ jobs:
           echo "::warning::$msg"
           echo "$msg" >> "$GITHUB_STEP_SUMMARY"
           title="chore(migrate): cut the tools/migration CLI tag (stale since ${latest_cli:-<none>})"
-          existing="$(gh issue list --state open --search '"chore(migrate): cut the tools/migration CLI tag" in:title author:app/github-actions' --json number --jq '.[0].number' || true)"
-          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
-            gh issue comment "$existing" --body "$msg" || echo "issue comment failed (non-fatal)"
+          if ! gh label create "$DRIFT_LABEL" --force --color d93f0b \
+            --description "Open while the go-bricks-migrate CLI tag trails the framework release"; then
+            echo "::warning::could not ensure the $DRIFT_LABEL label (non-fatal)"
+          fi
+          # REST listing, not `gh issue list --label`: that goes through the search index, which can lag.
+          if ! nums="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$DRIFT_LABEL&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | .number')"; then
+            echo "::warning::could not look up an open $DRIFT_LABEL issue (non-fatal); this drift is tracked only in the step summary"; exit 0
+          fi
+          existing="$(printf '%s\n' "$nums" | sed -n 1p)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$msg" || echo "::warning::drift issue comment failed (non-fatal)"
           else
-            gh issue create --title "$title" --body "$msg" || echo "issue create failed (non-fatal)"
+            # Never open it unlabeled: migrate-cli-tag.yml finds and closes drift issues by the label alone.
+            gh issue create --title "$title" --body "$msg" --label "$DRIFT_LABEL" \
+              || echo "::warning::could not open the $DRIFT_LABEL drift issue (non-fatal); this drift is tracked only in the step summary"
           fi
 
   # Must follow publish: release-please opens nothing while the merged Release PR is labeled pending.
