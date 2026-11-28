@@ -1332,10 +1332,11 @@ func TestModuleInitAllowsConfiguredSuperStreamsWhenDisabled(t *testing.T) {
 		"a disabled outbox must boot whatever its stream configuration says")
 }
 
-// TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521: a probe
-// the builder refused never reached the database, so the failure must not tell
-// the operator to run migrations or enable auto-create.
-func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
+// TestModuleInitRefusesVendorInvalidTableNameAtConstruction pins #1543: a table
+// name the PostgreSQL builder would refuse fails Init at store construction,
+// before any probe, and like #1521's build-stage refusal it must not tell the
+// operator to run migrations or enable auto-create.
+func TestModuleInitRefusesVendorInvalidTableNameAtConstruction(t *testing.T) {
 	m := NewModule()
 	cfg := outboxTestConfig()
 	cfg.Outbox.TableName = "ev#ents"
@@ -1347,7 +1348,7 @@ func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
-		`outbox: table "ev#ents" cannot be queried: the query was refused before it reached the database`)
+		`outbox: failed to create store: outbox: table name "ev#ents" is not valid for postgresql`)
 	assert.NotContains(t, err.Error(), "run migrations")
 	assert.NotContains(t, err.Error(), "outbox.autocreatetable")
 	assert.NotContains(t, err.Error(), "is not usable")

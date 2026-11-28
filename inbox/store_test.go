@@ -160,15 +160,15 @@ func TestValidateTableNameConfigBoundUnchanged(t *testing.T) {
 }
 
 // TestStoreMarkProcessedBuildRefusalIsABuildStageExecError pins #1521's premise
-// for the ledger's one build site: a table name the validator accepts but the
-// builder refuses reports the build stage, sentinel still reachable.
+// for the ledger's one build site: a table name the builder refuses reports the
+// build stage, sentinel still reachable. The constructor refuses this name now,
+// so the store is built around it to reach the builder.
 func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
-	store, err := NewPostgresStore("ev#ents")
-	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
+	store := &postgresStore{tableName: "ev#ents", qb: database.NewQueryBuilder(dbtypes.PostgreSQL)}
 	ctx := context.Background()
 	_, tx := permissiveDB(dbtypes.PostgreSQL)
 
-	_, err = store.MarkProcessed(ctx, tx, Record{TenantID: "acme", EventID: "e-1", ProcessedAt: fixedAt})
+	_, err := store.MarkProcessed(ctx, tx, Record{TenantID: "acme", EventID: "e-1", ProcessedAt: fixedAt})
 
 	require.Error(t, err)
 	var execErr *database.ExecError
@@ -176,4 +176,43 @@ func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
 	assert.Equal(t, database.StageBuild, execErr.Stage)
 	assert.Equal(t, "inbox postgres: build mark processed failed", execErr.Op)
 	assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
+}
+
+// TestValidateTableNameForVendorCharset pins the name against the STORE vendor's
+// alphabet at construction. The decisive pair is the `#` name: PostgreSQL refuses it
+// here, with the identifier sentinel, where it used to construct and fail at the first
+// query, while Oracle accepts it. An Oracle-invalid name never reaches this check: the
+// shared sqlid grammar is Oracle's and refuses it first, without the sentinel.
+func TestValidateTableNameForVendorCharset(t *testing.T) {
+	tests := []struct {
+		name     string
+		newStore func(string) (Store, error)
+		table    string
+		refused  bool
+	}{
+		{"postgres_refuses_hash", NewPostgresStore, "ev#ents", true},
+		{"postgres_accepts_dollar", NewPostgresStore, "ev$ents", false},
+		{"oracle_accepts_hash", NewOracleStore, "ev#ents", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := tt.newStore(tt.table)
+			if !tt.refused {
+				require.NoError(t, err)
+				require.NotNil(t, store)
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, store)
+			assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
+			assert.Contains(t, err.Error(), fmt.Sprintf("inbox: table name %q is not valid for %s", tt.table, dbtypes.PostgreSQL))
+		})
+	}
+}
+
+func TestNewOracleStoreRefusesNameOutsideOracleGrammar(t *testing.T) {
+	store, err := NewOracleStore("ev ents")
+	require.Error(t, err)
+	assert.Nil(t, store)
+	assert.Contains(t, err.Error(), "invalid identifier characters")
 }

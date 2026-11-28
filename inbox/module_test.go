@@ -543,52 +543,52 @@ func TestRegisterJobsWithoutAHoldAddsNoDrain(t *testing.T) {
 	assert.NotContains(t, reg.fixedRateJobs, holdDrainJobID)
 }
 
-// TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521 for both
-// inbox probes: a table name the builder refuses never reached the database, so
+// TestModuleInitBuildStageProbeFailureIsAConfigurationFault pins #1521 for the
+// hold probe: a table name the builder refuses never reached the database, so
 // the failure must not tell the operator to run migrations or enable
-// auto-create, and must not also claim the table is unusable.
+// auto-create, and must not also claim the table is unusable. The ledger table
+// no longer reaches its probe with such a name: see
+// TestModuleInitRefusesVendorInvalidLedgerTableNameAtConstruction.
 func TestModuleInitBuildStageProbeFailureIsAConfigurationFault(t *testing.T) {
-	tests := []struct {
-		name  string
-		setup func(m *Module, deps *app.ModuleDeps)
-	}{
-		{
-			name: "ledger_table",
-			setup: func(_ *Module, deps *app.ModuleDeps) {
-				deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true, TableName: "ev#ents"}}
-			},
-		},
-		{
-			name: "hold_table",
-			setup: func(m *Module, deps *app.ModuleDeps) {
-				m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return probeReadyDB(), nil }, nil)
-				deps.Config = &config.Config{
-					Inbox: config.InboxConfig{
-						Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyShared,
-						Hold: config.InboxHoldConfig{Enabled: true, TableName: "ev#ents"},
-					},
-				}
-			},
+	m := NewModule()
+	deps := testDeps()
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) { return probeReadyDB(), nil }, nil)
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{
+			Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyShared,
+			Hold: config.InboxHoldConfig{Enabled: true, TableName: "ev#ents"},
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := NewModule()
-			deps := testDeps()
-			tt.setup(m, deps)
+	err := m.Init(deps)
 
-			err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		`inbox: table "ev#ents" cannot be queried: the query was refused before it reached the database`)
+	assert.NotContains(t, err.Error(), "run migrations")
+	assert.NotContains(t, err.Error(), "inbox.autocreatetable")
+	assert.NotContains(t, err.Error(), "is not usable")
+	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
+}
 
-			require.Error(t, err)
-			assert.Contains(t, err.Error(),
-				`inbox: table "ev#ents" cannot be queried: the query was refused before it reached the database`)
-			assert.NotContains(t, err.Error(), "run migrations")
-			assert.NotContains(t, err.Error(), "inbox.autocreatetable")
-			assert.NotContains(t, err.Error(), "is not usable")
-			assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
-		})
-	}
+// TestModuleInitRefusesVendorInvalidLedgerTableNameAtConstruction pins #1543: a
+// ledger table name the PostgreSQL builder would refuse fails Init at store
+// construction, before any probe, and like #1521's build-stage refusal it must
+// not tell the operator to run migrations or enable auto-create.
+func TestModuleInitRefusesVendorInvalidLedgerTableNameAtConstruction(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true, TableName: "ev#ents"}}
+
+	err := m.Init(deps)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		`inbox: failed to create store: inbox: table name "ev#ents" is not valid for postgresql`)
+	assert.NotContains(t, err.Error(), "run migrations")
+	assert.NotContains(t, err.Error(), "inbox.autocreatetable")
+	assert.NotContains(t, err.Error(), "is not usable")
+	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
 }
 
 // cfg is taken by pointer: InboxConfig grew past the by-value threshold when the

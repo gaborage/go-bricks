@@ -162,3 +162,44 @@ func TestStoreSchemaSegmentBound(t *testing.T) {
 		})
 	}
 }
+
+// TestStoreTableNameCharset pins every segment of the table name against the STORE
+// vendor's alphabet at construction. The decisive pair is the `#` name: PostgreSQL
+// refuses it here, with the identifier sentinel, where it used to construct and fail at
+// the first query, while Oracle accepts it. An Oracle-invalid name never reaches this
+// check: the shared sqlid grammar is Oracle's and refuses it first, without the sentinel.
+func TestStoreTableNameCharset(t *testing.T) {
+	tests := []struct {
+		name     string
+		newStore func(string) (Store, error)
+		table    string
+		refused  bool
+	}{
+		{name: "postgresql_refuses_hash_in_table_segment", newStore: NewPostgresStore, table: "ev#ents", refused: true},
+		{name: "postgresql_refuses_hash_in_schema_segment", newStore: NewPostgresStore, table: "sch#ema.gobricks_outbox", refused: true},
+		{name: "postgresql_accepts_dollar", newStore: NewPostgresStore, table: "sch$ema.ev$ents"},
+		{name: "oracle_accepts_hash_in_both_segments", newStore: NewOracleStore, table: "sch#ema.ev#ents"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := tt.newStore(tt.table)
+			if !tt.refused {
+				require.NoError(t, err)
+				assert.NotNil(t, store)
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, store)
+			assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
+			assert.Contains(t, err.Error(), fmt.Sprintf("outbox: table name %q is not valid for %s", tt.table, dbtypes.PostgreSQL))
+		})
+	}
+}
+
+func TestNewOracleStoreRefusesNameOutsideOracleGrammar(t *testing.T) {
+	store, err := NewOracleStore("ev ents")
+	require.Error(t, err)
+	assert.Nil(t, store)
+	assert.Contains(t, err.Error(), "invalid identifier characters")
+}

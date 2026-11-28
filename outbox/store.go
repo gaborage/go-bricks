@@ -62,23 +62,28 @@ func maxSchemaSegmentLenFor(vendor dbtypes.Vendor) int {
 	return dbident.MaxPostgreSQLBytes
 }
 
-// validateTableNameForVendor is validateTableName plus the schema-segment bound of the
-// vendor the store actually talks to. Only the store constructors call it: they each know
-// their vendor, while the config-time check does not, and the shared grammar judges every
-// segment at Oracle's 128 bytes. Without it a 64-to-128-byte schema boots on PostgreSQL
-// and is refused later, inside the first ToSQL. Issue #1503 folds this into a shared
-// name-budget helper alongside the inbox's twin.
+// validateTableNameForVendor is validateTableName plus the schema-segment bound and the
+// per-segment alphabet of the vendor the store actually talks to. Only the store
+// constructors call it: they each know their vendor, while the config-time check does
+// not, and the shared grammar judges every segment by Oracle's 128 bytes and Oracle's
+// alphabet. Without it a 64-to-128-byte schema, or a `#` in either segment, boots on
+// PostgreSQL and is refused later, inside the first ToSQL. The length checks run first,
+// as at the builder doors. Issue #1503 folds the length half into a shared name-budget
+// helper alongside the inbox's twin.
 func validateTableNameForVendor(vendor dbtypes.Vendor, name string) error {
 	if err := validateTableName(name); err != nil {
 		return err
 	}
-	schema, _, qualified := strings.Cut(name, ".")
-	if !qualified {
-		return nil
+	if schema, _, qualified := strings.Cut(name, "."); qualified {
+		if maxLen := maxSchemaSegmentLenFor(vendor); len(schema) > maxLen {
+			return fmt.Errorf("outbox: table name schema segment %q is %d bytes; the maximum for %s is %d",
+				schema, len(schema), vendor, maxLen)
+		}
 	}
-	if maxLen := maxSchemaSegmentLenFor(vendor); len(schema) > maxLen {
-		return fmt.Errorf("outbox: table name schema segment %q is %d bytes; the maximum for %s is %d",
-			schema, len(schema), vendor, maxLen)
+	for _, segment := range strings.Split(name, ".") {
+		if err := dbident.ValidateCharset(vendor, segment); err != nil {
+			return fmt.Errorf("outbox: table name %q is not valid for %s: %w", name, vendor, err)
+		}
 	}
 	return nil
 }
