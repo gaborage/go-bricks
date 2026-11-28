@@ -17503,10 +17503,12 @@ ADR-065 made `keystore.secretminlength` a tri-state pointer and kept `0` as a
   `#` while the store's database is PostgreSQL; a direct `outbox.NewPostgresStore` or
   `inbox.NewPostgresStore` call with such a name; and tests, log queries or alerts that pin the
   `table "<name>" cannot be queried: the query was refused before it reached the database` text
-  for one of those two keys. Candidates: `git grep -niE '(table_?name|New(Postgres|Oracle)Store\()[^#]*#'`
+  for one of those two keys. Candidates: `git grep -niE '(table_?name|(outbox|inbox)\.NewPostgresStore\()[^#]*#'`
   over configuration, manifests and Go source, then every constant or variable such a call is
   handed, and a read of every secret or dynamic source.
-  A YAML comment after the value matches too: a candidate counts only once the VALUE holds `#`.
+  A comment or URL fragment after the value matches too: a candidate counts only once the table
+  NAME holds `#`. An Oracle store, and `migration/provisioning.NewPostgresStore`, are never
+  candidates.
 - gate: match = a confirmed candidate. no-match = none: a name PostgreSQL's alphabet accepts
   constructs as before, Oracle accepts `#` as before, and no such name could ever run a
   statement on PostgreSQL.
