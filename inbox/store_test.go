@@ -16,6 +16,7 @@ import (
 	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 // updateGoldens regenerates testdata/sql/*.golden — the SQL each inbox and hold
@@ -178,41 +179,19 @@ func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
 	assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 }
 
-// TestValidateTableNameForVendorCharset pins the name against the store vendor's
-// alphabet: `#` is refused on PostgreSQL and accepted on Oracle.
+var ledgerStores = testutil.LedgerStoreConstructors[Store]{Module: "inbox", Postgres: NewPostgresStore, Oracle: NewOracleStore}
+
+// TestValidateTableNameForVendorCharset pins every segment of the table name against the store
+// vendor's alphabet: `#` is refused on PostgreSQL and accepted on Oracle.
 func TestValidateTableNameForVendorCharset(t *testing.T) {
-	tests := []struct {
-		name     string
-		newStore func(string) (Store, error)
-		table    string
-		refused  bool
-	}{
-		{name: "postgresql_refuses_hash", newStore: NewPostgresStore, table: "ev#ents", refused: true},
-		{name: "postgresql_accepts_dollar", newStore: NewPostgresStore, table: "ev$ents"},
-		{name: "oracle_accepts_hash", newStore: NewOracleStore, table: "ev#ents"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store, err := tt.newStore(tt.table)
-			if !tt.refused {
-				require.NoError(t, err)
-				require.NotNil(t, store)
-				return
-			}
-			require.Error(t, err)
-			assert.Nil(t, store)
-			require.ErrorIs(t, err, dbident.ErrIdentifierCharset)
-			assert.Contains(t, err.Error(), fmt.Sprintf("inbox: table name %q is not valid for %s", tt.table, dbtypes.PostgreSQL))
-		})
-	}
+	ledgerStores.AssertTableNameCharset(t, []testutil.LedgerTableNameCase{
+		{Name: "postgresql_refuses_hash", Table: "ev#ents", Refused: true},
+		{Name: "postgresql_accepts_dollar", Table: "ev$ents"},
+		{Name: "oracle_accepts_hash", Oracle: true, Table: "ev#ents"},
+	})
 }
 
-// TestNewOracleStoreRefusesNameOutsideOracleGrammar pins that an Oracle-invalid
-// name keeps the shared sqlid refusal, which carries no identifier sentinel.
 func TestNewOracleStoreRefusesNameOutsideOracleGrammar(t *testing.T) {
-	store, err := NewOracleStore("ev ents")
-	require.Error(t, err)
-	assert.Nil(t, store)
-	assert.Contains(t, err.Error(), "invalid identifier characters")
-	assert.NotErrorIs(t, err, dbident.ErrIdentifierCharset)
+	ledgerStores.AssertOracleGrammarRefusal(t)
 }
+

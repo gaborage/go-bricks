@@ -13,9 +13,9 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
@@ -1346,13 +1346,8 @@ func TestModuleInitRefusesVendorInvalidTableNameAtConstruction(t *testing.T) {
 
 	err := m.Init(deps)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(),
+	testutil.AssertConfigurationFault(t, err, "outbox",
 		`outbox: failed to create store: outbox: table name "ev#ents" is not valid for postgresql`)
-	assert.NotContains(t, err.Error(), "run migrations")
-	assert.NotContains(t, err.Error(), "outbox.autocreatetable")
-	assert.NotContains(t, err.Error(), "is not usable")
-	assert.ErrorIs(t, err, identifier.ErrIdentifierCharset)
 }
 
 // TestRegisterJobsRegistersTheRelayAsAWindowedJob pins that the relay reaches the scheduler
