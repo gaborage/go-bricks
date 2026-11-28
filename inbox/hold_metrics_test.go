@@ -10,6 +10,14 @@ import (
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
+// The emitted gauge names, spelled out rather than read from the production
+// constants, so a rename fails here.
+const (
+	wantMetricHoldTenants   = "inbox.hold.tenants"
+	wantMetricHoldRows      = "inbox.hold.rows"
+	wantMetricHoldOldestAge = "inbox.hold.oldest_age"
+)
+
 // TestHoldGaugesReportTheDrainsSnapshot pins what an operator sees: the tenants
 // held, the rows behind them, and how old the oldest hold is — read from the
 // snapshot the drain wrote, never from the database, because a gauge callback
@@ -27,9 +35,9 @@ func TestHoldGaugesReportTheDrainsSnapshot(t *testing.T) {
 
 	rm := mp.Collect(t)
 
-	obtest.AssertMetricValue(t, rm, metricHoldTenants, int64(2))
-	obtest.AssertMetricValue(t, rm, metricHoldRows, int64(5))
-	age := obtest.FindMetric(rm, metricHoldOldestAge)
+	obtest.AssertMetricValue(t, rm, wantMetricHoldTenants, int64(2))
+	obtest.AssertMetricValue(t, rm, wantMetricHoldRows, int64(5))
+	age := obtest.FindMetric(rm, wantMetricHoldOldestAge)
 	require.NotNil(t, age, "the oldest-age gauge is reported")
 }
 
@@ -45,7 +53,7 @@ func TestHoldGaugesReportNothingBeforeAPass(t *testing.T) {
 
 	rm := mp.Collect(t)
 
-	assert.Nil(t, obtest.FindMetric(rm, metricHoldTenants),
+	assert.Nil(t, obtest.FindMetric(rm, wantMetricHoldTenants),
 		"no pass, no reading")
 }
 
@@ -61,7 +69,7 @@ func TestHoldGaugesStopAfterUnregister(t *testing.T) {
 	require.NoError(t, unregister())
 	rm := mp.Collect(t)
 
-	assert.Nil(t, obtest.FindMetric(rm, metricHoldTenants),
+	assert.Nil(t, obtest.FindMetric(rm, wantMetricHoldTenants),
 		"an unregistered callback reports nothing")
 }
 
