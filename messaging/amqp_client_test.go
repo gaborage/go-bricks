@@ -2620,8 +2620,7 @@ func TestPublishBytesWaitsForReadyClient(t *testing.T) {
 		}
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	t.Cleanup(cancel)
+	ctx := callerContext(t, 5*time.Second)
 	resultCh := make(chan error, 1)
 	go func() {
 		resultCh <- c.publishBytes(ctx, publishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
@@ -2685,8 +2684,7 @@ func TestPublishBytesExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
 		}
 	})
 
-	ctx, cancel := context.WithTimeout(logger.WithRequestCounters(context.Background()), 5*time.Second)
-	t.Cleanup(cancel)
+	ctx := logger.WithRequestCounters(callerContext(t, 5*time.Second))
 
 	resultCh := make(chan error, 1)
 	go func() {
