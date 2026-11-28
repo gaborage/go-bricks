@@ -180,4 +180,3 @@ func TestStoreTableNameCharset(t *testing.T) {
 func TestNewOracleStoreRefusesNameOutsideOracleGrammar(t *testing.T) {
 	ledgerStores.AssertOracleGrammarRefusal(t)
 }
-
