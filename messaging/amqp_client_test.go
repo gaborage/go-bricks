@@ -818,7 +818,13 @@ func TestDispatchConfirmsRecordsAReturnBeforeRoutingItsAck(t *testing.T) {
 // so callers can retry, log, or escalate — same contract as ConsumeFromQueue.
 func TestPublishNotReadyReturnsErrNotConnected(t *testing.T) {
 	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
-	err := awaitResult(t, publishAsync(context.Background(), c))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan error, 1)
+	go func() {
+		result <- c.publishBytes(ctx, publishOptions{RoutingKey: "q"}, []byte("x"))
+	}()
+	err := awaitResult(t, result)
 	if !errors.Is(err, errNotConnected) {
 		t.Fatalf("expected errNotConnected when not ready, got %v", err)
 	}
