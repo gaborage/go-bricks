@@ -178,11 +178,13 @@ jobs:
           title="chore(migrate): cut the tools/migration CLI tag (stale since ${latest_cli:-<none>})"
           if ! gh label create "$DRIFT_LABEL" --force --color d93f0b \
             --description "Open while the go-bricks-migrate CLI tag trails the framework release"; then
-            echo "::warning::could not ensure the $DRIFT_LABEL label (non-fatal); a new drift issue is opened unlabeled and must be labeled by hand"
+            echo "::warning::could not ensure the $DRIFT_LABEL label (non-fatal)"
             label_ok=0
           fi
-          if ! existing="$(gh issue list --state open --label "$DRIFT_LABEL" --json number --jq '.[0].number // empty')"; then
-            echo "::warning::could not look up an open $DRIFT_LABEL issue (non-fatal)"; exit 0
+          # REST listing, not `gh issue list --label`: that goes through the search index, which can lag.
+          if ! existing="$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$DRIFT_LABEL" \
+            --jq '[.[] | select(.pull_request == null)][0].number // empty')"; then
+            echo "::warning::could not look up an open $DRIFT_LABEL issue (non-fatal); this drift is tracked only in the step summary"; exit 0
           fi
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$msg" || echo "::warning::drift issue comment failed (non-fatal)"
@@ -190,6 +192,7 @@ jobs:
             gh issue create --title "$title" --body "$msg" --label "$DRIFT_LABEL" \
               || echo "::warning::drift issue create failed (non-fatal)"
           else
+            echo "::warning::opening the drift issue without the $DRIFT_LABEL label; label it by hand so the lookups find it"
             gh issue create --title "$title" --body "$msg" || echo "::warning::drift issue create failed (non-fatal)"
           fi
 

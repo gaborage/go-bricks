@@ -40,7 +40,9 @@ jobs:
             echo "CLI $cli_ver still trails framework $latest_fw — leaving any drift issue open"; exit 0
           fi
           echo "CLI $cli_ver is fresh vs framework $latest_fw — closing any open drift issue"
-          nums="$(gh issue list --state open --label "$DRIFT_LABEL" --json number --jq '.[].number')"
+          # REST listing, not `gh issue list --label`: that goes through the search index, which can lag.
+          nums="$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$DRIFT_LABEL&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | .number')"
           if [ -z "$nums" ]; then
             echo "no open drift issue (ok)"; exit 0
           fi
