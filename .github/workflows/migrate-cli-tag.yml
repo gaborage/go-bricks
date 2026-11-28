@@ -41,8 +41,10 @@ jobs:
           fi
           echo "CLI $cli_ver is fresh vs framework $latest_fw — closing any open drift issue"
           # REST listing, not `gh issue list --label`: that goes through the search index, which can lag.
-          nums="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$DRIFT_LABEL&per_page=100" \
-            --jq '.[] | select(.pull_request == null) | .number')"
+          if ! nums="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&labels=$DRIFT_LABEL&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | .number')"; then
+            echo "::error::could not list open $DRIFT_LABEL issues; re-run this job to close them"; exit 1
+          fi
           if [ -z "$nums" ]; then
             echo "no open drift issue (ok)"; exit 0
           fi
