@@ -78,7 +78,7 @@ func scanPostgresRecord(rows *sql.Rows) (Record, error) {
 // door and the statements interpolate no value.
 //
 // SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
-// table name (validateTableName, ADR-031 grammar) and sqlid's derivations of it are interpolated; no caller value
+// table name (validateTableNameForVendor, ADR-031 grammar) and sqlid's derivations of it are interpolated; no caller value
 func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	idxBase := sqlid.IndexBaseName(s.tableName)
 

@@ -81,9 +81,10 @@ func maxTableNameLenFor(vendor dbtypes.Vendor) int {
 	return maxTableNameLen
 }
 
-// validateTableNameForVendor is validateTableName plus the bound of the vendor
-// the store actually talks to. Only the store constructors call it: they each
-// know their vendor, while the config-time check does not.
+// validateTableNameForVendor is validateTableName plus the bound and the
+// alphabet of the vendor the store actually talks to. Only the store
+// constructors call it: they each know their vendor, while the config-time
+// check does not.
 func validateTableNameForVendor(vendor dbtypes.Vendor, name string) error {
 	if err := validateTableName(name); err != nil {
 		return err
@@ -91,6 +92,9 @@ func validateTableNameForVendor(vendor dbtypes.Vendor, name string) error {
 	if maxLen := maxTableNameLenFor(vendor); len(name) > maxLen {
 		return fmt.Errorf("inbox: table name %q is too long for %s (max %d; derived identifiers must fit the vendor's %d-byte cap)",
 			name, vendor, maxLen, maxLen+inboxLongestDerivedAffix)
+	}
+	if err := dbident.ValidateCharset(vendor, name); err != nil {
+		return fmt.Errorf("inbox: table name %q is not valid for %s: %w", name, vendor, err)
 	}
 	return nil
 }

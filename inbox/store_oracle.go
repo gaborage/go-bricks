@@ -100,7 +100,7 @@ func (s *oracleStore) DeleteProcessed(ctx context.Context, db dbtypes.Interface,
 // CreateTable errors as warnings, so existing objects are handled gracefully.
 //
 // SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
-// table name (validateTableName) is interpolated, for the table, its constraint and its index
+// table name (validateTableNameForVendor) is interpolated, for the table, its constraint and its index
 func (s *oracleStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	if _, err := db.Exec(ctx, fmt.Sprintf(oracleCreateTableSQL, s.tableName, s.tableName)); err != nil {
 		return fmt.Errorf("inbox oracle: create table failed: %w", err)

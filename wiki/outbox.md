@@ -439,7 +439,9 @@ every identifier derived from it stays distinct under PostgreSQL's 63-byte trunc
 schema prefix spends its own budget, not the table's: nothing the store derives decorates
 it, so it is bounded by the raw identifier cap of the store's vendor — 63 bytes on
 PostgreSQL, 128 on Oracle — and an over-long one is refused when the store is constructed
-([ADR-100](adr_100_vendor_identifier_grammar_behind_renderer.md)).
+([ADR-100](adr_100_vendor_identifier_grammar_behind_renderer.md)). Every segment must also be
+in the store vendor's alphabet: `#` is an identifier character on Oracle and refused at
+construction on PostgreSQL, for `inbox.tablename` too.
 
 **The persisted tenant stamp is rehydrated onto the publish context**, never forwarded as a
 stored header: `Publish` persists it in the row, the relay strips it from the headers and
@@ -580,10 +582,13 @@ is still a write and will fail against a read-only replica) — and fails `Init`
   inbox: `DELETE`). Missing table → run migrations, or set
   `outbox.autocreatetable`/`inbox.autocreatetable` where the role also holds DDL rights. Privilege
   failure → grant that privilege; auto-creation does not help.
+- `failed to create store: … table name %q is not valid for <vendor>` — the configured
+  `outbox.tablename`/`inbox.tablename` holds a character the store's vendor refuses (`#` on
+  PostgreSQL), so the store is refused at construction, before any probe; fix the name.
 - `table %q cannot be queried: the query was refused before it reached the database` — the query
   builder rejected the configured table name (a character the configured vendor's grammar refuses,
   e.g. one PostgreSQL does not accept), so neither migrations nor auto-creation applies; fix
-  `outbox.tablename`/`inbox.tablename`, or `inbox.hold.tablename` when the hold's probe raised it.
+  `inbox.hold.tablename`, whose probe raises it (the ledger names are refused at construction first).
 - `database resolver returned a nil database` — a resolver contract violation (`(nil, nil)`).
 
 Before the database probe, the outbox refuses a relay that could never publish (#366), with

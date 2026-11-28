@@ -10,6 +10,7 @@ import (
 
 	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 func TestValidateTableNameValid(t *testing.T) {
@@ -161,4 +162,21 @@ func TestStoreSchemaSegmentBound(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.want)
 		})
 	}
+}
+
+var ledgerStores = testutil.LedgerStoreConstructors[Store]{Module: "outbox", Postgres: NewPostgresStore, Oracle: NewOracleStore}
+
+// TestStoreTableNameCharset pins every segment of the table name against the store
+// vendor's alphabet: `#` is refused on PostgreSQL and accepted on Oracle.
+func TestStoreTableNameCharset(t *testing.T) {
+	ledgerStores.AssertTableNameCharset(t, []testutil.LedgerTableNameCase{
+		{Name: "postgresql_refuses_hash_in_table_segment", Table: "ev#ents", Refused: true},
+		{Name: "postgresql_refuses_hash_in_schema_segment", Table: "sch#ema.gobricks_outbox", Refused: true},
+		{Name: "postgresql_accepts_dollar", Table: "sch$ema.ev$ents"},
+		{Name: "oracle_accepts_hash_in_both_segments", Oracle: true, Table: "sch#ema.ev#ents"},
+	})
+}
+
+func TestNewOracleStoreRefusesNameOutsideOracleGrammar(t *testing.T) {
+	ledgerStores.AssertOracleGrammarRefusal(t)
 }

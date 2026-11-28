@@ -9,6 +9,28 @@
   (the renderer seam this extends)
 - **Issue**: #1202; the byte-cap half landed in #1437
 
+## Amendment (2026-11-27): the ledger stores judge the table name by the store vendor's alphabet
+
+The schema-segment amendment below made the store constructors the vendor-aware gate for
+LENGTH only. #1543 adds the CHARSET half at the same seam: `validateTableNameForVendor` in
+`outbox/store.go` and `inbox/store.go` now runs `identifier.ValidateCharset` with the store's
+own vendor on every segment of the configured table name (both segments of a qualified outbox
+name; the inbox name is unqualified), after the length checks, the order the builder doors use.
+A name such as `ev#ents` used to construct a PostgreSQL store and be refused later, by the
+builder inside the first statement, which #1521 worded as a build-stage probe failure; it is now
+refused at construction as `<module>: table name "ev#ents" is not valid for postgresql: …`,
+matching `identifier.ErrIdentifierCharset` under `errors.Is`. Construction is lazy, so where it
+lands follows the amendment below: `Init` on a static single-tenant or shared-ledger deployment,
+the first use of the store otherwise, in both cases before any statement is built.
+
+Only PostgreSQL tightens. `sqlid.ValidateTableName` runs first and judges every segment by
+Oracle's alphabet, so on Oracle the new check refuses nothing, and an Oracle-invalid name keeps
+sqlid's refusal, which does not carry the sentinel. The split this ADR drew holds unchanged:
+`sqlid.ValidateTableName` and the config-time `validateTableName` stay vendor-blind and still
+accept `#`, because their callers have no vendor in scope. The hold store's table name is not
+vendor-aware and is not touched, so its probe remains the one ledger path that reaches the
+build-stage wording. The constructor signatures do not move — only their refusal set widens.
+
 ## Amendment (2026-09-06): the outbox store bounds its schema segment by the store's vendor
 
 The byte-cap amendment below closed the builder half and the inbox store's

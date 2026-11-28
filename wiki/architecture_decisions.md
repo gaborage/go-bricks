@@ -3226,6 +3226,10 @@ unknown vendor inherits PostgreSQL's grammar by embedding, and Oracle is unchang
 `validateInsertColumns` funnel (#1449); and the outbox store bounds its schema segment by the
 store's vendor (#1495). See [migrations.md](migrations.md) `[C64.3]`.
 
+Amended 2026-11-27 (#1543): the outbox and inbox store constructors also judge every segment of
+the table name by the store vendor's alphabet, so a `#` name is refused at construction on
+PostgreSQL instead of at the first statement. See `[C75.1]`.
+
 ---
 
 ### [ADR-099: One Column Order for Map-Shaped Doors, One Inequality Spelling for the Filter Families](adr_099_one_column_order_one_inequality_spelling.md)

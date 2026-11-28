@@ -137,7 +137,9 @@ func (s *sqlStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, 
 	f := s.qb.Filter()
 	lockSQL, lockArgs, err := s.qb.Select("id").From(s.leaderTable).Where(f.Eq("id", 1)).ForUpdateNoWait().ToSQL()
 	if err != nil {
-		// StageBuild is what the startup probes read through tenantstore.ProbeFailureError.
+		// StageBuild is what tenantstore.ProbeFailureError classifies. The constructors refuse
+		// the names the builder's current charset and length rules refuse, so this is the
+		// defensive path.
 		return nil, &database.ExecError{Op: s.op("build leader lock"), Stage: database.StageBuild, Err: err}
 	}
 	// SECURITY: Manual SQL review completed - literal `1`, no identifier or input

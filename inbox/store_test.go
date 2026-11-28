@@ -16,6 +16,7 @@ import (
 	dbident "github.com/gaborage/go-bricks/database/identifier"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 // updateGoldens regenerates testdata/sql/*.golden — the SQL each inbox and hold
@@ -160,15 +161,15 @@ func TestValidateTableNameConfigBoundUnchanged(t *testing.T) {
 }
 
 // TestStoreMarkProcessedBuildRefusalIsABuildStageExecError pins #1521's premise
-// for the ledger's one build site: a table name the validator accepts but the
-// builder refuses reports the build stage, sentinel still reachable.
+// for the ledger's one build site: a table name the builder refuses reports the
+// build stage, sentinel still reachable. Built as a literal: the constructor
+// refuses this name.
 func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
-	store, err := NewPostgresStore("ev#ents")
-	require.NoError(t, err, "the name validator accepts this name; only the builder refuses it")
+	store := &postgresStore{tableName: "ev#ents", qb: database.NewQueryBuilder(dbtypes.PostgreSQL)}
 	ctx := context.Background()
 	_, tx := permissiveDB(dbtypes.PostgreSQL)
 
-	_, err = store.MarkProcessed(ctx, tx, Record{TenantID: "acme", EventID: "e-1", ProcessedAt: fixedAt})
+	_, err := store.MarkProcessed(ctx, tx, Record{TenantID: "acme", EventID: "e-1", ProcessedAt: fixedAt})
 
 	require.Error(t, err)
 	var execErr *database.ExecError
@@ -176,4 +177,20 @@ func TestStoreMarkProcessedBuildRefusalIsABuildStageExecError(t *testing.T) {
 	assert.Equal(t, database.StageBuild, execErr.Stage)
 	assert.Equal(t, "inbox postgres: build mark processed failed", execErr.Op)
 	assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
+}
+
+var ledgerStores = testutil.LedgerStoreConstructors[Store]{Module: "inbox", Postgres: NewPostgresStore, Oracle: NewOracleStore}
+
+// TestValidateTableNameForVendorCharset pins every segment of the table name against the store
+// vendor's alphabet: `#` is refused on PostgreSQL and accepted on Oracle.
+func TestValidateTableNameForVendorCharset(t *testing.T) {
+	ledgerStores.AssertTableNameCharset(t, []testutil.LedgerTableNameCase{
+		{Name: "postgresql_refuses_hash", Table: "ev#ents", Refused: true},
+		{Name: "postgresql_accepts_dollar", Table: "ev$ents"},
+		{Name: "oracle_accepts_hash", Oracle: true, Table: "ev#ents"},
+	})
+}
+
+func TestNewOracleStoreRefusesNameOutsideOracleGrammar(t *testing.T) {
+	ledgerStores.AssertOracleGrammarRefusal(t)
 }
