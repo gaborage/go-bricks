@@ -69,7 +69,7 @@ func (s *postgresStore) DeleteProcessed(ctx context.Context, db dbtypes.Interfac
 // door and the statements interpolate no value.
 //
 // SECURITY: Manual SQL review completed - static DDL constants; only the constructor-validated
-// table name (validateTableName) is interpolated, twice for the index; no caller value
+// table name (validateTableNameForVendor) is interpolated, twice for the index; no caller value
 func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	if _, err := db.Exec(ctx, fmt.Sprintf(postgresCreateTableSQL, s.tableName)); err != nil {
 		return fmt.Errorf("inbox postgres: create table failed: %w", err)

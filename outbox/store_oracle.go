@@ -99,7 +99,7 @@ func scanOracleRecord(rows *sql.Rows) (Record, error) {
 // if the table or indexes already exist. The caller (ensureStoreInitialized) treats
 // all CreateTable errors as warnings, so existing objects are handled gracefully.
 // SECURITY: Manual SQL review completed - static DDL constants and the MERGE ... USING dual seed; only the
-// constructor-validated table name (validateTableName, ADR-031 grammar) and sqlid's derivations of it are interpolated
+// constructor-validated table name (validateTableNameForVendor, ADR-031 grammar) and sqlid's derivations of it are interpolated
 func (s *oracleStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	idxBase := sqlid.IndexBaseName(s.tableName)
 

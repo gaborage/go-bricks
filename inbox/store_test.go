@@ -207,9 +207,12 @@ func TestValidateTableNameForVendorCharset(t *testing.T) {
 	}
 }
 
+// TestNewOracleStoreRefusesNameOutsideOracleGrammar pins that an Oracle-invalid
+// name keeps the shared sqlid refusal, which carries no identifier sentinel.
 func TestNewOracleStoreRefusesNameOutsideOracleGrammar(t *testing.T) {
 	store, err := NewOracleStore("ev ents")
 	require.Error(t, err)
 	assert.Nil(t, store)
 	assert.Contains(t, err.Error(), "invalid identifier characters")
+	assert.NotErrorIs(t, err, dbident.ErrIdentifierCharset)
 }
