@@ -46,6 +46,7 @@ func TestUnsignedIntConversions(t *testing.T) {
 		{"uint overflow", uint(math.MaxUint64), 0, true},
 		{"uint64 overflow", uint64(math.MaxUint64), 0, true},
 		{"uint64 max safe", uint64(math.MaxInt64), math.MaxInt64, false},
+		{"uint_max_safe", uint(math.MaxInt64), math.MaxInt64, false},
 		{unsupportedType, "invalid", 0, true},
 		{"unsupported type int", 42, 0, true},
 	}
@@ -271,6 +272,7 @@ func TestIntEdgeCases(t *testing.T) {
 		{"string whitespace", "   ", 0, true},
 		{invalidString, notANumber, 0, true},
 		{"int64 max value", int64(math.MaxInt64), int(math.MaxInt64), false},
+		{"int64_min_value", int64(math.MinInt64), int(math.MinInt64), false},
 		{"uint64 overflow", uint64(math.MaxUint64), 0, true},
 		{unsupportedType, []int{1}, 0, true},
 	}
