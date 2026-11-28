@@ -204,7 +204,7 @@ func TestValidateTableNameForVendorCharset(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Nil(t, store)
-			assert.ErrorIs(t, err, dbident.ErrIdentifierCharset)
+			require.ErrorIs(t, err, dbident.ErrIdentifierCharset)
 			assert.Contains(t, err.Error(), fmt.Sprintf("inbox: table name %q is not valid for %s", tt.table, dbtypes.PostgreSQL))
 		})
 	}
