@@ -8,12 +8,10 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -685,13 +683,10 @@ func okHandler(c server.HandlerContext) error {
 	return c.String(http.StatusOK, "ok")
 }
 
-// serveTestServer starts srv on the loopback port cfg already carries and
-// returns its base URL, shutting the server down when the test ends.
-func serveTestServer(t *testing.T, srv *server.Server, cfg *config.Config) string {
+// serveTestServer starts srv, waits until it serves, and returns its base URL
+// built from the OS-picked address, shutting the server down when the test ends.
+func serveTestServer(t *testing.T, srv *server.Server) string {
 	t.Helper()
-	// Start reports why the bind failed. The loopback port was reserved and then
-	// released, so another process can take it in the gap; without this the
-	// readiness poll below just times out and hides the real cause.
 	startErr := make(chan error, 1)
 	go func() { startErr <- srv.Start() }()
 	t.Cleanup(func() {
@@ -700,36 +695,23 @@ func serveTestServer(t *testing.T, srv *server.Server, cfg *config.Config) strin
 		_ = srv.Shutdown(shutdownCtx)
 	})
 
-	base := "http://" + net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
-	require.Eventually(t, func() bool {
-		select {
-		case err := <-startErr:
-			require.NoError(t, err, "test server failed to start")
-		default:
-		}
-		resp, err := http.Get(base + healthPath) //nolint:noctx // readiness probe against the loopback test server
-		if err != nil {
-			return false
-		}
-		_ = resp.Body.Close()
-		return true
-	}, 5*time.Second, 5*time.Millisecond, "test server never accepted a connection")
-	return base
+	select {
+	case <-srv.ReadyCh():
+	case err := <-startErr:
+		require.NoError(t, err, "test server failed to start")
+		require.FailNow(t, "test server stopped before it served")
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "test server not ready")
+	}
+	return "http://" + srv.BoundAddr().String()
 }
 
-// newLoopbackConfig reserves an ephemeral loopback port and returns a config
-// bound to it.
-func newLoopbackConfig(t *testing.T) *config.Config {
-	t.Helper()
-	var lc net.ListenConfig
-	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := ln.Addr().(*net.TCPAddr).Port
-	require.NoError(t, ln.Close())
-
+// newLoopbackConfig returns a config that binds the loopback host on port 0,
+// so the OS picks the port at Start.
+func newLoopbackConfig() *config.Config {
 	cfg := &config.Config{}
 	cfg.Server.Host = "127.0.0.1"
-	cfg.Server.Port = port
+	cfg.Server.Port = 0
 	return cfg
 }
 
@@ -769,12 +751,11 @@ func TestMiddlewareGuardsOnlyItsOwnRouteGroup(t *testing.T) {
 		ExpiresAt: verifierNow.Add(time.Hour),
 	})
 
-	cfg := newLoopbackConfig(t)
-	srv := server.New(cfg, logger.New("error", false))
+	srv := server.New(newLoopbackConfig(), logger.New("error", false))
 	root := srv.RootGroup()
 	root.Add(http.MethodGet, openPath, okHandler)
 	root.Group("/api", Middleware(v)).Add(http.MethodGet, "/thing", okHandler)
-	base := serveTestServer(t, srv, cfg)
+	base := serveTestServer(t, srv)
 
 	for _, path := range []string{healthPath, readyPath, openPath} {
 		t.Run("open"+strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
