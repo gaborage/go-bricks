@@ -152,7 +152,7 @@ tag `tools/migration/vX.Y.Z`; verifies the signature against
 `.github/allowed_signers`; and pushes. It does **not** create a GitHub Release
 (the CLI tag is a plain signed tag; no workflow publishes it).
 
-The release workflow's `publish` job checks this obligation on every framework tag: if the newest `tools/migration/v*` tag trails the *previous* framework release, it emits a workflow warning and opens/updates a `chore(migrate): cut the tools/migration CLI tag` issue. The tag cut itself stays manual and signed — CI never creates tags. Once a fresh `tools/migration/v*` tag is pushed, `migrate-cli-tag.yml` auto-closes that issue.
+The release workflow's `publish` job checks this obligation on every framework tag: if the newest `tools/migration/v*` tag trails the *previous* framework release, it emits a workflow warning and opens/updates the open issue labeled `cli-tag-drift` (title `chore(migrate): cut the tools/migration CLI tag …`), creating the label first if it is missing. The tag cut itself stays manual and signed — CI never creates tags. Once a fresh `tools/migration/v*` tag is pushed, `migrate-cli-tag.yml` auto-closes every open `cli-tag-drift` issue.
 
 ## 7. Security properties NOT yet provided (Phase 2)
 
